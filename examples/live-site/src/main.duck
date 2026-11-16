@@ -4,9 +4,10 @@
 ///
 /// It counts each page's visitors, and everyone shares a ❤ button, a guestbook, a note anyone can
 /// edit as they type, and a duck of the day.
-/// Two supervised tasks share nothing and talk over a channel:
-/// - `counter` owns all the state (a `Stats`);
-/// - `web` serves pages, telling `counter` what each request did and showing what it answers.
+/// Supervised tasks share nothing and talk over channels:
+/// - `counter` owns the state everyone shares (a `Stats`);
+/// - `sessions` gives each browser a task of its own, holding what only that visitor sees (a `Mine`);
+/// - `web` serves pages, asking both for their part of each page.
 /// Pages are `splash` pages: they keep themselves current, so saved edits and other visitors'
 /// clicks show up in open tabs without a reload.
 /// See README.md for edits to try and what each one does to the running program.
@@ -71,6 +72,23 @@ fn counter(hits: Chan<Hit>): ()! {
   }
 }
 
+// ---- sessions: what only one visitor sees ----
+
+/// One visitor's own state. TRY: add a field and only the session tasks restart (each visitor's
+/// count starts over); the shared counts stay.
+struct Mine { clicks: int }
+
+fn mine_update(m: Mine, splash.Click("mine", _)): Mine = Mine { clicks: m.clicks + 1 }
+fn mine_update(m: Mine, _: splash.Event): Mine = m
+
+fn mine_view(m: Mine): str = """
+  <p><button splash-click="mine">just for me</button>
+  You've clicked it <b>{m.clicks}</b> time(s). Only this browser sees that.</p>
+  """
+
+fn sessions(s: splash.Sessions): ()! =
+  splash.run_sessions(s, () => Mine { clicks: 0 }, mine_update, mine_view, 1000)
+
 // ---- the web server: stateless ----
 
 /// The site's colors, on top of splash's defaults (the rest is in static/site.css). TRY: change a
@@ -94,10 +112,11 @@ fn look(): splash.Page uses fs = splash
 
 /// The live part of the page. TRY: change the text or the colors and save: open tabs update,
 /// the counts stay.
-fn view(path: str, s: Shown): str = """
+fn view(path: str, s: Shown, mine: str): str = """
   <h1>🦆 Hello from Duck</h1>
   <p>You are visitor <b>{s.visits}</b> of <code>{splash.escape(path)}</code>.</p>
   <p><button class="like" splash-click="like">❤ {s.likes}</button></p>
+  {mine}
   <form splash-submit="sign">
     <input name="name" placeholder="your name" autocomplete="off">
     <button>sign the guestbook</button>
@@ -127,7 +146,7 @@ fn act(req: http.server.Req): Act = match splash.event(req) {
   none => if splash.is_poll(req) { Look } else { Visit }
 }
 
-fn handle(req: http.server.Req, hits: Chan<Hit>): http.Resp uses fs {
+fn handle(req: http.server.Req, hits: Chan<Hit>, mine: splash.Sessions): http.Resp uses fs {
   match splash.static(req, f => read_static(f)) {
     some(r) => return r
     none => {}
@@ -140,12 +159,12 @@ fn handle(req: http.server.Req, hits: Chan<Hit>): http.Resp uses fs {
   let reply: Chan<Shown> = chan()
   hits.send(Hit { path: req.path, act: act(req), reply })
   let shown = reply.recv() else Shown { visits: 0, likes: 0, names: [], note: "", duck: "" }
-  splash.answer(req, look(), view(req.path, shown))
+  splash.answer(req, look(), view(req.path, shown, splash.ask(mine, req)))
 }
 
-fn web(hits: Chan<Hit>, port: int): ()! uses net, fs {
+fn web(hits: Chan<Hit>, mine: splash.Sessions, port: int): ()! uses net, fs {
   eprint("listening on http://localhost:{port}")
-  await http.server.serve("", port, req => handle(req, hits))
+  await http.server.serve("", port, req => handle(req, hits, mine))
 }
 
 // ---- main: starts the tree ----
@@ -153,7 +172,12 @@ fn web(hits: Chan<Hit>, port: int): ()! uses net, fs {
 fn main(): int! uses net, time, env, fs {
   let port = int.parse(env.get("PORT") else "8080") else 8080
   let hits: Chan<Hit> = chan()
-  let kids = [sup.child("counter", () => counter(hits)), sup.child("web", () => web(hits, port))]
+  let mine = splash.sessions()
+  let kids = [
+    sup.child("counter", () => counter(hits)),
+    sup.child("sessions", () => sessions(mine)),
+    sup.child("web", () => web(hits, mine, port)),
+  ]
   sup.run(kids, sup.one_for_one(10, 6_000))?
   0
 }

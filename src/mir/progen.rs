@@ -759,6 +759,31 @@ impl<'a> Gen<'a> {
         (inc, dec)
     }
 
+    /// Can a value of type `t` hold a closure (or an `any` value, which might)?
+    pub fn holds_fn(&self, t: &Ty) -> bool {
+        fn go(g: &Gen, t: &Ty, seen: &mut Vec<usize>) -> bool {
+            match t {
+                Ty::Fn(..) | Ty::Any(_) | Ty::Param(_) | Ty::Var(_) => true,
+                Ty::Named(d, args) => {
+                    if args.iter().any(|a| go(g, a, seen)) {
+                        return true;
+                    }
+                    if seen.contains(d) {
+                        return false;
+                    }
+                    seen.push(*d);
+                    match &g.tp.defs.types[*d].kind {
+                        crate::types::TypeDefKind::Struct { fields } => fields.iter().any(|f| go(g, &f.ty, seen)),
+                        crate::types::TypeDefKind::Enum { variants } => variants.iter().any(|v| v.fields.iter().any(|(_, t)| go(g, t, seen))),
+                        crate::types::TypeDefKind::Opaque { .. } => false,
+                    }
+                }
+                _ => t.children().into_iter().any(|c| go(g, c, seen)),
+            }
+        }
+        go(self, t, &mut Vec::new())
+    }
+
     // ---- deep copies (values crossing a task boundary: runtime/src/heap.rs) ----
 
     /// An owned deep copy of the value `v` of type `t`, allocated in the current heap. Handles

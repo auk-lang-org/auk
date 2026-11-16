@@ -54,6 +54,10 @@ pub struct DuckTask {
     pub heap: *mut crate::heap::Heap,
     /// Releases the arguments (what the thunk does after the call), for a task that crashed.
     pub args_drop: Option<unsafe extern "C" fn(*mut c_void)>,
+    /// The code address of the task's one closure argument, when it has exactly one and nothing
+    /// else that could hold a closure (0 otherwise): `duck run --live` narrows what the task can
+    /// reach to it.
+    pub hint: usize,
 }
 
 /// How many tasks are cancelled but still running: generated loops check a task's flag only
@@ -66,14 +70,14 @@ pub static duck_cancel_pending: AtomicI64 = AtomicI64::new(0);
 /// on it can't be freed while the list is locked.
 static RUNNING: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
-/// Cancel each running task whose entry function (its thunk's address) `pick` selects; returns
-/// how many.
-pub fn cancel_running(pick: impl Fn(usize) -> bool) -> usize {
+/// Cancel each running task that `pick(entry, hint)` selects (its thunk's address and its
+/// closure hint); returns how many.
+pub fn cancel_running(pick: impl Fn(usize, usize) -> bool) -> usize {
     let g = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
     let mut n = 0;
     for &t in g.iter() {
         let t = t as *mut DuckTask;
-        if pick(unsafe { (*t).fn_ } as usize) {
+        if pick(unsafe { (*t).fn_ } as usize, unsafe { (*t).hint }) {
             unsafe { duck_task_cancel(t) };
             n += 1;
         }
@@ -249,11 +253,13 @@ pub unsafe extern "C" fn duck_task_spawn(
     result_ops: *const DuckElemOps,
     heap: *mut c_void,
     args_drop: Option<unsafe extern "C" fn(*mut c_void)>,
+    hint: *const c_void,
 ) -> *mut DuckTask {
     unsafe {
         let t = duck__alloc(size_of::<DuckTask>(), DUCK_K_TASK) as *mut DuckTask;
         (*t).heap = heap.cast();
         (*t).args_drop = args_drop;
+        (*t).hint = hint as usize;
         libc::pthread_mutex_init(&raw mut (*t).mu, ptr::null());
         // The object is calloc'd; write the fn pointer without reading the zeroed field.
         ptr::write(&raw mut (*t).fn_, fn_);

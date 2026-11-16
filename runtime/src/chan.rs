@@ -96,6 +96,40 @@ pub unsafe extern "C" fn duck_chan_recv(c: *mut DuckChan, out: *mut c_void) -> b
     }
 }
 
+/// `c.recv_for(ms)`: `recv`, giving up after `ms` milliseconds (false: closed and empty, or
+/// nothing came in time). Cancellable on a task thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn duck_chan_recv_for(c: *mut DuckChan, ms: i64, out: *mut c_void) -> bool {
+    unsafe {
+        let inner = &*(*c).inner;
+        let end = std::time::Instant::now() + Duration::from_millis(ms.max(0) as u64);
+        let mut st = inner.state.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if let Some(mut b) = st.items.pop_front() {
+                drop(st);
+                crate::copy::copy_elem(inner.ops, b.as_ptr(), out.cast());
+                if let Some(r) = (*inner.ops).release {
+                    let old = crate::heap::switch(null_mut());
+                    r(b.as_mut_ptr().cast());
+                    crate::heap::switch(old);
+                }
+                return true;
+            }
+            let now = std::time::Instant::now();
+            if st.closed || now >= end {
+                return false;
+            }
+            let wait = (end - now).min(Duration::from_millis(50));
+            if crate::task::on_task() {
+                drop(st);
+                crate::task::check_cancel(c"a channel receive".as_ptr());
+                st = inner.state.lock().unwrap_or_else(|e| e.into_inner());
+            }
+            st = inner.cv.wait_timeout(st, wait).unwrap_or_else(|e| e.into_inner()).0;
+        }
+    }
+}
+
 /// `c.close()`: no more sends; receivers drain what is queued, then get none.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn duck_chan_close(c: *mut DuckChan) {

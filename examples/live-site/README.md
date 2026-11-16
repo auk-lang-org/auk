@@ -19,8 +19,9 @@ other, type in the note, pick a duck. Each tab shows the other's changes within 
 
 ```
 main ── sup.run (one_for_one: up to 10 restarts in 6 s)
-          ├── counter   owns all the state (struct Stats): visits, likes, guestbook names
-          └── web       serves pages; tells counter what each request did, over a Chan<Hit>
+          ├── counter   owns the state everyone shares (struct Stats): visits, likes, guestbook, note
+          ├── sessions  a task per browser (splash.run_sessions), each holding a Mine: "your clicks"
+          └── web       serves pages; asks counter (over a Chan<Hit>) and the visitor's session for their parts
 ```
 
 Tasks share nothing. The state lives only in the `counter` task. For each request, `web` sends a
@@ -61,6 +62,7 @@ Edit `src/main.duck` with the site open and save; watch the page (and the termin
 | Edit `view` while half-way through typing a name | the page updates around the input | what you typed, and the focus |
 | Make a type error (`fn view(…): str = 5`) | the error is printed and nothing is reloaded | everything: the old code keeps serving |
 | Visit `/boom` | the request panics; `sup: web exited: …; restarting` | the counts (they live in `counter`); open tabs keep polling through the restart |
+| Add a field to `Mine` (`since: int`, and `since: 0` where one is made) | `` `Mine` changed shape: stopped … task(s) that use it ``: only the sessions restart | everything shared: visits, ❤, guestbook, note; only "your clicks" start over |
 | Add a field to `Stats` (`since: int`, and `since: 0` in `counter`) | `` `Stats` changed shape: stopped … task(s) that use it ``; `sup` restarts them on the new code | `main`, the supervisor and the channel; the counts start over, since they were `Stats` |
 | Add a field to `Hit` | `` `Hit` changed shape and `main`'s side of the program uses it: restarting the program `` | nothing: `main` made the `Chan<Hit>`, so the whole program starts again |
 | Stop the program (or crash `main`) | `[live] the program exited …; waiting for a change` | the next save starts it again |

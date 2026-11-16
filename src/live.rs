@@ -91,7 +91,56 @@ fn layouts(tp: &TypedProgram) -> HashMap<String, String> {
 /// `main` without starting a task, and from each task entry (thunk) by name.
 struct Uses {
     main: HashSet<String>,
-    thunks: HashMap<String, HashSet<String>>,
+    /// Per thunk: what it can reach (`wide`: an indirect call may be any closure of its
+    /// signature), and what it reaches on its own (`narrow`: indirect calls not followed).
+    thunks: HashMap<String, (HashSet<String>, HashSet<String>)>,
+    /// The call graph, to work out on demand what a closure can reach (only for closures that
+    /// running tasks were started with: there are many closures, few such tasks).
+    graph: std::sync::Arc<Graph>,
+}
+
+/// A compiled program's call graph, with the user types each function itself holds.
+struct Graph {
+    own: Vec<HashSet<String>>,
+    /// Functions called directly, or whose address is taken (a closure made, a helper passed).
+    refs: Vec<Vec<FuncId>>,
+    /// The functions called directly (a closure's body is reached by calling it, not making it).
+    calls: Vec<HashSet<FuncId>>,
+    /// The closures each function's indirect calls might call (any of the same signature).
+    indirect: Vec<Vec<FuncId>>,
+    names: Vec<String>,
+    /// Closure bodies by name: none when the closure's environment holds closures (then a task
+    /// started with it gets its thunk's `wide` set).
+    closures: HashMap<String, Option<FuncId>>,
+}
+
+impl Graph {
+    /// The user types reachable from `start` without entering another task's thunk. `wide`:
+    /// indirect calls may reach any closure of their signature; else only the closures the
+    /// reached code makes.
+    fn reach(&self, start: FuncId, wide: bool) -> HashSet<String> {
+        let mut seen = HashSet::new();
+        let mut stack = vec![start];
+        let mut keys = HashSet::new();
+        while let Some(f) = stack.pop() {
+            if !seen.insert(f) {
+                continue;
+            }
+            let i = f as usize;
+            keys.extend(self.own[i].iter().cloned());
+            if wide {
+                stack.extend(self.indirect[i].iter().copied());
+            }
+            for &g in &self.refs[i] {
+                let n = &self.names[g as usize];
+                let addr_only = is_thunk(n) || (wide && (n.starts_with("dk_clo") || n.starts_with("dk_fv")));
+                if !addr_only || self.calls[i].contains(&g) {
+                    stack.push(g);
+                }
+            }
+        }
+        keys
+    }
 }
 
 /// The functions an expression calls or takes the address of, and its indirect calls'
@@ -250,42 +299,46 @@ fn uses(prog: &Program, tp: &TypedProgram) -> Uses {
             callables.entry(sig_key(&ps, &f.ret)).or_default().push(i as FuncId);
         }
     }
-    // the types every function reaching from `start` touches, not entering other tasks' entries
-    let reach = |start: FuncId| -> HashSet<String> {
-        let mut seen = HashSet::new();
-        let mut stack = vec![start];
+    let n = prog.funcs.len();
+    let (mut own, mut refs, mut calls, mut indirect) = (Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n));
+    let mut aggs = HashSet::new();
+    for f in &prog.funcs {
         let mut keys = HashSet::new();
-        let mut aggs = HashSet::new();
-        while let Some(f) = stack.pop() {
-            if !seen.insert(f) {
-                continue;
-            }
-            let func = &prog.funcs[f as usize];
-            for t in &func.vars {
-                mty_keys(prog, tp, t, &mut keys, &mut aggs);
-            }
-            mty_keys(prog, tp, &func.ret, &mut keys, &mut aggs);
-            let (mut out, mut ind) = (Vec::new(), Vec::new());
-            refs_stmts(&func.body, &mut out, &mut ind);
-            let calls = direct_calls(&func.body);
-            // a closure's body runs where it is called (an indirect call of its signature, above),
-            // not where it is made; a thunk runs on its own task
-            let addr_only = |g: FuncId| {
-                let n = &prog.funcs[g as usize].name;
-                is_thunk(n) || n.starts_with("dk_clo") || n.starts_with("dk_fv")
-            };
-            let mut called = Vec::new();
-            for s in &ind {
-                called.extend(callables.get(s).into_iter().flatten().copied());
-            }
-            stack.extend(called);
-            stack.extend(out.into_iter().filter(|&g| !addr_only(g) || calls.contains(&g)));
+        aggs.clear();
+        for t in f.vars.iter().chain(std::iter::once(&f.ret)) {
+            mty_keys(prog, tp, t, &mut keys, &mut aggs);
         }
-        keys
-    };
-    let main = prog.entry.map(reach).unwrap_or_default();
-    let thunks = prog.funcs.iter().enumerate().filter(|(_, f)| is_thunk(&f.name)).map(|(i, f)| (f.name.clone(), reach(i as FuncId))).collect();
-    Uses { main, thunks }
+        own.push(keys);
+        let (mut out, mut ind) = (Vec::new(), Vec::new());
+        refs_stmts(&f.body, &mut out, &mut ind);
+        refs.push(out);
+        calls.push(direct_calls(&f.body));
+        indirect.push(ind.iter().flat_map(|s| callables.get(s).into_iter().flatten().copied()).collect());
+    }
+    // a closure `dk_clo{k}` keeps its captures in the aggregate `DkEnv{k}`
+    let envs: HashMap<&str, &crate::mir::AggDef> = prog.aggs.iter().map(|a| (a.name.as_str(), a)).collect();
+    let holds_fn = |m: &MTy| matches!(m, MTy::D(t) if { let mut f = false; t.walk(&mut |x| f |= matches!(x, Ty::Fn(..) | Ty::Any(_))); f });
+    let closures = prog
+        .funcs
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.name.starts_with("dk_clo") || f.name.starts_with("dk_fv"))
+        .map(|(i, f)| {
+            let env = f.name.strip_prefix("dk_clo").and_then(|k| envs.get(format!("DkEnv{k}").as_str()));
+            let safe = env.is_none_or(|a| !a.fields.iter().any(holds_fn));
+            (f.name.clone(), safe.then_some(i as FuncId))
+        })
+        .collect();
+    let graph = Graph { own, refs, calls, indirect, names: prog.funcs.iter().map(|f| f.name.clone()).collect(), closures };
+    let main = prog.entry.map(|e| graph.reach(e, true)).unwrap_or_default();
+    let thunks = prog
+        .funcs
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| is_thunk(&f.name))
+        .map(|(i, f)| (f.name.clone(), (graph.reach(i as FuncId, true), graph.reach(i as FuncId, false))))
+        .collect();
+    Uses { main, thunks, graph: std::sync::Arc::new(graph) }
 }
 
 /// One compile of the program in live mode.
@@ -301,7 +354,9 @@ struct Build {
 #[derive(Default)]
 struct Seen {
     main: HashSet<String>,
-    thunks: HashMap<usize, HashSet<String>>,
+    thunks: HashMap<usize, (HashSet<String>, HashSet<String>)>,
+    /// Closure code addresses: the graph they're in and their body (none: not narrowable).
+    closures: HashMap<usize, (std::sync::Arc<Graph>, Option<FuncId>)>,
 }
 
 impl Seen {
@@ -311,6 +366,23 @@ impl Seen {
             if let Some(&a) = b.jit.addrs.get(name) {
                 self.thunks.insert(a as usize, keys.clone());
             }
+        }
+        for (name, f) in &b.uses.graph.closures {
+            if let Some(&a) = b.jit.addrs.get(name) {
+                self.closures.insert(a as usize, (b.uses.graph.clone(), *f));
+            }
+        }
+    }
+
+    /// Can the task that started at thunk `entry` (with closure `hint`, 0 if none) hold one of
+    /// the types `keys`? Narrowed to its closure when it was started with exactly one (`sup`
+    /// children), else everything its thunk can reach.
+    fn task_uses(&self, entry: usize, hint: usize, keys: &[String]) -> bool {
+        let Some((wide, narrow)) = self.thunks.get(&entry) else { return false };
+        let hit = |s: &HashSet<String>| keys.iter().any(|k| s.contains(k));
+        match self.closures.get(&hint) {
+            Some((g, Some(f))) if hint != 0 => hit(narrow) || hit(&g.reach(*f, true)),
+            _ => hit(wide),
         }
     }
 }
@@ -393,8 +465,7 @@ fn watch(path: PathBuf, mut slots: HashMap<String, usize>, mut files: Files, mut
                 install(&b);
                 if !moved.is_empty() {
                     // only tasks can hold the old shape: stop those (their supervisors restart them)
-                    let hit = |a: usize| seen.thunks.get(&a).is_some_and(|ks| moved.iter().any(|k| ks.contains(k)));
-                    let n = duck_rt::task::cancel_running(hit);
+                    let n = duck_rt::task::cancel_running(|entry, hint| seen.task_uses(entry, hint, &moved));
                     let names: Vec<String> = moved.iter().map(short).collect();
                     note(&format!("`{}` changed shape: stopped {n} task(s) that use it", names.join("`, `")));
                 }

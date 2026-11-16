@@ -133,6 +133,7 @@ pub struct Chan<T> { r: ChanRef, proto: [T] }
 extern fn chan_new<T>(proto: [T]): ChanRef = "duck_chan_new"
 extern fn chan_send<T>(r: ChanRef, x: T) = "duck_chan_send +loc"
 extern fn chan_recv<T>(r: ChanRef): T? = "duck_chan_recv"
+extern fn chan_recv_for<T>(r: ChanRef, ms: int): T? = "duck_chan_recv_for"
 extern fn chan_close(r: ChanRef) = "duck_chan_close"
 
 /// A new channel; `T` comes from the expected type: `let c: Chan<Job> = chan()`.
@@ -146,6 +147,10 @@ pub fn send<T>(c: Chan<T>, x: T) = chan_send(c.r, x)
 
 /// Wait for the next message: none once the channel is closed and empty.
 pub fn recv<T>(c: Chan<T>): T? = chan_recv(c.r)
+
+/// `recv`, but give up after `ms` milliseconds: none if nothing came in time (or the channel is
+/// closed and empty). Waiting on a task that might never answer: `reply.recv_for(5000) else ...`.
+pub fn recv_for<T>(c: Chan<T>, ms: int): T? = chan_recv_for(c.r, ms)
 
 /// No more messages: receivers get what is queued, then none.
 pub fn close<T>(c: Chan<T>) = chan_close(c.r)

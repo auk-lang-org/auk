@@ -346,8 +346,8 @@ fn tasks_run_concurrently() {
         let sz = size_of::<SleepArgs>();
         let ps = size_of::<*mut DuckStr>();
         let mut ts = [
-            duck_task_spawn(sleep_thunk, vp(&a1), sz, ps, &duck_ops_str, std::ptr::null_mut(), None),
-            duck_task_spawn(sleep_thunk, vp(&a2), sz, ps, &duck_ops_str, std::ptr::null_mut(), None),
+            duck_task_spawn(sleep_thunk, vp(&a1), sz, ps, &duck_ops_str, std::ptr::null_mut(), None, std::ptr::null()),
+            duck_task_spawn(sleep_thunk, vp(&a2), sz, ps, &duck_ops_str, std::ptr::null_mut(), None, std::ptr::null()),
         ];
         let mut outs: [*mut DuckStr; 2] = [null_mut(); 2];
         duck_task_await_all(ts.as_mut_ptr(), 2, outs.as_mut_ptr().cast());
@@ -382,7 +382,7 @@ fn tasks_many_and_unawaited() {
         let mut ts: [*mut DuckTask; 16] = [null_mut(); 16];
         for (i, t) in ts.iter_mut().enumerate() {
             let n: i64 = 1000 * (i as i64 + 1);
-            *t = duck_task_spawn(sum_thunk, vp(&n), size_of::<i64>(), size_of::<i64>(), std::ptr::null(), std::ptr::null_mut(), None);
+            *t = duck_task_spawn(sum_thunk, vp(&n), size_of::<i64>(), size_of::<i64>(), std::ptr::null(), std::ptr::null_mut(), None, std::ptr::null());
         }
         for (i, &t) in ts.iter().enumerate() {
             let mut r: i64 = 0;
@@ -393,7 +393,7 @@ fn tasks_many_and_unawaited() {
         }
         // releasing a never-awaited task joins it and releases its result
         let a = SleepArgs { ms: 10, tag: s("x") };
-        let t = duck_task_spawn(sleep_thunk, vp(&a), size_of::<SleepArgs>(), size_of::<*mut DuckStr>(), &duck_ops_str, std::ptr::null_mut(), None);
+        let t = duck_task_spawn(sleep_thunk, vp(&a), size_of::<SleepArgs>(), size_of::<*mut DuckStr>(), &duck_ops_str, std::ptr::null_mut(), None, std::ptr::null());
         rel(t);
     });
 }
@@ -421,7 +421,7 @@ fn tasks_atomic_refcounts() {
         let mut ts: [*mut DuckTask; 8] = [null_mut(); 8];
         for t in ts.iter_mut() {
             let a = PushArgs { xs: ret(xs) };
-            *t = duck_task_spawn(shared_push_thunk, vp(&a), size_of::<PushArgs>(), size_of::<i64>(), std::ptr::null(), std::ptr::null_mut(), None);
+            *t = duck_task_spawn(shared_push_thunk, vp(&a), size_of::<PushArgs>(), size_of::<i64>(), std::ptr::null(), std::ptr::null_mut(), None, std::ptr::null());
         }
         let mut outs = [0i64; 8];
         duck_task_await_all(ts.as_mut_ptr(), 8, outs.as_mut_ptr().cast());

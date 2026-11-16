@@ -10,7 +10,7 @@
 /// cross-site form can't set and a cross-site `fetch` can't send without a CORS preflight this
 /// server never grants; `event` also rejects any `Origin` that isn't this host.
 ///
-/// v0.3 polls (`every` ms): the `http` server answers one connection at a time and closes each,
+/// v0.4 polls (`every` ms): the `http` server answers one connection at a time and closes each,
 /// so it can't hold a push channel open yet. The API is meant to stay the same when it can.
 
 /// The header splash's own requests carry: `poll` (a refresh) or `event` (a click or submit).
@@ -167,6 +167,120 @@ pub fn styled(title: str, css: str, view: str): str = render(titled(title).with_
 /// `styled`, asking for a fresh view every `every` ms.
 pub fn styled_every(title: str, css: str, view: str, every: int): str =
   render(titled(title).with_css(css).with_every(every), view)
+
+// ---- sessions: a task per browser ----
+
+/// The cookie naming a browser's session: a random UUID the page's script sets on its first
+/// load (secure randomness from the browser, so splash needs no `rand` effect).
+pub let SESSION_COOKIE = "splash-sid"
+
+/// How long `ask` waits for a session's answer (ms).
+pub let ASK_WAIT = 5000
+
+/// A request on its way to its session: its event (none: just show), and where to answer.
+struct Route { sid: str, event: Event?, reply: Chan<str> }
+
+/// The way to a site's sessions: make one with `sessions()`, run them with `run_sessions` (as a
+/// `sup` child) and ask them with `ask` (in the web handler).
+pub struct Sessions { ch: Chan<Route> }
+
+pub fn sessions(): Sessions = Sessions { ch: chan() }
+
+/// This request's session id, from its cookie (none on a first visit, or if it looks wrong).
+pub fn session_id(req: http.server.Req): str? {
+  let cookies = req.headers.get("cookie") else return none
+  for part in cookies.split(";") {
+    let kv = part.trim()
+    if kv.starts_with(SESSION_COOKIE + "=") {
+      let id = kv[SESSION_COOKIE.len() + 1..kv.len()]
+      let ok = id.len() >= 8 &&
+        id.len() <= 64 &&
+        id.chars().all(c => c.is_alpha() || c.is_digit() || c == '-')
+      return if ok { some(id) } else { none }
+    }
+  }
+  none
+}
+
+/// The view (HTML) of this request's session, after applying its event if it has one. A first
+/// visit (no session yet) gets the view of a fresh state; its page starts a session right away.
+/// If the session doesn't answer within `ASK_WAIT` ms (its task is being restarted), a short
+/// notice instead: the page's next refresh asks again.
+pub fn ask(s: Sessions, req: http.server.Req): str {
+  let reply: Chan<str> = chan()
+  s.ch.send(Route { sid: session_id(req) else "", event: event(req), reply })
+  reply.recv_for(ASK_WAIT) else "<p class=\"splash-error\">One moment…</p>"
+}
+
+/// Runs a site's sessions until `s` is closed (run it as a `sup` child). Each browser session
+/// gets a task of its own, holding a state that starts as `init()`; each event of that session is
+/// applied with `update`, and `view` renders it. Sessions share nothing: a panic in `update` or
+/// `view` starts that one session over from `init()` (with a line on stderr), and the others
+/// don't notice. At most `max` sessions live at once: past that, the least recently used stops.
+pub fn run_sessions<S>(
+  s: Sessions,
+  init: () => S,
+  update: (S, Event) => S,
+  view: (S) => str,
+  max: int,
+): ()! {
+  var chans: {str: Chan<Route>} = {}
+  var tasks: {str: Task<()>} = {}
+  var recent: [str] = []
+  for r in s.ch {
+    if r.sid == "" {
+      r.reply.send(catch view(init()) else e => problem(e))
+      continue
+    }
+    if !chans.contains(r.sid) {
+      while recent.len() > 0 && recent.len() >= max {
+        let old = recent.remove(0)
+        stop(&chans, &tasks, old)
+      }
+      let c: Chan<Route> = chan()
+      chans[r.sid] = c
+      tasks[r.sid] = session(c, init, update, view)
+    }
+    recent = recent.filter(x => x != r.sid) + [r.sid]
+    chans[r.sid].send(r)
+  }
+  for id in recent {
+    stop(&chans, &tasks, id)
+  }
+}
+
+/// Close session `id`'s channel and wait for its task to finish.
+fn stop(chans: var {str: Chan<Route>}, tasks: var {str: Task<()>}, id: str) {
+  match chans.remove(id) {
+    some(c) => c.close()
+    none => {}
+  }
+  match tasks.remove(id) {
+    some(t) => {
+      let _ = await any [t]
+    }
+    none => {}
+  }
+}
+
+async fn session<S>(asks: Chan<Route>, init: () => S, update: (S, Event) => S, view: (S) => str) {
+  var state = init()
+  for a in asks {
+    match a.event {
+      some(e) => match catch update(state, e) {
+        ok(next) => state = next
+        err(x) => {
+          eprint("splash: a session's update panicked ({x}); it starts over")
+          state = init()
+        }
+      }
+      none => {}
+    }
+    a.reply.send(catch view(state) else e => problem(e))
+  }
+}
+
+fn problem(e: Err): str = "<p class=\"splash-error\">{escape("{e}")}</p>"
 
 // ---- static files ----
 
@@ -362,7 +476,17 @@ let CLIENT = r"""
       const v = el.type === "checkbox" || el.type === "radio" ? (el.checked ? el.value || "on" : "") : el.value;
       send("event", params("change", el.getAttribute("splash-change"), v), el);
     });
-    timer = setTimeout(poll, delay);
+    // a session of its own: a random id in a cookie; without one yet, ask for this session's
+    // view right away (the page shows a fresh one)
+    let first = delay;
+    if (!/(^|;\s*)splash-sid=/.test(document.cookie)) {
+      const id = self.crypto && crypto.randomUUID ? crypto.randomUUID()
+        : Array.from({ length: 4 }, () => Math.random().toString(36).slice(2)).join("-");
+      document.cookie = "splash-sid=" + id + "; path=/; SameSite=Lax";
+      hash = "";
+      first = 0;
+    }
+    timer = setTimeout(poll, first);
   })();
   </script>
   """
@@ -521,6 +645,68 @@ test "asset URLs change with the content" {
   assert asset("a.css", "x").starts_with("/static/a.css?v=")
   assert asset("a.css", "x") == asset("a.css", "x")
   assert asset("a.css", "x") != asset("a.css", "y")
+}
+
+test "session ids come from the cookie, and must look like one" {
+  let with = (c: str) => req("GET", {"cookie": c}, "")
+  assert session_id(with("a=1; splash-sid=0b1e5d2c-77aa-4f0e-9d1c-3f6a2b8e9c10; b=2")) ==
+    some("0b1e5d2c-77aa-4f0e-9d1c-3f6a2b8e9c10")
+  assert session_id(with("splash-sid=short")) is none
+  assert session_id(with("splash-sid=<script>alert(1)</script>")) is none
+  assert session_id(with("other=1")) is none
+  assert session_id(get({})) is none
+}
+
+/// A counter per session, for the session tests.
+fn tally_update(n: int, Click("add", _)): int = n + 1
+fn tally_update(_: int, Click("boom", _)): int {
+  let xs: [int] = []
+  xs[1]
+}
+fn tally_update(n: int, _: Event): int = n
+
+fn tally_view(n: int): str = "n={n}"
+
+async fn tally_sessions(s: Sessions, max: int): ()! =
+  run_sessions(s, () => 0, tally_update, tally_view, max)
+
+fn as_session(sid: str, body: str): http.server.Req {
+  let headers = if body == "" {
+    {"cookie": "splash-sid={sid}"}
+  } else {
+    {"cookie": "splash-sid={sid}", "x-splash": "event"}
+  }
+  req(if body == "" { "GET" } else { "POST" }, headers, body)
+}
+
+let ADD = "splash-kind=click&splash-event=add&value="
+
+test "each session has its own state; a panic resets only that one" {
+  let s = sessions()
+  let t = tally_sessions(s, 10)
+  let (a, b) = ("aaaaaaaa-1", "bbbbbbbb-2")
+  assert ask(s, as_session(a, ADD)) == "n=1"
+  assert ask(s, as_session(a, ADD)) == "n=2"
+  assert ask(s, as_session(b, ADD)) == "n=1"
+  assert ask(s, as_session(a, "")) == "n=2"
+  assert ask(s, get({})) == "n=0"
+  assert ask(s, as_session(b, "splash-kind=click&splash-event=boom&value=")) == "n=0"
+  assert ask(s, as_session(a, "")) == "n=2"
+  s.ch.close()
+  await t?
+}
+
+test "past max sessions, the least recently used one stops" {
+  let s = sessions()
+  let t = tally_sessions(s, 2)
+  assert ask(s, as_session("first-111", ADD)) == "n=1"
+  assert ask(s, as_session("second-22", ADD)) == "n=1"
+  assert ask(s, as_session("first-111", ADD)) == "n=2"
+  assert ask(s, as_session("third-333", ADD)) == "n=1"
+  assert ask(s, as_session("first-111", "")) == "n=2"
+  assert ask(s, as_session("second-22", "")) == "n=0"
+  s.ch.close()
+  await t?
 }
 
 test "respond is a 200 HTML page" {

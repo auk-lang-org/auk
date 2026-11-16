@@ -1716,10 +1716,21 @@ impl<'g, 'a> Lower<'g, 'a> {
         }
         let a = self.f.b.decl(Ex::agg(MTy::Agg(argty), fields));
         self.do_(Ex::rt("duck_heap_switch", vec![old], MTy::void_ptr()));
+        // `duck run --live` narrows what the task can reach to its closure, when it gets exactly
+        // one and nothing else that could hold a closure (sup children: `go(f)`)
+        let closures: Vec<usize> = ps.iter().enumerate().filter(|(_, (t, var))| !*var && matches!(t, Ty::Fn(..))).map(|(k, _)| k).collect();
+        let others_plain = ps.iter().all(|(t, var)| matches!(t, Ty::Fn(..)) || (!*var && !self.g.holds_fn(t)));
+        let hint = match closures.as_slice() {
+            [k] if others_plain => {
+                let clo = self.g.fld(&a, Sel::F(*k as u32));
+                self.g.fld(&clo, Sel::F(0)).cast(MTy::void_ptr())
+            }
+            _ => Ex::zero(MTy::void_ptr()),
+        };
         let ops = if self.g.needs_rc(&rt) { self.g.ops(&rt) } else { Ex::zero(MTy::ptr(MTy::Rt(Rt::ElemOps))) };
         let call = Ex::rt(
             "duck_task_spawn",
-            vec![Ex::fn_addr(thunk), a.addr().cast(MTy::void_ptr()), Ex::size_of(MTy::Agg(argty)), Ex::size_of(d(&rt)), ops, heap, Ex::fn_addr(args_drop)],
+            vec![Ex::fn_addr(thunk), a.addr().cast(MTy::void_ptr()), Ex::size_of(MTy::Agg(argty)), Ex::size_of(d(&rt)), ops, heap, Ex::fn_addr(args_drop), hint],
             d(ret),
         );
         self.tmp(ret, call)

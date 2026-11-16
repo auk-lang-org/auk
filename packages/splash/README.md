@@ -72,6 +72,7 @@ Still escape what users typed before showing it (`escape`).
 - `styled(title, css, view): str`, `styled_every(…, every)` and `reply_styled(req, title, css, view)`: the same with your own stylesheet, which goes in `<head>` as `<style id="splash-css">`. Build on the defaults with `splash.BASE_CSS + mine`, or pass `""` for no CSS.
 - `BASE_CSS`: the default stylesheet. It gives readable system type, a centered column, plain buttons and inputs, works in light and dark mode, and shows a "reconnecting…" badge while the server is away.
 - `script(every: int): str`: just the client, for a page you build yourself (its live element needs `id="splash"`).
+- `sessions(): Sessions`, `run_sessions<S>(s, init: () => S, update: (S, Event) => S, view: (S) => str, max: int): ()!`, `ask(s, req): str` and `session_id(req): str?`: state per browser session (see above).
 - `escape(s: str): str`: HTML-escapes `& < > " '`. Put anything a user typed through this.
 
 ## CSS
@@ -89,6 +90,44 @@ The stylesheet is live, like the view. Under `duck run --live`, change a color a
 tabs restyle at their next refresh with no reload. A refresh only gets the page back when the view
 *or* the CSS changed. Use a raw string (`r"""…"""`) for CSS, so its braces aren't read as
 interpolation. A `<style>` inside the view works too, but it's sent with every changed view.
+
+## Sessions: a task per browser
+
+State that belongs to one visitor (a cart, a draft, "your clicks") lives in a task of that
+visitor's own, LiveView's model. You write it as three functions: where a session starts, how an
+event changes it, and how it looks.
+
+```duck
+struct Mine { clicks: int }
+
+fn update(m: Mine, splash.Click("mine", _)): Mine = Mine { clicks: m.clicks + 1 }
+fn update(m: Mine, _: splash.Event): Mine = m
+
+fn view(m: Mine): str = "<button splash-click=\"mine\">clicked {m.clicks}</button>"
+
+fn main(): int! uses net, time {
+  let mine = splash.sessions()
+  let kids = [
+    sup.child("sessions", () => splash.run_sessions(mine, () => Mine { clicks: 0 }, update, view, 1000)),
+    sup.child("web", () => web(mine)),        // its handler: splash.answer(req, look, splash.ask(mine, req))
+  ]
+  sup.run(kids, sup.one_for_one(10, 60_000))?
+  0
+}
+```
+
+- **Identity.** The page's script gives the browser a random session id in a cookie
+  (`splash-sid`, from `crypto.randomUUID()`). A first visit, before the cookie exists, sees a fresh
+  state, and the page asks for its own session's view right away.
+- **`ask(sessions, req)`** sends the request's event to its session and returns that session's view.
+  It waits at most `ASK_WAIT` (5 s); if the session is being restarted, it returns a short notice
+  and the next refresh asks again.
+- **`run_sessions(sessions, init, update, view, max)`** runs every session (run it under `sup`). Each
+  session is a task with its own heap. A panic in `update` or `view` starts that one session over
+  from `init()`, and other visitors don't notice. Past `max` sessions, the least recently used one
+  stops.
+- **With `duck run --live`**, changing the session state's shape (say, adding a field to `Mine`)
+  restarts only the session tasks; everything else keeps running.
 
 ## Pages, linked stylesheets and static files
 
