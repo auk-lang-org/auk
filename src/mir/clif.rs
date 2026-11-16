@@ -1366,6 +1366,8 @@ pub struct LiveJit {
     /// The program's `dk_init` (literals, imprints, constants), to run before a reloaded module's
     /// code is used.
     pub init: *const u8,
+    /// Each function's code address, by name (to tell which code a running task started in).
+    pub addrs: HashMap<String, *const u8>,
 }
 
 pub fn jit_live(prog: &Program, info: &TyInfo, table: usize, slots: &HashMap<u32, usize>) -> Result<LiveJit, String> {
@@ -1388,7 +1390,8 @@ pub fn jit_live(prog: &Program, info: &TyInfo, table: usize, slots: &HashMap<u32
         }
     }
     let init = addr(&module, "dk_init").ok_or("no dk_init")?;
-    Ok(LiveJit { jit: Jit { module: Some(module), entry }, entries, init })
+    let addrs = prog.funcs.iter().filter_map(|f| addr(&module, &f.name).map(|a| (f.name.clone(), a))).collect();
+    Ok(LiveJit { jit: Jit { module: Some(module), entry }, entries, init, addrs })
 }
 
 impl Jit {

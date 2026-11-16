@@ -1156,9 +1156,68 @@ fn live_reload_swaps_code_and_keeps_state() {
         lines.wait("b after the error", |l| num(l, "b").is_some());
         // 3. a new field: a restart from scratch
         fs::write(&f, src("\"c{n}\"", ", k: int", ", k: 1")).unwrap();
-        lines.wait("the restart", |l| l.contains("changed shape: restarting"));
+        lines.wait("the restart", |l| l.contains("changed shape and `main`'s side of the program uses it: restarting"));
         let c = lines.wait("a c line", |l| num(l, "c").is_some());
         assert!(num(&c, "c").unwrap() < 20, "not restarted: {c}");
+    }));
+    let _ = child.kill();
+    let _ = child.wait();
+    if let Err(e) = res {
+        std::panic::resume_unwind(e);
+    }
+}
+
+/// `duck run --live` with supervision: a type only a supervised task uses changes shape, so just
+/// that task is stopped and its supervisor starts it on the new code while `main` keeps going;
+/// a type `main` itself holds changes shape, so the whole program restarts.
+#[test]
+fn live_reload_restarts_only_the_tasks_using_a_changed_type() {
+    let d = scratch("live_sup");
+    fs::create_dir_all(d.join("src")).unwrap();
+    fs::write(d.join("quack.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\neffects = [\"time\"]\n\n[deps]\nsup = \"^0.1\"\n").unwrap();
+    let src = |counter: &str, init: &str, step: &str, main_ty: &str| {
+        format!(
+            "struct Counter {{ {counter} }}\nstruct Main {{ {main_ty} }}\n\nfn count(): ()! uses time {{\n  var c = Counter {{ {init} }}\n  while true {{\n    c.n += {step}\n    eprint(\"count {{c.n}}\")\n    time.sleep(20)\n  }}\n}}\n\nfn main(): int! uses time {{\n  let m = Main {{ a: 1 }}\n  eprint(\"main {{m.a}}\")\n  sup.run([sup.child(\"count\", () => count())], sup.one_for_one(5, 60_000))?\n  0\n}}\n"
+        )
+    };
+    let f = d.join("src/main.duck");
+    fs::write(&f, src("n: int", "n: 0", "1", "a: int")).unwrap();
+    let q = Command::new(env!("CARGO_BIN_EXE_quack"))
+        .arg("install")
+        .current_dir(&d)
+        .env("QUACK_REGISTRY", Path::new(env!("CARGO_MANIFEST_DIR")).join("packages"))
+        .output()
+        .unwrap();
+    assert!(q.status.success(), "{:?}", text(&q));
+    let mut child = duck_cmd()
+        .args(["run", "--live", "src/main.duck"])
+        .current_dir(&d)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let err = child.stderr.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        use std::io::BufRead;
+        for l in std::io::BufReader::new(err).lines().map_while(Result::ok) {
+            if tx.send(l).is_err() {
+                break;
+            }
+        }
+    });
+    let mut lines = Lines(rx, Vec::new());
+    let num = |l: &str| l.strip_prefix("count ").and_then(|n| n.parse::<i64>().ok());
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        lines.wait("count 5", |l| num(l).is_some_and(|n| n >= 5));
+        // only the counting task holds a Counter
+        fs::write(&f, src("n: int, k: int", "n: 0, k: 1", "100", "a: int")).unwrap();
+        lines.wait("the task stop", |l| l.contains("`Counter` changed shape: stopped 1 task(s) that use it"));
+        lines.wait("the new code", |l| num(l).is_some_and(|n| n % 100 == 0 && n > 0));
+        assert_eq!(lines.1.iter().filter(|l| l.starts_with("main ")).count(), 1, "main restarted:\n{}", lines.1.join("\n"));
+        // main holds a Main
+        fs::write(&f, src("n: int, k: int", "n: 0, k: 1", "100", "a: int, b: int").replace("Main { a: 1 }", "Main { a: 1, b: 2 }")).unwrap();
+        lines.wait("the restart", |l| l.contains("`Main` changed shape and `main`'s side of the program uses it: restarting the program"));
     }));
     let _ = child.kill();
     let _ = child.wait();

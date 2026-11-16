@@ -61,6 +61,26 @@ pub struct DuckTask {
 #[unsafe(no_mangle)]
 pub static duck_cancel_pending: AtomicI64 = AtomicI64::new(0);
 
+/// The tasks whose code is running (for `duck run --live`: a reload that changes a type's
+/// layout cancels the ones that use it). A task is on it from its start to its end, so a task
+/// on it can't be freed while the list is locked.
+static RUNNING: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// Cancel each running task whose entry function (its thunk's address) `pick` selects; returns
+/// how many.
+pub fn cancel_running(pick: impl Fn(usize) -> bool) -> usize {
+    let g = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+    let mut n = 0;
+    for &t in g.iter() {
+        let t = t as *mut DuckTask;
+        if pick(unsafe { (*t).fn_ } as usize) {
+            unsafe { duck_task_cancel(t) };
+            n += 1;
+        }
+    }
+    n
+}
+
 /// Guards the cancel/done transitions; `DONE` is signalled whenever a task finishes.
 static STATE: Mutex<()> = Mutex::new(());
 static DONE: Condvar = Condvar::new();
@@ -128,6 +148,7 @@ extern "C" fn task_entry(p: *mut c_void) -> *mut c_void {
     unsafe {
         CURRENT.with(|c| c.set(t));
         crate::heap::switch((*t).heap);
+        RUNNING.lock().unwrap_or_else(|e| e.into_inner()).push(t as usize);
         if let Some(p) = crate::catch::run((*t).fn_, (*t).args, (*t).result) {
             (*t).panic = Box::into_raw(Box::new(p));
             // the arguments' references (handles among them), then everything else the aborted
@@ -152,6 +173,7 @@ extern "C" fn task_entry(p: *mut c_void) -> *mut c_void {
                 crate::rc::duck_release(k.cast());
             }
         }
+        RUNNING.lock().unwrap_or_else(|e| e.into_inner()).retain(|&x| x != t as usize);
         let g = STATE.lock().unwrap_or_else(|e| e.into_inner());
         (*t).done.store(true, Ordering::SeqCst);
         if (*t).cancel.load(Ordering::SeqCst) {

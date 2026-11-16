@@ -31,6 +31,7 @@ Every exit is reported on stderr (`sup: web exited: err(...); restarting`).
 ## How it maps to OTP
 - Children are tasks. A child's panic ends only that child: the supervisor gets it from `await any` as an `Err`, the equivalent of OTP's `{'EXIT', Pid, Reason}`.
 - Children are stopped with `t.cancel()`. It is cooperative: the child stops at its next loop iteration or blocking call. A `catch` inside the child can't hold it.
+- With `duck run --live`, a code change that alters the layout of a struct or enum stops only the children that use it. Their supervisor restarts them on the new code, which is OTP's code upgrade without writing `code_change`.
 - Tasks are linked to the tasks they start. A supervisor that crashes or is cancelled takes its whole subtree down with it.
 - Children share nothing. Each runs in its own heap: its start function (a closure) and everything it captures are copied in. When a child crashes or is stopped, its heap is freed, and so are the connections it still held.
 - **Differences from OTP:** there are no named processes, no dynamic `start_child`, and no message queue per task. Use a `Chan<T>` instead.
