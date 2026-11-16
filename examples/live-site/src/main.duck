@@ -1,22 +1,28 @@
-/// A tiny website that counts its visitors, built to be edited while it runs:
+/// A tiny website, built to be edited while it runs:
 ///
 ///   duck run --live src/main.duck        then open http://localhost:8080
 ///
+/// It counts each page's visitors, has a ❤ button everyone shares, and a guestbook.
 /// Two supervised tasks share nothing and talk over a channel:
-/// - `counter` owns the visit counts (a `Stats`);
-/// - `web` serves pages, asking `counter` for each page's count.
-/// Pages are `splash` pages: they keep themselves current, so saved edits (and other visitors)
-/// show up in open tabs without a reload.
+/// - `counter` owns all the state (a `Stats`);
+/// - `web` serves pages, telling `counter` what each request did and showing what it answers.
+/// Pages are `splash` pages: they keep themselves current, so saved edits and other visitors'
+/// clicks show up in open tabs without a reload.
 /// See README.md for edits to try and what each one does to the running program.
 
-/// A request to `counter`: count a visit to `path` (or, for the page's refresh poll, just read
-/// its count), answering on `reply` with the page's count.
-struct Hit { path: str, visit: bool, reply: Chan<int> }
+/// What a request did: a visit to its page, a page refreshing itself (`Look`), or an event.
+enum Act { Visit, Look, Like, Sign(name: str) }
+
+/// A message to `counter`, answered on `reply` with what the page should show.
+struct Hit { path: str, act: Act, reply: Chan<Shown> }
+
+/// What a page shows.
+struct Shown { visits: int, likes: int, names: [str] }
 
 // ---- the counter: owns the state ----
 
 /// The counter's state. TRY: add a field (`since: int`) and the counter task alone restarts.
-struct Stats { hits: {str: int}, total: int }
+struct Stats { hits: {str: int}, total: int, likes: int, names: [str] }
 
 fn record(s: var Stats, path: str): int {
   s.hits[path] = (s.hits.get(path) else 0) + 1
@@ -24,10 +30,21 @@ fn record(s: var Stats, path: str): int {
   s.hits[path]
 }
 
+fn apply(s: var Stats, Visit, path: str) { let _ = record(&s, path) }
+fn apply(_: var Stats, Look, _: str) {}
+fn apply(s: var Stats, Like, _: str) { s.likes += 1 }
+fn apply(s: var Stats, Sign(name), _: str) {
+  let n = name.trim()
+  if n != "" {
+    s.names = ([n] + s.names).take(8)
+  }
+}
+
 fn counter(hits: Chan<Hit>): ()! {
-  var s = Stats { hits: {}, total: 0 }
+  var s = Stats { hits: {}, total: 0, likes: 0, names: [] }
   for h in hits {
-    h.reply.send(if h.visit { record(&s, h.path) } else { s.hits.get(h.path) else 0 })
+    apply(&s, h.act, h.path)
+    h.reply.send(Shown { visits: s.hits.get(h.path) else 0, likes: s.likes, names: s.names })
   }
 }
 
@@ -35,13 +52,27 @@ fn counter(hits: Chan<Hit>): ()! {
 
 /// The live part of the page. TRY: change the text or the colors and save: open tabs update,
 /// the counts stay.
-fn view(path: str, n: int): str = """
+fn view(path: str, s: Shown): str = """
   <div style="font: 20px system-ui; padding: 4em; min-height: 100vh; box-sizing: border-box; background: #fdf6e3; color: #333">
     <h1>🦆 Hello from Duck</h1>
-    <p>You are visitor <b>{n}</b> of <code>{splash.escape(path)}</code>.</p>
+    <p>You are visitor <b>{s.visits}</b> of <code>{splash.escape(path)}</code>.</p>
+    <p><button splash-click="like" style="font: inherit">❤ {s.likes}</button></p>
+    <form splash-submit="sign">
+      <input name="name" placeholder="your name" autocomplete="off" style="font: inherit">
+      <button style="font: inherit">sign the guestbook</button>
+    </form>
+    <ul>{s.names.map(n => "<li>{splash.escape(n)}</li>").join("")}</ul>
     <p><a href="/">home</a> · <a href="/pond">pond</a> · <a href="/boom">boom</a></p>
   </div>
   """
+
+/// What `req` did.
+fn act(req: http.server.Req): Act = match splash.event(req) {
+  some(splash.Click("like", _)) => Like
+  some(splash.Submit("sign", fields)) => Sign(fields.get("name") else "")
+  some(_) => Look
+  none => if splash.is_poll(req) { Look } else { Visit }
+}
 
 fn handle(req: http.server.Req, hits: Chan<Hit>): http.Resp {
   // TRY: `/boom` crashes this request's task; `sup` restarts the server, counts survive
@@ -49,11 +80,10 @@ fn handle(req: http.server.Req, hits: Chan<Hit>): http.Resp {
     let xs: [int] = []
     let _ = xs[1]
   }
-  let reply: Chan<int> = chan()
-  // an open page refreshing itself isn't a visit
-  hits.send(Hit { path: req.path, visit: !splash.is_poll(req), reply })
-  let n = reply.recv() else 0
-  splash.respond("live-site", view(req.path, n))
+  let reply: Chan<Shown> = chan()
+  hits.send(Hit { path: req.path, act: act(req), reply })
+  let shown = reply.recv() else Shown { visits: 0, likes: 0, names: [] }
+  splash.reply(req, "live-site", view(req.path, shown))
 }
 
 fn web(hits: Chan<Hit>, port: int): ()! uses net {

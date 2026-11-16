@@ -285,7 +285,7 @@ fn package_tests_pass() {
     let pkgs = [
         ("json", 16), ("csv", 11), ("regex", 15), ("cli", 11), ("http", 31), ("encoding", 8),
         ("hash", 8), ("datetime", 19), ("url", 13), ("toml", 23), ("log", 6), ("uuid", 8),
-        ("num", 15), ("text", 14), ("glob", 8), ("compress", 9), ("yaml", 14), ("xml", 11), ("sup", 7), ("splash", 5),
+        ("num", 15), ("text", 14), ("glob", 8), ("compress", 9), ("yaml", 14), ("xml", 11), ("sup", 7), ("splash", 9),
     ];
     for (pkg, min) in pkgs {
         let out = run_ok(&["test", &format!("packages/{pkg}/src/lib.duck")]);

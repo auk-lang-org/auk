@@ -8,6 +8,13 @@ effects = []
 checksum = "sha256:a73f02c15aa12b46334478dff4698d0441bdbf08c80abb21082ec4df26977ef2"
 
 [[package]]
+name = "hash"
+version = "0.1.0"
+source = "registry"
+effects = []
+checksum = "sha256:3100a72c68ffdf25b3b019fff2ce278e8776e50db2ded567fd0af881db00ba99"
+
+[[package]]
 name = "http"
 version = "0.1.0"
 source = "registry"

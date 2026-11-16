@@ -8,6 +8,13 @@ effects = []
 checksum = "sha256:a73f02c15aa12b46334478dff4698d0441bdbf08c80abb21082ec4df26977ef2"
 
 [[package]]
+name = "hash"
+version = "0.1.0"
+source = "registry"
+effects = []
+checksum = "sha256:3100a72c68ffdf25b3b019fff2ce278e8776e50db2ded567fd0af881db00ba99"
+
+[[package]]
 name = "http"
 version = "0.1.0"
 source = "registry"
@@ -23,10 +30,10 @@ checksum = "sha256:3f057b03d07b60c54e6f07593e51525f1fd52d12b0c0722e8f50be03601f5
 
 [[package]]
 name = "splash"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry"
 effects = ["net"]
-checksum = "sha256:fd2489049a27d09d516811813d9fcee5be5076f31e324a2e4e21c42a8db4662c"
+checksum = "sha256:f9d3f6ad0e2105b8cb9d27881e809c16d8a76ae20a4b0a24d08a6697bef37757"
 
 [[package]]
 name = "sup"
