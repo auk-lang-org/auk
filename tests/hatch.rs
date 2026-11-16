@@ -65,7 +65,6 @@ fn hatch(dir: &Path, cmd: &str, args: &[&str]) -> (Output, String) {
         .args(args)
         .current_dir(dir)
         .env("DUCK_HATCH_CMD", cmd)
-        .env_remove("DUCK_CFLAGS")
         .env_remove("DUCK_LEAK_CHECK")
         .output()
         .unwrap();
@@ -78,7 +77,7 @@ fn prompts(dir: &Path) -> Vec<String> {
 }
 
 fn duck(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_duck")).args(args).current_dir(dir).env_remove("DUCK_CFLAGS").env_remove("DUCK_LEAK_CHECK").output().unwrap()
+    Command::new(env!("CARGO_BIN_EXE_duck")).args(args).current_dir(dir).env_remove("DUCK_LEAK_CHECK").output().unwrap()
 }
 
 #[test]

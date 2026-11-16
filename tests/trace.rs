@@ -1,4 +1,4 @@
-//! Execution traces: `duck run --trace=...` and `duck test --trace=...` (runtime/trace.c, the
+//! Execution traces: `duck run --trace=...` and `duck test --trace=...` (runtime/src/trace.rs, the
 //! wrappers in lower.rs). Every trace line read here must parse as JSON (src/json.rs).
 
 #[allow(dead_code)]
@@ -13,7 +13,7 @@ use json::Json;
 
 fn duck_cmd() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_duck"));
-    for v in ["DUCK_CFLAGS", "DUCK_LEAK_CHECK", "DUCK_TRACE", "DUCK_TRACE_LIMIT", "DUCK_TRACE_TAIL", "DUCK_KEEP_C"] {
+    for v in ["DUCK_LEAK_CHECK", "DUCK_TRACE", "DUCK_TRACE_LIMIT", "DUCK_TRACE_TAIL"] {
         c.env_remove(v);
     }
     c
@@ -294,12 +294,11 @@ fn per_test_trace_files() {
     assert_eq!(ov[52].get("result").as_str(), Some("FAIL"));
 }
 
-/// Without the flag the generated C has no instrumentation at all (and the trace environment
-/// doesn't change codegen); with it every function outside core is wrapped.
+/// Without the flag the generated program has no instrumentation at all (and the trace
+/// environment doesn't change codegen); with it every function outside core is wrapped.
 #[test]
 fn no_instrumentation_without_the_flag() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let d = scratch("ir");
     let ir = |args: &[&str], env: bool| {
         let mut c = duck_cmd();
         c.arg("ir").args(args).current_dir(root);
@@ -312,32 +311,25 @@ fn no_instrumentation_without_the_flag() {
     };
     for f in ["examples/tour.duck", "examples/life.duck", "examples/physics.duck"] {
         let plain = ir(&[f], false);
-        assert!(!plain.contains("trace"), "{f}: the untraced C mentions tracing");
-        assert_eq!(ir(&[f], true), plain, "{f}: the environment changed the generated C");
-        // `duck run` without --trace compiles exactly this C
-        let kept = d.join("run.c");
-        let o = duck_cmd().args(["run", f]).current_dir(root).env("DUCK_KEEP_C", &kept).output().unwrap();
-        assert!(o.status.success(), "{}", text(&o));
-        assert_eq!(fs::read_to_string(&kept).unwrap(), plain, "{f}");
+        assert!(!plain.contains("trace"), "{f}: the untraced program mentions tracing");
+        assert_eq!(ir(&[f], true), plain, "{f}: the environment changed the generated program");
         // traced: a wrapper per function, call sites, and the tracer's start in main
         let traced = ir(&["--trace", f], false);
         assert_ne!(traced, plain);
-        assert!(traced.contains("    duck_trace_init(0);\n    dk_init();"), "{f}");
-        assert!(traced.contains("_main_untraced(") && traced.contains("duck_trace_site = ") && traced.contains("if (!duck_trace_begin()) return "), "{f}");
+        assert!(traced.contains("    duck_trace_init(false);\n    dk_init();"), "{f}");
+        assert!(traced.contains("_main_untraced(") && traced.contains("duck__trace_site_slot()") && traced.contains("duck_trace_begin()"), "{f}");
         // only the program's functions: core's (like `print`'s helpers) are not wrapped
         assert!(!traced.contains("\"core."), "{f}");
         assert!(ir(&["--trace", "--trace-core", f], false).contains("\"core."), "{f}");
     }
 }
 
-/// Traced builds keep the leak checker at zero and the generated C warning-free.
+/// Traced builds keep the leak checker at zero.
 #[test]
-fn traced_builds_are_leak_and_warning_free() {
+fn traced_builds_are_leak_free() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let d = scratch("clean");
-    let clang = std::env::var("CLANG").unwrap_or_else(|_| "clang".into());
     for (cmd, f) in [("test", "examples/calc.duck"), ("test", "examples/bank.duck"), ("run", "examples/tour.duck"), ("run", "examples/life.duck")] {
-        let c = d.join("prog.c");
         let tr = d.join("trace.out");
         let o = duck_cmd()
             .arg(cmd)
@@ -346,13 +338,10 @@ fn traced_builds_are_leak_and_warning_free() {
             .arg(f)
             .current_dir(root)
             .env("DUCK_LEAK_CHECK", "1")
-            .env("DUCK_KEEP_C", &c)
             .output()
             .unwrap();
         assert!(o.status.success(), "{f}: {}", text(&o));
         assert!(!text(&o).contains("leak"), "{f}: {}", text(&o));
-        let o = Command::new(&clang).args(["-std=c11", "-Wall", "-Wno-unused", "-Werror", "-fsyntax-only", "-I", "runtime"]).arg(&c).current_dir(root).output().unwrap();
-        assert!(o.status.success(), "{f}: warnings in the traced C:\n{}", text(&o));
     }
 }
 

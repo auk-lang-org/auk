@@ -1,9 +1,13 @@
 //! The `duck` command: the Duck compiler (lexer → parser → resolve → check → patterns/effects →
-//! lower → C → clang + the embedded runtime), its formatter, REPL, language server and docs.
+//! MIR → Cranelift, JIT or object file + the embedded runtime), its formatter, REPL, language
+//! server and docs.
 
 mod ast;
 mod build;
-mod cgen;
+mod mir;
+mod rt_symbols {
+    include!(concat!(env!("OUT_DIR"), "/rt_symbols.rs"));
+}
 mod check;
 mod diag;
 mod effects;
@@ -13,7 +17,6 @@ mod hatch;
 mod holes;
 mod json;
 mod lexer;
-mod lower;
 mod lsp;
 mod mcp;
 mod parser;
@@ -58,16 +61,14 @@ commands:
   pond [--quiet]           the interactive REPL (--quiet: no banner or prompts)
   lsp                      run the language server (LSP over stdio)
   mcp                      run the MCP server for AI agents (tools over stdio)
-  ir <file>                print the generated C
+  ir [--clif] <file>       print the program's MIR (--clif: its Cranelift IR)
   spec                     print the compact language reference
 
 packages are managed by `quack` (see docs/quack.md).
 
 environment:
-  CLANG                    the C compiler (default: clang)
-  DUCK_CFLAGS              extra C flags for the generated program (e.g. sanitizers)
-  DUCK_LEAK_CHECK=1        `run`/`test` binaries fail if runtime objects leak
-  DUCK_KEEP_C=<path>       keep the generated C
+  DUCK_LEAK_CHECK=1        `run`/`test` programs fail if runtime objects leak
+  DUCK_LINKER              the linker `build` uses (default: cc)
   DUCK_HATCH_CMD           the model command `hatch` runs, prompt on stdin (default: claude -p)";
 
 fn usage() -> ! {
@@ -91,6 +92,7 @@ fn main() {
         "holes" => holes::run(rest),
         "hatch" => hatch::run(rest),
         "run" | "build" | "ir" | "test" => build::cli(cmd, rest),
+        "__jit" => build::jit_cli(rest),
         "check" => match rest {
             [file] => check_file(file, false),
             [file, flag] if flag == "--json" => check_file(file, true),

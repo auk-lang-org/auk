@@ -1,6 +1,6 @@
 //! Units of measure (`3.0<m/s>`, `float<kg*m/s^2>`): inference through arithmetic, core
 //! functions and generics; every error (E0037, E0290-E0292); the `3<x` vs `3 < x` lexing rule;
-//! `duck fmt`; interpolation and `to_value`; and erasure (the generated C doesn't change).
+//! `duck fmt`; interpolation and `to_value`; and erasure (the generated program doesn't change).
 
 use std::fs;
 use std::path::PathBuf;
@@ -293,7 +293,7 @@ fn main() {
     };
     let (a, b) = (ir(with), ir(&without));
     assert!(a.len() > 1000);
-    assert_eq!(a, b, "the C for a program with units is the C for the same program without them");
+    assert_eq!(a, b, "the program with units compiles to the same IR as the program without them");
     assert_eq!(run(with), run(&without));
 }
 

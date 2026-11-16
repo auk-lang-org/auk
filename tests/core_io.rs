@@ -16,7 +16,7 @@ fn scratch(name: &str) -> PathBuf {
 
 fn duck_cmd() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_duck"));
-    c.env_remove("DUCK_CFLAGS").env("DUCK_LEAK_CHECK", "1");
+    c.env("DUCK_LEAK_CHECK", "1");
     c
 }
 

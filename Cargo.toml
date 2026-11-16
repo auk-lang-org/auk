@@ -4,3 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+duck_rt = { path = "runtime" }
+cranelift-codegen = "0.137.1"
+cranelift-frontend = "0.137.1"
+cranelift-module = "0.137.1"
+cranelift-jit = "0.137.1"
+cranelift-object = "0.137.1"
+cranelift-native = "0.137.1"
+libc = "0.2"
+
+[workspace]
+members = [".", "runtime"]
+
+# The runtime staticlib (built by build.rs for linking generated programs) never unwinds.
+[profile.rt]
+inherits = "release"
+panic = "abort"

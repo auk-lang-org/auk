@@ -42,8 +42,7 @@ fn p0_package_tests_pass_without_leaks() {
     for p in PKGS {
         let o = Command::new(env!("CARGO_BIN_EXE_duck"))
             .args(["test", &format!("packages/{p}/src/lib.duck")])
-            .env_remove("DUCK_CFLAGS")
-            .env("DUCK_LEAK_CHECK", "1")
+                .env("DUCK_LEAK_CHECK", "1")
             .output()
             .unwrap();
         let out = String::from_utf8_lossy(&o.stdout);
@@ -86,7 +85,7 @@ fn quack_adds_each_p0_package() {
 "#,
     )
     .unwrap();
-    let o = Command::new(env!("CARGO_BIN_EXE_duck")).args(["run", "src/main.duck"]).current_dir(&dir).env_remove("DUCK_CFLAGS").output().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_duck")).args(["run", "src/main.duck"]).current_dir(&dir).output().unwrap();
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(o.status.success(), "{out}\n{}", String::from_utf8_lossy(&o.stderr));
     assert_eq!(out, "a b\n64\naGk=\n1970-01-01T00:00:00Z\ntrue\n");

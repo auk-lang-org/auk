@@ -1,6 +1,6 @@
 /// The core library: always in scope, in every module, without a path (`core.x` still works when
 /// a local name shadows `x`). Each `extern fn` binds a Duck signature to a C function of the
-/// runtime (runtime/duck.h). A symbol that starts with `@` is a compiler intrinsic instead (see
+/// runtime (runtime/src). A symbol that starts with `@` is a compiler intrinsic instead (see
 /// `typed::Intrinsic`), and a trailing ` +loc` means the C function takes the call site's
 /// "file:line:col" as an extra last argument (for its panic message).
 ///

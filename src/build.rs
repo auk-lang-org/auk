@@ -1,12 +1,12 @@
-//! The back end driver: TypedProgram → one C file → clang (with the embedded C runtime) →
-//! a native executable; and the `run`, `build`, `ir` and `test` commands.
+//! The back end driver: TypedProgram → MIR (`mir/`) → machine code with Cranelift; and the
+//! `run`, `build`, `ir` and `test` commands.
 //!
-//! The runtime sources are compiled into the compiler (`include_str!`) and written to a fresh
-//! temporary directory for each build together with the generated `prog.c` (nothing is cached).
-//! `CLANG` overrides the C compiler. Debug builds (`run`, `test`, `ir`) check `ensures` and use
-//! `-O1`; `build` is a release build (`-O2`, no `ensures`) and refuses a program with holes.
-//! `DUCK_CFLAGS` adds C compiler flags (e.g. sanitizers); `DUCK_KEEP_C=<path>` saves the
-//! generated C of each build.
+//! `run` and `test` compile in memory (the JIT) and run the program in this process (tests and
+//! imprints in forked children); the runtime is the `duck_rt` library linked into the compiler.
+//! Debug builds (`run`, `test`, `ir`) check `ensures`; `build` is a release build (optimized, no
+//! `ensures`) that refuses a program with holes: it writes an object file and links it with the
+//! embedded runtime library (`libduck_rt.a`) using the system linker (`cc`; `DUCK_LINKER`
+//! overrides it).
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -15,60 +15,39 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{env, fs};
 
-use super::cgen::{CVal, Gen, Mode, Trace, c_str};
-use super::lower;
+use super::mir::progen::{CVal, Gen, Mode, Trace};
+use super::mir::types::TyInfo;
+use super::mir::{self, Abi, Body, Ex, MTy, Program, Sel, Stmt};
+use super::types::Ty;
 use super::diag::Diag;
 use super::resolve::ModId;
 use super::typed::{BodyRef, ConstId, TypedProgram};
 
-/// The C runtime, embedded: (file name, contents).
-pub const RUNTIME: &[(&str, &str)] = &[
-    ("duck.h", include_str!("../runtime/duck.h")),
-    ("duck_internal.h", include_str!("../runtime/duck_internal.h")),
-    ("arr.c", include_str!("../runtime/arr.c")),
-    ("core.c", include_str!("../runtime/core.c")),
-    ("err.c", include_str!("../runtime/err.c")),
-    ("map.c", include_str!("../runtime/map.c")),
-    ("rc.c", include_str!("../runtime/rc.c")),
-    ("str.c", include_str!("../runtime/str.c")),
-    ("task.c", include_str!("../runtime/task.c")),
-    ("testing.c", include_str!("../runtime/testing.c")),
-    ("tls.c", include_str!("../runtime/tls.c")),
-    ("trace.c", include_str!("../runtime/trace.c")),
-    ("value.c", include_str!("../runtime/value.c")),
-];
+/// The runtime (`runtime/`, the Rust crate `duck_rt`) as a static library, built by the cargo
+/// build script and linked into every program.
+pub const RUNTIME_LIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libduck_rt.a"));
 
-/// Libraries the runtime links besides libc and libm: the platform TLS stack on macOS
-/// (runtime/tls.c; always part of the SDK); elsewhere `-ldl`, since tls.c loads OpenSSL with
-/// `dlopen` at run time, so a build never needs it installed.
+/// Libraries the runtime needs besides libc and libm (what Rust's std links on each platform).
 pub const LINK_LIBS: &[&str] = if cfg!(target_os = "macos") {
-    &["-framework", "Network", "-framework", "Security", "-framework", "CoreFoundation"]
+    &["-framework", "CoreFoundation", "-framework", "Security", "-liconv"]
 } else {
-    &["-ldl"]
+    &["-ldl", "-lpthread", "-lrt", "-lgcc_s"]
 };
 
-/// The generated C for a type-checked program, plus the holes found in it.
-pub struct Output {
-    pub c: String,
+/// A generated program (MIR), plus the holes found in it.
+pub struct Generated {
+    pub prog: Program,
     pub holes: Vec<String>,
     /// The number of tests registered (test mode).
     pub tests: usize,
 }
 
-/// Generate the C program. In `Mode::Test` the entry point runs the root package's tests.
-pub fn generate(tp: &TypedProgram, mode: Mode) -> Result<Output, String> {
-    generate_traced(tp, mode, Trace::default())
-}
-
-/// `generate`, with execution-trace instrumentation when `trace.on`.
-pub fn generate_traced(tp: &TypedProgram, mode: Mode, trace: Trace) -> Result<Output, String> {
+/// The program as MIR. In `Mode::Test` the entry point runs the root package's tests.
+pub fn generate(tp: &TypedProgram, mode: Mode, trace: Trace) -> Result<Generated, String> {
     let imprints = eval_imprints(tp)?;
     let mut g = Gen::new(tp, mode);
     g.imprints = imprints;
     g.trace = trace;
-    // the tracer starts before the constants are initialized (their initializers are traced too)
-    let trace_init = |tests: bool| if trace.on { format!("    duck_trace_init({});
-", u8::from(tests)) } else { String::new() };
     let mut tests = Vec::new();
     for (i, inst) in tp.instances.iter().enumerate() {
         // an imprint's initializer ran at compile time; only its value is emitted
@@ -84,19 +63,28 @@ pub fn generate_traced(tp: &TypedProgram, mode: Mode, trace: Trace) -> Result<Ou
             tests.push((t, i));
         }
         emit(&mut g, i);
-        while let Some(j) = g.queue.pop() {
-            emit(&mut g, j);
-        }
+        drain(&mut g);
     }
-    let entry = match mode {
+    let i32 = MTy::I32;
+    let argv = MTy::void_ptr();
+    let entry = g.declare("dk_entry".into(), vec![i32.clone(), argv.clone()], i32.clone(), Abi::C);
+    let (mut b, ps) = g.body_for(entry);
+    // the tracer starts before the constants are initialized (their initializers are traced too)
+    let trace_init = |b: &mut Body, tests: bool| {
+        if trace.on {
+            b.do_(Ex::rt("duck_trace_init", vec![Ex::new(mir::K::Int(tests as i64), MTy::Bool)], MTy::Void));
+        }
+    };
+    let ntests = tests.len();
+    let mut tail: Vec<Stmt> = Vec::new();
+    match mode {
         Mode::Test => {
-            let mut s = format!("int main(int argc, char **argv) {{\n{}    dk_init();\n    duck_set_cleanup(dk_cleanup);\n", trace_init(true));
+            trace_init(&mut b, true);
             for (t, i) in &tests {
                 let f = g.inst_fn(*i);
-                let _ = writeln!(s, "    duck_test_register({}, {f});", c_str(&tp.tests[*t].name));
+                tail.push(Stmt::Do(Ex::rt("duck_test_register", vec![Ex::cstr(&tp.tests[*t].name), Ex::fn_addr(f)], MTy::Void)));
             }
-            s.push_str("    return duck_test_main(argc, argv);\n}\n");
-            s
+            tail.push(Stmt::Ret(Some(Ex::rt("duck_test_main", vec![ps[0].clone(), ps[1].clone()], i32.clone()))));
         }
         _ => {
             let Some(mi) = &tp.main else {
@@ -108,37 +96,56 @@ pub fn generate_traced(tp: &TypedProgram, mode: Mode, trace: Trace) -> Result<Ou
                 .position(|x| x.body == BodyRef::Fn(mi.func) && x.type_args.is_empty())
                 .ok_or_else(|| "error: main has no instance (compiler bug)\n".to_string())?;
             let f = g.inst_fn(inst);
-            let call = if mi.takes_args { format!("{f}(args)") } else { format!("{f}()") };
-            let body = match &mi.ret {
-                Ty::Int => format!("    return DUCK_OK(DuckRes_int, {call});"),
+            let rint = Ty::res(Ty::Int, g.err_ty());
+            let shim = g.declare("dk_main_shim".into(), vec![MTy::D(Ty::list(Ty::Str))], MTy::D(rint.clone()), Abi::C);
+            let (mut sb, sp) = g.body_for(shim);
+            let call = g.call(f, if mi.takes_args { vec![sp[0].clone()] } else { vec![] });
+            let ok = |e: Ex| Ex::agg(MTy::D(rint.clone()), vec![(Sel::F(0), Ex::new(mir::K::Int(1), MTy::Bool)), (Sel::F(1), e)]);
+            match &mi.ret {
+                Ty::Int => sb.emit(Stmt::Ret(Some(ok(call)))),
                 Ty::Res(t, _) if t.is_unit() => {
-                    format!("    DuckRes_unit r = {call};\n    if (!r.ok) return DUCK_ERR(DuckRes_int, r.err);\n    return DUCK_OK(DuckRes_int, 0);")
+                    let r = sb.decl(call);
+                    sb.open_if(g.fld(&r, Sel::F(0)).not());
+                    sb.emit(Stmt::Ret(Some(Ex::agg(MTy::D(rint.clone()), vec![(Sel::F(2), g.fld(&r, Sel::F(2)))]))));
+                    sb.close();
+                    sb.emit(Stmt::Ret(Some(ok(Ex::int(0)))));
                 }
-                Ty::Res(..) => format!("    return {call};"),
-                _ => format!("    {call};\n    return DUCK_OK(DuckRes_int, 0);"),
-            };
-            let init = trace_init(false);
-            format!(
-                "static DuckRes_int dk_main_shim(DuckArr *args) {{\n    (void)args;\n{body}\n}}\nint main(int argc, char **argv) {{\n{init}    dk_init();\n    duck_set_cleanup(dk_cleanup);\n    return duck_main_wrapper(argc, argv, dk_main_shim);\n}}\n"
-            )
+                Ty::Res(..) => sb.emit(Stmt::Ret(Some(call))),
+                _ => {
+                    sb.do_(call);
+                    sb.emit(Stmt::Ret(Some(ok(Ex::int(0)))));
+                }
+            }
+            g.define(shim, sb);
+            trace_init(&mut b, false);
+            tail.push(Stmt::Ret(Some(Ex::rt("duck_main_wrapper", vec![ps[0].clone(), ps[1].clone(), Ex::fn_addr(shim)], i32.clone()))));
         }
-    };
-    while let Some(j) = g.queue.pop() {
-        emit(&mut g, j);
     }
+    drain(&mut g);
+    let (init, cleanup) = g.init_and_cleanup();
+    b.do_(g.call(init, vec![]));
+    b.do_(Ex::rt("duck_set_cleanup", vec![Ex::fn_addr(cleanup)], MTy::Void));
+    for s in tail {
+        b.emit(s);
+    }
+    g.define(entry, b);
+    g.prog.entry = Some(entry);
     let holes = g.holes.clone();
-    let ntests = tests.len();
-    Ok(Output { c: g.finish(&entry), holes, tests: ntests })
+    Ok(Generated { prog: g.prog, holes, tests: ntests })
 }
-
-use super::types::Ty;
 
 fn emit(g: &mut Gen, i: usize) {
     if g.emitted.contains(&i) {
         return;
     }
     g.emitted.insert(i);
-    lower::emit_instance(g, i);
+    mir::lower::emit_instance(g, i);
+}
+
+fn drain(g: &mut Gen) {
+    while let Some(j) = g.queue.pop() {
+        emit(g, j);
+    }
 }
 
 // ---- compile-time imprints ----
@@ -151,50 +158,10 @@ fn emit(g: &mut Gen, i: usize) {
 //   when they start and finish computing constant `c`, and `C<c>` (then exit 3) when one is
 //   needed while it is being computed: a cycle through function calls (direct cycles are
 //   E0115 in the checker);
-// - `main` writes `V<c> <value>` for each imprint: its derived (structural) `to_value`.
-// Records go to the file named by argv[1], not stdout (an imprint may `print`). A value is
-// `N`, `T`, `F`, `I<int>;`, `D<16 hex digits: the f64 bits>;`, `S<n>:<n bytes>`,
-// `L<n>;<n values>` or `M<n>;<n (S-key, value) pairs>`. A panic (exit 101) is blamed on the
-// innermost imprint being computed (E0420). Nothing is cached.
-
-/// The helper's writer of a `Value` tree.
-const DUMP_C: &str = r#"static void dk_dump(DuckValue v) {
-    switch (v.tag) {
-    case DUCK_V_NULL: fputc('N', dk_out); break;
-    case DUCK_V_BOOL: fputc(v.u.b ? 'T' : 'F', dk_out); break;
-    case DUCK_V_INT: fprintf(dk_out, "I%lld;", (long long)v.u.i); break;
-    case DUCK_V_FLOAT: {
-        uint64_t bits;
-        memcpy(&bits, &v.u.f, sizeof bits);
-        fprintf(dk_out, "D%016llx;", (unsigned long long)bits);
-        break;
-    }
-    case DUCK_V_STR: {
-        int64_t n = v.u.s ? v.u.s->len_bytes : 0;
-        fprintf(dk_out, "S%lld:", (long long)n);
-        if (n) fwrite(v.u.s->data, 1, (size_t)n, dk_out);
-        break;
-    }
-    case DUCK_V_LIST:
-        fprintf(dk_out, "L%lld;", (long long)duck_arr_len(v.u.list));
-        for (int64_t i = 0; i < duck_arr_len(v.u.list); i++) dk_dump(*(DuckValue *)duck_arr_at(v.u.list, i, NULL));
-        break;
-    case DUCK_V_MAP: {
-        fprintf(dk_out, "M%lld;", (long long)duck_map_len(v.u.map));
-        int64_t it = 0;
-        void *kp, *vp;
-        while (duck_map_next(v.u.map, &it, &kp, &vp)) {
-            DuckStr *k = *(DuckStr **)kp;
-            int64_t n = k ? k->len_bytes : 0;
-            fprintf(dk_out, "S%lld:", (long long)n);
-            if (n) fwrite(k->data, 1, (size_t)n, dk_out);
-            dk_dump(*(DuckValue *)vp);
-        }
-        break;
-    }
-    }
-}
-"#;
+// - the entry point writes `V<c> <value>` for each imprint: its derived (structural) `to_value`.
+// Records go to the file named by argv[1], not stdout (an imprint may `print`); the runtime
+// (runtime/src/compiler.rs) writes them. A panic (exit 101) is blamed on the innermost imprint
+// being computed (E0420). Nothing is cached.
 
 /// Evaluate every imprint of the program at compile time: their values, by constant id.
 pub fn eval_imprints(tp: &TypedProgram) -> Result<HashMap<ConstId, CVal>, String> {
@@ -204,35 +171,51 @@ pub fn eval_imprints(tp: &TypedProgram) -> Result<HashMap<ConstId, CVal>, String
     }
     let mut g = Gen::new(tp, Mode::Run);
     g.imprint_eval = true;
-    g.ops_defs.push_str("static FILE *dk_out;\n");
-    let mut body = String::new();
+    let entry = g.declare("dk_entry".into(), vec![MTy::I32, MTy::void_ptr()], MTy::I32, Abi::C);
+    let (mut b, ps) = g.body_for(entry);
+    let mut values = Vec::new();
     for &c in &ids {
         let getter = g.const_getter(c);
         let tov = g.tov_fn(&tp.consts[c].ty);
-        let _ = writeln!(
-            body,
-            "    {{\n        DuckValue v = {tov}({getter}());\n        fputs(\"V{c} \", dk_out);\n        dk_dump(v);\n        fputs(\"\\n\", dk_out);\n        fflush(dk_out);\n        duck_value_release(v);\n    }}"
-        );
+        values.push((c, getter, tov));
     }
-    while let Some(j) = g.queue.pop() {
-        emit(&mut g, j);
+    drain(&mut g);
+    let (init, _) = g.init_and_cleanup();
+    let bad = Ex::rt("duck__imprint_open", vec![ps[0].clone(), ps[1].clone()], MTy::Bool).not();
+    b.open_if(bad);
+    b.emit(Stmt::Ret(Some(Ex::int_as(2, MTy::I32))));
+    b.close();
+    b.do_(g.call(init, vec![]));
+    let vt = MTy::D(g.value_ty());
+    for (c, getter, tov) in values {
+        let v = g.call(getter, vec![]);
+        let tv = b.decl(g.call_ref(&tov, vec![v], vt.clone()));
+        b.do_(Ex::rt("duck__imprint_value", vec![Ex::i64(c as i64), tv.clone().addr()], MTy::Void));
+        b.do_(Ex::rt("duck_value_release", vec![tv], MTy::Void));
     }
-    let entry = format!(
-        "{DUMP_C}int main(int argc, char **argv) {{\n    if (argc < 2 || !(dk_out = fopen(argv[1], \"wb\"))) return 2;\n    dk_init();\n{body}    fclose(dk_out);\n    return 0;\n}}\n"
-    );
-    let c = g.finish(&entry);
+    b.do_(Ex::rt("duck__imprint_close", vec![], MTy::Void));
+    b.emit(Stmt::Ret(Some(Ex::int_as(0, MTy::I32))));
+    g.define(entry, b);
+    g.prog.entry = Some(entry);
+    let info = TyInfo::new(tp);
     let dir = scratch()?;
-    let res = run_imprint_helper(tp, &dir, &c);
+    let records = dir.join("imprints.out");
+    let errs = dir.join("imprints.err");
+    // in a forked child: an imprint may panic (or loop; that is the program's own bug)
+    let run = || -> Result<(Option<i32>, String), String> {
+        let j = mir::clif::jit(&g.prog, &info, false)?;
+        let args = vec!["imprints".to_string(), records.display().to_string()];
+        let code = j.run_forked(&args, mir::clif::Redirect { stdout: Some(Path::new("/dev/null")), stderr: Some(&errs), ..Default::default() })?;
+        Ok((code, fs::read_to_string(&errs).unwrap_or_default()))
+    };
+    let res = run().and_then(|(code, stderr)| imprint_results(tp, &records, code, &stderr));
     let _ = fs::remove_dir_all(&dir);
     res
 }
 
-fn run_imprint_helper(tp: &TypedProgram, dir: &Path, c: &str) -> Result<HashMap<ConstId, CVal>, String> {
-    let exe = dir.join("imprints");
-    cc_in(dir, c, &exe, Mode::Run, &[], false)?;
-    let records = dir.join("imprints.out");
-    let out = Command::new(&exe).arg(&records).output().map_err(|e| format!("error: cannot run the imprint helper: {e}\n"))?;
-    let data = fs::read(&records).unwrap_or_default();
+/// The imprint values from the helper's records (`code`: its exit code, None if killed).
+fn imprint_results(tp: &TypedProgram, records: &Path, code: Option<i32>, stderr: &str) -> Result<HashMap<ConstId, CVal>, String> {
+    let data = fs::read(records).unwrap_or_default();
     let mut p = Records { b: &data, i: 0 };
     let mut values = HashMap::new();
     let mut stack: Vec<ConstId> = Vec::new();
@@ -262,9 +245,8 @@ fn run_imprint_helper(tp: &TypedProgram, dir: &Path, c: &str) -> Result<HashMap<
             .note("break the cycle: give one of the constants a value that doesn't read the other");
         return Err(render_at(tp, k.module, &d));
     }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if out.status.code() == Some(101) {
-        let (msg, at) = panic_message(&stderr);
+    if code == Some(101) {
+        let (msg, at) = panic_message(stderr);
         // blame the innermost imprint being computed; a `let` it was computing goes in a note
         let Some(c) = stack.iter().rev().copied().find(|&c| tp.consts[c].imprint) else {
             return Err(format!("error: computing the imprints panicked: {msg}\n  at {at}\n"));
@@ -279,8 +261,8 @@ fn run_imprint_helper(tp: &TypedProgram, dir: &Path, c: &str) -> Result<HashMap<
         }
         return Err(render_at(tp, k.module, &d));
     }
-    if !out.status.success() || (0..tp.consts.len()).any(|c| tp.consts[c].imprint && !values.contains_key(&c)) {
-        let status = out.status.code().map_or("killed by a signal".to_string(), |c| format!("exit status {c}"));
+    if code != Some(0) || (0..tp.consts.len()).any(|c| tp.consts[c].imprint && !values.contains_key(&c)) {
+        let status = code.map_or("killed by a signal".to_string(), |c| format!("exit status {c}"));
         return Err(format!("error: computing the imprints failed ({status}); this is a duck compiler bug:\n{stderr}"));
     }
     Ok(values)
@@ -383,107 +365,96 @@ fn scratch() -> Result<PathBuf, String> {
     Ok(d)
 }
 
-/// Compile generated C with the runtime into `out`.
-pub fn cc(c: &str, out: &Path, mode: Mode, extra: &[String]) -> Result<(), String> {
+/// The exit status of `duck __jit` when the program doesn't compile.
+pub const JIT_BUILD_FAILED: i32 = 125;
+
+/// `duck __jit run|test [--trace-core] <file> [args...]`: compile and run in this process (the
+/// trace destination comes from the environment). For drivers that need the program in a
+/// child process of its own: flat test directories, `duck hatch`, `duck pond`.
+pub fn jit_cli(args: &[String]) -> i32 {
+    let (mode, rest) = match args.split_first() {
+        Some((m, rest)) if m == "run" => (Mode::Run, rest),
+        Some((m, rest)) if m == "test" => (Mode::Test, rest),
+        _ => {
+            eprintln!("usage: duck __jit run|test [--trace-core] <file> [args...]");
+            return 2;
+        }
+    };
+    let (core, rest) = match rest.split_first() {
+        Some((f, r)) if f == "--trace-core" => (true, r),
+        _ => (false, rest),
+    };
+    let Some((file, args)) = rest.split_first() else { return 2 };
+    let on = env::var_os("DUCK_TRACE").is_some();
+    match jit_run(Path::new(file), args, mode, Trace { on, core }) {
+        Ok(code) => exit_now(code),
+        Err(e) => {
+            eprint!("{e}");
+            JIT_BUILD_FAILED
+        }
+    }
+}
+
+/// `duck build`: compile `path` (a release build: optimized, no `ensures`, no holes allowed)
+/// to an object file with Cranelift and link it with the runtime library into `out`. The
+/// linker is the system C compiler driver (`cc`; `DUCK_LINKER` overrides it).
+pub fn build_native(path: &Path, out: &Path) -> Result<(), String> {
+    let tp = check(path)?;
+    let g = generate(&tp, Mode::Release, Trace::default())?;
+    if !g.holes.is_empty() {
+        let mut s = format!("error: `{}` still has {} unfilled hole(s); `duck build` needs a complete program\n", path.display(), g.holes.len());
+        for h in &g.holes {
+            let _ = writeln!(s, "  {h}");
+        }
+        s.push_str("  (fill them in, or use `duck run` / `duck test`, which allow holes)\n");
+        return Err(s);
+    }
+    let info = TyInfo::new(&tp);
+    let obj = mir::clif::object(&g.prog, &info, true).map_err(|e| format!("error: code generation failed (this is a duck compiler bug): {e}\n"))?;
     let dir = scratch()?;
-    let res = cc_in(&dir, c, out, mode, extra, true);
+    let res = (|| {
+        let o = dir.join("prog.o");
+        fs::write(&o, obj).map_err(|e| format!("error: cannot write {}: {e}\n", o.display()))?;
+        let lib = dir.join("libduck_rt.a");
+        fs::write(&lib, RUNTIME_LIB).map_err(|e| format!("error: cannot write the runtime library: {e}\n"))?;
+        let linker = env::var("DUCK_LINKER").unwrap_or_else(|_| "cc".into());
+        let output = Command::new(&linker)
+            .arg(&o)
+            .arg(&lib)
+            .args(LINK_LIBS)
+            .args(["-lm", "-lpthread"])
+            .arg("-o")
+            .arg(out)
+            .output()
+            .map_err(|e| format!("error: cannot run the linker `{linker}`: {e}\n"))?;
+        if !output.status.success() {
+            return Err(format!("error: linking failed:\n{}", String::from_utf8_lossy(&output.stderr)));
+        }
+        Ok(())
+    })();
     let _ = fs::remove_dir_all(&dir);
     res
 }
 
-/// Compile C into `out` in the scratch directory `dir` (`keep`: honor `DUCK_KEEP_C`).
-fn cc_in(dir: &Path, c: &str, out: &Path, mode: Mode, extra: &[String], keep: bool) -> Result<(), String> {
-    let w = |name: &str, text: &str| fs::write(dir.join(name), text).map_err(|e| format!("error: cannot write {name}: {e}\n"));
-    for (name, text) in RUNTIME {
-        w(name, text)?;
+/// Compile `path` in memory and run it in this process with `args` (`argv[0]` is the file);
+/// returns its exit code.
+pub fn jit_run(path: &Path, args: &[String], mode: Mode, trace: Trace) -> Result<i32, String> {
+    let tp = check(path)?;
+    let g = generate(&tp, mode, trace)?;
+    if mode == Mode::Test && g.tests == 0 {
+        eprintln!("note: {} has no `test` blocks", path.display());
     }
-    w("prog.c", c)?;
-    if keep && let Ok(keep) = env::var("DUCK_KEEP_C") {
-        let _ = fs::write(keep, c);
-    }
-    let clang = env::var("CLANG").unwrap_or_else(|_| "clang".into());
-    let mut cmd = Command::new(&clang);
-    cmd.args(["-std=c11", "-pthread", "-Wall", "-Wno-unused"]);
-    cmd.arg(if mode == Mode::Release { "-O2" } else { "-O1" });
-    cmd.args(extra);
-    if let Ok(flags) = env::var("DUCK_CFLAGS") {
-        cmd.args(flags.split_whitespace());
-    }
-    cmd.arg("-I").arg(dir);
-    cmd.arg(dir.join("prog.c"));
-    for (name, _) in RUNTIME {
-        if name.ends_with(".c") {
-            cmd.arg(dir.join(name));
-        }
-    }
-    cmd.args(LINK_LIBS).arg("-lm").arg("-o").arg(out);
-    let output = cmd.output().map_err(|e| format!("error: failed to run `{clang}`: {e}\n"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "error: the C compiler rejected the generated code (this is a duck compiler bug):\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    Ok(())
+    let info = TyInfo::new(&tp);
+    let j = mir::clif::jit(&g.prog, &info, false)?;
+    let mut argv = vec![path.display().to_string()];
+    argv.extend(args.iter().cloned());
+    Ok(j.run(&argv))
 }
 
-/// The runtime compiled once into object files, for drivers that build many small programs
-/// (`duck pond` builds one per input): each build then compiles only the generated C and links
-/// these objects, which keeps a build to one small clang invocation.
-pub struct PrebuiltRuntime {
-    dir: PathBuf,
-    objs: Vec<PathBuf>,
-}
-
-impl PrebuiltRuntime {
-    /// Write the runtime sources into `dir` and compile them (`-O1`) to object files there.
-    pub fn build(dir: &Path) -> Result<PrebuiltRuntime, String> {
-        fs::create_dir_all(dir).map_err(|e| format!("error: cannot create {}: {e}\n", dir.display()))?;
-        for (name, text) in RUNTIME {
-            fs::write(dir.join(name), text).map_err(|e| format!("error: cannot write {name}: {e}\n"))?;
-        }
-        let clang = env::var("CLANG").unwrap_or_else(|_| "clang".into());
-        let mut cmd = Command::new(&clang);
-        cmd.current_dir(dir).args(["-std=c11", "-pthread", "-Wall", "-Wno-unused", "-O1", "-c"]);
-        if let Ok(flags) = env::var("DUCK_CFLAGS") {
-            cmd.args(flags.split_whitespace());
-        }
-        let mut objs = Vec::new();
-        for (name, _) in RUNTIME {
-            if let Some(stem) = name.strip_suffix(".c") {
-                cmd.arg(name);
-                objs.push(dir.join(format!("{stem}.o")));
-            }
-        }
-        let output = cmd.output().map_err(|e| format!("error: failed to run `{clang}`: {e}\n"))?;
-        if !output.status.success() {
-            return Err(format!("error: the C compiler rejected the runtime:\n{}", String::from_utf8_lossy(&output.stderr)));
-        }
-        Ok(PrebuiltRuntime { dir: dir.to_path_buf(), objs })
-    }
-
-    /// Compile generated C (written to `c_file`) at `-O0` and link it with the prebuilt runtime.
-    pub fn cc(&self, c: &str, c_file: &Path, out: &Path) -> Result<(), String> {
-        fs::write(c_file, c).map_err(|e| format!("error: cannot write {}: {e}\n", c_file.display()))?;
-        if let Ok(keep) = env::var("DUCK_KEEP_C") {
-            let _ = fs::write(keep, c);
-        }
-        let clang = env::var("CLANG").unwrap_or_else(|_| "clang".into());
-        let mut cmd = Command::new(&clang);
-        cmd.args(["-std=c11", "-pthread", "-w", "-O0"]);
-        if let Ok(flags) = env::var("DUCK_CFLAGS") {
-            cmd.args(flags.split_whitespace());
-        }
-        cmd.arg("-I").arg(&self.dir).arg(c_file).args(&self.objs).args(LINK_LIBS).arg("-lm").arg("-o").arg(out);
-        let output = cmd.output().map_err(|e| format!("error: failed to run `{clang}`: {e}\n"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "error: the C compiler rejected the generated code (this is a duck compiler bug):\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-        Ok(())
-    }
+/// End the process as a C program returning from `main` would: flush C stdio, run `atexit`
+/// handlers (the tracer's), exit with `code`.
+pub fn exit_now(code: i32) -> ! {
+    unsafe { libc::exit(code) }
 }
 
 /// Load and type-check a program.
@@ -497,22 +468,6 @@ pub fn check(path: &Path) -> Result<TypedProgram, String> {
         }
         s
     })
-}
-
-/// Type-check, generate and compile `path` into `out`. Returns the generated program info.
-pub fn build_exe(path: &Path, out: &Path, mode: Mode, extra: &[String], trace: Trace) -> Result<Output, String> {
-    let tp = check(path)?;
-    let o = generate_traced(&tp, mode, trace)?;
-    if mode == Mode::Release && !o.holes.is_empty() {
-        let mut s = format!("error: `{}` still has {} unfilled hole(s); `duck build` needs a complete program\n", path.display(), o.holes.len());
-        for h in &o.holes {
-            let _ = writeln!(s, "  {h}");
-        }
-        s.push_str("  (fill them in, or use `duck run` / `duck test`, which allow holes)\n");
-        return Err(s);
-    }
-    cc(&o.c, out, mode, extra)?;
-    Ok(o)
 }
 
 /// The root file `duck test <dir>` builds: the project's `src/lib.duck` or `src/main.duck`.
@@ -565,6 +520,19 @@ impl TraceOpts {
     }
 
     /// Configure the environment of a traced program (`dest` overrides `self.dest`).
+    /// Configure the tracer of a program run in this process (the JIT).
+    pub fn apply_here(&self, dest: Option<&str>) {
+        let Some(d) = dest.or(self.dest.as_deref()) else { return };
+        // SAFETY: the compiler is single-threaded when it starts the program
+        unsafe {
+            env::set_var("DUCK_TRACE", d);
+            match self.limit {
+                Some(n) => env::set_var("DUCK_TRACE_LIMIT", n.to_string()),
+                None => env::remove_var("DUCK_TRACE_LIMIT"),
+            }
+        }
+    }
+
     pub fn apply(&self, cmd: &mut Command, dest: Option<&str>) {
         let Some(d) = dest.or(self.dest.as_deref()) else { return };
         cmd.env("DUCK_TRACE", d);
@@ -613,16 +581,6 @@ pub fn trace_flags(args: &[String], leading: bool) -> Result<(TraceOpts, Vec<Str
     Ok((o, rest))
 }
 
-/// Build the test executable of `root` (a temporary file the caller removes).
-fn build_tests(root: &Path, trace: &TraceOpts) -> Result<PathBuf, String> {
-    let exe = temp_exe("test");
-    let o = build_exe(root, &exe, Mode::Test, &[], trace.codegen())?;
-    if o.tests == 0 {
-        eprintln!("note: {} has no `test` blocks", root.display());
-    }
-    Ok(exe)
-}
-
 /// The trace directory of `duck test --trace=<dir>` (created), or `-`.
 fn test_trace_dest(trace: &TraceOpts, sub: Option<&str>) -> Result<Option<String>, String> {
     match trace.dest.as_deref() {
@@ -656,20 +614,12 @@ fn test_files(files: &[PathBuf], filter: Option<&str>, trace: &TraceOpts) -> i32
                 return 1;
             }
         };
-        let exe = match build_tests(f, trace) {
-            Ok(exe) => exe,
-            Err(e) => {
-                eprint!("{e}");
-                println!("did not build");
-                broken += 1;
-                continue;
-            }
-        };
-        let mut cmd = Command::new(&exe);
+        // each file is its own program, in a process of its own
+        let mut cmd = Command::new(env::current_exe().unwrap_or_else(|_| "duck".into()));
+        cmd.arg("__jit").arg("test").args(trace.core.then_some("--trace-core")).arg(f);
         cmd.args(filter).stderr(std::process::Stdio::inherit());
         trace.apply(&mut cmd, dest.as_deref());
         let out = cmd.output();
-        let _ = fs::remove_file(&exe);
         let Ok(out) = out else {
             println!("could not run the tests");
             broken += 1;
@@ -691,7 +641,12 @@ fn test_files(files: &[PathBuf], filter: Option<&str>, trace: &TraceOpts) -> i32
                     broken += 1;
                 }
             }
-            None => broken += 1,
+            None => {
+                if out.status.code() == Some(JIT_BUILD_FAILED) {
+                    println!("did not build");
+                }
+                broken += 1
+            }
         }
     }
     let files_n = files.len();
@@ -699,11 +654,6 @@ fn test_files(files: &[PathBuf], filter: Option<&str>, trace: &TraceOpts) -> i32
     let broken_note = if broken > 0 { format!(", {broken} did not build or run") } else { String::new() };
     println!("== {files_n} file{plural}{broken_note}: {passed} passed, {failed} failed");
     if failed > 0 || broken > 0 { 1 } else { 0 }
-}
-
-fn temp_exe(tag: &str) -> PathBuf {
-    let n = BUILD_N.fetch_add(1, Ordering::Relaxed);
-    env::temp_dir().join(format!("duck-{tag}-{}-{n}", std::process::id()))
 }
 
 /// `duck run|build|ir|test ...`. Returns the exit code.
@@ -754,21 +704,22 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
                 Ok(d) => d,
                 Err(e) => return fail(e),
             };
-            match build_tests(&root, &trace) {
-                Ok(exe) => {
-                    let mut c = Command::new(&exe);
-                    c.args(filter.as_slice());
-                    trace.apply(&mut c, dest.as_deref());
-                    let status = c.status();
-                    let _ = fs::remove_file(&exe);
-                    status.ok().and_then(|s| s.code()).unwrap_or(1)
-                }
+            trace.apply_here(dest.as_deref());
+            match jit_run(&root, filter.as_slice(), Mode::Test, trace.codegen()) {
+                Ok(code) => exit_now(code),
                 Err(e) => fail(e),
             }
         }
         "run" | "build" | "ir" => {
-            let [file, rest @ ..] = args.as_slice() else {
-                let flags = if cmd == "build" { "" } else { "[--trace=json|<file>] [--trace-limit N] [--trace-core] " };
+            // `duck ir --clif`: the Cranelift IR instead of the MIR
+            let clif = cmd == "ir" && args.first().is_some_and(|a| a == "--clif");
+            let args = if clif { &args[1..] } else { &args[..] };
+            let [file, rest @ ..] = args else {
+                let flags = match cmd {
+                    "build" => "",
+                    "ir" => "[--clif] [--trace=json|<file>] [--trace-core] ",
+                    _ => "[--trace=json|<file>] [--trace-limit N] [--trace-core] ",
+                };
                 eprintln!("usage: duck {cmd} {flags}<file.duck>");
                 return 2;
             };
@@ -779,13 +730,20 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
                         Ok(t) => t,
                         Err(e) => return fail(e),
                     };
-                    match generate_traced(&tp, Mode::Run, trace.codegen()) {
-                        Ok(o) => {
-                            print!("{}", o.c);
-                            0
+                    let g = match generate(&tp, Mode::Run, trace.codegen()) {
+                        Ok(g) => g,
+                        Err(e) => return fail(e),
+                    };
+                    let info = TyInfo::new(&tp);
+                    if clif {
+                        match mir::clif::ir_text(&g.prog, &info) {
+                            Ok(t) => print!("{t}"),
+                            Err(e) => return fail(format!("error: {e}\n")),
                         }
-                        Err(e) => fail(e),
+                    } else {
+                        print!("{}", mir::print::print(&g.prog, &info));
                     }
+                    0
                 }
                 "build" => {
                     let out = match rest {
@@ -796,22 +754,17 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
                             return 2;
                         }
                     };
-                    match build_exe(path, &out, Mode::Release, &[], Trace::default()) {
-                        Ok(_) => 0,
+                    match build_native(path, &out) {
+                        Ok(()) => 0,
                         Err(e) => fail(e),
                     }
                 }
                 _ => {
-                    let exe = temp_exe("run");
-                    if let Err(e) = build_exe(path, &exe, Mode::Run, &[], trace.codegen()) {
-                        return fail(e);
+                    trace.apply_here(None);
+                    match jit_run(path, rest, Mode::Run, trace.codegen()) {
+                        Ok(code) => exit_now(code),
+                        Err(e) => fail(e),
                     }
-                    let mut c = Command::new(&exe);
-                    c.args(rest);
-                    trace.apply(&mut c, None);
-                    let status = c.status();
-                    let _ = fs::remove_file(&exe);
-                    status.ok().and_then(|s| s.code()).unwrap_or(1)
                 }
             }
         }

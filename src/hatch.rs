@@ -25,7 +25,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{env, fs, thread};
 
 use super::diag::FileDiag;
@@ -335,16 +335,34 @@ pub fn splice(src: &str, h: &Hole, code: &str) -> String {
 
 static RUN_N: AtomicUsize = AtomicUsize::new(0);
 
-/// Build the program's test binary (holes allowed, contracts on, traced) and run it. Only the tests
+/// Build the program's tests (holes allowed, contracts on, traced) and run them. Only the tests
 /// named in `names` count; one that fails only by reaching another unfilled hole is ignored.
 /// Returns their failure output.
 fn run_tests(root: &Path, names: &[&str]) -> Result<(), String> {
+    // compiled here (the candidate is an in-memory source), run in a forked child in its own
+    // process group, killed after TEST_TIMEOUT
+    let tp = super::build::check(root)?;
+    let g = super::build::generate(&tp, super::mir::progen::Mode::Test, super::mir::progen::Trace { on: true, core: false })?;
+    let info = super::mir::types::TyInfo::new(&tp);
+    let j = super::mir::clif::jit(&g.prog, &info, false)?;
     let n = RUN_N.fetch_add(1, Ordering::Relaxed);
-    let exe = env::temp_dir().join(format!("duck-hatch-{}-{n}", std::process::id()));
-    super::build::build_exe(root, &exe, super::cgen::Mode::Test, &[], super::cgen::Trace { on: true, core: false })?;
-    let out = run_with_timeout(&exe, TEST_TIMEOUT, &[("DUCK_TRACE", "-"), ("DUCK_TRACE_TAIL", TRACE_TAIL)]);
-    let _ = fs::remove_file(&exe);
-    let out = out?;
+    let file = env::temp_dir().join(format!("duck-hatch-{}-{n}.out", std::process::id()));
+    // SAFETY: hatch is single-threaded here
+    unsafe {
+        env::set_var("DUCK_TRACE", "-");
+        env::set_var("DUCK_TRACE_TAIL", TRACE_TAIL);
+    }
+    let r = super::mir::clif::Redirect { merged: Some(&file), stdin_null: true, ..Default::default() };
+    let w = j.spawn(&[root.display().to_string()], r, true).and_then(|pid| super::mir::clif::wait_child(pid, Some(TEST_TIMEOUT)));
+    unsafe {
+        env::remove_var("DUCK_TRACE");
+        env::remove_var("DUCK_TRACE_TAIL");
+    }
+    let out = fs::read(&file).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+    let _ = fs::remove_file(&file);
+    if w?.is_none() {
+        return Err(format!("the tests did not finish within {}s (an infinite loop?)", TEST_TIMEOUT.as_secs()));
+    }
     // "ok NAME" / "FAIL NAME" lines, each failure followed by its indented output
     let mut failures = String::new();
     let mut seen = 0;
@@ -384,47 +402,6 @@ fn run_tests(root: &Path, names: &[&str]) -> Result<(), String> {
         return Err(format!("the tests did not run to completion:\n{out}"));
     }
     Ok(())
-}
-
-/// Run a test binary in its own process group, killing the group after `limit`.
-fn run_with_timeout(exe: &Path, limit: Duration, envs: &[(&str, &str)]) -> Result<String, String> {
-    use std::os::unix::process::CommandExt;
-    let mut child = Command::new(exe)
-        .envs(envs.iter().copied())
-        .process_group(0)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("cannot run the tests: {e}"))?;
-    let mut stdout = child.stdout.take().expect("piped stdout");
-    let mut stderr = child.stderr.take().expect("piped stderr");
-    let out_t = thread::spawn(move || {
-        let mut s = String::new();
-        let _ = std::io::Read::read_to_string(&mut stdout, &mut s);
-        s
-    });
-    let err_t = thread::spawn(move || {
-        let mut s = String::new();
-        let _ = std::io::Read::read_to_string(&mut stderr, &mut s);
-        s
-    });
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if start.elapsed() > limit => {
-                let _ = Command::new("kill").args(["-KILL", &format!("-{}", child.id())]).status();
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("the tests did not finish within {}s (an infinite loop?)", limit.as_secs()));
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(20)),
-            Err(e) => return Err(format!("cannot run the tests: {e}")),
-        }
-    }
-    let mut s = out_t.join().unwrap_or_default();
-    s += &err_t.join().unwrap_or_default();
-    Ok(s)
 }
 
 /// A unified diff of `a` -> `b` with 3 lines of context.

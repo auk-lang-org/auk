@@ -1,6 +1,7 @@
 //! `duck pond`: the interactive REPL.
 //!
-//! The C backend has no JIT, so every input is compiled and run as a whole program:
+//! Every input is compiled (Cranelift JIT) and run as a whole program, so a session needs no
+//! interpreter state of its own:
 //!
 //! ```text
 //! <every definition of the session>
@@ -25,25 +26,22 @@
 //!   with `Show` as `<value> : <type>`. A `()` expression prints nothing and joins the history
 //!   like a statement (it may mutate a variable: `xs.push(4)`).
 //!
-//! The replayed statements' output (stdout and stderr share one pipe) is hidden by the marker.
+//! The replayed statements' output (stdout and stderr share one file) is hidden by the marker.
 //! An input that fails to check, panics or makes `main` return an error is not kept.
 //! Diagnostics and panic locations are mapped back to the input's own line numbers.
 //!
-//! Speed: checking takes a few ms; the runtime is compiled once per session (in the
-//! background, as soon as the session starts) into object files, so each input is one `clang
-//! -O0` of the small generated C file plus a link. Nothing runs for a definition.
+//! Speed: checking takes a few ms; each input is compiled in memory (Cranelift) and runs in a
+//! forked child process. Nothing runs for a definition.
 
 use std::fmt::Write as _;
-use std::io::{BufRead, IsTerminal, Read, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::io::{BufRead, IsTerminal, Write};
+use std::path::PathBuf;
 use std::rc::Rc;
-use std::thread::JoinHandle;
 use std::{env, fs};
 
 use super::ast::{ExprKind, FnBody, Item as AstItem, Module};
-use super::build::{self, PrebuiltRuntime};
-use super::cgen::Mode;
+use super::build;
+use super::mir::progen::Mode;
 use super::diag::{Diag, FileDiag};
 use super::lexer::lex;
 use super::token::Tok;
@@ -79,9 +77,9 @@ Commands:
 A line ending in an operator, `=` or `,`, or with an open bracket or string, continues on the
 next line (`..`); a blank line ends it early.
 Each input compiles and runs a small native program: the session's definitions plus a main that
-replays the earlier statements (their output is hidden) and then runs the new input. So an input
-takes a moment (clang -O0), and replayed statements run again (`rand`, `time` and files see the
-re-run). Inputs that fail to check or panic are not kept.
+replays the earlier statements (their output is hidden) and then runs the new input. So
+replayed statements run again (`rand`, `time` and files see the re-run). Inputs that fail to
+check or panic are not kept.
 ";
 
 /// `duck pond [--quiet]`. Returns the exit code.
@@ -386,15 +384,10 @@ struct Session {
     /// The generated source's path (as diagnostics and panics name it).
     src_path: PathBuf,
     builds: usize,
-    runtime: Option<JoinHandle<Result<PrebuiltRuntime, String>>>,
-    built: Option<Result<PrebuiltRuntime, String>>,
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        if let Some(h) = self.runtime.take() {
-            let _ = h.join();
-        }
         let _ = fs::remove_dir_all(&self.dir);
     }
 }
@@ -404,10 +397,8 @@ impl Session {
         let dir = env::temp_dir().join(format!("duck-pond-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).map_err(|e| format!("error: cannot create {}: {e}\n", dir.display()))?;
-        let rt_dir = dir.join("rt");
-        let runtime = std::thread::spawn(move || PrebuiltRuntime::build(&rt_dir));
         let src_path = dir.join("pond.duck");
-        Ok(Session { defs: Vec::new(), history: Vec::new(), dir, src_path, builds: 0, runtime: Some(runtime), built: None })
+        Ok(Session { defs: Vec::new(), history: Vec::new(), dir, src_path, builds: 0 })
     }
 
     /// Handle a `:command`. Returns false to quit.
@@ -710,35 +701,29 @@ impl Session {
         }
     }
 
-    fn runtime(&mut self) -> Result<&PrebuiltRuntime, String> {
-        if self.built.is_none() {
-            let h = self.runtime.take().expect("runtime build started");
-            self.built = Some(h.join().unwrap_or_else(|_| Err("error: the runtime build panicked\n".into())));
-        }
-        self.built.as_ref().expect("set above").as_ref().map_err(Clone::clone)
-    }
-
     /// Compile and run a checked program. Returns whether it succeeded and its output after
     /// the marker (with panic locations mapped back to the inputs).
+    /// It is compiled in memory and runs in a forked child: stdin closed, stdout and stderr
+    /// merged (in order) in one file.
     fn exec(&mut self, tp: &TypedProgram, p: &Prog) -> (bool, String) {
-        let o = match build::generate(tp, Mode::Run) {
-            Ok(o) => o,
+        let g = match build::generate(tp, Mode::Run, Default::default()) {
+            Ok(g) => g,
             Err(e) => return (false, e),
         };
+        let info = crate::mir::types::TyInfo::new(tp);
+        let j = match crate::mir::clif::jit(&g.prog, &info, false) {
+            Ok(j) => j,
+            Err(e) => return (false, format!("error: {e}\n")),
+        };
         self.builds += 1;
-        let n = self.builds;
-        let c_file = self.dir.join(format!("prog{n}.c"));
-        let exe = self.dir.join(format!("prog{n}"));
-        if let Err(e) = self.runtime().and_then(|rt| rt.cc(&o.c, &c_file, &exe)) {
-            let _ = fs::remove_file(&c_file);
-            return (false, e);
-        }
-        let _ = fs::remove_file(&c_file);
-        let res = run_merged(&exe);
-        let _ = fs::remove_file(&exe);
-        let (ok, out) = match res {
-            Ok(r) => r,
-            Err(e) => return (false, format!("error: cannot run the program: {e}\n")),
+        let out_file = self.dir.join(format!("out{}", self.builds));
+        let args = vec![self.src_path.display().to_string()];
+        let r = j.run_forked(&args, crate::mir::clif::Redirect { merged: Some(&out_file), stdin_null: true, ..Default::default() });
+        let out = fs::read(&out_file).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+        let _ = fs::remove_file(&out_file);
+        let ok = match r {
+            Ok(code) => code == Some(0),
+            Err(e) => return (false, e),
         };
         let out = match out.split_once(MARK) {
             Some((_, after)) => after.to_string(),
@@ -776,20 +761,6 @@ impl Session {
 fn result_ty(tp: &TypedProgram) -> Ty {
     let root = tp.program.root;
     tp.tables[root].locals.iter().rev().find(|l| l.name == RESULT).map(|l| l.ty.clone()).unwrap_or(Ty::Error)
-}
-
-/// Run an executable with stdin closed and stdout and stderr in one pipe (so their order is
-/// kept): whether it exited with 0, and everything it wrote.
-fn run_merged(exe: &Path) -> std::io::Result<(bool, String)> {
-    let (mut r, w) = std::io::pipe()?;
-    let mut cmd = Command::new(exe);
-    cmd.stdin(Stdio::null()).stdout(w.try_clone()?).stderr(w);
-    let mut child = cmd.spawn()?;
-    drop(cmd); // closes our copies of the pipe's write end
-    let mut bytes = Vec::new();
-    r.read_to_end(&mut bytes)?;
-    let status = child.wait()?;
-    Ok((status.success(), String::from_utf8_lossy(&bytes).into_owned()))
 }
 
 /// The definitions of a parsed input, each with its own lines (doc comments above it included).

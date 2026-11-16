@@ -1,6 +1,6 @@
 # Duck
 
-A statically typed language that compiles to native code through C, designed so that code
+A statically typed language that compiles to native code with Cranelift, designed so that code
 (especially AI-written code) takes few tokens and is checked hard: clause functions with
 exhaustiveness checking, errors and optionals in the types (`T!`, `T?`), declared effects
 (`uses fs, net`), structural generics ("shapes"), units of measure (`9.81<m/s^2>`, checked at
@@ -35,7 +35,8 @@ programs live in [`examples/`](examples/): start with `hello.duck`, `fib.duck` a
 
 ## Usage
 
-Requires Rust (no crate dependencies) and `clang`.
+Requires Rust. `duck run`/`test` compile in memory (Cranelift JIT); `duck build` also needs a
+system linker (`cc`).
 
 ```sh
 cargo build
@@ -61,14 +62,14 @@ cargo test                                              # the compiler's whole t
 | `duck pond [--quiet]` | the interactive REPL |
 | `duck lsp` | the language server (LSP over stdio) |
 | `duck mcp` | the MCP server: Duck tools for AI agents (see below) |
-| `duck ir <file>` | print the generated C |
+| `duck ir [--clif] <file>` | print the program's MIR as C-like text (`--clif`: its Cranelift IR) |
 | `duck spec` | print the compact language reference |
 | `quack new\|add\|remove\|install\|list` | the package manager |
 
-Environment: `CLANG` picks the C compiler, `DUCK_CFLAGS` adds C flags (e.g. sanitizers),
-`DUCK_LEAK_CHECK=1` makes `run`/`test` binaries fail on leaked runtime objects,
-`DUCK_KEEP_C=<path>` keeps the generated C, and `DUCK_HATCH_CMD` is the model command
-`duck hatch` runs (via `sh -c`, prompt on stdin, answer on stdout; default `claude -p`).
+Environment: `DUCK_LEAK_CHECK=1` makes `run`/`test` programs fail on leaked runtime objects,
+`DUCK_LINKER` picks the linker `duck build` uses (default `cc`), and `DUCK_HATCH_CMD` is the
+model command `duck hatch` runs (via `sh -c`, prompt on stdin, answer on stdout; default
+`claude -p`).
 
 ### Use Duck from an AI agent
 
@@ -121,9 +122,9 @@ and `http`. `examples/` is itself a quack project (it depends on `http` and `jso
 ## How the compiler works
 
 ```
-source ─▶ lexer ─▶ parser ─▶ resolve ─▶ checker ─▶ patterns/effects ─▶ lower ─▶ C ─▶ clang + runtime ─▶ executable
-          tokens   AST       modules    types,     exhaustiveness,     RC and           -O2, links
-                             and names  shapes     `uses`              control flow     runtime/*.c
+source ─▶ lexer ─▶ parser ─▶ resolve ─▶ checker ─▶ patterns/effects ─▶ lower ─▶ MIR ─▶ Cranelift ─▶ JIT (run/test) or object + libduck_rt.a ─▶ executable
+          tokens   AST       modules    types,     exhaustiveness,     RC and
+                             and names  shapes     `uses`              control flow
 ```
 
 - **lexer / parser** (`src/lexer.rs`, `src/parser.rs`): newline-terminated statements, string
@@ -135,9 +136,11 @@ source ─▶ lexer ─▶ parser ─▶ resolve ─▶ checker ─▶ patterns/
   measure (`src/units.rs`; erased before codegen).
 - **patterns / effects** (`src/patterns.rs`, `src/effects.rs`): clause and `match`
   exhaustiveness and reachability; `uses` checking against each function and `quack.toml`.
-- **lower / C** (`src/lower.rs`, `src/cgen.rs`, `src/build.rs`): one C file per program with
-  explicit reference counting, linked with the C runtime in [`runtime/`](runtime/), which is
-  compiled into the `duck` binary.
+- **lower / MIR / Cranelift** (`src/mir/`, `src/build.rs`): each program becomes MIR, a
+  structured IR with explicit reference counting, then machine code with Cranelift: compiled in
+  memory and run in-process for `run`/`test`, or an object file linked into an executable for
+  `build`. The runtime is [`runtime/`](runtime/), the Rust crate `duck_rt` (linked into the
+  `duck` binary for the JIT, and embedded as a static library for `build`).
 - **diagnostics** (`src/diag.rs`): stable codes, notes and fix-its; every code has a page in
   [`docs/errors/`](docs/errors/) (`duck explain E0400`).
 

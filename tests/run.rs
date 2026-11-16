@@ -18,7 +18,7 @@ use std::{env, fs, thread};
 
 fn duck_cmd() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_duck"));
-    c.env_remove("DUCK_CFLAGS").env_remove("DUCK_LEAK_CHECK");
+    c.env_remove("DUCK_LEAK_CHECK");
     c
 }
 
@@ -335,51 +335,28 @@ fn no_leaks_in_programs() {
     }
 }
 
-/// Does clang build and run a program with these sanitizers here?
-fn sanitizers_work(flags: &str) -> bool {
-    let d = scratch("probe");
-    let src = d.join("p.c");
-    fs::write(&src, "#include <stdlib.h>\nint main(void) { char *p = malloc(4); p[0] = 1; int r = p[0] - 1; free(p); return r; }\n").unwrap();
-    let exe = d.join("p");
-    let clang = env::var("CLANG").unwrap_or_else(|_| "clang".into());
-    let ok = Command::new(clang).args(flags.split_whitespace()).arg(&src).arg("-o").arg(&exe).output().is_ok_and(|o| o.status.success());
-    ok && Command::new(&exe).status().is_ok_and(|s| s.success())
-}
-
+/// Every package's tests pass with the leak checker on: each test (a forked child) frees every
+/// runtime object it made.
 #[test]
-fn package_tests_under_sanitizers() {
+fn package_tests_are_leak_free() {
     setup();
-    let flags = "-fsanitize=address,undefined -fno-omit-frame-pointer -g";
-    if !sanitizers_work(flags) {
-        eprintln!("skipping: sanitizers unsupported by this toolchain");
-        return;
-    }
-    for pkg in ["json", "csv", "regex", "cli", "http", "encoding", "hash", "datetime", "url", "toml", "log", "uuid", "num", "text", "glob", "compress", "yaml"] {
-        let o = duck_cmd()
-            .args(["test", &format!("packages/{pkg}/src/lib.duck")])
-            .env("DUCK_CFLAGS", flags)
-            .env("ASAN_OPTIONS", "detect_leaks=0:abort_on_error=0")
-            .env("UBSAN_OPTIONS", "halt_on_error=1:print_stacktrace=1")
-            .output()
-            .unwrap();
+    for pkg in ["json", "csv", "regex", "cli", "http", "encoding", "hash", "datetime", "url", "toml", "log", "uuid", "num", "text", "glob", "compress", "yaml", "xml"] {
+        let o = duck_cmd().args(["test", &format!("packages/{pkg}/src/lib.duck")]).env("DUCK_LEAK_CHECK", "1").output().unwrap();
         let (out, err) = text(&o);
-        assert!(o.status.success() && out.ends_with(" 0 failed\n"), "{pkg} under sanitizers:\n{out}\n{err}");
-        assert!(!out.contains("runtime error") && !out.contains("AddressSanitizer"), "{pkg}:\n{out}");
+        assert!(o.status.success() && out.ends_with(" 0 failed\n"), "{pkg} with the leak checker:\n{out}\n{err}");
+        assert!(!out.contains("leak") && !err.contains("leak"), "{pkg}:\n{out}\n{err}");
     }
 }
 
-/// The generated C compiles without warnings under `-Wall -Wno-unused`.
+/// `duck ir` prints the MIR, `duck ir --clif` the Cranelift IR, for real programs.
 #[test]
-fn generated_c_is_warning_free() {
+fn ir_prints_mir_and_cranelift() {
     setup();
-    let d = scratch("warnings");
-    let clang = env::var("CLANG").unwrap_or_else(|_| "clang".into());
-    for f in ["examples/calc.duck", "examples/fetch.duck", "examples/grep.duck", "examples/life.duck", "packages/json/src/lib.duck", "packages/csv/src/lib.duck", "packages/http/src/lib.duck"] {
-        let c = d.join("prog.c");
-        let o = duck_cmd().args(["test", f]).env("DUCK_KEEP_C", &c).output().unwrap();
-        assert!(o.status.success(), "{f}: {:?}", text(&o));
-        let o = Command::new(&clang).args(["-std=c11", "-Wall", "-Wno-unused", "-Werror", "-fsyntax-only", "-I", "runtime"]).arg(&c).output().unwrap();
-        assert!(o.status.success(), "{f}: warnings in the generated C:\n{}", text(&o).1);
+    for f in ["examples/tour.duck", "examples/fetch.duck", "examples/grep.duck", "examples/life.duck"] {
+        let mir = run_ok(&["ir", f]);
+        assert!(mir.contains("dk_entry(") && mir.contains("duck_main_wrapper("), "{f}");
+        let clif = run_ok(&["ir", "--clif", f]);
+        assert!(clif.contains("; dk_entry\nfunction ") && clif.contains("call "), "{f}");
     }
 }
 
@@ -614,13 +591,13 @@ fn imprints_are_computed_at_compile_time() {
         IMPRINTS,
         "[2, 3, 5, 7, 11, 13, 17, 19, 23, 29]\nsome(199)\n1046\n{\"one\": 1, \"two\": 4, \"three\": 9}\nCfg { name: \"duck \\\"q\\\" é\\n\", ratio: 0.1, tags: [\"a\", \"b\"], limit: some(3), nick: none }\n[Push(1), Pop, Jump(0, \"start\")]\nNode(Node(Leaf(0), Leaf(1)), Leaf(2))\nEmp { name: \"a\", boss: some(Emp { name: \"b\", boss: none }) }\n[[1.5, -0.0, 1e300], []]\n{\"name\": \"duck \\\"q\\\" é\\n\", \"ratio\": 0.1, \"tags\": [\"a\", \"b\"], \"limit\": 3, \"nick\": Null}\n1 a 3\n",
     );
-    // the generated C holds the values, not the computation
+    // the generated program holds the values, not the computation
     let d = scratch("imprints_ir");
     let p = d.join("imprints.duck");
     fs::write(&p, IMPRINTS).unwrap();
     let ir = run_ok(&["ir", p.to_str().unwrap()]);
-    assert!(ir.contains("INT64_C(193), INT64_C(197), INT64_C(199)}, 46)"), "the primes are a literal");
-    assert!(ir.contains("/* imprint PRIMES: its value, computed at compile time */"));
+    assert!(ir.contains("INT64_C(193)") && ir.contains("INT64_C(199)"), "the primes are data");
+    assert!(ir.contains("_PRIMES_init(void)"), "an imprint is built from its value");
     assert!(!ir.contains("_const_PRIMES(void)"), "no initializer function for an imprint");
     assert!(!ir.contains("_sieve(INT64_C(200))"), "sieve(200) isn't called at run time");
     assert!(ir.contains("INT64_C(1046)"), "an imprint using another imprint and a `let`");

@@ -49,7 +49,8 @@
 //! is an empty block, as in `_ => {}`); ranges (in `for` heads and slices, or as a
 //! materialized `[int]` elsewhere); `x is pat`; `peek e` (prints `[file:line] <src> = <show>`,
 //! see `shows` for the show); holes (`duck_hole`, with `tables.types[hole.id]` as the expected
-//! type); `assert`. Runtime representations follow duck.h: `T?` is `DuckOpt_*`, `T!`/`T!E` is
+//! type); `assert`. Runtime representations follow the runtime (runtime/src, see
+//! `mir/types.rs`): `T?` is `DuckOpt_*`, `T!`/`T!E` is
 //! `DuckRes_*` (a typed error enum value travels as a `DuckErr` payload), `Ty::Task` is a
 //! `DuckTask *`, closures are `DuckClosure`, `Err` / `net.Conn` are their `extern type` C types.
 //!

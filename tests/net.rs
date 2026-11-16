@@ -16,7 +16,7 @@ use std::{env, fs, thread};
 
 fn duck_cmd() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_duck"));
-    c.env_remove("DUCK_CFLAGS").env("DUCK_LEAK_CHECK", "1");
+    c.env("DUCK_LEAK_CHECK", "1");
     c
 }
 
@@ -123,16 +123,10 @@ fn duck_echo_server_and_client_tasks() {
     let d = scratch("echo_test");
     let p = d.join("echo_test.duck");
     fs::write(&p, ECHO_TEST).unwrap();
-    let c = d.join("prog.c");
-    let o = duck_cmd().arg("test").arg(&p).env("DUCK_KEEP_C", &c).output().unwrap();
+    let o = duck_cmd().arg("test").arg(&p).output().unwrap();
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}\n{err}");
     assert!(out.ends_with("2 passed, 0 failed\n") && !out.contains("leak"), "{out}\n{err}");
-    // the generated C (with net.Listener results) is warning-free
-    let clang = env::var("CLANG").unwrap_or_else(|_| "clang".into());
-    let rt = Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime");
-    let o = Command::new(&clang).args(["-std=c11", "-Wall", "-Wno-unused", "-Werror", "-fsyntax-only", "-I"]).arg(rt).arg(&c).output().unwrap();
-    assert!(o.status.success(), "warnings in the generated C:\n{}", text(&o).1);
 }
 
 #[test]
