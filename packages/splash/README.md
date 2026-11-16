@@ -244,9 +244,11 @@ level) and replaces the live element with the server's version, so the page does
   attributes and nodes that differ. An input being typed in is never replaced, so it keeps its
   focus, cursor and text.
 - **Event fields show the server's state.** A field with `splash-change` or `splash-input` also
-  gets its live state set (`selectedIndex`, `checked`, `value`), not just its attributes, unless
-  it's the field being used. Browsers stop applying `selected` to an option once the user has
-  picked it, so without this a dropdown could stay stuck on an old choice. Plain form fields, such
+  gets its live state set (`selectedIndex`, `checked`, `value`), not just its attributes.
+  Browsers stop applying `selected` to an option once the user has picked it, so without this a
+  dropdown could stay stuck on an old choice. A dropdown, checkbox or radio always follows the
+  server: its choice was sent the moment it was made, and it keeps focus long after. A text field
+  is spared only while it's being typed in (focused, in a focused window). Plain form fields, such
   as an unsent draft, are left alone.
 - **Ordering.** Answers to requests sent before the latest event are dropped, so a refresh that
   raced your click can't briefly show the old state.

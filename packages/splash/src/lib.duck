@@ -561,7 +561,9 @@ let CLIENT = r"""
     const decode = (body) => body ? Object.fromEntries(new URLSearchParams(body)) : undefined;
 
     // with push, polling is only a fallback (in case the stream is down)
-    const every = splashPush ? Math.max(splashEvery, 5000) : splashEvery;
+    // (a browser without EventSource keeps polling at the normal rate)
+    const push = splashPush && !!self.EventSource;
+    const every = push ? Math.max(splashEvery, 5000) : splashEvery;
     let hash = splashHash, delay = every, timer, sent = 0, shown = 0, lastEvent = 0, offline = false;
     const root = document.documentElement;
     let changes = null;  // what the current patch changed (for logs)
@@ -589,10 +591,14 @@ let CLIENT = r"""
         i++;
       }
       while (a.childNodes.length > i) { note(`removed ${where(a.lastChild)}`); a.lastChild.remove(); }
-      // a field the server owns (an event field) shows the server's state, unless it's the one
-      // being used: browsers display a field's current state, which stops following its
-      // attributes once touched (an option the user picked ignores `selected` from then on)
-      if ((a.hasAttribute("splash-change") || a.hasAttribute("splash-input")) && a !== document.activeElement) {
+      // a field the server owns (an event field) shows the server's state: browsers display a
+      // field's current state, which stops following its attributes once touched (an option the
+      // user picked ignores `selected` from then on). Spared: only a text field being typed in
+      // (focused, in a focused window). A choice (select, checkbox, radio) was sent the moment it
+      // was made, and keeps focus long after, so it always follows the server.
+      const choice = a.tagName === "SELECT" || a.type === "checkbox" || a.type === "radio";
+      const typing = !choice && a === document.activeElement && document.hasFocus();
+      if ((a.hasAttribute("splash-change") || a.hasAttribute("splash-input")) && !typing) {
         if (a.tagName === "SELECT") {
           if (a.selectedIndex !== b.selectedIndex) { note(`synced ${where(a)}: option ${a.selectedIndex} -> ${b.selectedIndex}`); a.selectedIndex = b.selectedIndex; }
         } else if (a.type === "checkbox" || a.type === "radio") {
@@ -603,8 +609,8 @@ let CLIENT = r"""
           const v = b.getAttribute("value") ?? "";
           if (a.value !== v) { note(`synced ${where(a)}: ${JSON.stringify(a.value)} -> ${JSON.stringify(v)}`); a.value = v; }
         }
-      } else if ((a.hasAttribute("splash-change") || a.hasAttribute("splash-input")) && a === document.activeElement) {
-        say(2, `kept ${where(a)} as is: it has focus`);
+      } else if (a.hasAttribute("splash-change") || a.hasAttribute("splash-input")) {
+        say(2, `kept ${where(a)} as is: it's being typed in`);
       }
     };
     const key = (n) => n.nodeType === 1 ? n.getAttribute("splash-key") ?? (n.id || null) : null;
@@ -691,7 +697,7 @@ let CLIENT = r"""
     const now = () => { clearTimeout(timer); poll(); };
     document.addEventListener("visibilitychange", () => { if (!document.hidden) { say(2, "tab visible again: refreshing"); now(); } });
     // push: the server says something changed; fetch now (EventSource reconnects by itself)
-    if (splashPush && self.EventSource) {
+    if (push) {
       const es = new EventSource(location.pathname + "?splash=events");
       es.onopen = () => say(2, "push stream open");
       es.onerror = () => say(2, "push stream interrupted (the browser reconnects by itself)");
@@ -741,7 +747,7 @@ let CLIENT = r"""
       first = 0;
     }
     const sid = (document.cookie.match(/(?:^|;\s*)splash-sid=([^;]*)/) || [])[1] || "";
-    say(1, `started: session ${sid.slice(0, 8)} (server logs say ${sid.slice(0, 8)}#n for this tab's request #n), log level ${Object.keys(levels)[level]}, ${splashPush ? "push + polling every " + every / 1000 + " s" : "polling every " + every + " ms"}, view ${splashHash}`);
+    say(1, `started: session ${sid.slice(0, 8)} (server logs say ${sid.slice(0, 8)}#n for this tab's request #n), log level ${Object.keys(levels)[level]}, ${push ? "push + polling every " + every / 1000 + " s" : "polling every " + every + " ms"}, view ${splashHash}`);
     timer = setTimeout(poll, first);
   })();
   </script>
