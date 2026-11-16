@@ -53,6 +53,9 @@ pub mod testing;
 pub mod trace;
 pub mod compiler;
 pub mod catch;
+pub mod heap;
+pub mod copy;
+pub mod chan;
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::atomic::AtomicI64;
@@ -67,12 +70,15 @@ pub const DUCK_K_OBJ: u32 = 5;
 pub const DUCK_K_TASK: u32 = 6;
 pub const DUCK_K_CONN: u32 = 7;
 pub const DUCK_K_LISTENER: u32 = 8;
+pub const DUCK_K_CHAN: u32 = 9;
 
 /// Every heap object begins with this. rc < 0 marks an immortal object.
 #[repr(C)]
 pub struct DuckHeader {
     pub rc: AtomicI64,
     pub kind: u32,
+    /// `heap::TRACKED` (in what C left as padding: the header is still 16 bytes).
+    pub flags: u32,
 }
 
 /// `()` is a byte.
@@ -95,7 +101,15 @@ pub struct DuckElemOps {
     pub cmp: Option<CmpFn>,
     pub hash: Option<HashFn>,
     pub show: Option<ShowFn>,
+    /// Write a deep copy of `*src` (owned, allocated in the current heap) to `dst`; None for
+    /// plain data (a byte copy is a copy).
+    pub copy: Option<CopyFn>,
 }
+
+/// `void copy(const void *src, void *dst)`.
+pub type CopyFn = unsafe extern "C" fn(*const c_void, *mut c_void);
+/// A `DuckObj`'s deep copy (closure env, box): a new object in the current heap.
+pub type ObjCopyFn = unsafe extern "C" fn(*const DuckObj) -> *mut DuckObj;
 
 // ---- optionals and results ---------------------------------------------------------------
 
@@ -235,6 +249,7 @@ pub type DropFn = unsafe extern "C" fn(*mut DuckObj);
 pub struct DuckObj {
     pub h: DuckHeader,
     pub drop: Option<DropFn>,
+    pub copy: Option<ObjCopyFn>,
 }
 pub type DuckEnv = DuckObj;
 

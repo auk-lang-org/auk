@@ -555,6 +555,8 @@ pub enum ForKind {
     List,
     /// `for k, v in m` (or `for kv in m`: a `(K, V)` tuple).
     Map,
+    /// `for x in c` over a `Chan<T>`: receive until it is closed and empty.
+    Chan,
 }
 
 /// A parsed `{x:spec}`: `[fill? align] ['0'] [width] ['.' precision]` (runtime `duck_fmt_*`).

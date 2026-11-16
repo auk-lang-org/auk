@@ -103,7 +103,8 @@ fn stop(ts: [Task<()!>], lo: int, hi: int, skip: int) {
   while k >= lo {
     if k != skip {
       ts[k].cancel()
-      let _ = catch await ts[k]
+      // its exit (a "cancelled" panic) as a value: no panic is raised here
+      let _ = await any [ts[k]]
     }
     k -= 1
   }

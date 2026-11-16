@@ -340,8 +340,8 @@ fn no_leaks_in_programs() {
 #[test]
 fn package_tests_are_leak_free() {
     setup();
-    // not sup: its tests crash and cancel children on purpose, and an aborted task's objects leak
-    for pkg in ["json", "csv", "regex", "cli", "http", "encoding", "hash", "datetime", "url", "toml", "log", "uuid", "num", "text", "glob", "compress", "yaml", "xml"] {
+    // sup's tests crash and cancel children on purpose: their heaps must be swept clean
+    for pkg in ["json", "csv", "regex", "cli", "http", "encoding", "hash", "datetime", "url", "toml", "log", "uuid", "num", "text", "glob", "compress", "yaml", "xml", "sup"] {
         let o = duck_cmd().args(["test", &format!("packages/{pkg}/src/lib.duck")]).env("DUCK_LEAK_CHECK", "1").output().unwrap();
         let (out, err) = text(&o);
         assert!(o.status.success() && out.ends_with(" 0 failed\n"), "{pkg} with the leak checker:\n{out}\n{err}");
@@ -1012,6 +1012,79 @@ fn main() uses time {
         out,
         "1 ok(2)\n2 true\nerr(panic: cancelled at await_any.duck:12:3)\nerr(panic: cancelled at a blocking call)\nerr(panic: cancelled at a blocking call)\ntrue\n",
         "{err}"
+    );
+}
+
+/// Tasks share nothing: arguments, results and channel messages are deep copies, and a task
+/// that crashes or is cancelled (holding received data, a channel, a half-built list) leaves
+/// nothing behind: the whole program runs clean under the leak checker.
+#[test]
+fn channels_and_task_heaps() {
+    expect_out(
+        "chan_heaps",
+        r#"struct Job { id: int, tags: [str] }
+
+async fn worker(jobs: Chan<Job>, out: Chan<str>): int {
+  var n = 0
+  for j in jobs {
+    out.send("job {j.id} {j.tags}")
+    n += 1
+  }
+  n
+}
+
+async fn crasher(jobs: Chan<Job>): int {
+  var seen: [str] = []
+  for j in jobs {
+    seen.push("got {j.id}")
+    let _ = j.tags[10]
+  }
+  0
+}
+
+async fn waiter(jobs: Chan<Job>): int {
+  for j in jobs {
+    print("never {j.id}")
+  }
+  0
+}
+
+async fn grow(xs: [str]): [str] {
+  var ys = xs
+  ys.push("more")
+  ys
+}
+
+fn main() uses time {
+  let jobs: Chan<Job> = chan()
+  let out: Chan<str> = chan()
+  let w = worker(jobs, out)
+  for i in 0..3 {
+    jobs.send(Job { id: i, tags: ["t{i}"] })
+  }
+  jobs.close()
+  print(await w)
+  out.close()
+  for s in out {
+    print(s)
+  }
+  let base = ["a"]
+  let g = grow(base)
+  print("{await g} {base}")
+  let cj: Chan<Job> = chan()
+  var ts = [crasher(cj)]
+  cj.send(Job { id: 7, tags: ["x"] })
+  let (_, r) = await any ts
+  print(r is err(_))
+  let wj: Chan<Job> = chan()
+  var ws = [waiter(wj)]
+  time.sleep(20)
+  ws[0].cancel()
+  let (_, c) = await any ws
+  print(c)
+}
+"#,
+        "3\njob 0 [\"t0\"]\njob 1 [\"t1\"]\njob 2 [\"t2\"]\n[\"a\", \"more\"] [\"a\"]\ntrue\nerr(panic: cancelled at a channel receive)\n",
     );
 }
 

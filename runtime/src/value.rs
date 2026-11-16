@@ -217,5 +217,5 @@ pub static duck_ops_value: DuckElemOps = DuckElemOps {
     eq: Some(v_eq),
     cmp: None,
     hash: Some(v_hash),
-    show: Some(v_show),
+    show: Some(v_show),    copy: Some(crate::copy::value_copy_elem),
 };

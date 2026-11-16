@@ -1671,6 +1671,15 @@ impl Checker {
         self.note_call(e.id, Call { callee: Callee::Fn { func: f, type_args: targs }, args: out_args });
         if info.is_async && direct {
             self.cx().t.awaits.insert(e.id, AwaitKind::Direct);
+        } else if info.is_async
+            && let Some(p) = info.params.iter().find(|p| p.var)
+        {
+            // a task shares nothing with its caller (its arguments are copied into its own heap)
+            self.err(
+                Diag::new("E0336", e.span, format!("`{name}` takes {} by `var`, so it can't run as a task", p.name.as_deref().map(|n| format!("`{n}`")).unwrap_or("an argument".into())))
+                    .note("a task gets copies of its arguments and shares nothing with its caller; `await` the call right away to run it here, or pass the value and return the new one")
+                    .fix(Span { end_line: e.span.line, end_col: e.span.col, ..e.span }, "await "),
+            );
         }
         result
     }
@@ -3207,6 +3216,13 @@ impl Checker {
                         None => self.pattern(pat, &Ty::Tuple(vec![*k, *v]), false, &mut seen),
                     }
                     self.cx().t.fors.insert(e.id, ForKind::Map);
+                }
+                Ty::Named(dd, args) if args.len() == 1 && self.defs.types[dd].name == "Chan" && self.prog.is_core(self.defs.types[dd].module) => {
+                    if let Some(ix) = index {
+                        self.err(Diag::new("E0207", ix.span, "a channel loop has no index").note("write `for x in c`"));
+                    }
+                    self.pattern(pat, &args[0], false, &mut seen);
+                    self.cx().t.fors.insert(e.id, ForKind::Chan);
                 }
                 Ty::Error => {
                     if let Some(ix) = index {

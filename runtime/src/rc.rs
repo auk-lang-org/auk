@@ -44,10 +44,9 @@ pub unsafe fn duck__xrealloc(p: *mut c_void, n: usize) -> *mut c_void {
 
 /// Allocate a zeroed heap object with rc = 1 (counted as live).
 pub unsafe fn duck__alloc(size: usize, kind: u32) -> *mut c_void {
-    let h = unsafe { duck__xcalloc(1, size) } as *mut DuckHeader;
+    let h = unsafe { crate::heap::alloc(size, kind) };
     unsafe {
         (*h).rc.store(1, Ordering::Relaxed);
-        (*h).kind = kind;
     }
     LIVE_OBJECTS.fetch_add(1, Ordering::Relaxed);
     h.cast()
@@ -56,7 +55,7 @@ pub unsafe fn duck__alloc(size: usize, kind: u32) -> *mut c_void {
 /// Free the object memory itself (and update the live counter).
 pub unsafe fn duck__free_obj(p: *mut c_void) {
     LIVE_OBJECTS.fetch_sub(1, Ordering::Relaxed);
-    unsafe { libc::free(p) }
+    unsafe { crate::heap::free(p.cast()) }
 }
 
 pub unsafe fn duck__make_immortal(p: *mut c_void) {
@@ -114,6 +113,9 @@ pub unsafe extern "C" fn duck_retain(p: *mut c_void) -> *mut c_void {
             return p;
         }
         (*h).rc.fetch_add(1, Ordering::Relaxed);
+        if crate::heap::is_handle((*h).kind) {
+            crate::heap::note_handle(p, 1);
+        }
     }
     p
 }
@@ -128,10 +130,22 @@ pub unsafe extern "C" fn duck_release(p: *mut c_void) {
         if (*h).rc.load(Ordering::Relaxed) < 0 {
             return;
         }
+        if crate::heap::is_handle((*h).kind) {
+            crate::heap::note_handle(p, -1);
+        }
         if (*h).rc.fetch_sub(1, Ordering::Release) != 1 {
             return;
         }
         fence(Ordering::Acquire);
+        free_now(p);
+    }
+}
+
+/// Free an object whose last reference is gone (or whose heap is being swept): release what it
+/// holds and free its memory, by kind.
+pub unsafe fn free_now(p: *mut c_void) {
+    let h = p as *const DuckHeader;
+    unsafe {
         match (*h).kind {
             DUCK_K_STR => crate::str::duck__str_free(p.cast()),
             DUCK_K_ARR => crate::arr::duck__arr_free(p.cast()),
@@ -140,6 +154,7 @@ pub unsafe extern "C" fn duck_release(p: *mut c_void) {
             DUCK_K_TASK => crate::task::duck__task_free(p.cast()),
             DUCK_K_CONN => crate::core::duck__conn_free(p.cast()),
             DUCK_K_LISTENER => crate::core::duck__listener_free(p.cast()),
+            DUCK_K_CHAN => crate::chan::duck__chan_free(p.cast()),
             DUCK_K_OBJ => {
                 let o = p as *mut DuckObj;
                 if let Some(d) = (*o).drop {
@@ -168,13 +183,6 @@ pub unsafe extern "C" fn duck_refcount(p: *const c_void) -> i64 {
     unsafe { (*(p as *const DuckHeader)).rc.load(Ordering::SeqCst) }
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_obj_alloc(size: usize, drop: Option<DropFn>) -> *mut c_void {
-    let size = size.max(size_of::<DuckObj>());
-    let o = unsafe { duck__alloc(size, DUCK_K_OBJ) } as *mut DuckObj;
-    unsafe { (*o).drop = drop };
-    o.cast()
-}
 
 // ---- panics ------------------------------------------------------------------------------
 
@@ -435,7 +443,7 @@ pub static duck_ops_int: DuckElemOps = DuckElemOps {
     eq: Some(int_eq),
     cmp: Some(int_cmp),
     hash: Some(int_hash),
-    show: Some(int_show),
+    show: Some(int_show),    copy: None,
 };
 
 unsafe extern "C" fn float_eq(a: *const c_void, b: *const c_void) -> bool {
@@ -462,7 +470,7 @@ pub static duck_ops_float: DuckElemOps = DuckElemOps {
     eq: Some(float_eq),
     cmp: Some(float_cmp),
     hash: Some(float_hash),
-    show: Some(float_show),
+    show: Some(float_show),    copy: None,
 };
 
 unsafe extern "C" fn bool_eq(a: *const c_void, b: *const c_void) -> bool {
@@ -485,7 +493,7 @@ pub static duck_ops_bool: DuckElemOps = DuckElemOps {
     eq: Some(bool_eq),
     cmp: Some(bool_cmp),
     hash: Some(bool_hash),
-    show: Some(bool_show),
+    show: Some(bool_show),    copy: None,
 };
 
 unsafe extern "C" fn char_eq(a: *const c_void, b: *const c_void) -> bool {
@@ -509,7 +517,7 @@ pub static duck_ops_char: DuckElemOps = DuckElemOps {
     eq: Some(char_eq),
     cmp: Some(char_cmp),
     hash: Some(char_hash),
-    show: Some(char_show),
+    show: Some(char_show),    copy: None,
 };
 
 unsafe extern "C" fn unit_eq(_: *const c_void, _: *const c_void) -> bool {
@@ -532,7 +540,7 @@ pub static duck_ops_unit: DuckElemOps = DuckElemOps {
     eq: Some(unit_eq),
     cmp: Some(unit_cmp),
     hash: Some(unit_hash),
-    show: Some(unit_show),
+    show: Some(unit_show),    copy: None,
 };
 
 pub unsafe extern "C" fn ptr_retain(p: *mut c_void) {
@@ -562,7 +570,7 @@ pub static duck_ops_str: DuckElemOps = DuckElemOps {
     eq: Some(str_eq),
     cmp: Some(str_cmp),
     hash: Some(str_hash),
-    show: Some(str_show),
+    show: Some(str_show),    copy: Some(crate::copy::str_copy_elem),
 };
 
 unsafe extern "C" fn arr_eq(a: *const c_void, b: *const c_void) -> bool {
@@ -585,7 +593,7 @@ pub static duck_ops_arr: DuckElemOps = DuckElemOps {
     eq: Some(arr_eq),
     cmp: Some(arr_cmp),
     hash: Some(arr_hash),
-    show: Some(arr_show),
+    show: Some(arr_show),    copy: Some(crate::copy::arr_copy_elem),
 };
 
 unsafe extern "C" fn map_eq(a: *const c_void, b: *const c_void) -> bool {
@@ -602,7 +610,7 @@ pub static duck_ops_map: DuckElemOps = DuckElemOps {
     eq: Some(map_eq),
     cmp: None,
     hash: None,
-    show: Some(map_show),
+    show: Some(map_show),    copy: Some(crate::copy::map_copy_elem),
 };
 
 unsafe extern "C" fn err_show(a: *const c_void) -> *mut DuckStr {
@@ -616,7 +624,7 @@ pub static duck_ops_err: DuckElemOps = DuckElemOps {
     eq: None,
     cmp: None,
     hash: None,
-    show: Some(err_show),
+    show: Some(err_show),    copy: Some(crate::copy::err_copy_elem),
 };
 
 #[unsafe(no_mangle)]
@@ -627,7 +635,7 @@ pub static duck_ops_obj: DuckElemOps = DuckElemOps {
     eq: None,
     cmp: None,
     hash: None,
-    show: None,
+    show: None,    copy: Some(crate::copy::obj_copy_elem),
 };
 #[unsafe(no_mangle)]
 pub static duck_ops_task: DuckElemOps = DuckElemOps {
@@ -637,7 +645,7 @@ pub static duck_ops_task: DuckElemOps = DuckElemOps {
     eq: None,
     cmp: None,
     hash: None,
-    show: None,
+    show: None,    copy: Some(crate::copy::handle_copy_elem),
 };
 
 unsafe extern "C" fn closure_retain(p: *mut c_void) {
@@ -654,7 +662,7 @@ pub static duck_ops_closure: DuckElemOps = DuckElemOps {
     eq: None,
     cmp: None,
     hash: None,
-    show: None,
+    show: None,    copy: Some(crate::copy::closure_copy_elem),
 };
 
 #[unsafe(no_mangle)]

@@ -264,7 +264,7 @@ impl Printer<'_, '_> {
         let info = self.info;
         match (t, sel) {
             (MTy::Agg(_), Sel::F(i)) => format!("f{i}"),
-            (MTy::Rt(Rt::ElemOps), Sel::F(i)) => ["size", "retain", "release", "eq", "cmp", "hash", "show"][i as usize].into(),
+            (MTy::Rt(Rt::ElemOps), Sel::F(i)) => ["size", "retain", "release", "eq", "cmp", "hash", "show", "copy"][i as usize].into(),
             (MTy::D(t), sel) => match (t, sel) {
                 (Ty::Opt(_), Sel::F(0)) => "some".into(),
                 (Ty::Opt(_), Sel::F(1)) | (Ty::Res(..), Sel::F(1)) => "val".into(),

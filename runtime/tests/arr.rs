@@ -295,7 +295,7 @@ unsafe extern "C" fn pair_cmp(x: *const c_void, y: *const c_void, _ctx: *mut c_v
     unsafe { duck_int_cmp((*(x as *const Pair)).key, (*(y as *const Pair)).key) }
 }
 static PAIR_OPS: DuckElemOps =
-    DuckElemOps { size: size_of::<Pair>(), retain: None, release: None, eq: None, cmp: None, hash: None, show: None };
+    DuckElemOps { size: size_of::<Pair>(), retain: None, release: None, eq: None, cmp: None, hash: None, show: None, copy: None };
 
 #[test]
 fn arr_sort_stable() {

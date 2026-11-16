@@ -317,8 +317,11 @@ impl<'a> Gen<'a> {
         if self.imprint_eval {
             b.do_(Ex::rt("duck__imprint_mark", vec![Ex::int_as(b'B' as i64, MTy::I32), Ex::i64(c as i64)], MTy::Void));
         }
+        // computed outside any task's heap: the value outlives the task that computes it first
+        let heap = b.decl(Ex::rt("duck_heap_switch", vec![Ex::zero(MTy::void_ptr())], MTy::void_ptr()));
         let call = self.call(initf, vec![]);
         b.set(v.clone(), call);
+        b.do_(Ex::rt("duck_heap_switch", vec![heap], MTy::void_ptr()));
         b.set(s.clone(), Ex::int_as(2, MTy::I32));
         if self.imprint_eval {
             b.do_(Ex::rt("duck__imprint_mark", vec![Ex::int_as(b'E' as i64, MTy::I32), Ex::i64(c as i64)], MTy::Void));
@@ -545,12 +548,21 @@ impl<'a> Gen<'a> {
         self.memo.insert(("box", t.clone()), a);
         let drop = self.declare(format!("DkBox{k}_drop"), vec![MTy::obj_ptr()], MTy::Void, Abi::C);
         self.memo.insert(("boxdrop", t.clone()), drop);
+        let copy = self.declare(format!("DkBox{k}_copy"), vec![MTy::obj_ptr()], MTy::obj_ptr(), Abi::C);
+        self.memo.insert(("boxcopy", t.clone()), copy);
         let (mut b, ps) = self.body_for(drop);
         let v = ps[0].clone().cast(MTy::ptr(MTy::Agg(a))).deref(MTy::Agg(a)).field(Sel::F(1), d(t));
         if let Some(r) = self.release(t, &v) {
             b.emit(r);
         }
         self.define(drop, b);
+        // the copy: a new box holding a deep copy of the value
+        let (mut b, ps) = self.body_for(copy);
+        let v = ps[0].clone().cast(MTy::ptr(MTy::Agg(a))).deref(MTy::Agg(a)).field(Sel::F(1), d(t));
+        let c = self.copy_ex(t, v);
+        let nb = self.box_new(t, c);
+        b.emit(Stmt::Ret(Some(nb)));
+        self.define(copy, b);
         a
     }
 
@@ -559,8 +571,9 @@ impl<'a> Gen<'a> {
         let f = self.helper("boxnew", t, vec![d(t)], MTy::obj_ptr(), |g, f| {
             let bt = g.box_ty(t);
             let drop = g.memo[&("boxdrop", t.clone())];
+            let copy = g.memo[&("boxcopy", t.clone())];
             let (mut b, ps) = g.body_for(f);
-            let x = b.decl(Ex::rt("duck_obj_alloc", vec![Ex::size_of(MTy::Agg(bt)), Ex::fn_addr(drop)], MTy::ptr(MTy::Agg(bt))));
+            let x = b.decl(Ex::rt("duck_obj_alloc", vec![Ex::size_of(MTy::Agg(bt)), Ex::fn_addr(drop), Ex::fn_addr(copy)], MTy::ptr(MTy::Agg(bt))));
             b.set(x.clone().deref(MTy::Agg(bt)).field(Sel::F(1), d(t)), ps[0].clone());
             b.emit(Stmt::Ret(Some(x.cast(MTy::obj_ptr()))));
             b
@@ -746,6 +759,102 @@ impl<'a> Gen<'a> {
         (inc, dec)
     }
 
+    // ---- deep copies (values crossing a task boundary: runtime/src/heap.rs) ----
+
+    /// An owned deep copy of the value `v` of type `t`, allocated in the current heap. Handles
+    /// (tasks, connections, listeners, channels) are shared instead.
+    pub fn copy_ex(&mut self, t: &Ty, v: Ex) -> Ex {
+        if !self.needs_rc(t) {
+            return v;
+        }
+        let rt = |s: &str, v: Ex| Ex::rt(s, vec![v], d(t));
+        match t {
+            Ty::Str => rt("duck_str_copy", v),
+            Ty::List(_) => rt("duck_arr_copy_deep", v),
+            Ty::Map(..) => rt("duck_map_copy_deep", v),
+            Ty::Task(_) => rt("duck_retain", v),
+            t if self.info.is_opaque(t) && !self.is_err_ty(t) => rt("duck_retain", v),
+            t if self.is_value(t) => rt("duck_value_copy", v),
+            t if self.is_err_ty(t) => rt("duck_err_copy_deep", v),
+            _ => {
+                let f = self.copy_fn(t);
+                self.call(f, vec![v])
+            }
+        }
+    }
+
+    /// `T f(T)`: a deep copy of an aggregate (closure, `any`, tuple, optional, result, struct,
+    /// enum).
+    fn copy_fn(&mut self, t: &Ty) -> FuncId {
+        self.helper("copy", t, vec![d(t)], d(t), |g, f| {
+            let (mut b, ps) = g.body_for(f);
+            let src = ps[0].clone();
+            let r = b.decl(src.clone());
+            let obj = |g: &mut Gen, b: &mut Body, s: Sel| {
+                let c = Ex::rt("duck_obj_copy", vec![g.fld(&src, s)], MTy::obj_ptr());
+                b.set(g.fld(&r, s), c);
+            };
+            let field = |g: &mut Gen, b: &mut Body, ty: &Ty, s: Sel| {
+                if g.needs_rc(ty) {
+                    let c = g.copy_ex(ty, g.fld(&src, s));
+                    b.set(g.fld(&r, s), c);
+                }
+            };
+            match t {
+                Ty::Fn(..) => obj(g, &mut b, Sel::F(1)),
+                Ty::Any(_) => obj(g, &mut b, Sel::F(0)),
+                Ty::Tuple(ts) => {
+                    for (i, x) in ts.iter().enumerate() {
+                        field(g, &mut b, x, Sel::F(i as u32));
+                    }
+                }
+                Ty::Opt(x) => {
+                    b.open_if(g.fld(&src, Sel::F(0)));
+                    field(g, &mut b, x, Sel::F(1));
+                    b.close();
+                }
+                Ty::Res(x, _) => {
+                    b.open_if(g.fld(&src, Sel::F(0)));
+                    field(g, &mut b, x, Sel::F(1));
+                    b.else_();
+                    let c = Ex::rt("duck_err_copy_deep", vec![g.fld(&src, Sel::F(2))], MTy::void_ptr());
+                    b.set(g.fld(&r, Sel::F(2)), c);
+                    b.close();
+                }
+                Ty::Named(dd, _) if g.tp.defs.is_struct(*dd) => {
+                    for (i, (ft, boxed)) in g.info.struct_layout(t).into_iter().enumerate() {
+                        if boxed {
+                            obj(g, &mut b, Sel::F(i as u32));
+                        } else {
+                            field(g, &mut b, &ft, Sel::F(i as u32));
+                        }
+                    }
+                }
+                Ty::Named(..) => {
+                    let layout = g.info.enum_layout(t);
+                    for (vi, fs) in layout.iter().enumerate() {
+                        if !fs.iter().any(|(ft, boxed)| *boxed || g.needs_rc(ft)) {
+                            continue;
+                        }
+                        b.open_if(g.variant_tag(t, vi, &src));
+                        for (fi, (ft, boxed)) in fs.iter().enumerate() {
+                            let s = Sel::V(vi as u32, fi as u32);
+                            if *boxed {
+                                obj(g, &mut b, s);
+                            } else {
+                                field(g, &mut b, ft, s);
+                            }
+                        }
+                        b.close();
+                    }
+                }
+                _ => {}
+            }
+            b.emit(Stmt::Ret(Some(r)));
+            b
+        })
+    }
+
     // ---- memoized helper functions ----
 
     /// A generated helper function for (kind, type), created once: declared with `params` and
@@ -867,9 +976,28 @@ impl<'a> Gen<'a> {
             }
             None => Ex::zero(MTy::Code),
         };
+        let copy = if self.needs_rc(t) {
+            let n = self.declare(format!("{name}_copy"), vec![cv.clone(), cv.clone()], MTy::Void, Abi::C);
+            let (mut b, ps) = self.body_for(n);
+            let c = self.copy_ex(t, elem(&ps[0]));
+            b.set(elem(&ps[1]), c);
+            self.define(n, b);
+            Ex::fn_addr(n)
+        } else {
+            Ex::zero(MTy::Code)
+        };
         let init = Ex::agg(
             MTy::Rt(Rt::ElemOps),
-            vec![(Sel::F(0), Ex::size_of(d(t))), (Sel::F(1), ret), (Sel::F(2), rel), (Sel::F(3), eq), (Sel::F(4), cmp), (Sel::F(5), hash), (Sel::F(6), show)],
+            vec![
+                (Sel::F(0), Ex::size_of(d(t))),
+                (Sel::F(1), ret),
+                (Sel::F(2), rel),
+                (Sel::F(3), eq),
+                (Sel::F(4), cmp),
+                (Sel::F(5), hash),
+                (Sel::F(6), show),
+                (Sel::F(7), copy),
+            ],
         );
         self.prog.globals[g as usize].init = Some(init);
         Ex::new(K::GlobalAddr(g), MTy::ptr(MTy::Rt(Rt::ElemOps)))

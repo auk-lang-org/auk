@@ -155,6 +155,7 @@ static BT_OPS: DuckElemOps = DuckElemOps {
     cmp: None,
     hash: None,
     show: Some(bt_show),
+    copy: None,
 };
 const TYPE_BADTOKEN: u32 = 17;
 const TYPE_OTHER: u32 = 18;
@@ -298,7 +299,7 @@ unsafe extern "C" fn greet_fn(env: *mut DuckEnv, who: *mut DuckStr) -> *mut Duck
 fn closures_env_rc() {
     run(|| unsafe {
         DROPS.store(0, Ordering::SeqCst);
-        let env = duck_obj_alloc(size_of::<GreetEnv>(), Some(greet_drop)) as *mut GreetEnv;
+        let env = duck_rt::copy::duck_obj_alloc(size_of::<GreetEnv>(), Some(greet_drop), None) as *mut GreetEnv;
         (*env).greeting = s("hi");
         (*env).n = 2;
         let c = DuckClosure { fn_: greet_fn as GreetFn as *mut c_void, env: &raw mut (*env).base };
@@ -345,8 +346,8 @@ fn tasks_run_concurrently() {
         let sz = size_of::<SleepArgs>();
         let ps = size_of::<*mut DuckStr>();
         let mut ts = [
-            duck_task_spawn(sleep_thunk, vp(&a1), sz, ps, &duck_ops_str),
-            duck_task_spawn(sleep_thunk, vp(&a2), sz, ps, &duck_ops_str),
+            duck_task_spawn(sleep_thunk, vp(&a1), sz, ps, &duck_ops_str, std::ptr::null_mut(), None),
+            duck_task_spawn(sleep_thunk, vp(&a2), sz, ps, &duck_ops_str, std::ptr::null_mut(), None),
         ];
         let mut outs: [*mut DuckStr; 2] = [null_mut(); 2];
         duck_task_await_all(ts.as_mut_ptr(), 2, outs.as_mut_ptr().cast());
@@ -381,7 +382,7 @@ fn tasks_many_and_unawaited() {
         let mut ts: [*mut DuckTask; 16] = [null_mut(); 16];
         for (i, t) in ts.iter_mut().enumerate() {
             let n: i64 = 1000 * (i as i64 + 1);
-            *t = duck_task_spawn(sum_thunk, vp(&n), size_of::<i64>(), size_of::<i64>(), std::ptr::null());
+            *t = duck_task_spawn(sum_thunk, vp(&n), size_of::<i64>(), size_of::<i64>(), std::ptr::null(), std::ptr::null_mut(), None);
         }
         for (i, &t) in ts.iter().enumerate() {
             let mut r: i64 = 0;
@@ -392,7 +393,7 @@ fn tasks_many_and_unawaited() {
         }
         // releasing a never-awaited task joins it and releases its result
         let a = SleepArgs { ms: 10, tag: s("x") };
-        let t = duck_task_spawn(sleep_thunk, vp(&a), size_of::<SleepArgs>(), size_of::<*mut DuckStr>(), &duck_ops_str);
+        let t = duck_task_spawn(sleep_thunk, vp(&a), size_of::<SleepArgs>(), size_of::<*mut DuckStr>(), &duck_ops_str, std::ptr::null_mut(), None);
         rel(t);
     });
 }
@@ -420,7 +421,7 @@ fn tasks_atomic_refcounts() {
         let mut ts: [*mut DuckTask; 8] = [null_mut(); 8];
         for t in ts.iter_mut() {
             let a = PushArgs { xs: ret(xs) };
-            *t = duck_task_spawn(shared_push_thunk, vp(&a), size_of::<PushArgs>(), size_of::<i64>(), std::ptr::null());
+            *t = duck_task_spawn(shared_push_thunk, vp(&a), size_of::<PushArgs>(), size_of::<i64>(), std::ptr::null(), std::ptr::null_mut(), None);
         }
         let mut outs = [0i64; 8];
         duck_task_await_all(ts.as_mut_ptr(), 8, outs.as_mut_ptr().cast());

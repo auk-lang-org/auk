@@ -127,8 +127,9 @@ let x = catch { parse(s)? + xs[i] } else 0
 var ts: [Task<Resp!>] = [get(u1), get(u2)]
 let (i, r) = await any ts                 // first to finish; r: Resp!, a panic is an Err
 ts[1].cancel()                            // it panics "cancelled" at its next loop or blocking call
+let c: Chan<Job> = chan()                 // c.send(j); c.recv(): Job? (none once closed); c.close(); for j in c
 ```
-An `async fn` call must be awaited, stored or returned; outside an `async fn`, `await` blocks. A task's panic is raised again at its `await`; a task that panics cancels the tasks it started. `catch` may change the variables it uses; `return` can't leave it. Supervisors: package `sup`.
+An `async fn` call must be awaited, stored or returned; outside an `async fn`, `await` blocks. A task's panic is raised again at its `await`; a task that panics cancels the tasks it started. Tasks share nothing: arguments, results and messages are copied (so no `var` parameter on a started task), and a crashed task's memory is freed. `catch` may change the variables it uses; `return` can't leave it. Supervisors: package `sup`.
 
 ## Contracts, holes, tests, debugging
 ```

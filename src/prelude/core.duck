@@ -120,6 +120,36 @@ pub extern fn lower(c: char): char = "duck_char_lower"
 /// it as an `Err` from `await any`). No effect on a finished task.
 pub extern fn cancel<T>(t: Task<T>) = "duck_task_cancel"
 
+// ---- channels ----
+
+/// The runtime side of a channel, shared by every copy of its `Chan`.
+pub extern type ChanRef = "DuckChan *"
+
+/// A queue of `T` messages between tasks (unbounded). Each message is copied, so a sender and
+/// a receiver never share data. Pass the channel to tasks as an argument; `for x in c` receives
+/// until it is closed.
+pub struct Chan<T> { r: ChanRef, proto: [T] }
+
+extern fn chan_new<T>(proto: [T]): ChanRef = "duck_chan_new"
+extern fn chan_send<T>(r: ChanRef, x: T) = "duck_chan_send +loc"
+extern fn chan_recv<T>(r: ChanRef): T? = "duck_chan_recv"
+extern fn chan_close(r: ChanRef) = "duck_chan_close"
+
+/// A new channel; `T` comes from the expected type: `let c: Chan<Job> = chan()`.
+pub fn chan<T>(): Chan<T> {
+  let proto: [T] = []
+  Chan { r: chan_new(proto), proto }
+}
+
+/// Queue a copy of `x`. Panics if the channel is closed.
+pub fn send<T>(c: Chan<T>, x: T) = chan_send(c.r, x)
+
+/// Wait for the next message: none once the channel is closed and empty.
+pub fn recv<T>(c: Chan<T>): T? = chan_recv(c.r)
+
+/// No more messages: receivers get what is queued, then none.
+pub fn close<T>(c: Chan<T>) = chan_close(c.r)
+
 // ---- numbers ----
 
 pub extern fn sqrt(x: float): float = "duck_fsqrt"

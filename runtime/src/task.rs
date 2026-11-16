@@ -49,6 +49,11 @@ pub struct DuckTask {
     /// The tasks this task started (retained; a `Box<Vec<_>>`, null until the first), for the
     /// link: cancelled when this task ends with a panic.
     pub kids: *mut Vec<*mut DuckTask>,
+    /// The task's own heap (heap.rs): its arguments were copied into it, everything it
+    /// allocates goes there, and it is swept when the task crashes or is freed.
+    pub heap: *mut crate::heap::Heap,
+    /// Releases the arguments (what the thunk does after the call), for a task that crashed.
+    pub args_drop: Option<unsafe extern "C" fn(*mut c_void)>,
 }
 
 /// How many tasks are cancelled but still running: generated loops check a task's flag only
@@ -122,9 +127,19 @@ extern "C" fn task_entry(p: *mut c_void) -> *mut c_void {
     let t = p as *mut DuckTask;
     unsafe {
         CURRENT.with(|c| c.set(t));
+        crate::heap::switch((*t).heap);
         if let Some(p) = crate::catch::run((*t).fn_, (*t).args, (*t).result) {
             (*t).panic = Box::into_raw(Box::new(p));
+            // the arguments' references (handles among them), then everything else the aborted
+            // code left in the heap (nothing outside the heap points into it)
+            if let Some(d) = (*t).args_drop {
+                d((*t).args);
+            }
+            crate::heap::switch(null_mut());
+            crate::heap::sweep((*t).heap);
+            (*t).heap = null_mut();
         }
+        crate::heap::switch(null_mut());
         libc::free((*t).args);
         (*t).args = null_mut();
         if !(*t).kids.is_null() {
@@ -210,9 +225,13 @@ pub unsafe extern "C" fn duck_task_spawn(
     args_size: usize,
     result_size: usize,
     result_ops: *const DuckElemOps,
+    heap: *mut c_void,
+    args_drop: Option<unsafe extern "C" fn(*mut c_void)>,
 ) -> *mut DuckTask {
     unsafe {
         let t = duck__alloc(size_of::<DuckTask>(), DUCK_K_TASK) as *mut DuckTask;
+        (*t).heap = heap.cast();
+        (*t).args_drop = args_drop;
         libc::pthread_mutex_init(&raw mut (*t).mu, ptr::null());
         // The object is calloc'd; write the fn pointer without reading the zeroed field.
         ptr::write(&raw mut (*t).fn_, fn_);
@@ -229,6 +248,8 @@ pub unsafe extern "C" fn duck_task_spawn(
         // the link to the task that starts it (pruning the ones already finished)
         let parent = CURRENT.with(|c| c.get());
         if !parent.is_null() {
+            // the runtime's own references: not the task's (not on its heap's ledger)
+            let old = crate::heap::switch(null_mut());
             if (*parent).kids.is_null() {
                 (*parent).kids = Box::into_raw(Box::new(Vec::new()));
             }
@@ -241,6 +262,7 @@ pub unsafe extern "C" fn duck_task_spawn(
                 keep
             });
             kids.push(crate::rc::retain(t));
+            crate::heap::switch(old);
         }
         let rc = libc::pthread_create(&raw mut (*t).th, &attr, task_entry, t.cast());
         libc::pthread_attr_destroy(&mut attr);
@@ -278,11 +300,11 @@ pub unsafe extern "C" fn duck_task_await(t: *mut DuckTask, out: *mut c_void) {
             crate::rc::panic_msg(loc.as_ptr(), &p.msg);
         }
         if !out.is_null() && (*t).result_size != 0 {
-            ptr::copy_nonoverlapping((*t).result as *const u8, out as *mut u8, (*t).result_size);
-            if !(*t).ops.is_null()
-                && let Some(r) = (*(*t).ops).retain
-            {
-                r(out);
+            // a deep copy into the awaiter's heap: the result stays in the task's
+            if (*t).ops.is_null() {
+                ptr::copy_nonoverlapping((*t).result as *const u8, out as *mut u8, (*t).result_size);
+            } else {
+                crate::copy::copy_elem((*t).ops, (*t).result as *const u8, out.cast());
             }
         }
     }
@@ -337,8 +359,14 @@ pub unsafe fn duck__task_free(t: *mut DuckTask) {
         if !(*t).ops.is_null()
             && let Some(r) = (*(*t).ops).release
         {
+            // as the task: the result's handle references are on its ledger
+            let old = crate::heap::switch((*t).heap);
             r((*t).result);
+            crate::heap::switch(old);
         }
+        // what is left of the task's heap: objects a `catch` inside it gave up on
+        crate::heap::sweep((*t).heap);
+        (*t).heap = null_mut();
         libc::free((*t).result);
         libc::pthread_mutex_destroy(&raw mut (*t).mu);
         duck__free_obj(t.cast());

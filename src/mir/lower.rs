@@ -1698,21 +1698,28 @@ impl<'g, 'a> Lower<'g, 'a> {
         let ps = self.g.inst_params(i);
         let rt = self.g.inst_ret(i);
         let (thunk, argty) = self.thunk(i);
+        let args_drop = self.g.memo2[&format!("thunkdrop{i}")];
+        // the task's heap, with deep copies of the arguments in it (it shares nothing with us)
+        let heap = self.f.b.decl(Ex::rt("duck_heap_new", vec![], MTy::void_ptr()));
+        let vals: Vec<Ex> = args
+            .into_iter()
+            .map(|a| match a {
+                ArgV::Val(v) => self.f.b.decl(v.c),
+                ArgV::Addr(p, _) => p,
+            })
+            .collect();
+        let old = self.f.b.decl(Ex::rt("duck_heap_switch", vec![heap.clone()], MTy::void_ptr()));
         let mut fields = Vec::new();
-        for (k, (a, (pt, _))) in args.into_iter().zip(&ps).enumerate() {
-            fields.push((
-                Sel::F(k as u32),
-                match a {
-                    ArgV::Val(v) => self.own_as(v, pt),
-                    ArgV::Addr(p, _) => p,
-                },
-            ));
+        for (k, (v, (pt, var))) in vals.into_iter().zip(&ps).enumerate() {
+            let c = if *var { v } else { self.g.copy_ex(pt, v) };
+            fields.push((Sel::F(k as u32), c));
         }
         let a = self.f.b.decl(Ex::agg(MTy::Agg(argty), fields));
+        self.do_(Ex::rt("duck_heap_switch", vec![old], MTy::void_ptr()));
         let ops = if self.g.needs_rc(&rt) { self.g.ops(&rt) } else { Ex::zero(MTy::ptr(MTy::Rt(Rt::ElemOps))) };
         let call = Ex::rt(
             "duck_task_spawn",
-            vec![Ex::fn_addr(thunk), a.addr().cast(MTy::void_ptr()), Ex::size_of(MTy::Agg(argty)), Ex::size_of(d(&rt)), ops],
+            vec![Ex::fn_addr(thunk), a.addr().cast(MTy::void_ptr()), Ex::size_of(MTy::Agg(argty)), Ex::size_of(d(&rt)), ops, heap, Ex::fn_addr(args_drop)],
             d(ret),
         );
         self.tmp(ret, call)
@@ -1751,6 +1758,21 @@ impl<'g, 'a> Lower<'g, 'a> {
             b.emit(r);
         }
         self.g.define(n, b);
+        // what the thunk releases after the call, for a task that crashes before that: its
+        // arguments' handles (a channel, a connection) aren't in its heap
+        let drop = self.g.declare(format!("dk_thunk{i}_drop"), vec![MTy::void_ptr()], MTy::Void, Abi::C);
+        self.g.memo2.insert(format!("thunkdrop{i}"), drop);
+        let (mut b, pv) = self.g.body_for(drop);
+        let x = pv[0].clone().cast(MTy::ptr(MTy::Agg(argty))).deref(MTy::Agg(argty));
+        for (k, (pt, var)) in ps.iter().enumerate() {
+            let a = self.g.fld(&x, Sel::F(k as u32));
+            if !*var
+                && let Some(r) = self.g.release(pt, &a)
+            {
+                b.emit(r);
+            }
+        }
+        self.g.define(drop, b);
         (n, argty)
     }
 
@@ -2627,6 +2649,29 @@ impl<'g, 'a> Lower<'g, 'a> {
                 self.pop();
                 self.close();
             }
+            Some(ForKind::Chan) => {
+                let v = self.expr(iter);
+                let Ty::Named(_, args) = v.ty.clone() else { return };
+                let et = args[0].clone();
+                let ct = v.ty.clone();
+                let c = self.hold(v);
+                self.register(&c, &ct);
+                let r = self.fld(&c, Sel::F(0));
+                self.f.b.open_loop(vec![]);
+                self.cancel_point(e.span);
+                self.push(ScopeKind::Block);
+                let depth = self.f.scopes.len() - 1;
+                let x = self.zero_decl(&et);
+                let got = Ex::rt("duck_chan_recv", vec![r, x.clone().addr().cast(MTy::void_ptr())], MTy::Bool);
+                self.open_if(got.not());
+                self.emit(Stmt::Break);
+                self.close();
+                self.register(&x, &et);
+                self.bind_top(pat, &x, &et);
+                self.loop_body(depth, body);
+                self.pop();
+                self.close();
+            }
             None => {}
         }
     }
@@ -3067,7 +3112,20 @@ impl<'g, 'a> Lower<'g, 'a> {
                 }
             }
             self.g.define(drop, b);
-            Some((a, drop))
+            // the copy (a task's argument): a new env with deep copies of the captures
+            let copy = self.g.declare(format!("DkEnv{k}_copy"), vec![MTy::obj_ptr()], MTy::obj_ptr(), Abi::C);
+            let (mut b, pv) = self.g.body_for(copy);
+            let ev = pv[0].clone().cast(MTy::ptr(MTy::Agg(a))).deref(MTy::Agg(a));
+            let nv = b.decl(Ex::rt("duck_obj_alloc", vec![Ex::size_of(MTy::Agg(a)), Ex::fn_addr(drop), Ex::fn_addr(copy)], MTy::ptr(MTy::Agg(a))));
+            for (i, (_, _, ty)) in caps.iter().enumerate() {
+                let f = self.g.fld(&ev, Sel::F(i as u32 + 1));
+                let c = self.g.copy_ex(ty, f);
+                let place = self.g.fld(&nv.clone().deref(MTy::Agg(a)), Sel::F(i as u32 + 1));
+                b.set(place, c);
+            }
+            b.emit(Stmt::Ret(Some(nv.cast(MTy::obj_ptr()))));
+            self.g.define(copy, b);
+            Some((a, (drop, copy)))
         };
         // the lifted function
         let fty = if info.unpack { vec![Ty::Tuple(ptys.clone())] } else { ptys.clone() };
@@ -3107,10 +3165,10 @@ impl<'g, 'a> Lower<'g, 'a> {
         self.end(fname);
         // build the value
         let fnty = Ty::func(fty, ret);
-        let Some((a, drop)) = env else {
+        let Some((a, (drop, copy))) = env else {
             return Val::plain(self.closure_val(fname, &fnty, Ex::zero(MTy::obj_ptr())), fnty);
         };
-        let ev = self.f.b.decl(Ex::rt("duck_obj_alloc", vec![Ex::size_of(MTy::Agg(a)), Ex::fn_addr(drop)], MTy::ptr(MTy::Agg(a))));
+        let ev = self.f.b.decl(Ex::rt("duck_obj_alloc", vec![Ex::size_of(MTy::Agg(a)), Ex::fn_addr(drop), Ex::fn_addr(copy)], MTy::ptr(MTy::Agg(a))));
         for (i, (_, c, ty)) in caps.into_iter().enumerate() {
             let o = self.own(Val::plain(c, ty));
             let f = self.fld(&ev.clone().deref(MTy::Agg(a)), Sel::F(i as u32 + 1));

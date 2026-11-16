@@ -112,8 +112,8 @@ impl<'p, 'a> Layouts<'p, 'a> {
                 if fs.is_empty() { vec![MTy::I32] } else { fs }
             }
             MTy::Rt(Rt::StrBuf) => vec![MTy::void_ptr(), MTy::I64, MTy::I64],
-            MTy::Rt(Rt::Obj) => vec![MTy::I64, MTy::U32, MTy::Code],
-            MTy::Rt(Rt::ElemOps) => vec![MTy::U64, MTy::Code, MTy::Code, MTy::Code, MTy::Code, MTy::Code, MTy::Code],
+            MTy::Rt(Rt::Obj) => vec![MTy::I64, MTy::U32, MTy::Code, MTy::Code],
+            MTy::Rt(Rt::ElemOps) => vec![MTy::U64, MTy::Code, MTy::Code, MTy::Code, MTy::Code, MTy::Code, MTy::Code, MTy::Code],
             MTy::D(d) => match d {
                 Ty::Tuple(ts) => ts.iter().map(|x| MTy::D(x.clone())).collect(),
                 Ty::Opt(x) => vec![MTy::Bool, MTy::D((**x).clone())],
