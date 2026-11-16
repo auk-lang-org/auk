@@ -285,7 +285,7 @@ fn package_tests_pass() {
     let pkgs = [
         ("json", 16), ("csv", 11), ("regex", 15), ("cli", 11), ("http", 31), ("encoding", 8),
         ("hash", 8), ("datetime", 19), ("url", 13), ("toml", 23), ("log", 6), ("uuid", 8),
-        ("num", 15), ("text", 14), ("glob", 8), ("compress", 9), ("yaml", 14), ("xml", 11), ("sup", 7),
+        ("num", 15), ("text", 14), ("glob", 8), ("compress", 9), ("yaml", 14), ("xml", 11), ("sup", 7), ("splash", 5),
     ];
     for (pkg, min) in pkgs {
         let out = run_ok(&["test", &format!("packages/{pkg}/src/lib.duck")]);
@@ -341,7 +341,7 @@ fn no_leaks_in_programs() {
 fn package_tests_are_leak_free() {
     setup();
     // sup's tests crash and cancel children on purpose: their heaps must be swept clean
-    for pkg in ["json", "csv", "regex", "cli", "http", "encoding", "hash", "datetime", "url", "toml", "log", "uuid", "num", "text", "glob", "compress", "yaml", "xml", "sup"] {
+    for pkg in ["json", "csv", "regex", "cli", "http", "encoding", "hash", "datetime", "url", "toml", "log", "uuid", "num", "text", "glob", "compress", "yaml", "xml", "sup", "splash"] {
         let o = duck_cmd().args(["test", &format!("packages/{pkg}/src/lib.duck")]).env("DUCK_LEAK_CHECK", "1").output().unwrap();
         let (out, err) = text(&o);
         assert!(o.status.success() && out.ends_with(" 0 failed\n"), "{pkg} with the leak checker:\n{out}\n{err}");

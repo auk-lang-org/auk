@@ -50,7 +50,7 @@ cargo test                                              # the compiler's whole t
 | command | does |
 |---|---|
 | `duck run <file> [args...]` | compile and run the program |
-| `duck run --live <file> [args...]` | run, and swap in new code on every save: state, tasks and sockets survive; a type error keeps the old code; a changed struct/enum layout stops just the tasks that use it (their `sup` supervisors restart them on the new code), or restarts the program when `main` uses it |
+| `duck run --live <file> [args...]` | run, and swap in new code on every save: state, tasks and sockets survive; a type error keeps the old code; a changed struct/enum layout stops just the tasks that use it (their `sup` supervisors restart them on the new code), or restarts the program when `main` uses it. Try it on [`examples/live-site`](examples/live-site) |
 | `duck run --trace=json\|<file> <file> [args...]` | run with an execution trace: every call (args shown), return value or error, `peek` and panic as JSON Lines (`json` = stderr) |
 | `duck build <file> [-o out]` | compile to a native executable (release build; refuses `??` holes) |
 | `duck check <file> [--json]` | type-check only; `--json` for machine-readable diagnostics with fix-its |
