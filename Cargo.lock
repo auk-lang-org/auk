@@ -265,6 +265,7 @@ dependencies = [
 name = "duck_rt"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "libc",
  "rustls",
  "webpki-roots",

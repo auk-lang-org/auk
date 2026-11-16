@@ -522,6 +522,7 @@ impl Checker {
             K::OptChain { expr, name, args } => self.opt_chain(e, expr, name, args.as_deref(), exp),
             K::Else { expr, arm } => self.else_expr(e, expr, arm, exp),
             K::Await(x) => self.await_expr(e, x),
+            K::Catch(x) => self.catch_expr(e, x),
             K::Ref(x) => {
                 self.err(Diag::new("E0311", e.span, "`&` is only for an argument passed to a `var` parameter"));
                 self.infer(x, None)
@@ -562,6 +563,13 @@ impl Checker {
             K::Assert(x) => {
                 self.check(x, &Ty::Bool);
                 Ty::unit()
+            }
+            K::Return(_) if self.cxs.last().and_then(|c| c.frames.last()).is_some_and(|f| f.what == "catch") => {
+                self.err(
+                    Diag::new("E0335", e.span, "`return` can't leave a `catch`")
+                        .note("`catch e` is an expression: its value is `e`'s value; compute it, then `return` after the `catch`"),
+                );
+                Ty::Never
             }
             K::Return(x) => {
                 match self.frame_ret() {
@@ -2812,6 +2820,34 @@ impl Checker {
         t.clone()
     }
 
+    // ---- `catch` ----
+
+    /// `catch x`: x's value as `T!`, where a panic while evaluating it becomes an `Err`. The
+    /// body runs in a function of its own (the runtime's recovery point needs a frame), checked
+    /// like a closure `() => x` returning `T!`: `?` and `fail` inside it end the `catch` with that
+    /// error. It captures by reference, so it may change the variables it uses.
+    fn catch_expr(&mut self, e: &Expr, x: &Expr) -> Ty {
+        let ok = self.fresh();
+        let ret = Ty::res(ok, Ty::Named(self.b.err, Vec::new()));
+        self.push_scope();
+        self.push_frame(Frame {
+            ret: Some(ret.clone()),
+            ret_span: None,
+            scope_base: 0,
+            captures: Vec::new(),
+            loops: Vec::new(),
+            is_closure: true,
+            by_ref: true,
+            ret_insert: None,
+            what: "catch",
+        });
+        self.check(x, &ret);
+        let frame = self.pop_frame();
+        self.pop_scope();
+        self.cx().t.closures.insert(e.id, ClosureInfo { params: Vec::new(), ret: ret.clone(), captures: frame.captures, unpack: false });
+        ret
+    }
+
     // ---- closures ----
 
     fn closure(&mut self, e: &Expr, params: &[ast::Param], body: &Expr, exp: &Exp) -> Ty {
@@ -2881,6 +2917,7 @@ impl Checker {
             captures: Vec::new(),
             loops: Vec::new(),
             is_closure: true,
+            by_ref: false,
             ret_insert: None,
             what: "closure",
         });

@@ -751,7 +751,7 @@ impl<'a> Finder<'a> {
                 self.expr(expr, me);
                 self.pat(pat);
             }
-            K::Try(x) | K::Unwrap(x) | K::Await(x) | K::Ref(x) | K::Assert(x) | K::Peek(x) => self.expr(x, me),
+            K::Try(x) | K::Unwrap(x) | K::Await(x) | K::Catch(x) | K::Ref(x) | K::Assert(x) | K::Peek(x) => self.expr(x, me),
             K::Call { callee, args } => {
                 self.expr(callee, me);
                 args.iter().for_each(|a| self.expr(a, me));

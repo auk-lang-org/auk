@@ -179,7 +179,8 @@ pub unsafe extern "C" fn duck_obj_alloc(size: usize, drop: Option<DropFn>) -> *m
 // ---- panics ------------------------------------------------------------------------------
 
 /// The one panic path: flush stdout, print `panic: <msg>\n  at <loc>`, record it in the trace,
-/// and `_exit(101)` (no atexit handlers: other threads may still be busy).
+/// and `_exit(101)` (no atexit handlers: other threads may still be busy). Under a recovery point
+/// (`catch`, a task thread) it jumps back there instead (catch.rs).
 pub fn panic_msg(loc: *const c_char, msg: &str) -> ! {
     unsafe { libc::fflush(c_stdout()) };
     // C's fixed 2 KB buffer truncated long messages; keep that bound.
@@ -192,9 +193,14 @@ pub fn panic_msg(loc: *const c_char, msg: &str) -> ! {
         msg = &msg[..end];
     }
     let loc_s = if loc.is_null() { "<unknown>".into() } else { unsafe { cstr(loc) } };
+    // inside `catch` (or on a task thread, whose awaiter re-raises it): record it, jump back
+    if crate::catch::recoverable() {
+        crate::trace::duck__trace_panic(loc, msg, true);
+        crate::catch::throw(&loc_s, msg);
+    }
     fwrite_bytes(c_stderr(), format!("panic: {msg}\n  at {loc_s}\n").as_bytes());
     unsafe { libc::fflush(c_stderr()) };
-    crate::trace::duck__trace_panic(loc, msg);
+    crate::trace::duck__trace_panic(loc, msg, false);
     unsafe { libc::_exit(101) }
 }
 

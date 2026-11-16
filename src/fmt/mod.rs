@@ -954,11 +954,11 @@ impl Fmt {
                 let arm = self.else_arm(arm, cx.last);
                 concat(vec![d, Doc::Tail(Box::new(concat(vec![text(" else "), arm])))])
             }
-            K::Await(x) => {
-                // the operand is a postfix chain without `?`, `!` or `?.` (or another `await`)
-                let ok = matches!(x.kind, K::Await(_)) || (level(x) == POSTFIX && !greedy(x) && !has_try_spine(x));
+            K::Await(x) | K::Catch(x) => {
+                // the operand is a postfix chain without `?`, `!` or `?.` (or another `await`/`catch`)
+                let ok = matches!(x.kind, K::Await(_) | K::Catch(_)) || (level(x) == POSTFIX && !greedy(x) && !has_try_spine(x));
                 let d = if ok { self.expr(x, cx.operand(AWAIT, false)) } else { concat(vec![text("("), self.expr(x, Cx::inner()), text(")")]) };
-                concat(vec![text("await "), d])
+                concat(vec![text(if matches!(e.kind, K::Catch(_)) { "catch " } else { "await " }), d])
             }
             K::Ref(x) => {
                 let d = self.expr(x, cx.operand(AWAIT, false));
@@ -1448,7 +1448,7 @@ fn level(e: &Expr) -> u8 {
         K::Is { .. } => IS,
         K::Range { .. } => RANGE,
         K::Unary { .. } | K::Ref(_) => UNARY,
-        K::Await(_) => AWAIT,
+        K::Await(_) | K::Catch(_) => AWAIT,
         _ => POSTFIX,
     }
 }
@@ -1483,7 +1483,7 @@ fn recv_needs_parens(recv: &Expr, seg: &Expr) -> bool {
     let dotted = matches!(seg.kind, K::Field { .. } | K::MethodCall { .. } | K::TupleField { .. } | K::OptChain { .. });
     match &recv.kind {
         K::Try(_) | K::Hole => dotted,
-        K::Await(_) => !matches!(seg.kind, K::Try(_) | K::Unwrap(_) | K::OptChain { .. }),
+        K::Await(_) | K::Catch(_) => !matches!(seg.kind, K::Try(_) | K::Unwrap(_) | K::OptChain { .. }),
         _ => false,
     }
 }
@@ -1518,7 +1518,7 @@ fn peek_operand_ok(e: &Expr) -> bool {
         | K::Try(x)
         | K::Unwrap(x)
         | K::OptChain { expr: x, .. } => peek_operand_ok(x),
-        K::Lit(_) | K::Measured { .. } | K::Interp(_) | K::Name(_) | K::If { .. } | K::Match { .. } | K::Await(_) | K::Tuple(_) | K::List(_) | K::Struct { .. } => true,
+        K::Lit(_) | K::Measured { .. } | K::Interp(_) | K::Name(_) | K::If { .. } | K::Match { .. } | K::Await(_) | K::Catch(_) | K::Tuple(_) | K::List(_) | K::Struct { .. } => true,
         K::Closure { .. } => true,
         _ => false,
     }

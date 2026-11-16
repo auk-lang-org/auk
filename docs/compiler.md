@@ -56,7 +56,9 @@ source ─▶ lex ─▶ parse ─▶ resolve ─▶ check ─▶ lower ─▶ M
 - **Value:** a C enum mirroring core `Value`. The compiler generates `to_value`/`from_value` per type.
 - **Async:** `async fn` compiles to a normal function plus a thunk. Calling it without `await` creates a `DuckTask` (a thunk run on a pthread pool). `await t` joins. `await (a, b)` / `await [..]` starts everything and then joins all of them. A direct `await f(x)` just calls `f` (no thread).
 - **Core library in the runtime:** fs, net (tcp; tls via rustls, verified against the bundled Mozilla roots of `webpki-roots`), time, rand, env, proc, string and collection primitives, float formatting (shortest exact output), and `print`.
-- **Panics** (overflow, index out of range, a failed `requires`, an unfilled hole, unwrapping `none`) print `panic: <msg>\n  at file:line:col` and exit 101.
+- **Panics** (overflow, index out of range, a failed `requires`, an unfilled hole, unwrapping `none`) print `panic: <msg>\n  at file:line:col` and exit 101, unless the thread has a recovery point (`runtime/src/catch.c`: a stack of `sigsetjmp` buffers). Then the panic is recorded and `siglongjmp`s back to it, and nothing in between is cleaned up (owned objects leak).
+- **`catch e`** lifts `e` into `dk_catch{k}(env)` returning `T!`, like a closure but capturing by reference (env holds pointers to the captured variables), plus a C thunk. `duck_catch(thunk, env, out)` runs the thunk under a recovery point and returns the panic as an `Err` (`panic: <msg> at <loc>`), or NULL.
+- **Task links:** every task thread runs under a recovery point. A panic ends only the task; `await` raises it again in the awaiter (where a `catch` can take it). A task that panicked and is freed without being awaited ends the process with the panic report.
 
 ## Contracts, holes, tests, peek, imprint (codegen)
 - `requires` → a check at function entry, in every build. `ensures` → a check at every return in debug and test builds; `old(e)` values are captured at entry.

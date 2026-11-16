@@ -836,6 +836,110 @@ fn main() {
     );
 }
 
+// ---- catch and task links ----
+
+const CATCH_SRC: &str = r#"fn at(xs: [int], i: int): int = xs[i]
+fn parse(s: str): int! {
+  let n = int.parse(s) else fail("nan: {s}")
+  n
+}
+async fn boom(n: int): int {
+  let xs = [1]
+  xs[n]
+}
+fn bump(n: var int) { n += 1 }
+fn main() {
+  let xs = [1, 2, 3]
+  print(catch at(xs, 1))
+  match catch at(xs, 9) {
+    ok(v) => print("ok {v}"),
+    err(e) => print("caught: {e}"),
+  }
+  print("{catch parse("12")} {catch parse("x")} {catch at(xs, 7) else 0}")
+  var count = 0
+  let r = catch {
+    bump(&count)
+    count += 1
+    parse("5")? + at(xs, 5)
+  }
+  print("count {count} r {r}")
+  let t = boom(0)
+  let u = boom(5)
+  print("{await t} {catch await u}")
+  let n = catch {
+    let a = catch at(xs, 100)
+    print("inner {a is err(_)}")
+    at(xs, 50)
+  }
+  print(n is err(_))
+  let m: {str: int} = {}
+  print(catch m["k"])
+  print("alive")
+}
+"#;
+
+const CATCH_OUT: &str = "ok(2)\ncaught: panic: index 9 out of range for length 3 at catch.duck:1:33\nok(12) err(nan: x) 0\ncount 2 r err(panic: index 5 out of range for length 3 at catch.duck:1:33)\n1 err(panic: index 5 out of range for length 1 at catch.duck:8:3)\ninner true\ntrue\nerr(panic: key not found: \"k\" at catch.duck:36:15)\nalive\n";
+
+/// `catch e` turns a panic (index, missing key, one re-raised by `await`) into an `Err`, passes
+/// `?`/`fail` errors through, composes with `else`, and changes the `var`s it captures; in the
+/// JIT and in a `duck build` executable.
+#[test]
+fn catch_recovers_panics() {
+    let d = scratch("catch");
+    let p = d.join("catch.duck");
+    fs::write(&p, CATCH_SRC).unwrap();
+    let o = duck_cmd().arg("run").arg("catch.duck").current_dir(&d).output().unwrap();
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}\n{err}");
+    assert_eq!(out, CATCH_OUT, "stderr:\n{err}");
+    let exe = d.join("catch");
+    let o = duck_cmd().args(["build", "catch.duck", "-o"]).arg(&exe).current_dir(&d).output().unwrap();
+    assert!(o.status.success(), "{:?}", text(&o));
+    let o = Command::new(&exe).current_dir(&d).output().unwrap();
+    assert_eq!(text(&o).0, CATCH_OUT);
+}
+
+/// A `catch` that doesn't panic leaks nothing (a panic leaks what the aborted code owned).
+#[test]
+fn catch_without_a_panic_leaks_nothing() {
+    expect_out(
+        "catch_leaks",
+        r#"fn parse(s: str): int! {
+  let n = int.parse(s) else fail("nan: {s}")
+  n
+}
+fn main() {
+  var names: [str] = []
+  for i in 0..3 {
+    let r = catch {
+      names.push("a{i}")
+      "v{parse("{i}")?}"
+    }
+    print(r)
+  }
+  print("{catch parse("q")} {names}")
+}
+"#,
+        "ok(\"v0\")\nok(\"v1\")\nok(\"v2\")\nerr(nan: q) [\"a0\", \"a1\", \"a2\"]\n",
+    );
+}
+
+/// A task's panic ends only the task; `await` raises it again (uncaught: exit 101 with the
+/// original location), and a crashed task dropped without an `await` still ends the process.
+#[test]
+fn task_panics_are_raised_at_await() {
+    let src = "async fn boom(n: int): int {\n  let xs = [1]\n  xs[n]\n}\n";
+    let o = run_src("task_await", &format!("{src}fn main() {{\n  let t = boom(4)\n  print(\"before\")\n  print(await t)\n}}\n"));
+    let (out, err) = text(&o);
+    assert_eq!(o.status.code(), Some(101), "{out}\n{err}");
+    assert_eq!(out, "before\n");
+    assert!(err.contains("panic: index 4 out of range for length 1\n  at ") && err.contains("task_await.duck:3:3"), "{err}");
+    let o = run_src("task_dropped", &format!("{src}fn go() uses time {{\n  let t = boom(4)\n  time.sleep(20)\n}}\nfn main() uses time {{\n  go()\n  print(\"after\")\n}}\n"));
+    let (out, err) = text(&o);
+    assert_eq!(o.status.code(), Some(101), "{out}\n{err}");
+    assert!(err.contains("(in a task that was never awaited)"), "{err}");
+}
+
 // ---- error programs, spec ----
 
 fn error_files() -> Vec<PathBuf> {

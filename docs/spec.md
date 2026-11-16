@@ -7,7 +7,7 @@ Statically typed and compiled to native code. Braces delimit blocks; no semicolo
 No implicit conversions: `float(n)`, `int(x)`, `str(v)` (`str` of a `[char]` joins it), `int(c)`/`char(n): char?` (code points; chars compare by code point). A plain value converts to `T?`/`T!` where one is expected; `some(v)` and `none` also build a `T?`.
 Units: `3.0<m>`, `float<m/s^2>` (no space before `<`). `+ -`, comparisons and calls need equal units; `* /` combine them; plain numbers only scale (`0` fits any). `float(x)` drops a unit; `"{d}"` prints `3.0 m`.
 Strings: `"hi {name} {x:.2} {n:>5}"` interpolates any expression; `{{` and `}}` are literal braces. Escapes: `\n \t \r \0 \\ \" \' \u{1F986}`. Slices: `s[a..b]`, `xs[a..b]`. Floats print in the shortest exact form (`2.0`). `r"..."`/`r"""..."""` don't interpolate. Triple-quoted strings drop the first newline and strip the closing line's indentation from every line. `"{e}"` on an `Err` gives its message and causes. Numbers: `1_000`, `0xff`, `1e-9`.
-Precedence, tightest first: postfix (`.f()` `[i]` `?` `!` `?.`) > `await` > unary `- ! ~` > `**` > `* / %` > `+ -` > `<< >>` > `&` > `^` > `|` > `..` > comparisons > `is` > `&&` > `||` > `|>` > `else`. A `?` after a `|>` step applies to the whole pipe so far. `/` and `%` truncate toward zero: `-7 / 2 == -3`, `-7 % 2 == -1`. `+` also concatenates `str` and `[T]`. `x is pat` tests a pattern.
+Precedence, tightest first: postfix (`.f()` `[i]` `?` `!` `?.`) > `await` `catch` > unary `- ! ~` > `**` > `* / %` > `+ -` > `<< >>` > `&` > `^` > `|` > `..` > comparisons > `is` > `&&` > `||` > `|>` > `else`. A `?` after a `|>` step applies to the whole pipe so far. `/` and `%` truncate toward zero: `-7 / 2 == -3`, `-7 % 2 == -1`. `+` also concatenates `str` and `[T]`. `x is pat` tests a pattern.
 Assignment copies values (copy-on-write); memory is reference-counted.
 
 ## Bindings
@@ -122,8 +122,10 @@ async fn get(url: str): Resp! uses net { ... }
 let page = await get(u)?                  // (await get(u))?
 let (a, b) = await (get(u1), get(u2))     // runs concurrently
 let all = await urls.map(u => get(u))     // [Resp!]
+let r = catch handle(req, &db)            // Resp!: a panic inside becomes an Err
+let x = catch { parse(s)? + xs[i] } else 0
 ```
-An `async fn` call must be awaited, stored or returned; outside an `async fn`, `await` blocks.
+An `async fn` call must be awaited, stored or returned; outside an `async fn`, `await` blocks. A task's panic is raised again at its `await`. `catch` may change the variables it uses; `return` can't leave it.
 
 ## Contracts, holes, tests, debugging
 ```

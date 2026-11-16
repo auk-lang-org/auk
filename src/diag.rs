@@ -171,6 +171,7 @@ pub const CODES: &[(&str, &str)] = &[
     ("E0332", "unawaited `async fn` call"),
     ("E0333", "un-awaited `async fn` call used as its result"),
     ("E0334", "the error of a `T!` value is ignored"),
+    ("E0335", "`return` inside `catch`"),
     ("E0350", "type doesn't fit a shape"),
     ("E0360", "type can't be inferred"),
     ("E0370", "unsupported `main` signature"),

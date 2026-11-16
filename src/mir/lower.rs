@@ -1090,6 +1090,7 @@ impl<'g, 'a> Lower<'g, 'a> {
             EK::OptChain { expr, name, args } => self.opt_chain(e, expr, name, args.is_some()),
             EK::Else { expr, arm } => self.else_expr(e, expr, arm),
             EK::Await(x) => self.await_(e, x),
+            EK::Catch(x) => self.catch_(e, x),
             EK::Ref(x) => self.expr(x),
             EK::Closure { params, body } => self.closure(e, params, body),
             EK::If { cond, then, els } => self.if_(e, cond, then, els.as_deref(), tail),
@@ -2913,6 +2914,66 @@ impl<'g, 'a> Lower<'g, 'a> {
                 self.tmp(&ty, Ex::agg(d(&ty), parts))
             }
         }
+    }
+
+    // ---- `catch` ----
+
+    /// `catch body`: lift the body into `R dk_catch{k}(env)` (R = `T!`; env points at the
+    /// captured variables, captured by reference) and a C thunk `dk_catcht{k}(env, out)` that
+    /// stores its value; `duck_catch` runs the thunk under a recovery point and returns the panic
+    /// as an `Err` (NULL when the body finished).
+    fn catch_(&mut self, e: &Expr, body: &Expr) -> Val {
+        let Some(info) = self.t.closures.get(&e.id).cloned() else { return Val::never() };
+        let ret = self.sub(&info.ret);
+        let k = self.g.fresh();
+        // the captured variables' places in this function
+        let mut caps = Vec::new();
+        for &l in &info.captures {
+            let (c, ty) = match self.f.locals.get(&l) {
+                Some(s) => (s.c.clone(), s.ty.clone()),
+                None => {
+                    let ty = self.local_ty(l);
+                    (self.zero_decl(&ty), ty)
+                }
+            };
+            caps.push((l, c, ty));
+        }
+        let env = self.g.agg(format!("DkCatchEnv{k}"), caps.iter().map(|(_, _, t)| MTy::ptr(d(t))).chain([MTy::void_ptr()]).collect());
+        // the body
+        let fname = self.g.declare(format!("dk_catch{k}"), vec![MTy::void_ptr()], d(&ret), Abi::Duck);
+        let pv = self.begin_fn(fname, ret.clone());
+        self.push(ScopeKind::Block);
+        let ev = pv[0].clone().cast(MTy::ptr(MTy::Agg(env))).deref(MTy::Agg(env));
+        for (i, (l, _, ty)) in caps.iter().enumerate() {
+            let p = self.g.fld(&ev, Sel::F(i as u32));
+            self.f.locals.insert(*l, Slot { c: p.deref(d(ty)), ty: ty.clone() });
+        }
+        let v = self.expr(body);
+        self.ret_val(v, &ret);
+        let z = self.g.zero(&ret);
+        self.emit(Stmt::Ret(Some(z)));
+        self.end(fname);
+        // the thunk: *out = dk_catch{k}(env)
+        let thunk = self.g.declare(format!("dk_catcht{k}"), vec![MTy::void_ptr(), MTy::void_ptr()], MTy::Void, Abi::C);
+        let (mut b, tv) = self.g.body_for(thunk);
+        let c = self.g.call(fname, vec![tv[0].clone()]);
+        b.set(tv[1].clone().cast(MTy::ptr(d(&ret))).deref(d(&ret)), c);
+        self.g.define(thunk, b);
+        // run it
+        let mut fields: Vec<(Sel, Ex)> = caps.into_iter().enumerate().map(|(i, (_, c, _))| (Sel::F(i as u32), c.addr())).collect();
+        let n = fields.len() as u32;
+        fields.push((Sel::F(n), Ex::zero(MTy::void_ptr())));
+        let envv = self.f.b.decl(Ex::agg(MTy::Agg(env), fields));
+        let r = self.zero_decl(&ret);
+        let et = self.g.err_ty();
+        let err = self.decl(
+            &et,
+            Ex::rt("duck_catch", vec![Ex::fn_addr(thunk), envv.addr().cast(MTy::void_ptr()), r.clone().addr().cast(MTy::void_ptr())], d(&et)),
+        );
+        self.open_if(Ex::bin(BOp::Ne, err.clone().cast(MTy::void_ptr()), Ex::zero(MTy::void_ptr())));
+        self.set(r.clone(), Ex::agg(d(&ret), vec![(Sel::F(2), err)]));
+        self.close();
+        self.reown(r, ret)
     }
 
     // ---- closures ----

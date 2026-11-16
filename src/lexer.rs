@@ -679,6 +679,7 @@ fn continues_after(t: &Tok) -> bool {
             | Requires
             | Ensures
             | Await
+            | Catch
     )
 }
 

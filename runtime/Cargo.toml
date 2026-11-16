@@ -15,3 +15,6 @@ webpki-roots = "1"
 
 [dev-dependencies]
 libc = "0.2"
+
+[build-dependencies]
+cc = "1"

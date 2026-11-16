@@ -174,6 +174,9 @@ pub(crate) struct Frame {
     pub captures: Vec<LocalId>,
     pub loops: Vec<LoopCx>,
     pub is_closure: bool,
+    /// A `catch` body: captures by reference (it runs before the enclosing frame returns), so
+    /// it may change the variables it captures.
+    pub by_ref: bool,
     pub what: &'static str,
     /// Where to insert `: T` when the function has no return type (just after its `)`).
     pub ret_insert: Option<Span>,
@@ -1298,6 +1301,7 @@ impl Checker {
             captures: Vec::new(),
             loops: Vec::new(),
             is_closure: false,
+            by_ref: false,
             ret_insert: None,
             what: "constant",
         });
@@ -1352,6 +1356,7 @@ impl Checker {
                 captures: Vec::new(),
                 loops: Vec::new(),
                 is_closure: false,
+                by_ref: false,
                 ret_insert: None,
                 what: "function",
             });
@@ -1371,6 +1376,7 @@ impl Checker {
                 captures: Vec::new(),
                 loops: Vec::new(),
                 is_closure: false,
+                by_ref: false,
                 ret_insert,
                 what: "function",
             });
@@ -1496,6 +1502,7 @@ impl Checker {
             captures: Vec::new(),
             loops: Vec::new(),
             is_closure: false,
+            by_ref: false,
             ret_insert: None,
             what: "test",
         });
@@ -1529,6 +1536,7 @@ impl Checker {
             captures: Vec::new(),
             loops: Vec::new(),
             is_closure: false,
+            by_ref: false,
             ret_insert: None,
             what: "guard",
         });
@@ -1579,7 +1587,7 @@ impl Checker {
     /// Is local `l` captured by the innermost closure frame (declared outside it)?
     pub fn is_captured(&self, l: LocalId) -> bool {
         let Some(cx) = self.cxs.last() else { return false };
-        cx.frames.iter().rev().take_while(|f| f.is_closure).any(|f| f.captures.contains(&l))
+        cx.frames.iter().rev().take_while(|f| f.is_closure).any(|f| !f.by_ref && f.captures.contains(&l))
     }
 
     pub fn local_ty(&self, l: LocalId) -> Ty {
@@ -1794,7 +1802,7 @@ pub(crate) fn visit_expr(e: &ast::Expr, f: &mut dyn FnMut(&ast::Expr)) {
             }
         }
         K::Field { expr, .. } | K::TupleField { expr, .. } | K::Unary { expr, .. } | K::Is { expr, .. } => visit_expr(expr, f),
-        K::Try(x) | K::Unwrap(x) | K::Await(x) | K::Ref(x) | K::Assert(x) | K::Peek(x) => visit_expr(x, f),
+        K::Try(x) | K::Unwrap(x) | K::Await(x) | K::Catch(x) | K::Ref(x) | K::Assert(x) | K::Peek(x) => visit_expr(x, f),
         K::Call { callee, args } => {
             visit_expr(callee, f);
             args.iter().for_each(|a| visit_expr(a, f));

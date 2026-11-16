@@ -653,7 +653,9 @@ pub unsafe fn duck__trace_peek(loc: *const c_char, src_text: *const c_char, show
 
 /// A panic: records it and writes out the trace (the process is about to _exit).
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn duck__trace_panic(loc: *const c_char, msg: &str) {
+/// `caught`: the panic jumps to a recovery point (`catch`, a task thread) instead of ending the
+/// process; the event gets `"caught":true`.
+pub fn duck__trace_panic(loc: *const c_char, msg: &str, caught: bool) {
     if unsafe { MODE } == T_OFF {
         return;
     }
@@ -671,8 +673,22 @@ pub fn duck__trace_panic(loc: *const c_char, msg: &str) {
         } else {
             unsafe { put_cjson(&mut l, loc) };
         }
+        if caught {
+            put(&mut l, b",\"caught\":true");
+        }
         end_depth(&mut l, DEPTH.with(|d| d.get()));
         emit_ev(l, true);
     }
     unsafe { duck__trace_flush() };
+}
+
+/// This thread's call depth and mute count, saved at a recovery point (`catch`, a task) and put
+/// back when a panic jumps past traced frames that never got to exit.
+pub fn save_state() -> (i64, c_int) {
+    (DEPTH.with(|d| d.get()), MUTE.with(|m| m.get()))
+}
+
+pub fn restore_state(s: (i64, c_int)) {
+    DEPTH.with(|d| d.set(s.0));
+    MUTE.with(|m| m.set(s.1));
 }

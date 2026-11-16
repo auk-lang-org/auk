@@ -28,7 +28,8 @@
 //!    (an array needs its element ops).
 //! 6. `loc` parameters are "file:line:col" strings used in panic messages.
 //!
-//! Panics print `panic: <msg>\n  at <loc>` to stderr and exit with 101.
+//! Panics print `panic: <msg>\n  at <loc>` to stderr and exit with 101, unless the thread has a
+//! recovery point (`catch`, a task thread: see catch.rs).
 //!
 //! # Layout of the crate
 //! One module per area; public entry points are `duck_*` (`#[unsafe(no_mangle)] pub unsafe
@@ -51,6 +52,7 @@ pub mod tls;
 pub mod testing;
 pub mod trace;
 pub mod compiler;
+pub mod catch;
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::atomic::AtomicI64;

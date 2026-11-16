@@ -1100,15 +1100,22 @@ impl Parser {
         Ok(self.mk(ExprKind::Unary { op, expr: Box::new(e) }, start))
     }
 
+    /// `await e` and `catch e` (same precedence, either order: `catch await t`). A trailing `?`,
+    /// `!` or `?.` applies to the result: `catch f(x)?` is `(catch f(x))?`.
     fn await_expr(&mut self) -> PResult<Expr> {
         let start = self.span();
-        if !self.eat(&Tok::Await) {
+        let catch = self.at(&Tok::Catch);
+        if !catch && !self.eat(&Tok::Await) {
             let e = self.primary()?;
             return self.postfix(e, false);
         }
-        let operand = if self.at(&Tok::Await) { self.await_expr()? } else { self.primary()? };
+        if catch {
+            self.bump();
+        }
+        let operand = if self.at(&Tok::Await) || self.at(&Tok::Catch) { self.await_expr()? } else { self.primary()? };
         let operand = self.postfix(operand, true)?;
-        let e = self.mk(ExprKind::Await(Box::new(operand)), start);
+        let kind = if catch { ExprKind::Catch(Box::new(operand)) } else { ExprKind::Await(Box::new(operand)) };
+        let e = self.mk(kind, start);
         self.postfix(e, false)
     }
 
@@ -1585,7 +1592,8 @@ impl Parser {
             | Tok::False
             | Tok::If
             | Tok::Match
-            | Tok::Await => true,
+            | Tok::Await
+            | Tok::Catch => true,
             Tok::LParen | Tok::LBracket => next.space_before,
             _ => false,
         }
@@ -1626,6 +1634,9 @@ mod tests {
     fn precedence() {
         assert_eq!(e("await x?"), "(? (await x))");
         assert_eq!(e("await get(u).body"), "(await (. (call get u) body))");
+        assert_eq!(e("catch f(x)?"), "(? (catch (call f x)))");
+        assert_eq!(e("catch await t"), "(catch (await t))");
+        assert_eq!(e("catch xs[i] else 0"), "(else (catch (index xs i)) 0)");
         assert_eq!(e("-e.1"), "(- (. e 1))");
         assert_eq!(e("-eval(e)?"), "(- (? (call eval e)))");
         assert_eq!(e("!p.at(c)"), "(! (method p at c))");

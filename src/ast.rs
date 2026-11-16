@@ -348,6 +348,8 @@ pub enum ExprKind {
     /// `e else fallback`, `e else err => fallback`.
     Else { expr: Box<Expr>, arm: ElseArm },
     Await(Box<Expr>),
+    /// `catch e`: e's value as `T!`; a panic while evaluating it becomes an `Err`.
+    Catch(Box<Expr>),
     /// `&x`: marks a `var` argument; only valid directly as a call argument.
     Ref(Box<Expr>),
     /// `x => body`, `(a, b: int) => body`. A closure passed where one tuple parameter is
@@ -735,6 +737,7 @@ pub fn expr_dump(e: &Expr) -> String {
         ExprKind::OptChain { expr, name, args: Some(a) } => format!("(?. {} {} (args{}))", d(expr), name.name, args_dump(a)),
         ExprKind::Else { expr, arm } => format!("(else {} {})", d(expr), else_dump(arm)),
         ExprKind::Await(e) => format!("(await {})", d(e)),
+        ExprKind::Catch(e) => format!("(catch {})", d(e)),
         ExprKind::Ref(e) => format!("(& {})", d(e)),
         ExprKind::Closure { params, body } => format!("(closure ({}) {})", join(params, param_dump), d(body)),
         ExprKind::If { cond, then, els } => match els {

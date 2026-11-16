@@ -113,6 +113,7 @@ pub(crate) fn children<'e>(e: &'e Expr) -> Vec<&'e Expr> {
         | ExprKind::Try(expr)
         | ExprKind::Unwrap(expr)
         | ExprKind::Await(expr)
+        | ExprKind::Catch(expr)
         | ExprKind::Ref(expr)
         | ExprKind::Unary { expr, .. }
         | ExprKind::Peek(expr)
