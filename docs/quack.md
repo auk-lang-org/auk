@@ -27,6 +27,7 @@
 | `url` | RFC 3986 `parse`/`show`/`resolve`, query strings (depends on `encoding`) | none |
 | `toml` | TOML 1.0 `parse` (text → core `Value`), `str`, `decode`/`encode` for any `Data` | none |
 | `log` | leveled logfmt / JSON-lines logging to stderr through a `Logger` value (depends on `json`) | none |
+| `xml` | XML 1.0 `parse` into an `Element` tree, queries (`child`, `all`, `descendants`, `text`), `str`/`pretty` writers | none |
 
 ## Project layout
 ```
