@@ -63,6 +63,9 @@ pub unsafe fn run(f: DuckThunk, env: *mut c_void, out: *mut c_void) -> Option<Pa
 pub unsafe extern "C" fn duck_catch(f: DuckThunk, env: *mut c_void, out: *mut c_void) -> *mut DuckErr {
     match unsafe { run(f, env, out) } {
         None => null_mut(),
+        // a cancelled task must end: pass the panic on to the next recovery point out (the
+        // task's own, at the latest)
+        Some(p) if crate::task::cancelled() => throw(&p.loc, &p.msg),
         Some(p) => crate::err::err_msg(&p.err_text()),
     }
 }

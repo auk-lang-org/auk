@@ -799,6 +799,13 @@ impl Checker {
                         if let Some(p) = prim {
                             return self.no_args(m, t, args, p);
                         }
+                        if n == "Task" {
+                            if args.len() != 1 {
+                                self.err_in(m, Diag::new("E0106", t.span, format!("`Task` takes 1 type argument, found {}", args.len())));
+                                return Ty::Error;
+                            }
+                            return Ty::Task(Box::new(self.resolve_type(m, &args[0], g)));
+                        }
                     }
                 }
                 let Some(item) = self.lookup_type_path(m, path) else {
@@ -1802,7 +1809,7 @@ pub(crate) fn visit_expr(e: &ast::Expr, f: &mut dyn FnMut(&ast::Expr)) {
             }
         }
         K::Field { expr, .. } | K::TupleField { expr, .. } | K::Unary { expr, .. } | K::Is { expr, .. } => visit_expr(expr, f),
-        K::Try(x) | K::Unwrap(x) | K::Await(x) | K::Catch(x) | K::Ref(x) | K::Assert(x) | K::Peek(x) => visit_expr(x, f),
+        K::Try(x) | K::Unwrap(x) | K::Await(x) | K::AwaitAny(x) | K::Catch(x) | K::Ref(x) | K::Assert(x) | K::Peek(x) => visit_expr(x, f),
         K::Call { callee, args } => {
             visit_expr(callee, f);
             args.iter().for_each(|a| visit_expr(a, f));

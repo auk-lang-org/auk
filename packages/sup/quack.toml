@@ -1,0 +1,6 @@
+[package]
+name = "sup"
+version = "0.1.0"
+effects = ["time"]
+
+[deps]

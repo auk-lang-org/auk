@@ -285,7 +285,7 @@ fn package_tests_pass() {
     let pkgs = [
         ("json", 16), ("csv", 11), ("regex", 15), ("cli", 11), ("http", 31), ("encoding", 8),
         ("hash", 8), ("datetime", 19), ("url", 13), ("toml", 23), ("log", 6), ("uuid", 8),
-        ("num", 15), ("text", 14), ("glob", 8), ("compress", 9), ("yaml", 14), ("xml", 11),
+        ("num", 15), ("text", 14), ("glob", 8), ("compress", 9), ("yaml", 14), ("xml", 11), ("sup", 7),
     ];
     for (pkg, min) in pkgs {
         let out = run_ok(&["test", &format!("packages/{pkg}/src/lib.duck")]);
@@ -340,6 +340,7 @@ fn no_leaks_in_programs() {
 #[test]
 fn package_tests_are_leak_free() {
     setup();
+    // not sup: its tests crash and cancel children on purpose, and an aborted task's objects leak
     for pkg in ["json", "csv", "regex", "cli", "http", "encoding", "hash", "datetime", "url", "toml", "log", "uuid", "num", "text", "glob", "compress", "yaml", "xml"] {
         let o = duck_cmd().args(["test", &format!("packages/{pkg}/src/lib.duck")]).env("DUCK_LEAK_CHECK", "1").output().unwrap();
         let (out, err) = text(&o);
@@ -938,6 +939,80 @@ fn task_panics_are_raised_at_await() {
     let (out, err) = text(&o);
     assert_eq!(o.status.code(), Some(101), "{out}\n{err}");
     assert!(err.contains("(in a task that was never awaited)"), "{err}");
+}
+
+/// `await any` gives the first task to finish (its panic or error as the `Err`); `cancel()` stops
+/// a loop or a sleep, a `catch` inside the cancelled task can't hold it, a task that crashes
+/// cancels the tasks it started (the link), and a cancelled task dropped unawaited is no crash.
+#[test]
+fn await_any_and_cancel() {
+    // no leak check: cancelling (a panic) leaks what the stopped code owned
+    let d = scratch("await_any");
+    fs::write(
+        d.join("await_any.duck"),
+        r#"async fn slow(ms: int, v: int): int uses time {
+  time.sleep(ms)
+  v
+}
+async fn crash(ms: int): int uses time {
+  time.sleep(ms)
+  let xs = [1]
+  xs[ms]
+}
+async fn spin(): int {
+  var n = 0
+  while true {
+    n += 1
+  }
+  n
+}
+async fn stubborn(): int uses time {
+  loop {
+    let r = catch time.sleep(10_000)
+    print("held {r}")
+  }
+}
+async fn parent(): int uses time {
+  let k = slow(10_000, 1)
+  time.sleep(10_000)
+  await k
+}
+fn main() uses time {
+  let t0 = time.now()
+  var ts = [slow(2_000, 1), slow(10, 2), crash(100)]
+  let (i, r) = await any ts
+  print("{i} {r}")
+  ts[i] = slow(5_000, 9)
+  let (j, s) = await any ts
+  print("{j} {s is err(_)}")
+  let sp = spin()
+  time.sleep(20)
+  sp.cancel()
+  print(catch await sp)
+  let st = stubborn()
+  time.sleep(20)
+  st.cancel()
+  print(catch await st)
+  let p = parent()
+  time.sleep(20)
+  p.cancel()
+  print(catch await p)
+  for t in ts {
+    t.cancel()
+  }
+  print(time.now() - t0 < 3_000)
+}
+"#,
+    )
+    .unwrap();
+    let o = duck_cmd().args(["run", "await_any.duck"]).current_dir(&d).output().unwrap();
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}\n{err}");
+    assert_eq!(
+        out,
+        "1 ok(2)\n2 true\nerr(panic: cancelled at await_any.duck:12:3)\nerr(panic: cancelled at a blocking call)\nerr(panic: cancelled at a blocking call)\ntrue\n",
+        "{err}"
+    );
 }
 
 // ---- error programs, spec ----

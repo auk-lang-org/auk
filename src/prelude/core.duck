@@ -113,6 +113,13 @@ pub extern fn is_space(c: char): bool = "duck_char_is_space"
 pub extern fn upper(c: char): char = "duck_char_upper"
 pub extern fn lower(c: char): char = "duck_char_lower"
 
+// ---- tasks ----
+
+/// Stop a task: it panics "cancelled" at its next loop iteration or blocking call (sleep, await,
+/// net I/O), and no `catch` inside it can hold that panic. Awaiting it raises the panic (or gives
+/// it as an `Err` from `await any`). No effect on a finished task.
+pub extern fn cancel<T>(t: Task<T>) = "duck_task_cancel"
+
 // ---- numbers ----
 
 pub extern fn sqrt(x: float): float = "duck_fsqrt"

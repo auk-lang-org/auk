@@ -503,7 +503,7 @@ fn kids(e: &Expr) -> Vec<&Expr> {
             }
         }
         K::Field { expr, .. } | K::TupleField { expr, .. } | K::Unary { expr, .. } | K::Is { expr, .. } => v.push(expr),
-        K::Try(x) | K::Unwrap(x) | K::Await(x) | K::Catch(x) | K::Ref(x) | K::Assert(x) | K::Peek(x) | K::Measured { expr: x, .. } => v.push(x),
+        K::Try(x) | K::Unwrap(x) | K::Await(x) | K::AwaitAny(x) | K::Catch(x) | K::Ref(x) | K::Assert(x) | K::Peek(x) | K::Measured { expr: x, .. } => v.push(x),
         K::Call { callee, args } => {
             v.push(callee);
             v.extend(args);

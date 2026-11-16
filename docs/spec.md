@@ -124,8 +124,11 @@ let (a, b) = await (get(u1), get(u2))     // runs concurrently
 let all = await urls.map(u => get(u))     // [Resp!]
 let r = catch handle(req, &db)            // Resp!: a panic inside becomes an Err
 let x = catch { parse(s)? + xs[i] } else 0
+var ts: [Task<Resp!>] = [get(u1), get(u2)]
+let (i, r) = await any ts                 // first to finish; r: Resp!, a panic is an Err
+ts[1].cancel()                            // it panics "cancelled" at its next loop or blocking call
 ```
-An `async fn` call must be awaited, stored or returned; outside an `async fn`, `await` blocks. A task's panic is raised again at its `await`. `catch` may change the variables it uses; `return` can't leave it.
+An `async fn` call must be awaited, stored or returned; outside an `async fn`, `await` blocks. A task's panic is raised again at its `await`; a task that panics cancels the tasks it started. `catch` may change the variables it uses; `return` can't leave it. Supervisors: package `sup`.
 
 ## Contracts, holes, tests, debugging
 ```
@@ -154,4 +157,4 @@ fn main(args: [str]): int! uses fs {    // the parameters and return type are op
 `enum Value { Null, Bool(b), Int(i), Float(f), Str(s), List(xs), Map(m) }`: structs and enums get `to_value(x)` and `from_value(v): T!`.
 Collections: `len push pop(): T? insert remove contains get first last min max: T? map filter flat_map reduce(init, f) find(pred): T? find_index: int? take skip take_while any all sum reverse chunks(n) windows(n) counts(): {T: int} group_by(key): {K: [T]} unique zip enum join(sep)` · `sort sort_by(key)`: stable sorted copies; tuples and lists compare element by element: `sort_by(p => (-p.n, p.name))` · maps: `remove(k): V? keys values entries`.
 Strings: `len split(sep = whitespace) trim lines starts_with ends_with replace find(sub): int? (char index) contains upper lower repeat(n) chars bytes` · chars: `is_digit is_alpha is_space upper lower` (ASCII) · `int.parse float.parse str.from_utf8`. Floats: `sqrt abs floor ceil round`.
-Prefer these to hand-written loops. Packages (quack): `json csv regex cli http encoding hash datetime url toml log uuid num text glob compress yaml xml`.
+Prefer these to hand-written loops. Packages (quack): `json csv regex cli http encoding hash datetime url toml log uuid num text glob compress yaml xml sup`.

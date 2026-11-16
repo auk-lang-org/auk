@@ -30,6 +30,7 @@ struct FdIo(c_int);
 impl Read for FdIo {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
+            crate::task::wait_fd(self.0, false);
             let n = unsafe { libc::recv(self.0, buf.as_mut_ptr().cast(), buf.len(), 0) };
             if n >= 0 {
                 return Ok(n as usize);
@@ -45,6 +46,7 @@ impl Read for FdIo {
 impl Write for FdIo {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         loop {
+            crate::task::wait_fd(self.0, true);
             let n = unsafe { libc::send(self.0, buf.as_ptr().cast(), buf.len(), SEND_FLAGS) };
             if n >= 0 {
                 return Ok(n as usize);

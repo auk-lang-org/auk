@@ -1,0 +1,173 @@
+/// Supervision, the Erlang/OTP way: run children as tasks, restart them when they exit, and give
+/// up when restarts come too fast, failing so that the supervisor above restarts this one.
+/// A child is a function `() => ()!`; a panic in it, an `Err` from it, or its normal end are its
+/// exit. Children share nothing with each other and start from scratch on every restart.
+
+/// When a child that exits is restarted: always, only when it failed (panic or `Err`), or never.
+pub enum Restart { Permanent, Transient, Temporary }
+
+/// What a restart takes down with it: just the child, every child, or the child and the ones
+/// started after it (stopped in reverse order, restarted in order).
+pub enum Strategy { OneForOne, OneForAll, RestForOne }
+
+/// A child: a name for crash reports, the function it runs, and when it is restarted.
+pub struct Child { id: str, start: () => ()!, restart: Restart }
+
+/// The restart policy: the strategy, and at most `intensity` restarts within `period` ms.
+pub struct Policy { strategy: Strategy, intensity: int, period: int }
+
+/// A permanent child.
+pub fn child(id: str, start: () => ()!): Child = Child { id, start, restart: Permanent }
+
+/// A child restarted only when it fails.
+pub fn transient(id: str, start: () => ()!): Child = Child { id, start, restart: Transient }
+
+/// A child that is never restarted.
+pub fn temporary(id: str, start: () => ()!): Child = Child { id, start, restart: Temporary }
+
+pub fn one_for_one(intensity: int, period: int): Policy =
+  Policy { strategy: OneForOne, intensity, period }
+
+pub fn one_for_all(intensity: int, period: int): Policy =
+  Policy { strategy: OneForAll, intensity, period }
+
+pub fn rest_for_one(intensity: int, period: int): Policy =
+  Policy { strategy: RestForOne, intensity, period }
+
+/// One child under a one-for-one policy: `sup.restart(() => serve(8080), 5, 60_000)?`.
+pub fn restart(start: () => ()!, intensity: int, period: int): ()! uses time =
+  run([child("main", start)], one_for_one(intensity, period))
+
+async fn go(f: () => ()!): ()! {
+  f()?
+}
+
+/// Should a child that exited with `r` be started again?
+fn again(Permanent, _: ()!): bool = true
+fn again(Transient, r: ()!): bool = r is err(_)
+fn again(Temporary, _: ()!): bool = false
+
+/// Run `kids` under `p` until each has exited for good: `ok` then. When a child exits it is
+/// restarted (with its siblings, per the strategy) unless its `Restart` says not; a restart
+/// beyond `p.intensity` within `p.period` ms stops every child and fails with the last exit,
+/// so a supervisor above can restart this one. Supervisors nest: a child may call `sup.run`.
+pub fn run(kids: [Child], p: Policy): ()! uses time {
+  var cs = kids
+  var ts: [Task<()!>] = cs.map(c => go(c.start))
+  var recent: [int] = []
+  while ts.len() > 0 {
+    let (i, r) = await any ts
+    let c = cs[i]
+    if !again(c.restart, r) {
+      if r is err(_) {
+        eprint("sup: {c.id} exited: {r}; not restarted")
+      }
+      cs.remove(i)
+      let _ = ts.remove(i)
+      continue
+    }
+    let now = time.now()
+    recent = recent.filter(t => now - t < p.period) + [now]
+    if recent.len() > p.intensity {
+      stop(ts, 0, ts.len(), i)
+      fail("sup: {c.id} exited ({r}); {recent.len()} restarts within {p.period} ms, more than {p.intensity}")
+    }
+    eprint("sup: {c.id} exited: {r}; restarting")
+    let (lo, hi) = match p.strategy {
+      OneForOne => (i, i + 1)
+      OneForAll => (0, ts.len())
+      RestForOne => (i, ts.len())
+    }
+    stop(ts, lo, hi, i)
+    // restart the group in order; a temporary sibling isn't started again
+    var ncs: [Child] = []
+    var nts: [Task<()!>] = []
+    for k in 0..ts.len() {
+      if k < lo || k >= hi {
+        ncs.push(cs[k])
+        nts.push(ts[k])
+      } else if k == i || cs[k].restart != Temporary {
+        ncs.push(cs[k])
+        nts.push(go(cs[k].start))
+      }
+    }
+    cs = ncs
+    ts = nts
+  }
+}
+
+/// Stop the running children in `lo..hi` other than `skip` (which has exited), last first, and
+/// wait for them.
+fn stop(ts: [Task<()!>], lo: int, hi: int, skip: int) {
+  var k = hi - 1
+  while k >= lo {
+    if k != skip {
+      ts[k].cancel()
+      let _ = catch await ts[k]
+    }
+    k -= 1
+  }
+}
+
+// ---- tests ----
+
+fn crash(): ()! {
+  let xs = [1]
+  let _ = xs[5]
+}
+
+test "a transient child is restarted until it ends normally" {
+  let t0 = time.now()
+  let flaky: () => ()! = () => {
+    time.sleep(10)
+    if time.now() - t0 < 60 { fail("too early") }
+  }
+  run([transient("flaky", flaky)], one_for_one(100, 1000))?
+  assert time.now() - t0 >= 60
+}
+
+test "too many restarts fail the supervisor" {
+  let r = run([child("bad", () => fail("boom"))], one_for_one(3, 60_000))
+  assert r is err(_)
+  assert "{r}".contains("4 restarts within 60000 ms, more than 3")
+}
+
+test "a panic is an exit" {
+  let r = restart(() => crash(), 2, 60_000)
+  assert "{r}".contains("panic: index 5 out of range")
+}
+
+test "temporary and normal ends aren't restarted" {
+  run([temporary("t", () => fail("once")), transient("ok", () => ())], one_for_one(0, 1000))?
+}
+
+test "one_for_all stops the siblings of a crashed child" {
+  // `slow` would take 10 s: the test ends quickly only if each restart cancels it
+  let t0 = time.now()
+  let r = run(
+    [child("slow", () => time.sleep(10_000)), child("bad", () => fail("x"))],
+    one_for_all(2, 60_000),
+  )
+  assert r is err(_)
+  assert time.now() - t0 < 5_000
+}
+
+test "rest_for_one keeps the children before the crashed one" {
+  let t0 = time.now()
+  let r = run(
+    [
+      child("first", () => time.sleep(10_000)),
+      child("bad", () => fail("x")),
+      child("after", () => time.sleep(10_000)),
+    ],
+    rest_for_one(2, 60_000),
+  )
+  assert r is err(_)
+  assert time.now() - t0 < 5_000
+}
+
+test "supervisors nest: a failing child supervisor is restarted, then escalates" {
+  let inner = () => run([child("bad", () => fail("x"))], one_for_one(1, 60_000))
+  let r = run([child("inner", inner)], one_for_one(2, 60_000))
+  assert "{r}".contains("sup: inner exited")
+}

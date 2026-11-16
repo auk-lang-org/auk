@@ -186,6 +186,16 @@ impl<'g, 'a> Lower<'g, 'a> {
         Ex::cstr(&format!("{}:{}:{}", self.file, span.line, span.col))
     }
 
+    /// A cancellation point at the top of every iteration of a user loop: one load of
+    /// `duck_cancel_pending` while no task is cancelled (runtime/src/task.rs).
+    fn cancel_point(&mut self, span: crate::diag::Span) {
+        let pending = Ex::rt_global("duck_cancel_pending", MTy::D(Ty::Int)).deref(MTy::D(Ty::Int));
+        self.open_if(Ex::bin(BOp::Ne, pending, Ex::int(0)));
+        let loc = self.loc(span);
+        self.do_(Ex::rt("duck_cancel_check", vec![loc], MTy::Void));
+        self.close();
+    }
+
     fn emit(&mut self, s: Stmt) {
         self.f.b.emit(s);
     }
@@ -1091,6 +1101,7 @@ impl<'g, 'a> Lower<'g, 'a> {
             EK::Else { expr, arm } => self.else_expr(e, expr, arm),
             EK::Await(x) => self.await_(e, x),
             EK::Catch(x) => self.catch_(e, x),
+            EK::AwaitAny(x) => self.await_any(e, x),
             EK::Ref(x) => self.expr(x),
             EK::Closure { params, body } => self.closure(e, params, body),
             EK::If { cond, then, els } => self.if_(e, cond, then, els.as_deref(), tail),
@@ -1099,6 +1110,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let ty = self.ty(e.id);
                 let r = if Self::has_value(&ty) { Some(self.zero_decl(&ty)) } else { None };
                 self.f.b.open_loop(vec![]);
+                self.cancel_point(e.span);
                 self.push(ScopeKind::Block);
                 let depth = self.f.scopes.len() - 1;
                 self.f.loops.push(LoopCx { depth, result: r.clone().map(|r| (r, ty.clone())) });
@@ -1116,6 +1128,7 @@ impl<'g, 'a> Lower<'g, 'a> {
             }
             EK::While { cond, body } => {
                 self.f.b.open_loop(vec![]);
+                self.cancel_point(e.span);
                 self.push(ScopeKind::Stmt);
                 let c = self.expr(cond);
                 let cc = self.val_as(&c, &Ty::Bool);
@@ -2543,6 +2556,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let hv = self.decl(&Ty::Int, hc);
                 let i = self.decl(&Ty::Int, lc);
                 self.f.b.open_loop(vec![Stmt::Set(i.clone(), Ex::bin(BOp::Add, i.clone(), Ex::int(1)))]);
+                self.cancel_point(e.span);
                 let op = if inclusive { BOp::Le } else { BOp::Lt };
                 self.open_if(Ex::bin(op, i.clone(), hv).not());
                 self.emit(Stmt::Break);
@@ -2562,6 +2576,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 self.register(&it, &Ty::list((*et).clone()));
                 let k = self.decl(&Ty::Int, Ex::int(0));
                 self.f.b.open_loop(vec![Stmt::Set(k.clone(), Ex::bin(BOp::Add, k.clone(), Ex::int(1)))]);
+                self.cancel_point(e.span);
                 let len = Ex::rt("duck_arr_len", vec![it.clone()], MTy::D(Ty::Int));
                 self.open_if(Ex::bin(BOp::Lt, k.clone(), len).not());
                 self.emit(Stmt::Break);
@@ -2588,6 +2603,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let kp = self.f.b.decl(Ex::null());
                 let vp = self.f.b.decl(Ex::null());
                 self.f.b.open_loop(vec![]);
+                self.cancel_point(e.span);
                 let next = Ex::rt("duck_map_next", vec![m.clone(), it.addr(), kp.clone().addr(), vp.clone().addr()], MTy::Bool);
                 self.open_if(next.not());
                 self.emit(Stmt::Break);
@@ -2914,6 +2930,46 @@ impl<'g, 'a> Lower<'g, 'a> {
                 self.tmp(&ty, Ex::agg(d(&ty), parts))
             }
         }
+    }
+
+    /// `await any ts` → `duck_task_await_any(data, n, &out, &err, loc)`: the index, and the
+    /// result (`T!` as is; a plain `T` wrapped) or the panic as the `Err`.
+    fn await_any(&mut self, e: &Expr, x: &Expr) -> Val {
+        let ty = self.ty(e.id);
+        let Ty::Tuple(parts) = ty.clone() else { return Val::never() };
+        let res = parts[1].clone();
+        let Ty::Res(ok, _) = res.clone() else { return Val::never() };
+        let tv = self.expr(x);
+        let Ty::List(tt) = tv.ty.clone() else { return Val::never() };
+        let Ty::Task(inner) = *tt else { return Val::never() };
+        let wrapped = matches!(*inner, Ty::Res(..));
+        let n = self.decl(&Ty::Int, Ex::rt("duck_arr_len", vec![tv.c.clone()], MTy::D(Ty::Int)));
+        let data = tv.c.rt_field(RtF::ArrData).cast(MTy::ptr(MTy::ptr(MTy::Rt(Rt::Task))));
+        let et = self.g.err_ty();
+        let err = self.zero_decl(&et);
+        let r = self.zero_decl(&res);
+        let (out, v) = if wrapped {
+            (r.clone().addr().cast(MTy::void_ptr()), None)
+        } else if Self::has_value(&ok) {
+            let v = self.zero_decl(&ok);
+            (v.clone().addr().cast(MTy::void_ptr()), Some(v))
+        } else {
+            (Ex::zero(MTy::void_ptr()), None)
+        };
+        let loc = self.loc(e.span);
+        let idx = self.decl(&Ty::Int, Ex::rt("duck_task_await_any", vec![data, n, out, err.clone().addr().cast(MTy::void_ptr()), loc], MTy::D(Ty::Int)));
+        self.open_if(Ex::bin(BOp::Ne, err.clone().cast(MTy::void_ptr()), Ex::zero(MTy::void_ptr())));
+        self.set(r.clone(), Ex::agg(d(&res), vec![(Sel::F(2), err)]));
+        if !wrapped {
+            self.else_();
+            let mut fs = vec![(Sel::F(0), Ex::bool(true))];
+            if let Some(v) = v {
+                fs.push((Sel::F(1), v));
+            }
+            self.set(r.clone(), Ex::agg(d(&res), fs));
+        }
+        self.close();
+        self.tmp(&ty, Ex::agg(d(&ty), vec![(Sel::F(0), idx), (Sel::F(1), r)]))
     }
 
     // ---- `catch` ----

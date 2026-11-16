@@ -348,6 +348,8 @@ pub enum ExprKind {
     /// `e else fallback`, `e else err => fallback`.
     Else { expr: Box<Expr>, arm: ElseArm },
     Await(Box<Expr>),
+    /// `await any ts`: wait for the first task of the list `ts` to finish: `(index, T!)`.
+    AwaitAny(Box<Expr>),
     /// `catch e`: e's value as `T!`; a panic while evaluating it becomes an `Err`.
     Catch(Box<Expr>),
     /// `&x`: marks a `var` argument; only valid directly as a call argument.
@@ -738,6 +740,7 @@ pub fn expr_dump(e: &Expr) -> String {
         ExprKind::Else { expr, arm } => format!("(else {} {})", d(expr), else_dump(arm)),
         ExprKind::Await(e) => format!("(await {})", d(e)),
         ExprKind::Catch(e) => format!("(catch {})", d(e)),
+        ExprKind::AwaitAny(e) => format!("(await-any {})", d(e)),
         ExprKind::Ref(e) => format!("(& {})", d(e)),
         ExprKind::Closure { params, body } => format!("(closure ({}) {})", join(params, param_dump), d(body)),
         ExprKind::If { cond, then, els } => match els {

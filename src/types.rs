@@ -389,8 +389,9 @@ impl Defs {
                 self.fmt(r, out);
             }
             Ty::Task(t) => {
-                out.push_str("task of ");
+                out.push_str("Task<");
                 self.fmt(t, out);
+                out.push('>');
             }
             Ty::Measured(t, u) => {
                 self.fmt(t, out);

@@ -1111,6 +1111,13 @@ impl Parser {
         }
         if catch {
             self.bump();
+        } else if matches!(self.peek(), Tok::Ident(s) if s == "any") && self.peek_operand_ahead() {
+            // `await any ts` (`any` is only special here; `await any(ts)` calls a function `any`)
+            self.bump();
+            let operand = self.primary()?;
+            let operand = self.postfix(operand, true)?;
+            let e = self.mk(ExprKind::AwaitAny(Box::new(operand)), start);
+            return self.postfix(e, false);
         }
         let operand = if self.at(&Tok::Await) || self.at(&Tok::Catch) { self.await_expr()? } else { self.primary()? };
         let operand = self.postfix(operand, true)?;
@@ -1636,6 +1643,9 @@ mod tests {
         assert_eq!(e("await get(u).body"), "(await (. (call get u) body))");
         assert_eq!(e("catch f(x)?"), "(? (catch (call f x)))");
         assert_eq!(e("catch await t"), "(catch (await t))");
+        assert_eq!(e("await any ts"), "(await-any ts)");
+        assert_eq!(e("await any [a(), b()]"), "(await-any (list (call a) (call b)))");
+        assert_eq!(e("await any(ts)"), "(await (call any ts))");
         assert_eq!(e("catch xs[i] else 0"), "(else (catch (index xs i)) 0)");
         assert_eq!(e("-e.1"), "(- (. e 1))");
         assert_eq!(e("-eval(e)?"), "(- (? (call eval e)))");

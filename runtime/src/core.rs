@@ -603,6 +603,7 @@ pub unsafe extern "C" fn duck_listener_accept(l: *mut DuckListener) -> DuckRes_c
         }
         let mut fd;
         loop {
+            crate::task::wait_fd((*l).fd, false);
             fd = libc::accept((*l).fd, null_mut(), null_mut());
             if !(fd < 0 && (errno() == libc::EINTR || errno() == libc::ECONNABORTED)) {
                 break;
@@ -647,6 +648,7 @@ pub unsafe extern "C" fn duck_conn_read(c: *mut DuckConn, max: i64) -> DuckRes_a
         let mut buf = vec![0u8; max as usize];
         let mut n;
         loop {
+            crate::task::wait_fd((*c).fd, false);
             n = libc::recv((*c).fd, buf.as_mut_ptr().cast(), max as usize, 0);
             if !(n < 0 && errno() == libc::EINTR) {
                 break;
@@ -674,6 +676,7 @@ pub unsafe extern "C" fn duck_conn_write(c: *mut DuckConn, bytes: *const DuckArr
         }
         let mut off = 0usize;
         while off < buf.len() {
+            crate::task::wait_fd((*c).fd, true);
             let w = libc::send((*c).fd, buf.as_ptr().add(off).cast(), buf.len() - off, SEND_FLAGS);
             if w < 0 {
                 let err = errno();
@@ -716,8 +719,7 @@ pub extern "C" fn duck_time_sleep(ms: i64) {
     if ms <= 0 {
         return;
     }
-    let mut ts = libc::timespec { tv_sec: (ms / 1000) as libc::time_t, tv_nsec: ((ms % 1000) * 1_000_000) as _ };
-    while unsafe { libc::nanosleep(&ts, &mut ts) } < 0 && errno() == libc::EINTR {}
+    crate::task::sleep_ms(ms);
 }
 
 // ---- rand (xoshiro256**, seeded from the OS CSPRNG) --------------------------------------
@@ -1016,6 +1018,7 @@ pub unsafe extern "C" fn duck_proc_run(cmd: *const DuckStr, args: *const DuckArr
         let mut b = Vec::new();
         let mut buf = vec![0u8; 65536];
         loop {
+            crate::task::wait_fd(fds[0], false);
             let r = libc::read(fds[0], buf.as_mut_ptr().cast(), buf.len());
             if r < 0 && errno() == libc::EINTR {
                 continue;

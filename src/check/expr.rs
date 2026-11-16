@@ -523,6 +523,7 @@ impl Checker {
             K::Else { expr, arm } => self.else_expr(e, expr, arm, exp),
             K::Await(x) => self.await_expr(e, x),
             K::Catch(x) => self.catch_expr(e, x),
+            K::AwaitAny(x) => self.await_any_expr(e, x),
             K::Ref(x) => {
                 self.err(Diag::new("E0311", e.span, "`&` is only for an argument passed to a `var` parameter"));
                 self.infer(x, None)
@@ -2818,6 +2819,36 @@ impl Checker {
             .fix(Span { end_line: x.span.line, end_col: x.span.col, ..e.span }, ""),
         );
         t.clone()
+    }
+
+    /// `await any ts`: `(index, T!)` for a list of `Task<T>` (a `T!`/`T!E` result stays as is, as
+    /// `T!`); a task's panic is the `Err` instead of being raised.
+    fn await_any_expr(&mut self, e: &Expr, x: &Expr) -> Ty {
+        let t = self.infer(x, None);
+        let el = match self.shallow(&t) {
+            Ty::List(el) => match self.shallow(&el) {
+                Ty::Task(r) => *r,
+                Ty::Error => return Ty::Error,
+                _ => return self.bad_await_any(e, x, &t),
+            },
+            Ty::Error => return Ty::Error,
+            _ => return self.bad_await_any(e, x, &t),
+        };
+        let err = Ty::Named(self.b.err, Vec::new());
+        let r = match self.shallow(&el) {
+            Ty::Res(ok, _) => Ty::res(*ok, err),
+            other => Ty::res(other, err),
+        };
+        Ty::Tuple(vec![Ty::Int, r])
+    }
+
+    fn bad_await_any(&mut self, e: &Expr, x: &Expr, t: &Ty) -> Ty {
+        let ts = self.show(t);
+        self.err(
+            Diag::new("E0331", e.span, format!("`await any` needs a list of tasks, but `{}` is `{ts}`", self.text(x.span)))
+                .note("build the list from `async fn` calls without `await`: `var ts = [a(), b()]`, then `await any ts`"),
+        );
+        Ty::Error
     }
 
     // ---- `catch` ----
