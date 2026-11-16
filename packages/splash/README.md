@@ -2,8 +2,8 @@
 
 Live pages in the style of Phoenix LiveView. The server renders a view to HTML, and the page keeps
 itself current: new state, other visitors' actions and, under `duck run --live`, saved code all show
-up in open tabs within a moment. Buttons and forms send events to the server, and its answer
-updates the page at once. There's no reload and no flash, and the page is patched node by node, so
+up in open tabs within a moment. Buttons, forms and inputs send events to the server, and its
+answer updates the page at once. There's no reload and no flash, and the page is patched node by node, so
 focus, half-typed input and the scroll position all survive updates.
 
 **Effects:** `net` (for `serve`). Depends on `http`, `url` and `hash`.
@@ -25,6 +25,10 @@ Mark elements in your view, and handle what comes back:
 <button splash-click="like">❤ 3</button>
 <button splash-click="delete" splash-value="42">delete</button>
 <form splash-submit="sign"><input name="name"><button>sign</button></form>
+<input splash-input="search" placeholder="search…">          <!-- as you type, 250 ms after a pause -->
+<input splash-input="q" splash-debounce="500">              <!-- …or after 500 ms -->
+<select splash-change="sort"><option>new</option><option>old</option></select>
+<input type="checkbox" splash-change="done" value="7">      <!-- "7" when checked, "" when not -->
 ```
 
 ```duck
@@ -32,6 +36,7 @@ fn handle(req: http.server.Req): http.Resp {
   match splash.event(req) {
     some(splash.Click("like", _)) => likes.send(Like)
     some(splash.Submit("sign", fields)) => book.send(Sign(fields.get("name") else ""))
+    some(splash.Input("search", text)) => query.send(text)
     some(_) => {}
     none => if splash.is_visit(req) { count_a_visit() }
   }
@@ -42,23 +47,57 @@ fn handle(req: http.server.Req): http.Resp {
 Add `http` to your own `[deps]` too, so you can name `http.server.Req`. A dependency's types aren't
 visible to its users.
 
+While an event is waiting on the server, the element that sent it (button, form, select) has the
+class `splash-loading` and `aria-busy="true"`. Clicks and submits on a busy element are ignored, so
+a double click counts once. `BASE_CSS` dims busy elements; style `.splash-loading` for a spinner.
+
+**Security.** Other sites can't send events on a visitor's behalf. Every event must carry the
+`x-splash` header: a cross-site form can't set it, and a cross-site `fetch` with it needs a CORS
+preflight that this server never grants. `event` also rejects any `Origin` that isn't this host.
+Still escape what users typed before showing it (`escape`).
+
 ## API
-- `enum Event { Click(name: str, value: str), Submit(name: str, fields: {str: str}) }`: something the user did. A `splash-click="name"` element was clicked (`splash-value` gives `value`, else ""), or a `splash-submit="name"` form was submitted with its fields.
-- `event(req): Event?`: the event a request carries, if any.
+- `enum Event { Click(name, value), Submit(name, fields), Input(name, value), Change(name, value) }`: something the user did.
+  - `Click`: a `splash-click="name"` element was clicked; `splash-value` gives `value`, else "".
+  - `Submit`: a `splash-submit="name"` form was submitted, with its fields as `{str: str}`.
+  - `Input`: the user typed in a `splash-input="name"` field. It's sent once typing pauses (250 ms, or `splash-debounce="ms"`), with the field's text.
+  - `Change`: a `splash-change="name"` field changed. A select gives its value; a checkbox or radio gives its value when checked and "" when not.
+- `event(req): Event?`: the event a request carries, if any. Events from another origin are `none`.
 - `is_poll(req): bool`: is this an open page refreshing itself? `is_visit(req)` is neither a refresh nor an event. Do a visit's side effects only for visits.
 - `reply(req, title, view): http.Resp`: the answer to any request for a live page. It sends the whole page, except for a refresh whose view hasn't changed, which gets a bare `204`.
 - `serve(port: int, title: str, view: (http.server.Req) => str): ()!`: serves live pages on `port` forever with `reply`. Handle `event(req)` inside `view`. Run it under `sup` to restart it if it crashes.
-- `page(title, view): str` and `page_every(title, view, every)`: a whole HTML page with `view` as its live part (`<main id="splash">`) and the client, refreshing every `every` ms (default `EVERY`, 500). `respond(title, view)` wraps that page in a 200 response.
+- `page(title, view): str` and `page_every(title, view, every)`: a whole HTML page with `view` as its live part (`<main id="splash">`) and the client, refreshing every `every` ms (default `EVERY`, 500), styled with `BASE_CSS`. `respond(title, view)` wraps that page in a 200 response.
+- `styled(title, css, view): str`, `styled_every(…, every)` and `reply_styled(req, title, css, view)`: the same with your own stylesheet, which goes in `<head>` as `<style id="splash-css">`. Build on the defaults with `splash.BASE_CSS + mine`, or pass `""` for no CSS.
+- `BASE_CSS`: the default stylesheet. It gives readable system type, a centered column, plain buttons and inputs, works in light and dark mode, and shows a "reconnecting…" badge while the server is away.
 - `script(every: int): str`: just the client, for a page you build yourself (its live element needs `id="splash"`).
 - `escape(s: str): str`: HTML-escapes `& < > " '`. Put anything a user typed through this.
+
+## CSS
+
+```duck
+let CSS = splash.BASE_CSS + r"""
+  body { background: #fdf6e3; }
+  .like { font-size: 1.2em; }
+  """
+
+splash.reply_styled(req, "my site", CSS, view)
+```
+
+The stylesheet is live, like the view. Under `duck run --live`, change a color and save, and open
+tabs restyle at their next refresh with no reload. A refresh only gets the page back when the view
+*or* the CSS changed. Use a raw string (`r"""…"""`) for CSS, so its braces aren't read as
+interpolation. A `<style>` inside the view works too, but it's sent with every changed view.
 
 ## How it works
 - **Refreshes.** Every `every` ms the page fetches its own URL in the background, sending
   `x-splash: poll` and a fingerprint of the view it shows. If the view is the same, the server
   answers `204` with no body; otherwise it sends the page and the client patches `#splash` in
   place.
-- **Events.** A click or submit is a form-encoded `POST` to the same URL with `x-splash: event`.
-  The response is patched in the same way, without waiting for the next refresh.
+- **Events.** A click, submit, input or change is a form-encoded `POST` to the same URL with
+  `x-splash: event`. The response is patched in the same way, without waiting for the next
+  refresh.
+- **Ordering.** Every request is numbered, and an answer older than the one already on the page is
+  dropped. A slow refresh can't undo a click that was answered after it.
 - **Patching.** The client walks the old and new live element together, changing only the text,
   attributes and nodes that differ. An input being typed in is never replaced, so it keeps its
   focus, cursor and text.

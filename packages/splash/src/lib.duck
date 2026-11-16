@@ -2,10 +2,15 @@
 /// current. Its script re-fetches the page in the background and patches the view in place when
 /// it changed, so new state, other visitors' actions and (under `duck run --live`) saved code all
 /// show up in open tabs within a moment: no reload, no flash, focus, typing and scroll intact.
-/// Buttons and forms send events (`splash-click`, `splash-submit`) that the server handles, and
-/// the answer patches the page at once.
+/// Buttons, forms and inputs send events (`splash-click`, `splash-submit`, `splash-input`,
+/// `splash-change`) that the server handles, and the answer patches the page at once; the element
+/// has the class `splash-loading` until it does.
 ///
-/// v0.2 polls (`every` ms): the `http` server answers one connection at a time and closes each,
+/// Events can't be forged by other sites: each one must carry the `x-splash` header, which a
+/// cross-site form can't set and a cross-site `fetch` can't send without a CORS preflight this
+/// server never grants; `event` also rejects any `Origin` that isn't this host.
+///
+/// v0.3 polls (`every` ms): the `http` server answers one connection at a time and closes each,
 /// so it can't hold a push channel open yet. The API is meant to stay the same when it can.
 
 /// The header splash's own requests carry: `poll` (a refresh) or `event` (a click or submit).
@@ -14,11 +19,36 @@ pub let HEADER = "x-splash"
 /// How often an open page asks for a fresh view, by default (ms).
 pub let EVERY = 500
 
+/// The default stylesheet of `page`, `reply` and `serve`: readable type, a centered column, plain
+/// buttons and inputs, light and dark, and a "reconnecting…" badge while the server is away. Build
+/// on it with `styled(title, splash.BASE_CSS + mine, view)`, or replace it.
+pub let BASE_CSS = r"""
+  :root { color-scheme: light dark; }
+  body { margin: 0; font: 18px/1.5 system-ui, sans-serif; }
+  #splash { max-width: 42rem; margin: 0 auto; padding: 2rem 1rem; }
+  button, input, select, textarea { font: inherit; }
+  button { padding: .3em .9em; border: 1px solid #8886; border-radius: .5em; background: #8881; cursor: pointer; }
+  button:hover { background: #8883; }
+  input, select, textarea { padding: .3em .5em; border: 1px solid #8886; border-radius: .5em; }
+  a { color: inherit; }
+  .splash-loading { opacity: .6; cursor: progress; }
+  .splash-offline body::after { content: "reconnecting…"; position: fixed; right: 1rem; bottom: 1rem; padding: .3em .9em; border-radius: 1em; background: #333; color: #fff; font-size: .8em; }
+  """
+
 /// Something the user did on a page.
 /// - `Click(name, value)`: an element with `splash-click="name"` (and `splash-value="..."`,
 ///   or "") was clicked.
 /// - `Submit(name, fields)`: a form with `splash-submit="name"` was submitted, with its fields.
-pub enum Event { Click(name: str, value: str), Submit(name: str, fields: {str: str}) }
+/// - `Input(name, value)`: the user typed in a field with `splash-input="name"`; sent once
+///   typing pauses for 250 ms (`splash-debounce="ms"` to change it), with the field's text.
+/// - `Change(name, value)`: a field with `splash-change="name"` changed (a select, a checkbox:
+///   its value when checked, "" when not).
+pub enum Event {
+  Click(name: str, value: str),
+  Submit(name: str, fields: {str: str}),
+  Input(name: str, value: str),
+  Change(name: str, value: str),
+}
 
 /// Is `req` an open page asking for a fresh view? Don't count it as a visit, and don't do a
 /// visit's side effects for it.
@@ -26,36 +56,53 @@ pub fn is_poll(req: http.server.Req): bool = req.headers.get(HEADER) == some("po
 
 /// The event `req` carries, if it is one (handle it, then answer with the new view).
 pub fn event(req: http.server.Req): Event? {
-  if req.method != "POST" || req.headers.get(HEADER) != some("event") { return none }
+  if req.method != "POST" || req.headers.get(HEADER) != some("event") || !same_origin(req) {
+    return none
+  }
   var fields: {str: str} = {}
   for (k, v) in url.parse_query(req.body) { fields[k] = v }
   let name = fields.remove("splash-event") else return none
+  let value = fields.get("value") else ""
   match fields.remove("splash-kind") {
     some("submit") => Submit(name, fields)
-    _ => Click(name, fields.get("value") else "")
+    some("input") => Input(name, value)
+    some("change") => Change(name, value)
+    _ => Click(name, value)
   }
+}
+
+/// Did `req` come from a page of this site? Browsers send `Origin` on every POST; a request
+/// without one (not from a browser) has no page to have been tricked.
+fn same_origin(req: http.server.Req): bool {
+  let o = req.headers.get("origin") else return true
+  let host = req.headers.get("host") else return false
+  o == "http://{host}" || o == "https://{host}"
 }
 
 /// Is `req` a visit: not a refresh, not an event?
 pub fn is_visit(req: http.server.Req): bool = !is_poll(req) && event(req) is none
 
 /// The answer to any request for a live page: the whole page for a visit or an event, and for a
-/// refresh either the page or, when the view hasn't changed since the page last saw it, a bare
-/// 204 (an idle tab costs a few bytes per poll).
-pub fn reply(req: http.server.Req, title: str, view: str): http.Resp {
-  let h = fingerprint(view)
+/// refresh either the page or, when neither the view nor the CSS changed since the page last saw
+/// them, a bare 204 (an idle tab costs a few bytes per poll). Styled with `BASE_CSS`.
+pub fn reply(req: http.server.Req, title: str, view: str): http.Resp =
+  reply_styled(req, title, BASE_CSS, view)
+
+/// `reply` with your own stylesheet `css` (see `styled`).
+pub fn reply_styled(req: http.server.Req, title: str, css: str, view: str): http.Resp {
+  let h = fingerprint(css, view)
   if is_poll(req) && req.headers.get("x-splash-hash") == some(h) {
     return http.Resp { status: 204, headers: {"x-splash-hash": h}, body: "" }
   }
-  respond(title, view)
+  http.Resp {
+    status: 200,
+    headers: {"content-type": "text/html; charset=utf-8", "x-splash-hash": h},
+    body: styled(title, css, view),
+  }
 }
 
 /// A 200 response with `page(title, view)`.
-pub fn respond(title: str, view: str): http.Resp = http.Resp {
-  status: 200,
-  headers: {"content-type": "text/html; charset=utf-8", "x-splash-hash": fingerprint(view)},
-  body: page(title, view),
-}
+pub fn respond(title: str, view: str): http.Resp = reply_styled(no_poll(), title, BASE_CSS, view)
 
 /// Serves live pages on `port` (every interface) forever: `view(req)` renders each one (its
 /// HTML; handle `event(req)` in it), and `title` names them.
@@ -63,17 +110,29 @@ pub async fn serve(port: int, title: str, view: (http.server.Req) => str): ()! u
   await http.server.serve("", port, req => reply(req, title, view(req)))
 }
 
-/// A whole HTML page showing `view` (HTML), titled `title`, that keeps itself current.
-pub fn page(title: str, view: str): str = page_every(title, view, EVERY)
+/// A whole HTML page showing `view` (HTML), titled `title`, that keeps itself current. Styled
+/// with `BASE_CSS`.
+pub fn page(title: str, view: str): str = styled_every(title, BASE_CSS, view, EVERY)
 
 /// `page`, asking for a fresh view every `every` ms.
-pub fn page_every(title: str, view: str, every: int): str = """
+pub fn page_every(title: str, view: str, every: int): str =
+  styled_every(title, BASE_CSS, view, every)
+
+/// `page` with the stylesheet `css` (in `<head>`, as `<style id="splash-css">`; "" for none).
+/// It is live too: change it, and open pages restyle at their next refresh.
+pub fn styled(title: str, css: str, view: str): str = styled_every(title, css, view, EVERY)
+
+/// `styled`, asking for a fresh view every `every` ms.
+pub fn styled_every(title: str, css: str, view: str, every: int): str = """
   <!doctype html>
   <html>
-  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>{escape(title)}</title></head>
-  <body style="margin: 0">
+  <head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>{escape(title)}</title>
+  <style id="splash-css">{css}</style>
+  </head>
+  <body>
   <main id="splash">{view}</main>
-  {boot(every, fingerprint(view))}
+  {boot(every, fingerprint(css, view))}
   </body>
   </html>
   """
@@ -90,8 +149,13 @@ pub fn escape(s: str): str = s
   .replace("\"", "&quot;")
   .replace("'", "&#39;")
 
-/// What a page reports to say which view it shows.
-fn fingerprint(view: str): str = "{hash.fnv1a64(view.bytes())}"
+/// What a page reports to say which view (and stylesheet) it shows.
+fn fingerprint(css: str, view: str): str =
+  "{hash.fnv1a64(css.bytes())}-{hash.fnv1a64(view.bytes())}"
+
+/// A request that is not a refresh (for `respond`).
+fn no_poll(): http.server.Req =
+  http.server.Req { method: "GET", target: "/", path: "/", query: "", headers: {}, body: "" }
 
 fn boot(every: int, h: str): str =
   "<script>const splashEvery = {every}, splashHash = \"{h}\";</script>" + CLIENT
@@ -103,7 +167,7 @@ fn boot(every: int, h: str): str =
 let CLIENT = r"""
   <script>
   (() => {
-    let hash = splashHash, delay = splashEvery, timer;
+    let hash = splashHash, delay = splashEvery, timer, sent = 0, shown = 0;
     const root = document.documentElement;
     const morph = (a, b) => {
       if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) { a.replaceWith(b.cloneNode(true)); return; }
@@ -115,22 +179,35 @@ let CLIENT = r"""
       bc.forEach((n, i) => { if (i < ac.length) morph(ac[i], n); else a.appendChild(n.cloneNode(true)); });
       for (let i = bc.length; i < ac.length; i++) ac[i].remove();
     };
-    const send = async (kind, body) => {
+    // `el`: the element that sent an event, marked `splash-loading` until the answer is in
+    const send = async (kind, body, el) => {
+      const my = ++sent;
       const headers = { "x-splash": kind, "x-splash-hash": hash };
       if (body) headers["content-type"] = "application/x-www-form-urlencoded";
+      if (el) { el.classList.add("splash-loading"); el.setAttribute("aria-busy", "true"); }
       try {
         const r = await fetch(location.href, { method: body ? "POST" : "GET", headers, body });
         root.classList.remove("splash-offline");
         delay = splashEvery;
+        if (my < shown) return;  // a later request's answer is already on the page
+        shown = my;
         if (r.status === 204) return;
         const doc = new DOMParser().parseFromString(await r.text(), "text/html");
         const now = document.getElementById("splash"), next = doc.getElementById("splash");
         if (now && next) { morph(now, next); hash = r.headers.get("x-splash-hash") || ""; }
+        const cs = document.getElementById("splash-css"), ns = doc.getElementById("splash-css");
+        if (ns && !cs) document.head.appendChild(ns.cloneNode(true));
+        else if (cs && !ns) cs.remove();
+        else if (cs && ns && cs.textContent !== ns.textContent) cs.textContent = ns.textContent;
       } catch (e) {
         root.classList.add("splash-offline");
         delay = Math.min(delay * 2, 5000);
+      } finally {
+        if (el) { el.classList.remove("splash-loading"); el.removeAttribute("aria-busy"); }
       }
     };
+    const params = (kind, name, value) => new URLSearchParams({ "splash-kind": kind, "splash-event": name, value }).toString();
+    const busy = (el) => el.classList.contains("splash-loading");
     const poll = async () => {
       if (!document.hidden) await send("poll");
       timer = setTimeout(poll, delay);
@@ -142,18 +219,33 @@ let CLIENT = r"""
       const el = e.target.closest("[splash-click]");
       if (!el) return;
       e.preventDefault();
-      const p = new URLSearchParams({ "splash-kind": "click", "splash-event": el.getAttribute("splash-click"), value: el.getAttribute("splash-value") || "" });
-      send("event", p.toString());
+      if (busy(el)) return;  // still waiting on the last click
+      send("event", params("click", el.getAttribute("splash-click"), el.getAttribute("splash-value") || ""), el);
     });
     document.addEventListener("submit", (e) => {
       const f = e.target.closest("[splash-submit]");
       if (!f) return;
       e.preventDefault();
+      if (busy(f)) return;
       const p = new URLSearchParams(new FormData(f));
       p.set("splash-kind", "submit");
       p.set("splash-event", f.getAttribute("splash-submit"));
-      send("event", p.toString());
+      send("event", p.toString(), f);
       f.reset();
+    });
+    const typing = new WeakMap();
+    document.addEventListener("input", (e) => {
+      const el = e.target.closest("[splash-input]");
+      if (!el) return;
+      clearTimeout(typing.get(el));
+      typing.set(el, setTimeout(() => send("event", params("input", el.getAttribute("splash-input"), el.value)),
+        +(el.getAttribute("splash-debounce") || 250)));
+    });
+    document.addEventListener("change", (e) => {
+      const el = e.target.closest("[splash-change]");
+      if (!el) return;
+      const v = el.type === "checkbox" || el.type === "radio" ? (el.checked ? el.value || "on" : "") : el.value;
+      send("event", params("change", el.getAttribute("splash-change"), v), el);
     });
     timer = setTimeout(poll, delay);
   })();
@@ -173,7 +265,8 @@ test "a page wraps the view in the live element and runs the client" {
   let p = page("Home & away", "<p>hi</p>")
   assert p.contains("<main id=\"splash\"><p>hi</p></main>")
   assert p.contains("<title>Home &amp; away</title>")
-  assert p.contains("const splashEvery = 500, splashHash = \"{fingerprint("<p>hi</p>")}\";")
+  assert p.contains("const splashEvery = 500, splashHash = \"{fingerprint(BASE_CSS, "<p>hi</p>")}\";")
+  assert p.contains("<style id=\"splash-css\">{BASE_CSS}</style>")
   assert p.contains("[splash-click]") && p.contains("[splash-submit]")
 }
 
@@ -199,6 +292,30 @@ test "a submit, with its fields decoded" {
   assert e == some(Submit("sign", {"name": "Ann Lee", "note": "a&b"}))
 }
 
+test "typing and changes" {
+  assert event(post("splash-kind=input&splash-event=search&value=du")) ==
+    some(Input("search", "du"))
+  assert event(post("splash-kind=change&splash-event=mood&value=")) == some(Change("mood", ""))
+}
+
+test "events from another site are rejected" {
+  let body = "splash-kind=click&splash-event=like&value="
+  let from = (origin: str) => req(
+    "POST",
+    {"x-splash": "event", "host": "localhost:8080", "origin": origin},
+    body,
+  )
+  assert event(from("http://localhost:8080")) == some(Click("like", ""))
+  assert event(from("https://localhost:8080")) == some(Click("like", ""))
+  assert event(from("http://evil.example")) is none
+  assert event(from("http://localhost:8080.evil.example")) is none
+  assert event(from("null")) is none
+  // and a cross-site form can't set the header at all
+  assert event(
+    req("POST", {"host": "localhost:8080", "origin": "http://localhost:8080"}, body),
+  ) is none
+}
+
 test "no event: a GET, a plain POST, a POST without a name" {
   assert event(get({"x-splash": "event"})) is none
   assert event(req("POST", {}, "splash-kind=click&splash-event=inc")) is none
@@ -213,6 +330,21 @@ test "reply: the page, or 204 for a refresh that would show the same view" {
   assert reply(get({"x-splash": "poll", "x-splash-hash": h}), "t", v).status == 204
   assert reply(get({"x-splash": "poll", "x-splash-hash": h}), "t", "<b>y</b>").status == 200
   assert reply(get({"x-splash": "poll", "x-splash-hash": ""}), "t", v).status == 200
+}
+
+test "styled: your CSS in the head, live; \"\" for none" {
+  let p = styled("t", "h1 {{ color: red }}", "<h1>x</h1>")
+  assert p.contains("<style id=\"splash-css\">h1 {{ color: red }}</style>")
+  assert !p.contains("system-ui")
+  assert styled("t", "", "x").contains("<style id=\"splash-css\"></style>")
+}
+
+test "reply: a CSS change alone is a change (no 204)" {
+  let r = reply_styled(get({}), "t", "a {{}}", "<b>x</b>")
+  let h = r.headers["x-splash-hash"]
+  let poll = get({"x-splash": "poll", "x-splash-hash": h})
+  assert reply_styled(poll, "t", "a {{}}", "<b>x</b>").status == 204
+  assert reply_styled(poll, "t", "b {{}}", "<b>x</b>").status == 200
 }
 
 test "respond is a 200 HTML page" {

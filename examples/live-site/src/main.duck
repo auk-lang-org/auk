@@ -2,7 +2,8 @@
 ///
 ///   duck run --live src/main.duck        then open http://localhost:8080
 ///
-/// It counts each page's visitors, has a ❤ button everyone shares, and a guestbook.
+/// It counts each page's visitors, and everyone shares a ❤ button, a guestbook, a note anyone can
+/// edit as they type, and a duck of the day.
 /// Two supervised tasks share nothing and talk over a channel:
 /// - `counter` owns all the state (a `Stats`);
 /// - `web` serves pages, telling `counter` what each request did and showing what it answers.
@@ -11,18 +12,18 @@
 /// See README.md for edits to try and what each one does to the running program.
 
 /// What a request did: a visit to its page, a page refreshing itself (`Look`), or an event.
-enum Act { Visit, Look, Like, Sign(name: str) }
+enum Act { Visit, Look, Like, Sign(name: str), Note(text: str), Pick(duck: str) }
 
 /// A message to `counter`, answered on `reply` with what the page should show.
 struct Hit { path: str, act: Act, reply: Chan<Shown> }
 
 /// What a page shows.
-struct Shown { visits: int, likes: int, names: [str] }
+struct Shown { visits: int, likes: int, names: [str], note: str, duck: str }
 
 // ---- the counter: owns the state ----
 
 /// The counter's state. TRY: add a field (`since: int`) and the counter task alone restarts.
-struct Stats { hits: {str: int}, total: int, likes: int, names: [str] }
+struct Stats { hits: {str: int}, total: int, likes: int, names: [str], note: str, duck: str }
 
 fn record(s: var Stats, path: str): int {
   s.hits[path] = (s.hits.get(path) else 0) + 1
@@ -39,37 +40,72 @@ fn apply(s: var Stats, Sign(name), _: str) {
     s.names = ([n] + s.names).take(8)
   }
 }
+fn apply(s: var Stats, Note(text), _: str) {
+  s.note = if text.len() > 200 { text[0..200] } else { text }
+}
+fn apply(s: var Stats, Pick(duck), _: str) {
+  if DUCKS.contains(duck) {
+    s.duck = duck
+  }
+}
+
+/// The ducks to pick from.
+let DUCKS = ["🦆 mallard", "🐣 duckling", "🦢 swan (close enough)", "🪿 goose (don't)"]
 
 fn counter(hits: Chan<Hit>): ()! {
-  var s = Stats { hits: {}, total: 0, likes: 0, names: [] }
+  var s = Stats { hits: {}, total: 0, likes: 0, names: [], note: "", duck: DUCKS[0] }
   for h in hits {
     apply(&s, h.act, h.path)
-    h.reply.send(Shown { visits: s.hits.get(h.path) else 0, likes: s.likes, names: s.names })
+    let visits = s.hits.get(h.path) else 0
+    h.reply.send(Shown { visits, likes: s.likes, names: s.names, note: s.note, duck: s.duck })
   }
 }
 
 // ---- the web server: stateless ----
 
+/// The look of the site, on top of splash's defaults. TRY: change a color and save: open tabs
+/// restyle without a reload.
+let CSS = splash.BASE_CSS + r"""
+  body { background: #fdf6e3; color: #333; }
+  h1 { font-size: 2.2em; margin: 0 0 .5em; }
+  .like { font-size: 1.2em; }
+  li { padding: .1em 0; }
+  .note { width: 100%; box-sizing: border-box; }
+  blockquote { margin: .5em 0; padding-left: 1em; border-left: 3px solid #8886; min-height: 1.5em; }
+  @media (prefers-color-scheme: dark) { body { background: #1d2021; color: #ebdbb2; } }
+  """
+
 /// The live part of the page. TRY: change the text or the colors and save: open tabs update,
 /// the counts stay.
 fn view(path: str, s: Shown): str = """
-  <div style="font: 20px system-ui; padding: 4em; min-height: 100vh; box-sizing: border-box; background: #fdf6e3; color: #333">
-    <h1>🦆 Hello from Duck</h1>
-    <p>You are visitor <b>{s.visits}</b> of <code>{splash.escape(path)}</code>.</p>
-    <p><button splash-click="like" style="font: inherit">❤ {s.likes}</button></p>
-    <form splash-submit="sign">
-      <input name="name" placeholder="your name" autocomplete="off" style="font: inherit">
-      <button style="font: inherit">sign the guestbook</button>
-    </form>
-    <ul>{s.names.map(n => "<li>{splash.escape(n)}</li>").join("")}</ul>
-    <p><a href="/">home</a> · <a href="/pond">pond</a> · <a href="/boom">boom</a></p>
-  </div>
+  <h1>🦆 Hello from Duck</h1>
+  <p>You are visitor <b>{s.visits}</b> of <code>{splash.escape(path)}</code>.</p>
+  <p><button class="like" splash-click="like">❤ {s.likes}</button></p>
+  <form splash-submit="sign">
+    <input name="name" placeholder="your name" autocomplete="off">
+    <button>sign the guestbook</button>
+  </form>
+  <ul>{s.names.map(n => "<li>{splash.escape(n)}</li>").join("")}</ul>
+  <p>A note anyone can edit (other tabs see it as you type):</p>
+  <input class="note" splash-input="note" value="{splash.escape(s.note)}" placeholder="say something" autocomplete="off">
+  <blockquote>{splash.escape(s.note)}</blockquote>
+  <p>Duck of the day:
+    <select splash-change="duck">{DUCKS.map(d => option(d, s.duck)).join("")}</select>
+  </p>
+  <p><a href="/">home</a> · <a href="/pond">pond</a> · <a href="/boom">boom</a></p>
   """
+
+fn option(d: str, chosen: str): str {
+  let sel = if d == chosen { " selected" } else { "" }
+  "<option{sel}>{splash.escape(d)}</option>"
+}
 
 /// What `req` did.
 fn act(req: http.server.Req): Act = match splash.event(req) {
   some(splash.Click("like", _)) => Like
   some(splash.Submit("sign", fields)) => Sign(fields.get("name") else "")
+  some(splash.Input("note", text)) => Note(text)
+  some(splash.Change("duck", d)) => Pick(d)
   some(_) => Look
   none => if splash.is_poll(req) { Look } else { Visit }
 }
@@ -82,8 +118,8 @@ fn handle(req: http.server.Req, hits: Chan<Hit>): http.Resp {
   }
   let reply: Chan<Shown> = chan()
   hits.send(Hit { path: req.path, act: act(req), reply })
-  let shown = reply.recv() else Shown { visits: 0, likes: 0, names: [] }
-  splash.reply(req, "live-site", view(req.path, shown))
+  let shown = reply.recv() else Shown { visits: 0, likes: 0, names: [], note: "", duck: "" }
+  splash.reply_styled(req, "live-site", CSS, view(req.path, shown))
 }
 
 fn web(hits: Chan<Hit>, port: int): ()! uses net {

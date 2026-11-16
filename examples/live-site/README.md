@@ -1,6 +1,7 @@
 # live-site: hot reload, hands-on
 
-A tiny website: it counts each page's visitors, has a ❤ button everyone shares, and has a guestbook.
+A tiny website: it counts each page's visitors, and everyone shares a ❤ button, a guestbook, a
+note anyone can edit as they type, and a "duck of the day" picker.
 It's built to be edited while it runs, so you can watch what `duck run --live` keeps and what it
 restarts.
 
@@ -11,7 +12,7 @@ duck run --live src/main.duck      # PORT=9000 to pick another port
 ```
 
 Open <http://localhost:8080> in two tabs and click around: ❤ in one tab, sign the guestbook in the
-other. Each tab shows the other's clicks within half a second. Keep a tab open while you edit:
+other, type in the note, pick a duck. Each tab shows the other's changes within half a second. Keep a tab open while you edit:
 **the page updates itself**, with no reload button.
 
 ## How it's built
@@ -23,8 +24,8 @@ main ── sup.run (one_for_one: up to 10 restarts in 6 s)
 ```
 
 Tasks share nothing. The state lives only in the `counter` task. For each request, `web` sends a
-`Hit` saying what it did (`Act`: a `Visit`, a `Look` from a page refreshing itself, a `Like`, or a
-`Sign` with a name) plus a reply channel. `counter` applies it and answers with what the page should
+`Hit` saying what it did (an `Act`: a `Visit`, a `Look` from a page refreshing itself, a `Like`, a
+`Sign` with a name, a `Note` being typed, or a `Pick` of a duck) plus a reply channel. `counter` applies it and answers with what the page should
 show.
 
 ## How the page updates itself
@@ -32,8 +33,9 @@ show.
 Pages are [`splash`](../../packages/splash) pages. Each one carries a small script that re-fetches
 the same URL every 500 ms and patches the live part (`view`) in place when it changed. There's no
 flash; focus, half-typed input and the scroll position all stay. The ❤ button
-(`splash-click="like"`) and the guestbook form (`splash-submit="sign"`) send events that `act`
-turns into an `Act`, and the answer updates the page at once. A refresh is a `Look`, so it doesn't
+(`splash-click="like"`), the guestbook form (`splash-submit="sign"`), the note
+(`splash-input="note"`) and the duck picker (`splash-change="duck"`) send events that `act` turns
+into an `Act`, and the answer updates the page at once. A refresh is a `Look`, so it doesn't
 count as a visit. That one loop shows both kinds of change:
 
 - **Code changes:** you save, `duck run --live` swaps in the new code, and the next poll renders
@@ -51,7 +53,8 @@ Edit `src/main.duck` with the site open and save; watch the page (and the termin
 
 | Edit | What happens | What survives |
 |---|---|---|
-| Change the text or colors in `view` | `[live] reloaded in … ms`; the open page shows it within half a second | everything: the counts, the open port |
+| Change the text in `view` | `[live] reloaded in … ms`; the open page shows it within half a second | everything: the counts, the open port |
+| Change a color in `CSS` | reloaded; the open page restyles within half a second, without a reload | everything, including whatever you were typing |
 | Change `record` (count by 10: `+ 10`) | reloaded; the next visit (another tab, or a click) uses the new rule | the counts so far |
 | Make ❤ worth 10 (`s.likes += 10` in `apply`) | reloaded; the next click adds 10 | the likes so far, and the guestbook |
 | Edit `view` while half-way through typing a name | the page updates around the input | what you typed, and the focus |
