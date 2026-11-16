@@ -345,6 +345,18 @@ pub fn encode_response(status: int, headers: {str: str}, body: str, head_req: bo
   if bodiless || head_req { out } else { out + body }
 }
 
+/// The head of a streamed response: no length, so the body runs until the connection closes.
+pub fn encode_stream_head(status: int, headers: {str: str}): str! {
+  if status < 200 || status > 999 { fail("bad status: {status}") }
+  var lines = ["HTTP/1.1 {status} {reason(status)}"]
+  for k, v in headers {
+    if k == "" || !k.chars().all(c => is_tchar(c)) || has_crlf(v) { fail("bad header: {k}") }
+    if !framing(k.lower()) { lines.push("{k}: {v}") }
+  }
+  lines.push("Connection: close")
+  lines.join("\r\n") + "\r\n\r\n"
+}
+
 /// The standard reason phrase for a status code ("" for an unknown one).
 pub fn reason(status: int): str
 fn reason(100): str = "Continue"

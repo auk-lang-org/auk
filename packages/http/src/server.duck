@@ -1,5 +1,7 @@
-/// HTTP/1.1 server (module `http.server`) over core `net.listen`. One connection at a time,
-/// one request per connection (every response carries `Connection: close`). Parsing and
+/// HTTP/1.1 server (module `http.server`) over core `net.listen`. `serve` answers one connection
+/// at a time; `serve_live` gives each connection a task of its own and can stream responses
+/// (`Reply.Stream`, for Server-Sent Events). One request per connection (every response carries
+/// `Connection: close`). Parsing and
 /// formatting live in `http.wire`; this module is the accept loop, the request type and small
 /// helpers for building responses and routing with Duck's clause patterns.
 
@@ -51,6 +53,123 @@ pub async fn serve_n(host: str, port: int, n: int, handler: (Req) => http.Resp):
 /// Serves `n` connections on a server from `listen`, then returns; `s` stays open.
 pub async fn serve_n(s: Server, n: int, handler: (Req) => http.Resp): ()! uses net {
   for _ in 0..n { await serve_one(s, handler)? }
+}
+
+// ---- concurrent connections and streams ----
+
+/// What a `serve_live` handler answers: a whole response, or a stream. A stream sends `status`
+/// and `headers`, then each string sent on `chunks` as it comes, until `chunks` is closed (or the
+/// client goes away: then the server closes `chunks`, so a sender can tell).
+pub enum Reply {
+  Whole(resp: http.Resp),
+  Stream(status: int, headers: {str: str}, chunks: Chan<str>),
+}
+
+/// At most this many connections are served at once by `serve_live` (more wait to be accepted).
+pub let MAX_CONNS = 256
+
+/// Serves forever on `host`:`port`, each connection in a task of its own: a slow client, a long
+/// stream or a handler that panics holds up nobody else (a panic only drops its connection).
+pub async fn serve_live(host: str, port: int, handler: (Req) => Reply): ()! uses net {
+  var s = listen(host, port)?
+  let r = await serve_live(s, handler)
+  s.close()
+  r?
+}
+
+/// `serve_live` on a server from `listen`.
+pub async fn serve_live(s: Server, handler: (Req) => Reply): ()! uses net {
+  var open: [Task<()>] = []
+  loop {
+    let c = s.listener.accept()?
+    open = open.filter(t => !t.done())
+    if open.len() >= MAX_CONNS {
+      let (i, _) = await any open
+      let _ = open.remove(i)
+    }
+    open.push(connection(c, handler))
+  }
+}
+
+/// Serves `n` connections concurrently on a server from `listen`, then waits for them to finish
+/// (for tests).
+pub async fn serve_live_n(s: Server, n: int, handler: (Req) => Reply): ()! uses net {
+  var open: [Task<()>] = []
+  for _ in 0..n {
+    let c = s.listener.accept()?
+    open.push(connection(c, handler))
+  }
+  for t in open {
+    let _ = await any [t]
+  }
+}
+
+// One connection, as a task: a panic in the handler drops just this connection.
+async fn connection(c: net.Conn, handler: (Req) => Reply) uses net {
+  var conn = c
+  let _ = catch await answer_live(&conn, handler)
+  conn.close()
+}
+
+async fn answer_live(c: var net.Conn, handler: (Req) => Reply): ()! uses net {
+  let r = await read_request(&c)? else return
+  match handler(r) {
+    Whole(resp) => c.write(encode(r, resp).bytes())?
+    Stream(status, headers, chunks) => {
+      let head = http.wire.encode_stream_head(status, headers) else e => {
+        c.write(encode(r, text(500, "bad response: {e}")).bytes())?
+        return
+      }
+      // the client gone: close `chunks`, so whoever sends on it can tell
+      let sent = catch {
+        c.write(head.bytes())?
+        for chunk in chunks {
+          c.write(chunk.bytes())?
+        }
+      }
+      chunks.close()
+      sent?
+    }
+  }
+}
+
+// Reads one request (answering `Expect: 100-continue`); none if the client closed first or sent
+// something unparseable (then it has had its 4xx).
+async fn read_request(c: var net.Conn): Req?! uses net {
+  var buf: [int] = []
+  var need = 1
+  var continued = false
+  loop {
+    if buf.len() >= need {
+      match http.wire.decode_request(buf) {
+        ok(Done(method, target, headers, body)) =>
+          return some(request(method, target, headers, body))
+        ok(More(n, cont)) => {
+          need = n
+          if cont && !continued {
+            c.write("HTTP/1.1 100 Continue\r\n\r\n".bytes())?
+            continued = true
+          }
+        }
+        err(e) => {
+          c.write(failure(e).bytes())?
+          return none
+        }
+      }
+    }
+    let got = c.read(65536)?
+    if got.len() == 0 { return none }
+    for b in got { buf.push(b) }
+  }
+}
+
+// A response, serialized for request `r` (a bad status or header becomes a 500).
+fn encode(r: Req, resp: http.Resp): str {
+  let head = r.method == "HEAD"
+  http.wire.encode_response(resp.status, resp.headers, resp.body, head) else e => {
+    let bad = text(500, "bad response: {e}")
+    http.wire.encode_response(bad.status, bad.headers, bad.body, head)!
+  }
 }
 
 // Accepts one connection and answers it. A failure on the connection itself (the client went
@@ -349,6 +468,44 @@ async fn raw(port: int, req: str): str! uses net {
   }
   c.close()
   str.from_utf8(buf)?
+}
+
+// Reads a whole response from a raw connection, after sending `req`.
+async fn slow_stream(port: int): str! uses net =
+  await raw(port, "GET /stream HTTP/1.1\r\nHost: x\r\n\r\n")
+
+fn live_route(r: Req, streams: Chan<Chan<str>>): Reply = match r.path {
+  "/stream" => {
+    // the test writes to this stream from outside, while other requests are served
+    let chunks: Chan<str> = chan()
+    streams.send(chunks)
+    Stream(200, {"content-type": "text/event-stream"}, chunks)
+  }
+  "/boom" => {
+    let xs: [int] = []
+    Whole(text(200, "{xs[3]}"))
+  }
+  _ => Whole(text(200, "quick"))
+}
+
+test "serve_live: a stream doesn't block other connections; a panic drops only its own" {
+  var s = listen("127.0.0.1", 0)?
+  let p = s.port()
+  let streams: Chan<Chan<str>> = chan()
+  let server = serve_live_n(s, 3, r => live_route(r, streams))
+  let streamed = slow_stream(p)
+  let chunks = streams.recv() else return fail("no stream")
+  chunks.send("data: one\n\n")
+  // the stream is open and waiting; other connections are answered meanwhile
+  assert (await get_body("http://127.0.0.1:{p}/quick"))? == "200 quick"
+  assert (await raw(p, "GET /boom HTTP/1.1\r\nHost: x\r\n\r\n"))? == ""
+  chunks.send("data: two\n\n")
+  chunks.close()
+  let out = (await streamed)?
+  assert out.starts_with("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nConnection: close\r\n\r\n")
+  assert out.ends_with("data: one\n\ndata: two\n\n")
+  await server?
+  s.close()
 }
 
 test "integration: serve_n answers http.get and http.post on 127.0.0.1" {

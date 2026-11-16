@@ -120,6 +120,13 @@ pub extern fn lower(c: char): char = "duck_char_lower"
 /// it as an `Err` from `await any`). No effect on a finished task.
 pub extern fn cancel<T>(t: Task<T>) = "duck_task_cancel"
 
+/// Has the task finished (its result, error or panic is in, so `await` won't wait)?
+pub extern fn done<T>(t: Task<T>): bool = "duck_task_done"
+
+/// How many times `duck run --live` has swapped new code into this program (0 when not live):
+/// watch it to react to a reload.
+pub extern fn reloads(): int = "duck_live_reloads"
+
 // ---- channels ----
 
 /// The runtime side of a channel, shared by every copy of its `Chan`.

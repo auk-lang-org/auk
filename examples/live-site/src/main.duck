@@ -7,7 +7,10 @@
 /// Supervised tasks share nothing and talk over channels:
 /// - `counter` owns the state everyone shares (a `Stats`);
 /// - `sessions` gives each browser a task of its own, holding what only that visitor sees (a `Mine`);
-/// - `web` serves pages, asking both for their part of each page.
+/// - `hub` pushes to open pages: after any click or edit, and after each `duck run --live` reload,
+///   every open tab fetches at once (Server-Sent Events);
+/// - `web` serves pages, each connection in a task of its own, asking `counter` and the visitor's
+///   session for their parts of each page.
 /// Pages are `splash` pages: they keep themselves current, so saved edits and other visitors'
 /// clicks show up in open tabs without a reload.
 /// See README.md for edits to try and what each one does to the running program.
@@ -105,10 +108,11 @@ fn read_static(name: str): str? uses fs = match fs.read("static/{name}") {
 }
 
 /// How every page looks: read on each request, so an edit to static/site.css shows up live.
-fn look(): splash.Page uses fs = splash
+fn look(hub: splash.Hub): splash.Page uses fs = splash
   .titled("live-site")
   .with_css(CSS)
   .with_link(splash.asset("site.css", read_static("site.css") else ""))
+  .with_hub(hub)
 
 /// The live part of the page. TRY: change the text or the colors and save: open tabs update,
 /// the counts stay.
@@ -146,25 +150,33 @@ fn act(req: http.server.Req): Act = match splash.event(req) {
   none => if splash.is_poll(req) { Look } else { Visit }
 }
 
-fn handle(req: http.server.Req, hits: Chan<Hit>, mine: splash.Sessions): http.Resp uses fs {
-  match splash.static(req, f => read_static(f)) {
+/// The tasks and channels a request needs.
+struct Site { hits: Chan<Hit>, mine: splash.Sessions, hub: splash.Hub }
+
+fn handle(req: http.server.Req, site: Site): http.server.Reply uses fs {
+  match splash.stream(req, site.hub) {
     some(r) => return r
     none => {}
   }
-  // TRY: `/boom` crashes this request's task; `sup` restarts the server, counts survive
+  match splash.static(req, f => read_static(f)) {
+    some(r) => return http.server.Whole(r)
+    none => {}
+  }
+  // TRY: `/boom` crashes this request's task: only its own connection drops, nothing restarts
   if req.path == "/boom" {
     let xs: [int] = []
     let _ = xs[1]
   }
   let reply: Chan<Shown> = chan()
-  hits.send(Hit { path: req.path, act: act(req), reply })
+  site.hits.send(Hit { path: req.path, act: act(req), reply })
   let shown = reply.recv() else Shown { visits: 0, likes: 0, names: [], note: "", duck: "" }
-  splash.answer(req, look(), view(req.path, shown, splash.ask(mine, req)))
+  let page = view(req.path, shown, splash.ask(site.mine, req))
+  http.server.Whole(splash.answer(req, look(site.hub), page))
 }
 
-fn web(hits: Chan<Hit>, mine: splash.Sessions, port: int): ()! uses net, fs {
+fn web(site: Site, port: int): ()! uses net, fs {
   eprint("listening on http://localhost:{port}")
-  await http.server.serve("", port, req => handle(req, hits, mine))
+  await http.server.serve_live("", port, req => handle(req, site))
 }
 
 // ---- main: starts the tree ----
@@ -172,11 +184,12 @@ fn web(hits: Chan<Hit>, mine: splash.Sessions, port: int): ()! uses net, fs {
 fn main(): int! uses net, time, env, fs {
   let port = int.parse(env.get("PORT") else "8080") else 8080
   let hits: Chan<Hit> = chan()
-  let mine = splash.sessions()
+  let site = Site { hits, mine: splash.sessions(), hub: splash.hub() }
   let kids = [
-    sup.child("counter", () => counter(hits)),
-    sup.child("sessions", () => sessions(mine)),
-    sup.child("web", () => web(hits, mine, port)),
+    sup.child("counter", () => counter(site.hits)),
+    sup.child("sessions", () => sessions(site.mine)),
+    sup.child("hub", () => splash.run_hub(site.hub)),
+    sup.child("web", () => web(site, port)),
   ]
   sup.run(kids, sup.one_for_one(10, 6_000))?
   0

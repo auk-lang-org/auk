@@ -190,6 +190,21 @@ extern "C" fn task_entry(p: *mut c_void) -> *mut c_void {
     null_mut()
 }
 
+/// `t.done()`: has the task finished (its result or panic is in)?
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn duck_task_done(t: *mut DuckTask) -> bool {
+    !t.is_null() && unsafe { (*t).done.load(Ordering::SeqCst) }
+}
+
+/// How many times `duck run --live` has swapped new code into this program (the driver bumps it
+/// after each reload; 0 when not live).
+pub static LIVE_RELOADS: AtomicI64 = AtomicI64::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_live_reloads() -> i64 {
+    LIVE_RELOADS.load(Ordering::SeqCst)
+}
+
 /// `t.cancel()`: see the module docs. No effect on a finished task.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn duck_task_cancel(t: *mut DuckTask) {

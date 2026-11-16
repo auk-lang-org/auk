@@ -21,7 +21,8 @@ other, type in the note, pick a duck. Each tab shows the other's changes within 
 main ── sup.run (one_for_one: up to 10 restarts in 6 s)
           ├── counter   owns the state everyone shares (struct Stats): visits, likes, guestbook, note
           ├── sessions  a task per browser (splash.run_sessions), each holding a Mine: "your clicks"
-          └── web       serves pages; asks counter (over a Chan<Hit>) and the visitor's session for their parts
+          ├── hub       pushes to open pages (Server-Sent Events): after any click or edit, and after each reload
+          └── web       serves pages, a task per connection; asks counter (over a Chan<Hit>) and the visitor's session for their parts
 ```
 
 Tasks share nothing. The state lives only in the `counter` task. For each request, `web` sends a
@@ -39,14 +40,13 @@ flash; focus, half-typed input and the scroll position all stay. The ❤ button
 into an `Act`, and the answer updates the page at once. A refresh is a `Look`, so it doesn't
 count as a visit. That one loop shows both kinds of change:
 
-- **Code changes:** you save, `duck run --live` swaps in the new code, and the next poll renders
-  with it. The page changes about half a second after the save.
-- **State changes:** a visit, ❤ or guestbook entry from another tab changes the state, and the
-  next poll in this tab shows it.
+- **Code changes:** you save, `duck run --live` swaps in the new code, the hub notices the reload,
+  and every open tab fetches at once. The page changes about 0.3 s after the reload finishes.
+- **State changes:** a ❤, guestbook entry or note from another tab changes the state, and the hub
+  tells every tab to fetch. Other tabs update within about 50 ms.
 
-This is LiveView's behavior with polling instead of a push channel. The `http` server answers one
-connection at a time and closes each one, so it can't hold a connection open for Server-Sent
-Events or a WebSocket. That would be the next step.
+Pages hold a Server-Sent Events stream open to the hub (`http.server.serve_live` gives each
+connection a task of its own, so held streams don't block anyone). Polling is only a 5 s fallback.
 
 ## Things to try
 
@@ -61,7 +61,7 @@ Edit `src/main.duck` with the site open and save; watch the page (and the termin
 | Make ❤ worth 10 (`s.likes += 10` in `apply`) | reloaded; the next click adds 10 | the likes so far, and the guestbook |
 | Edit `view` while half-way through typing a name | the page updates around the input | what you typed, and the focus |
 | Make a type error (`fn view(…): str = 5`) | the error is printed and nothing is reloaded | everything: the old code keeps serving |
-| Visit `/boom` | the request panics; `sup: web exited: …; restarting` | the counts (they live in `counter`); open tabs keep polling through the restart |
+| Visit `/boom` | the request panics; only its own connection drops (each connection is a task) | everything; nothing restarts |
 | Add a field to `Mine` (`since: int`, and `since: 0` where one is made) | `` `Mine` changed shape: stopped … task(s) that use it ``: only the sessions restart | everything shared: visits, ❤, guestbook, note; only "your clicks" start over |
 | Add a field to `Stats` (`since: int`, and `since: 0` in `counter`) | `` `Stats` changed shape: stopped … task(s) that use it ``; `sup` restarts them on the new code | `main`, the supervisor and the channel; the counts start over, since they were `Stats` |
 | Add a field to `Hit` | `` `Hit` changed shape and `main`'s side of the program uses it: restarting the program `` | nothing: `main` made the `Chan<Hit>`, so the whole program starts again |

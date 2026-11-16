@@ -10,8 +10,9 @@
 /// cross-site form can't set and a cross-site `fetch` can't send without a CORS preflight this
 /// server never grants; `event` also rejects any `Origin` that isn't this host.
 ///
-/// v0.4 polls (`every` ms): the `http` server answers one connection at a time and closes each,
-/// so it can't hold a push channel open yet. The API is meant to stay the same when it can.
+/// Pages poll (`every` ms). With a `Hub` (`with_hub`, served by `http.server.serve_live`) they also
+/// listen on a Server-Sent Events stream: every event, `changed(hub)` and `duck run --live`
+/// reload tells all open pages to fetch at once, and polling slows to a fallback.
 
 /// The header splash's own requests carry: `poll` (a refresh) or `event` (a click or submit).
 pub let HEADER = "x-splash"
@@ -85,10 +86,10 @@ pub fn is_visit(req: http.server.Req): bool = !is_poll(req) && event(req) is non
 /// How a page looks, apart from its view: its title, its stylesheet (in `<head>`), the
 /// stylesheets it links, and how often it refreshes. Build one with `titled` and the `with_*`
 /// functions: `splash.titled("my site").with_css(CSS).with_link(splash.asset("site.css", text))`.
-pub struct Page { title: str, css: str, links: [str], every: int }
+pub struct Page { title: str, css: str, links: [str], every: int, hub: Hub? }
 
 /// A page titled `title`, styled with `BASE_CSS`, linking nothing, refreshing every `EVERY` ms.
-pub fn titled(title: str): Page = Page { title, css: BASE_CSS, links: [], every: EVERY }
+pub fn titled(title: str): Page = Page { title, css: BASE_CSS, links: [], every: EVERY, hub: none }
 
 /// The same page with the stylesheet `css` instead (`BASE_CSS + mine` to build on the defaults,
 /// "" for none). It is live: change it, and open pages restyle at their next refresh.
@@ -101,10 +102,75 @@ pub fn with_link(p: Page, href: str): Page = Page { links: p.links + [href], ..p
 /// The same page, refreshing every `every` ms.
 pub fn with_every(p: Page, every: int): Page = Page { every, ..p }
 
+/// The same page, pushed to by `hub`: open pages listen on its stream (answer it with `stream`),
+/// and answering an event tells them all to fetch at once.
+pub fn with_hub(p: Page, hub: Hub): Page = Page { hub: some(hub), ..p }
+
+// ---- push: a hub that tells open pages to fetch now ----
+
+/// The way to a site's hub: make one with `hub()`, run it with `run_hub` (as a `sup` child), answer
+/// pages' streams with `stream`, and attach it to pages with `with_hub`.
+pub struct Hub { ch: Chan<Tell> }
+
+enum Tell { Join(out: Chan<str>), Changed }
+
+pub fn hub(): Hub = Hub { ch: chan() }
+
+/// Something changed that no event caused (a timer, a background job): tell open pages to fetch.
+pub fn changed(h: Hub) = h.ch.send(Changed)
+
+/// Runs the hub forever (run it as a `sup` child). It tells every open page to fetch when told
+/// (`changed`, or an answered event) and after each `duck run --live` reload, and keeps idle
+/// streams alive (a comment every 15 s), dropping those whose page has gone.
+pub fn run_hub(h: Hub): ()! {
+  var pages: [Chan<str>] = []
+  var seen = reloads()
+  var idle = 0
+  loop {
+    match h.ch.recv_for(250) {
+      some(Join(out)) => pages.push(out)
+      some(Changed) => pages = tell(pages, "data: change\n\n")
+      none => {
+        idle += 1
+        if reloads() != seen {
+          seen = reloads()
+          pages = tell(pages, "data: reload\n\n")
+        } else if idle >= 60 {
+          idle = 0
+          pages = tell(pages, ": still here\n\n")
+        }
+      }
+    }
+  }
+}
+
+/// Send `msg` to every page; the ones whose stream has closed (the page went away) drop out.
+fn tell(pages: [Chan<str>], msg: str): [Chan<str>] = pages.filter(p => catch p.send(msg) is ok(_))
+
+/// The answer to a page's push stream (`?splash=events`), or none for any other request.
+pub fn stream(req: http.server.Req, h: Hub): http.server.Reply? {
+  if !req.query.split("&").contains("splash=events") { return none }
+  let out: Chan<str> = chan()
+  h.ch.send(Join(out))
+  some(
+    http.server.Stream(
+      200,
+      {"content-type": "text/event-stream", "cache-control": "no-cache"},
+      out,
+    ),
+  )
+}
+
 /// The answer to any request for a live page `p` showing `view`: the whole page for a visit or an
 /// event, and for a refresh either the page or, when nothing on it changed since the page last
 /// saw it, a bare 204 (an idle tab costs a few bytes per poll).
 pub fn answer(req: http.server.Req, p: Page, view: str): http.Resp {
+  if event(req) is some(_) {
+    match p.hub {
+      some(hub) => changed(hub)
+      none => {}
+    }
+  }
   let h = fingerprint(p, view)
   if is_poll(req) && req.headers.get("x-splash-hash") == some(h) {
     return http.Resp { status: 204, headers: {"x-splash-hash": h}, body: "" }
@@ -130,7 +196,7 @@ pub fn render(p: Page, view: str): str {
   </head>
   <body>
   <main id="splash">{view}</main>
-  {boot(p.every, fingerprint(p, view))}
+  {boot(p.every, fingerprint(p, view), p.hub is some(_))}
   </body>
   </html>
   """
@@ -349,7 +415,7 @@ fn short_hash(s: str): str = "{hash.fnv1a64(s.bytes()) & 0xffffffff}"
 
 /// The page's script on its own, for a page built by hand: the live part must be the element
 /// with `id="splash"`.
-pub fn script(every: int): str = boot(every, "")
+pub fn script(every: int): str = boot(every, "", false)
 
 /// `s` as HTML text: `&`, `<`, `>`, `"` and `'` escaped. Put anything a user typed through this.
 pub fn escape(s: str): str = s
@@ -367,8 +433,8 @@ fn fingerprint(p: Page, view: str): str =
 fn no_poll(): http.server.Req =
   http.server.Req { method: "GET", target: "/", path: "/", query: "", headers: {}, body: "" }
 
-fn boot(every: int, h: str): str =
-  "<script>const splashEvery = {every}, splashHash = \"{h}\";</script>" + CLIENT
+fn boot(every: int, h: str, push: bool): str = "<script>const splashEvery = {every}, splashHash = \"{h}\", splashPush = {push};</script>" +
+  CLIENT
 
 /// The client. Polls with `setTimeout` (paused while the tab is hidden, backing off to 5 s while
 /// the server is unreachable, when `<html>` gets the class `splash-offline`); sends clicks and
@@ -377,7 +443,9 @@ fn boot(every: int, h: str): str =
 let CLIENT = r"""
   <script>
   (() => {
-    let hash = splashHash, delay = splashEvery, timer, sent = 0, shown = 0, lastEvent = 0;
+    // with push, polling is only a fallback (in case the stream is down)
+    const every = splashPush ? Math.max(splashEvery, 5000) : splashEvery;
+    let hash = splashHash, delay = every, timer, sent = 0, shown = 0, lastEvent = 0;
     const root = document.documentElement;
     const morph = (a, b) => {
       if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) { a.replaceWith(b.cloneNode(true)); return; }
@@ -420,7 +488,7 @@ let CLIENT = r"""
       try {
         const r = await fetch(location.href, { method: body ? "POST" : "GET", headers, body });
         root.classList.remove("splash-offline");
-        delay = splashEvery;
+        delay = every;
         // a later request's answer is already on the page, or this one was sent before the
         // latest event and shows the state from before it
         if (my < shown || my < lastEvent) return;
@@ -453,9 +521,13 @@ let CLIENT = r"""
       if (!document.hidden) await send("poll");
       timer = setTimeout(poll, delay);
     };
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) { clearTimeout(timer); poll(); }
-    });
+    const now = () => { clearTimeout(timer); poll(); };
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) now(); });
+    // push: the server says something changed; fetch now (EventSource reconnects by itself)
+    if (splashPush && self.EventSource) {
+      const es = new EventSource(location.pathname + "?splash=events");
+      es.onmessage = () => { if (!document.hidden) now(); };
+    }
     document.addEventListener("click", (e) => {
       const el = e.target.closest("[splash-click]");
       if (!el) return;
@@ -516,7 +588,7 @@ test "a page wraps the view in the live element and runs the client" {
   let p = page("Home & away", "<p>hi</p>")
   assert p.contains("<main id=\"splash\"><p>hi</p></main>")
   assert p.contains("<title>Home &amp; away</title>")
-  assert p.contains("const splashEvery = 500, splashHash = \"{fingerprint(titled("x"), "<p>hi</p>")}\";")
+  assert p.contains("const splashEvery = 500, splashHash = \"{fingerprint(titled("x"), "<p>hi</p>")}\", splashPush = false;")
   assert p.contains("<style id=\"splash-css\">{BASE_CSS}</style>")
   assert p.contains("[splash-click]") && p.contains("[splash-submit]")
 }
@@ -719,6 +791,51 @@ test "past max sessions, the least recently used one stops" {
   assert ask(s, as_session("second-22", "")) == "n=0"
   s.ch.close()
   await t?
+}
+
+test "push: a hub's stream, and pages that know to listen" {
+  let h = hub()
+  let r = stream(get({}), h)
+  assert r is none
+  let s = stream(
+    http.server.Req {
+      method: "GET",
+      target: "/?splash=events",
+      path: "/",
+      query: "splash=events",
+      headers: {},
+      body: "",
+    },
+    h,
+  )
+  match s {
+    some(http.server.Stream(200, headers, _)) =>
+      assert headers["content-type"] == "text/event-stream"
+    _ => fail("no stream")
+  }
+  assert render(titled("t").with_hub(h), "v").contains("splashPush = true;")
+  assert render(titled("t"), "v").contains("splashPush = false;")
+}
+
+async fn hub_task(h: Hub): ()! = run_hub(h)
+
+test "the hub tells joined pages, and drops the ones that left" {
+  let h = hub()
+  let t = hub_task(h)
+  let (a, b): (Chan<str>, Chan<str>) = (chan(), chan())
+  h.ch.send(Join(a))
+  h.ch.send(Join(b))
+  changed(h)
+  assert a.recv_for(2000) == some("data: change\n\n")
+  assert b.recv_for(2000) == some("data: change\n\n")
+  b.close()
+  changed(h)
+  assert a.recv_for(2000) == some("data: change\n\n")
+  // an event answered on a page with the hub tells it too
+  let _ = answer(post("splash-kind=click&splash-event=x&value="), titled("t").with_hub(h), "v")
+  assert a.recv_for(2000) == some("data: change\n\n")
+  t.cancel()
+  let _ = await any [t]
 }
 
 test "respond is a 200 HTML page" {

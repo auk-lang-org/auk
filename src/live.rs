@@ -463,6 +463,7 @@ fn watch(path: PathBuf, mut slots: HashMap<String, usize>, mut files: Files, mut
                     }
                 }
                 install(&b);
+                duck_rt::task::LIVE_RELOADS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if !moved.is_empty() {
                     // only tasks can hold the old shape: stop those (their supervisors restart them)
                     let n = duck_rt::task::cancel_running(|entry, hint| seen.task_uses(entry, hint, &moved));

@@ -72,6 +72,7 @@ Still escape what users typed before showing it (`escape`).
 - `styled(title, css, view): str`, `styled_every(…, every)` and `reply_styled(req, title, css, view)`: the same with your own stylesheet, which goes in `<head>` as `<style id="splash-css">`. Build on the defaults with `splash.BASE_CSS + mine`, or pass `""` for no CSS.
 - `BASE_CSS`: the default stylesheet. It gives readable system type, a centered column, plain buttons and inputs, works in light and dark mode, and shows a "reconnecting…" badge while the server is away.
 - `script(every: int): str`: just the client, for a page you build yourself (its live element needs `id="splash"`).
+- `struct Hub`, `hub()`, `run_hub(h): ()!`, `changed(h)`, `stream(req, h): http.server.Reply?` and `Page.with_hub(h)`: push (see above).
 - `sessions(): Sessions`, `run_sessions<S>(s, init: () => S, update: (S, Event) => S, view: (S) => str, max: int): ()!`, `ask(s, req): str` and `session_id(req): str?`: state per browser session (see above).
 - `escape(s: str): str`: HTML-escapes `& < > " '`. Put anything a user typed through this.
 
@@ -90,6 +91,31 @@ The stylesheet is live, like the view. Under `duck run --live`, change a color a
 tabs restyle at their next refresh with no reload. A refresh only gets the page back when the view
 *or* the CSS changed. Use a raw string (`r"""…"""`) for CSS, so its braces aren't read as
 interpolation. A `<style>` inside the view works too, but it's sent with every changed view.
+
+## Push
+
+With a hub, open pages don't wait for their next poll. A Server-Sent Events stream tells them to
+fetch the moment something changes: after any event, after `splash.changed(hub)` (for changes no
+event caused, such as timers or background jobs), and after each `duck run --live` reload.
+Polling drops to a 5 s fallback.
+
+```duck
+let hub = splash.hub()
+// kids: sup.child("hub", () => splash.run_hub(hub)), and a web child serving with serve_live:
+fn handle(req: http.server.Req, hub: splash.Hub): http.server.Reply {
+  match splash.stream(req, hub) {                 // the pages' push streams
+    some(r) => return r
+    none => {}
+  }
+  http.server.Whole(splash.answer(req, splash.titled("my site").with_hub(hub), render()))
+}
+// await http.server.serve_live("", 8080, req => handle(req, hub))
+```
+
+Streams need `http.server.serve_live`, which gives each connection a task of its own. The plain
+`serve` answers one connection at a time, so a held-open stream would block everyone else. The hub
+keeps idle streams alive with a comment every 15 s, and drops a page's stream once its connection
+is gone.
 
 ## Sessions: a task per browser
 
@@ -200,9 +226,8 @@ an open `<details>` inside a row stays with its row.
   `splash-offline` and polling backs off up to 5 s. Style it to show "reconnecting…". The last
   view stays on screen.
 
-That's polling, not push. The `http` server answers one connection at a time and closes each one,
-so it can't hold a Server-Sent Events or WebSocket connection open yet. When it can, `splash`
-should switch to push without changing this API.
+Without a hub that's all polling. With one (see Push), pages also listen on a stream and fetch the
+moment the hub says so.
 
 See [`examples/live-site`](../../examples/live-site) for `splash` together with `sup` and
 `duck run --live`.

@@ -9,10 +9,10 @@ checksum = "sha256:a73f02c15aa12b46334478dff4698d0441bdbf08c80abb21082ec4df26977
 
 [[package]]
 name = "http"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry"
 effects = ["net"]
-checksum = "sha256:7cf63837309f2de5fd910102703a6c4baeb5681402e41e5342422b0a0f98ab58"
+checksum = "sha256:7aa0ae61bf73d0e86c4950c9b01593849d469c6d6a6e4e07e1fc71320d3cd8f2"
 
 [[package]]
 name = "json"
