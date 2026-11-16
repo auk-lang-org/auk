@@ -17,6 +17,7 @@ mod hatch;
 mod holes;
 mod json;
 mod lexer;
+mod live;
 mod lsp;
 mod mcp;
 mod parser;
@@ -45,6 +46,9 @@ commands:
   run [--trace=json|<file>] <file> [args...]
                            compile and run the program (--trace: log calls, returns,
                            errors, peeks and panics as JSON lines; json = stderr)
+  run --live <file> [args...]
+                           run, swapping in new code on every save (state survives;
+                           a changed struct/enum layout restarts the program)
   build <file> [-o out]    compile to a native executable (release; refuses `??` holes)
   check <file> [--json]    type-check only (no codegen); --json for machine-readable output
   test [--trace=json|<dir>] [file|dir] [filter]

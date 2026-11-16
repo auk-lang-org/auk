@@ -1015,6 +1015,85 @@ fn main() uses time {
     );
 }
 
+// ---- duck run --live ----
+
+/// Lines of a child's stderr, read on a thread, waited for with a deadline.
+struct Lines(std::sync::mpsc::Receiver<String>, Vec<String>);
+
+impl Lines {
+    /// Wait for a line matching `f` (lines before it are kept in `.1`); panics after 20 s.
+    fn wait(&mut self, what: &str, f: impl Fn(&str) -> bool) -> String {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let left = end.saturating_duration_since(std::time::Instant::now());
+            match self.0.recv_timeout(left) {
+                Ok(l) => {
+                    self.1.push(l.clone());
+                    if f(&l) {
+                        return l;
+                    }
+                }
+                Err(_) => panic!("timed out waiting for {what}; stderr so far:\n{}", self.1.join("\n")),
+            }
+        }
+    }
+}
+
+/// `duck run --live`: an edited function body is swapped in while the program keeps its state;
+/// a type error keeps the old code running; a changed struct layout restarts the program.
+#[test]
+fn live_reload_swaps_code_and_keeps_state() {
+    let d = scratch("live");
+    let f = d.join("live.duck");
+    let src = |msg: &str, fields: &str, init: &str| {
+        format!(
+            "struct S {{ n: int{fields} }}\n\nfn msg(n: int): str = {msg}\n\nfn main() uses time {{\n  var s = S {{ n: 0{init} }}\n  while s.n < 2_000 {{\n    s.n += 1\n    eprint(msg(s.n))\n    time.sleep(20)\n  }}\n}}\n"
+        )
+    };
+    fs::write(&f, src("\"a{n}\"", "", "")).unwrap();
+    let mut child = duck_cmd()
+        .args(["run", "--live", "live.duck"])
+        .current_dir(&d)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let err = child.stderr.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        use std::io::BufRead;
+        for l in std::io::BufReader::new(err).lines().map_while(Result::ok) {
+            if tx.send(l).is_err() {
+                break;
+            }
+        }
+    });
+    let mut lines = Lines(rx, Vec::new());
+    let num = |l: &str, p: &str| l.strip_prefix(p).and_then(|n| n.parse::<i64>().ok());
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        lines.wait("a5", |l| num(l, "a").is_some_and(|n| n >= 5));
+        // 1. a new body; the counter carries on
+        fs::write(&f, src("\"b{n}\"", "", "")).unwrap();
+        lines.wait("the reload", |l| l.contains("[live] reloaded in"));
+        let b = lines.wait("a b line", |l| num(l, "b").is_some());
+        assert!(num(&b, "b").unwrap() > 5, "the state was lost: {b}");
+        // 2. a type error: the old code keeps running
+        fs::write(&f, src("5", "", "")).unwrap();
+        lines.wait("the type error", |l| l.contains("not reloaded"));
+        lines.wait("b after the error", |l| num(l, "b").is_some());
+        // 3. a new field: a restart from scratch
+        fs::write(&f, src("\"c{n}\"", ", k: int", ", k: 1")).unwrap();
+        lines.wait("the restart", |l| l.contains("changed shape: restarting"));
+        let c = lines.wait("a c line", |l| num(l, "c").is_some());
+        assert!(num(&c, "c").unwrap() < 20, "not restarted: {c}");
+    }));
+    let _ = child.kill();
+    let _ = child.wait();
+    if let Err(e) = res {
+        std::panic::resume_unwind(e);
+    }
+}
+
 // ---- error programs, spec ----
 
 fn error_files() -> Vec<PathBuf> {

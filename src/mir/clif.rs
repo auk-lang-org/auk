@@ -325,6 +325,9 @@ impl Layouts<'_, '_> {
 
 struct Decls {
     funcs: Vec<CFuncId>,
+    /// `duck run --live`: calls to these functions (by MIR id) load their target from the live
+    /// table: `(table address, slot of each function)`.
+    live: Option<(usize, HashMap<u32, usize>)>,
     rt_funcs: HashMap<String, (CFuncId, Signature)>,
     globals: Vec<DataId>,
     rt_data: HashMap<String, DataId>,
@@ -333,10 +336,21 @@ struct Decls {
 
 /// Compile `prog` into module `m`; returns the entry function's id. `entry_name`: the symbol of
 /// the entry point (exported).
-pub fn compile<M: Module>(m: &mut M, prog: &Program, info: &TyInfo, entry_name: &str, mut dump: Option<&mut String>) -> Result<CFuncId, String> {
+pub fn compile<M: Module>(m: &mut M, prog: &Program, info: &TyInfo, entry_name: &str, dump: Option<&mut String>) -> Result<CFuncId, String> {
+    compile_with(m, prog, info, entry_name, dump, None)
+}
+
+fn compile_with<M: Module>(
+    m: &mut M,
+    prog: &Program,
+    info: &TyInfo,
+    entry_name: &str,
+    mut dump: Option<&mut String>,
+    live: Option<(usize, HashMap<u32, usize>)>,
+) -> Result<CFuncId, String> {
     let lay = Layouts::new(info, &prog.aggs);
     let cc = m.isa().default_call_conv();
-    let mut d = Decls { funcs: Vec::new(), rt_funcs: HashMap::new(), globals: Vec::new(), rt_data: HashMap::new(), cstrs: HashMap::new() };
+    let mut d = Decls { funcs: Vec::new(), live, rt_funcs: HashMap::new(), globals: Vec::new(), rt_data: HashMap::new(), cstrs: HashMap::new() };
     let entry = prog.entry.ok_or("no entry point")?;
     for (i, f) in prog.funcs.iter().enumerate() {
         let sig = func_sig(&lay, cc, f);
@@ -1150,6 +1164,30 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
 
     fn call(&mut self, c: &Callee, args: &[Ex], ret: &MTy) -> V {
         match c {
+            Callee::Fn(f) if self.d.live.as_ref().is_some_and(|(_, s)| s.contains_key(f)) => {
+                // live: the current body of `f` is in its table slot
+                let (table, slot) = self.d.live.as_ref().map(|(t, s)| (*t, s[f])).unwrap();
+                let func = &self.prog.funcs[*f as usize];
+                let ps: Vec<MTy> = func.params.iter().map(|&v| func.vars[v as usize].clone()).collect();
+                let sig = func_sig(self.lay, self.cc, func);
+                let sr = self.b.import_signature(sig);
+                let at = self.b.ins().iconst(PTR, (table + slot * 8) as i64);
+                let code = self.b.ins().load(PTR, mem(), at, 0);
+                let fret = func.ret.clone();
+                match func.abi {
+                    Abi::Duck => {
+                        let (vals, out) = self.duck_args(&ps, args, &fret);
+                        let inst = self.b.ins().call_indirect(sr, code, &vals);
+                        self.duck_result(inst, out, &fret)
+                    }
+                    Abi::C => {
+                        let (_, pp, rp) = self.lay.c_sig(self.cc, &ps, &fret);
+                        let (vals, out) = self.c_args(&pp, &ps, args, &rp, &fret);
+                        let inst = self.b.ins().call_indirect(sr, code, &vals);
+                        self.c_result(inst, out, &rp, &fret)
+                    }
+                }
+            }
             Callee::Fn(f) => {
                 let func = &self.prog.funcs[*f as usize];
                 let fr = self.m.declare_func_in_func(self.d.funcs[*f as usize], self.b.func);
@@ -1319,7 +1357,46 @@ pub fn jit(prog: &Program, info: &TyInfo, opt: bool) -> Result<Jit, String> {
     Ok(Jit { module: Some(module), entry })
 }
 
+/// A program compiled for `duck run --live`: every call to a function in `slots` goes through
+/// the live table at `table` (8-byte code pointers), so a later compile can replace bodies.
+pub struct LiveJit {
+    pub jit: Jit,
+    /// (slot, code address) of each function in `slots`, to store into the table.
+    pub entries: Vec<(usize, *const u8)>,
+    /// The program's `dk_init` (literals, imprints, constants), to run before a reloaded module's
+    /// code is used.
+    pub init: *const u8,
+}
+
+pub fn jit_live(prog: &Program, info: &TyInfo, table: usize, slots: &HashMap<u32, usize>) -> Result<LiveJit, String> {
+    let isa = isa(false, false)?;
+    let mut jb = cranelift_jit::JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+    for (name, addr) in crate::rt_symbols::rt_symbols() {
+        jb.symbol(name, addr);
+    }
+    let mut module = cranelift_jit::JITModule::new(jb);
+    let entry = compile_with(&mut module, prog, info, "dk_entry", None, Some((table, slots.clone())))?;
+    module.finalize_definitions().map_err(|e| e.to_string())?;
+    let entry = module.get_finalized_function(entry);
+    let ids: Vec<CFuncId> = module.declarations().get_functions().map(|(id, _)| id).collect();
+    let by_name: HashMap<String, CFuncId> = ids.iter().map(|&id| (module.declarations().get_function_decl(id).name.clone().unwrap_or_default(), id)).collect();
+    let addr = |m: &cranelift_jit::JITModule, name: &str| by_name.get(name).map(|&id| m.get_finalized_function(id));
+    let mut entries = Vec::new();
+    for (&f, &slot) in slots {
+        if let Some(a) = addr(&module, &prog.funcs[f as usize].name) {
+            entries.push((slot, a));
+        }
+    }
+    let init = addr(&module, "dk_init").ok_or("no dk_init")?;
+    Ok(LiveJit { jit: Jit { module: Some(module), entry }, entries, init })
+}
+
 impl Jit {
+    /// Leave the compiled code in memory for good (a live reload: old frames may still run it).
+    pub fn leak(mut self) {
+        std::mem::forget(self.module.take());
+    }
+
     /// Call the entry point with these arguments (`argv[0]` first); returns its exit code.
     pub fn run(&self, args: &[String]) -> i32 {
         let cs: Vec<std::ffi::CString> = args.iter().map(|a| std::ffi::CString::new(a.as_bytes()).unwrap_or_default()).collect();

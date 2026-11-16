@@ -382,6 +382,9 @@ pub struct Program {
     pub globals: Vec<Global>,
     /// The entry point: `int f(int argc, char **argv)`.
     pub entry: Option<FuncId>,
+    /// A key for each user function instance that stays the same across compiles of edited
+    /// source (its module, name and signature): `duck run --live` swaps bodies by it.
+    pub live_keys: std::collections::HashMap<FuncId, String>,
 }
 
 // ---- building function bodies -----------------------------------------------------------

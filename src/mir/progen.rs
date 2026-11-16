@@ -242,6 +242,12 @@ impl<'a> Gen<'a> {
         };
         let f = self.declare(format!("dk_f{i}_{what}"), params, ret, abi);
         self.inst_fns.insert(i, f);
+        if let BodyRef::Fn(fid) = self.tp.instances[i].body {
+            let info = &self.tp.fns[fid];
+            let ps: Vec<String> = self.inst_params(i).iter().map(|(t, var)| format!("{}{}", if *var { "var " } else { "" }, self.tp.defs.show(t))).collect();
+            let key = format!("{}::{}({}): {}", self.tp.program.mods[info.module].file, info.name, ps.join(", "), self.tp.defs.show(&self.inst_ret(i)));
+            self.prog.live_keys.insert(f, key);
+        }
         if !self.emitted.contains(&i) {
             self.queue.push(i);
         }

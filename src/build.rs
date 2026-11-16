@@ -658,6 +658,9 @@ fn test_files(files: &[PathBuf], filter: Option<&str>, trace: &TraceOpts) -> i32
 
 /// `duck run|build|ir|test ...`. Returns the exit code.
 pub fn cli(cmd: &str, args: &[String]) -> i32 {
+    if cmd == "run" && args.first().is_some_and(|a| a == "--live") {
+        return crate::live::cli(&args[1..]);
+    }
     let fail = |msg: String| {
         eprint!("{msg}");
         1
