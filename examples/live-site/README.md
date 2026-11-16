@@ -9,6 +9,7 @@ restarts.
 cd examples/live-site
 quack install                      # http, sup and splash
 duck run --live src/main.duck      # PORT=9000 to pick another port
+SPLASH_LOG=debug duck run --live src/main.duck   # log everything sent and received (also in the browser console)
 ```
 
 Open <http://localhost:8080> in two tabs and click around: ❤ in one tab, sign the guestbook in the

@@ -74,6 +74,7 @@ Still escape what users typed before showing it (`escape`).
 - `script(every: int): str`: just the client, for a page you build yourself (its live element needs `id="splash"`).
 - `struct Hub`, `hub()`, `run_hub(h): ()!`, `changed(h)`, `stream(req, h): http.server.Reply?` and `Page.with_hub(h)`: push (see above).
 - `sessions(): Sessions`, `run_sessions<S>(s, init: () => S, update: (S, Event) => S, view: (S) => str, max: int): ()!`, `ask(s, req): str` and `session_id(req): str?`: state per browser session (see above).
+- `enum Log { Quiet, Info, Debug }`, `log_level(name): Log`, and `with_log(level)` on a `Page`, a `Hub` and `Sessions`: logging (see above).
 - `escape(s: str): str`: HTML-escapes `& < > " '`. Put anything a user typed through this.
 
 ## CSS
@@ -200,6 +201,34 @@ are matched by key wherever they moved; the rest are matched by position. Give l
 
 Then inserting at the top moves the existing rows instead of rewriting every one, so an input or
 an open `<details>` inside a row stays with its row.
+
+## Logging
+
+When a page and the server disagree, turn on logging and watch both sides:
+
+```duck
+let log = splash.log_level(env.get("SPLASH_LOG") else "")    // "info" or "debug"
+let hub = splash.hub().with_log(log)
+let mine = splash.sessions().with_log(log)
+let look = splash.titled("my site").with_hub(hub).with_log(log)
+```
+
+- **Server (stderr):** at `Info`, every visit, event and change shown, as in
+  `75bbccf2#4 POST / event Submit("sign", {"name": "Ann"}) -> 200 view 1318231027-3710048048`, plus
+  pages joining and leaving the hub and sessions starting and stopping. At `Debug`, also every
+  refresh (including the empty `204` answers) and every push.
+- **Browser (console):** the page logs at the same level. A visitor can change their own page's
+  level with `splash.log("debug")` in the console, and it's remembered for that browser. You see
+  every request with its number (`#4 -> event {...}`), every answer and what it did (`#4 <- 200 in
+  5 ms: view …, 3 change(s)`, or `dropped: a newer answer is on the page`), each push, and at
+  `Debug` the list of changes the patch made, such as `text #splash > p > button[splash-click=like]:
+  "❤ 0" -> "❤ 1"`.
+- **Matching the two:** the console's "started" line names the session (`75bbccf2`); that tab's
+  request `#4` is `75bbccf2#4` in the server log.
+
+**Self-check.** After every patch, the page compares itself with the server's view. If they differ,
+which would be a bug in the patcher, it logs a warning naming the first difference (always, at any
+level) and replaces the live element with the server's version, so the page doesn't stay wrong.
 
 ## How it works
 - **Refreshes.** Every `every` ms the page fetches its own URL in the background, sending

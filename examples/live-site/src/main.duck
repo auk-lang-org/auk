@@ -108,11 +108,12 @@ fn read_static(name: str): str? uses fs = match fs.read("static/{name}") {
 }
 
 /// How every page looks: read on each request, so an edit to static/site.css shows up live.
-fn look(hub: splash.Hub): splash.Page uses fs = splash
+fn look(hub: splash.Hub, log: splash.Log): splash.Page uses fs = splash
   .titled("live-site")
   .with_css(CSS)
   .with_link(splash.asset("site.css", read_static("site.css") else ""))
   .with_hub(hub)
+  .with_log(log)
 
 /// The live part of the page. TRY: change the text or the colors and save: open tabs update,
 /// the counts stay.
@@ -151,7 +152,7 @@ fn act(req: http.server.Req): Act = match splash.event(req) {
 }
 
 /// The tasks and channels a request needs.
-struct Site { hits: Chan<Hit>, mine: splash.Sessions, hub: splash.Hub }
+struct Site { hits: Chan<Hit>, mine: splash.Sessions, hub: splash.Hub, log: splash.Log }
 
 fn handle(req: http.server.Req, site: Site): http.server.Reply uses fs {
   match splash.stream(req, site.hub) {
@@ -171,7 +172,7 @@ fn handle(req: http.server.Req, site: Site): http.server.Reply uses fs {
   site.hits.send(Hit { path: req.path, act: act(req), reply })
   let shown = reply.recv() else Shown { visits: 0, likes: 0, names: [], note: "", duck: "" }
   let page = view(req.path, shown, splash.ask(site.mine, req))
-  http.server.Whole(splash.answer(req, look(site.hub), page))
+  http.server.Whole(splash.answer(req, look(site.hub, site.log), page))
 }
 
 fn web(site: Site, port: int): ()! uses net, fs {
@@ -184,7 +185,14 @@ fn web(site: Site, port: int): ()! uses net, fs {
 fn main(): int! uses net, time, env, fs {
   let port = int.parse(env.get("PORT") else "8080") else 8080
   let hits: Chan<Hit> = chan()
-  let site = Site { hits, mine: splash.sessions(), hub: splash.hub() }
+  // SPLASH_LOG=info (or debug): what splash sends and receives, here and in the browser console
+  let log = splash.log_level(env.get("SPLASH_LOG") else "")
+  let site = Site {
+    hits,
+    mine: splash.sessions().with_log(log),
+    hub: splash.hub().with_log(log),
+    log,
+  }
   let kids = [
     sup.child("counter", () => counter(site.hits)),
     sup.child("sessions", () => sessions(site.mine)),
