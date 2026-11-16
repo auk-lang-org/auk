@@ -55,6 +55,7 @@ Edit `src/main.duck` with the site open and save; watch the page (and the termin
 |---|---|---|
 | Change the text in `view` | `[live] reloaded in … ms`; the open page shows it within half a second | everything: the counts, the open port |
 | Change a color in `CSS` | reloaded; the open page restyles within half a second, without a reload | everything, including whatever you were typing |
+| Edit `static/site.css` (the linked stylesheet) | no Duck reload at all: the page links `site.css?v=<content hash>`, the next refresh sees a new hash, and the open page swaps the link | everything |
 | Change `record` (count by 10: `+ 10`) | reloaded; the next visit (another tab, or a click) uses the new rule | the counts so far |
 | Make ❤ worth 10 (`s.likes += 10` in `apply`) | reloaded; the next click adds 10 | the likes so far, and the guestbook |
 | Edit `view` while half-way through typing a name | the page updates around the input | what you typed, and the focus |

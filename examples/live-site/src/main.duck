@@ -18,12 +18,21 @@ enum Act { Visit, Look, Like, Sign(name: str), Note(text: str), Pick(duck: str) 
 struct Hit { path: str, act: Act, reply: Chan<Shown> }
 
 /// What a page shows.
-struct Shown { visits: int, likes: int, names: [str], note: str, duck: str }
+/// `names`: the guestbook, newest first, each with its number (its key on the page).
+struct Shown { visits: int, likes: int, names: [(int, str)], note: str, duck: str }
 
 // ---- the counter: owns the state ----
 
 /// The counter's state. TRY: add a field (`since: int`) and the counter task alone restarts.
-struct Stats { hits: {str: int}, total: int, likes: int, names: [str], note: str, duck: str }
+struct Stats {
+  hits: {str: int},
+  total: int,
+  likes: int,
+  signed: int,
+  names: [(int, str)],
+  note: str,
+  duck: str,
+}
 
 fn record(s: var Stats, path: str): int {
   s.hits[path] = (s.hits.get(path) else 0) + 1
@@ -37,7 +46,8 @@ fn apply(s: var Stats, Like, _: str) { s.likes += 1 }
 fn apply(s: var Stats, Sign(name), _: str) {
   let n = name.trim()
   if n != "" {
-    s.names = ([n] + s.names).take(8)
+    s.signed += 1
+    s.names = ([(s.signed, n)] + s.names).take(8)
   }
 }
 fn apply(s: var Stats, Note(text), _: str) {
@@ -53,7 +63,7 @@ fn apply(s: var Stats, Pick(duck), _: str) {
 let DUCKS = ["🦆 mallard", "🐣 duckling", "🦢 swan (close enough)", "🪿 goose (don't)"]
 
 fn counter(hits: Chan<Hit>): ()! {
-  var s = Stats { hits: {}, total: 0, likes: 0, names: [], note: "", duck: DUCKS[0] }
+  var s = Stats { hits: {}, total: 0, likes: 0, signed: 0, names: [], note: "", duck: DUCKS[0] }
   for h in hits {
     apply(&s, h.act, h.path)
     let visits = s.hits.get(h.path) else 0
@@ -63,17 +73,24 @@ fn counter(hits: Chan<Hit>): ()! {
 
 // ---- the web server: stateless ----
 
-/// The look of the site, on top of splash's defaults. TRY: change a color and save: open tabs
-/// restyle without a reload.
+/// The site's colors, on top of splash's defaults (the rest is in static/site.css). TRY: change a
+/// color and save: open tabs restyle without a reload.
 let CSS = splash.BASE_CSS + r"""
   body { background: #fdf6e3; color: #333; }
-  h1 { font-size: 2.2em; margin: 0 0 .5em; }
-  .like { font-size: 1.2em; }
-  li { padding: .1em 0; }
-  .note { width: 100%; box-sizing: border-box; }
-  blockquote { margin: .5em 0; padding-left: 1em; border-left: 3px solid #8886; min-height: 1.5em; }
   @media (prefers-color-scheme: dark) { body { background: #1d2021; color: #ebdbb2; } }
   """
+
+/// A file of `static/`, or none.
+fn read_static(name: str): str? uses fs = match fs.read("static/{name}") {
+  ok(text) => some(text)
+  err(_) => none
+}
+
+/// How every page looks: read on each request, so an edit to static/site.css shows up live.
+fn look(): splash.Page uses fs = splash
+  .titled("live-site")
+  .with_css(CSS)
+  .with_link(splash.asset("site.css", read_static("site.css") else ""))
 
 /// The live part of the page. TRY: change the text or the colors and save: open tabs update,
 /// the counts stay.
@@ -85,7 +102,7 @@ fn view(path: str, s: Shown): str = """
     <input name="name" placeholder="your name" autocomplete="off">
     <button>sign the guestbook</button>
   </form>
-  <ul>{s.names.map(n => "<li>{splash.escape(n)}</li>").join("")}</ul>
+  <ul>{s.names.map((k, n) => "<li splash-key=\"{k}\">{splash.escape(n)}</li>").join("")}</ul>
   <p>A note anyone can edit (other tabs see it as you type):</p>
   <input class="note" splash-input="note" value="{splash.escape(s.note)}" placeholder="say something" autocomplete="off">
   <blockquote>{splash.escape(s.note)}</blockquote>
@@ -110,7 +127,11 @@ fn act(req: http.server.Req): Act = match splash.event(req) {
   none => if splash.is_poll(req) { Look } else { Visit }
 }
 
-fn handle(req: http.server.Req, hits: Chan<Hit>): http.Resp {
+fn handle(req: http.server.Req, hits: Chan<Hit>): http.Resp uses fs {
+  match splash.static(req, f => read_static(f)) {
+    some(r) => return r
+    none => {}
+  }
   // TRY: `/boom` crashes this request's task; `sup` restarts the server, counts survive
   if req.path == "/boom" {
     let xs: [int] = []
@@ -119,17 +140,17 @@ fn handle(req: http.server.Req, hits: Chan<Hit>): http.Resp {
   let reply: Chan<Shown> = chan()
   hits.send(Hit { path: req.path, act: act(req), reply })
   let shown = reply.recv() else Shown { visits: 0, likes: 0, names: [], note: "", duck: "" }
-  splash.reply_styled(req, "live-site", CSS, view(req.path, shown))
+  splash.answer(req, look(), view(req.path, shown))
 }
 
-fn web(hits: Chan<Hit>, port: int): ()! uses net {
+fn web(hits: Chan<Hit>, port: int): ()! uses net, fs {
   eprint("listening on http://localhost:{port}")
   await http.server.serve("", port, req => handle(req, hits))
 }
 
 // ---- main: starts the tree ----
 
-fn main(): int! uses net, time, env {
+fn main(): int! uses net, time, env, fs {
   let port = int.parse(env.get("PORT") else "8080") else 8080
   let hits: Chan<Hit> = chan()
   let kids = [sup.child("counter", () => counter(hits)), sup.child("web", () => web(hits, port))]

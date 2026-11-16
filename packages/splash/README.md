@@ -66,6 +66,8 @@ Still escape what users typed before showing it (`escape`).
 - `is_poll(req): bool`: is this an open page refreshing itself? `is_visit(req)` is neither a refresh nor an event. Do a visit's side effects only for visits.
 - `reply(req, title, view): http.Resp`: the answer to any request for a live page. It sends the whole page, except for a refresh whose view hasn't changed, which gets a bare `204`.
 - `serve(port: int, title: str, view: (http.server.Req) => str): ()!`: serves live pages on `port` forever with `reply`. Handle `event(req)` inside `view`. Run it under `sup` to restart it if it crashes.
+- `struct Page { title, css, links, every }`, built with `titled(title)` (with `BASE_CSS`, no links, `EVERY` ms) and `.with_css(css)`, `.with_link(href)`, `.with_every(ms)`. `answer(req, page, view)` is the answer to any request for a live page. `render(page, view)` gives the whole HTML.
+- `static(req, read: (str) => str?): http.Resp?` and `asset(name, text): str`: static text files under `STATIC` (`/static/`), with content-versioned URLs (see above).
 - `page(title, view): str` and `page_every(title, view, every)`: a whole HTML page with `view` as its live part (`<main id="splash">`) and the client, refreshing every `every` ms (default `EVERY`, 500), styled with `BASE_CSS`. `respond(title, view)` wraps that page in a 200 response.
 - `styled(title, css, view): str`, `styled_every(…, every)` and `reply_styled(req, title, css, view)`: the same with your own stylesheet, which goes in `<head>` as `<style id="splash-css">`. Build on the defaults with `splash.BASE_CSS + mine`, or pass `""` for no CSS.
 - `BASE_CSS`: the default stylesheet. It gives readable system type, a centered column, plain buttons and inputs, works in light and dark mode, and shows a "reconnecting…" badge while the server is away.
@@ -87,6 +89,52 @@ The stylesheet is live, like the view. Under `duck run --live`, change a color a
 tabs restyle at their next refresh with no reload. A refresh only gets the page back when the view
 *or* the CSS changed. Use a raw string (`r"""…"""`) for CSS, so its braces aren't read as
 interpolation. A `<style>` inside the view works too, but it's sent with every changed view.
+
+## Pages, linked stylesheets and static files
+
+A `Page` is everything about a page apart from its view: its title, CSS, links and refresh interval.
+
+```duck
+fn read_static(name: str): str? uses fs = match fs.read("static/{name}") {
+  ok(text) => some(text)
+  err(_) => none
+}
+
+fn handle(req: http.server.Req): http.Resp uses fs {
+  match splash.static(req, f => read_static(f)) {     // /static/… files
+    some(r) => return r
+    none => {}
+  }
+  let look = splash.titled("my site")
+    .with_css(splash.BASE_CSS + MINE)
+    .with_link(splash.asset("site.css", read_static("site.css") else ""))   // /static/site.css?v=…
+    .with_link("https://cdn.example/lib.css")
+  splash.answer(req, look, render())
+}
+```
+
+- **`static(req, read)`** serves `/static/<name>` using your `read` function, so `splash` itself
+  never touches the file system and needs no `fs` effect. Unsafe names (`..`, a leading `/`, an
+  empty segment) get 403, missing files 404. Files are text only (CSS, JS, SVG, JSON, HTML), since
+  `http` bodies are text.
+- **`asset(name, text)`** is the file's URL with a content hash (`?v=…`). Versioned URLs are cached
+  for good. Because you build the page on every request, an edited file gets a new URL, and open
+  pages switch to it at their next refresh. That's live CSS from a plain `.css` file, without
+  `duck run --live` even noticing.
+- **Links are live too:** adding, dropping or re-versioning a link reaches open pages without a
+  reload.
+
+## Lists that reorder
+
+When a view changes, the page is patched node by node. Children with a `splash-key` (or an `id`)
+are matched by key wherever they moved; the rest are matched by position. Give list items keys:
+
+```duck
+"<ul>{items.map(i => "<li splash-key=\"{i.id}\">{splash.escape(i.name)}</li>").join("")}</ul>"
+```
+
+Then inserting at the top moves the existing rows instead of rewriting every one, so an input or
+an open `<details>` inside a row stays with its row.
 
 ## How it works
 - **Refreshes.** Every `every` ms the page fetches its own URL in the background, sending

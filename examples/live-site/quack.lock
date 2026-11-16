@@ -30,10 +30,10 @@ checksum = "sha256:3f057b03d07b60c54e6f07593e51525f1fd52d12b0c0722e8f50be03601f5
 
 [[package]]
 name = "splash"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry"
 effects = ["net"]
-checksum = "sha256:606f6ccd9e4bc5044d7dd545345003c4076969b97049322536095da4f528f101"
+checksum = "sha256:e97efbb3ac35b1765858866fd6e456b156770e54d22692ba4ff0898a61620945"
 
 [[package]]
 name = "sup"

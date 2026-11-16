@@ -1,7 +1,7 @@
 [package]
 name = "live_site"
 version = "0.1.0"
-effects = ["net", "time", "env"]
+effects = ["net", "time", "env", "fs"]
 
 [deps]
 http = "^0.1"

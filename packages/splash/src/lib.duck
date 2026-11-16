@@ -82,27 +82,70 @@ fn same_origin(req: http.server.Req): bool {
 /// Is `req` a visit: not a refresh, not an event?
 pub fn is_visit(req: http.server.Req): bool = !is_poll(req) && event(req) is none
 
-/// The answer to any request for a live page: the whole page for a visit or an event, and for a
-/// refresh either the page or, when neither the view nor the CSS changed since the page last saw
-/// them, a bare 204 (an idle tab costs a few bytes per poll). Styled with `BASE_CSS`.
-pub fn reply(req: http.server.Req, title: str, view: str): http.Resp =
-  reply_styled(req, title, BASE_CSS, view)
+/// How a page looks, apart from its view: its title, its stylesheet (in `<head>`), the
+/// stylesheets it links, and how often it refreshes. Build one with `titled` and the `with_*`
+/// functions: `splash.titled("my site").with_css(CSS).with_link(splash.asset("site.css", text))`.
+pub struct Page { title: str, css: str, links: [str], every: int }
 
-/// `reply` with your own stylesheet `css` (see `styled`).
-pub fn reply_styled(req: http.server.Req, title: str, css: str, view: str): http.Resp {
-  let h = fingerprint(css, view)
+/// A page titled `title`, styled with `BASE_CSS`, linking nothing, refreshing every `EVERY` ms.
+pub fn titled(title: str): Page = Page { title, css: BASE_CSS, links: [], every: EVERY }
+
+/// The same page with the stylesheet `css` instead (`BASE_CSS + mine` to build on the defaults,
+/// "" for none). It is live: change it, and open pages restyle at their next refresh.
+pub fn with_css(p: Page, css: str): Page = Page { css, ..p }
+
+/// The same page, also linking the stylesheet at `href` (`<link rel="stylesheet">`, after the
+/// others). Links are live too: add, drop or re-version one, and open pages follow.
+pub fn with_link(p: Page, href: str): Page = Page { links: p.links + [href], ..p }
+
+/// The same page, refreshing every `every` ms.
+pub fn with_every(p: Page, every: int): Page = Page { every, ..p }
+
+/// The answer to any request for a live page `p` showing `view`: the whole page for a visit or an
+/// event, and for a refresh either the page or, when nothing on it changed since the page last
+/// saw it, a bare 204 (an idle tab costs a few bytes per poll).
+pub fn answer(req: http.server.Req, p: Page, view: str): http.Resp {
+  let h = fingerprint(p, view)
   if is_poll(req) && req.headers.get("x-splash-hash") == some(h) {
     return http.Resp { status: 204, headers: {"x-splash-hash": h}, body: "" }
   }
   http.Resp {
     status: 200,
     headers: {"content-type": "text/html; charset=utf-8", "x-splash-hash": h},
-    body: styled(title, css, view),
+    body: render(p, view),
   }
 }
 
+/// The whole HTML of page `p` showing `view`.
+pub fn render(p: Page, view: str): str {
+  let links = p.links.map(
+    l => "<link rel=\"stylesheet\" href=\"{escape(l)}\" data-splash>",
+  ).join("")
+  """
+  <!doctype html>
+  <html>
+  <head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>{escape(p.title)}</title>
+  {links}<style id="splash-css">{p.css}</style>
+  </head>
+  <body>
+  <main id="splash">{view}</main>
+  {boot(p.every, fingerprint(p, view))}
+  </body>
+  </html>
+  """
+}
+
+/// `answer` for a page titled `title`, styled with `BASE_CSS`.
+pub fn reply(req: http.server.Req, title: str, view: str): http.Resp =
+  answer(req, titled(title), view)
+
+/// `reply` with your own stylesheet `css`.
+pub fn reply_styled(req: http.server.Req, title: str, css: str, view: str): http.Resp =
+  answer(req, titled(title).with_css(css), view)
+
 /// A 200 response with `page(title, view)`.
-pub fn respond(title: str, view: str): http.Resp = reply_styled(no_poll(), title, BASE_CSS, view)
+pub fn respond(title: str, view: str): http.Resp = answer(no_poll(), titled(title), view)
 
 /// Serves live pages on `port` (every interface) forever: `view(req)` renders each one (its
 /// HTML; handle `event(req)` in it), and `title` names them.
@@ -112,30 +155,83 @@ pub async fn serve(port: int, title: str, view: (http.server.Req) => str): ()! u
 
 /// A whole HTML page showing `view` (HTML), titled `title`, that keeps itself current. Styled
 /// with `BASE_CSS`.
-pub fn page(title: str, view: str): str = styled_every(title, BASE_CSS, view, EVERY)
+pub fn page(title: str, view: str): str = render(titled(title), view)
 
 /// `page`, asking for a fresh view every `every` ms.
 pub fn page_every(title: str, view: str, every: int): str =
-  styled_every(title, BASE_CSS, view, every)
+  render(titled(title).with_every(every), view)
 
 /// `page` with the stylesheet `css` (in `<head>`, as `<style id="splash-css">`; "" for none).
-/// It is live too: change it, and open pages restyle at their next refresh.
-pub fn styled(title: str, css: str, view: str): str = styled_every(title, css, view, EVERY)
+pub fn styled(title: str, css: str, view: str): str = render(titled(title).with_css(css), view)
 
 /// `styled`, asking for a fresh view every `every` ms.
-pub fn styled_every(title: str, css: str, view: str, every: int): str = """
-  <!doctype html>
-  <html>
-  <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>{escape(title)}</title>
-  <style id="splash-css">{css}</style>
-  </head>
-  <body>
-  <main id="splash">{view}</main>
-  {boot(every, fingerprint(css, view))}
-  </body>
-  </html>
-  """
+pub fn styled_every(title: str, css: str, view: str, every: int): str =
+  render(titled(title).with_css(css).with_every(every), view)
+
+// ---- static files ----
+
+/// Where `static` serves files, and `asset` links them.
+pub let STATIC = "/static/"
+
+/// The answer to a request for a static file (`/static/<name>`), or none for any other request:
+/// `read(name)` gives the file's text (none: 404). splash reads nothing itself (it has no `fs`
+/// effect), so you pass the reading in: `splash.static(req, f => read_static(f))`, with
+/// `fn read_static(name: str): str? uses fs` reading `static/{name}` (none if it can't).
+/// Names with `..`, a leading `/`, a `\\` or an empty segment are refused (403). Text files
+/// only (`http` bodies are text): CSS, JS, SVG, JSON, HTML, plain text. A request with `?v=`
+/// (from `asset`) may be cached for good; any other must be checked again each time.
+pub fn static(req: http.server.Req, read: (str) => str?): http.Resp? {
+  if !req.path.starts_with(STATIC) { return none }
+  let name = req.path[STATIC.len()..req.path.len()]
+  if !safe_name(name) {
+    return some(http.Resp {
+      status: 403,
+      headers: {"content-type": "text/plain"},
+      body: "forbidden",
+    })
+  }
+  let text = read(name) else return some(http.Resp {
+    status: 404,
+    headers: {"content-type": "text/plain"},
+    body: "not found",
+  })
+  let cache = if req.query.contains("v=") {
+    "public, max-age=31536000, immutable"
+  } else {
+    "no-cache"
+  }
+  some(http.Resp {
+    status: 200,
+    headers: {"content-type": content_type(name), "cache-control": cache},
+    body: text,
+  })
+}
+
+/// The URL of static file `name` whose text is `text`, versioned by its content
+/// (`/static/site.css?v=…`): link it on every render, and an edited file gets a new URL, so
+/// open pages fetch it again (live), while an unchanged one stays cached.
+pub fn asset(name: str, text: str): str = "{STATIC}{name}?v={short_hash(text)}"
+
+fn safe_name(name: str): bool = name != "" &&
+  !name.starts_with("/") &&
+  !name.contains("\\") &&
+  !name.split("/").any(s => s == "" || s == "." || s == "..")
+
+fn content_type(name: str): str {
+  let ext = (name.split(".").last() else "").lower()
+  match ext {
+    "css" => "text/css; charset=utf-8"
+    "js" => "text/javascript; charset=utf-8"
+    "mjs" => "text/javascript; charset=utf-8"
+    "json" => "application/json"
+    "svg" => "image/svg+xml"
+    "html" => "text/html; charset=utf-8"
+    "txt" => "text/plain; charset=utf-8"
+    _ => "application/octet-stream"
+  }
+}
+
+fn short_hash(s: str): str = "{hash.fnv1a64(s.bytes()) & 0xffffffff}"
 
 /// The page's script on its own, for a page built by hand: the live part must be the element
 /// with `id="splash"`.
@@ -149,9 +245,9 @@ pub fn escape(s: str): str = s
   .replace("\"", "&quot;")
   .replace("'", "&#39;")
 
-/// What a page reports to say which view (and stylesheet) it shows.
-fn fingerprint(css: str, view: str): str =
-  "{hash.fnv1a64(css.bytes())}-{hash.fnv1a64(view.bytes())}"
+/// What a page reports to say what it shows (its view, stylesheet and links).
+fn fingerprint(p: Page, view: str): str =
+  "{hash.fnv1a64((p.css + p.links.join("\n")).bytes())}-{hash.fnv1a64(view.bytes())}"
 
 /// A request that is not a refresh (for `respond`).
 fn no_poll(): http.server.Req =
@@ -175,10 +271,22 @@ let CLIENT = r"""
       if (a.nodeType !== 1) return;
       for (const { name } of [...a.attributes]) if (!b.hasAttribute(name)) a.removeAttribute(name);
       for (const { name, value } of [...b.attributes]) if (a.getAttribute(name) !== value) a.setAttribute(name, value);
-      const ac = [...a.childNodes], bc = [...b.childNodes];
-      bc.forEach((n, i) => { if (i < ac.length) morph(ac[i], n); else a.appendChild(n.cloneNode(true)); });
-      for (let i = bc.length; i < ac.length; i++) ac[i].remove();
+      // children: keyed ones (`splash-key`, or `id`) are matched by key, wherever they moved;
+      // the rest by position
+      const keyed = new Map();
+      for (const c of a.childNodes) { const k = key(c); if (k !== null) keyed.set(k, c); }
+      let i = 0;
+      for (const n of [...b.childNodes]) {
+        const cur = a.childNodes[i] || null, k = key(n);
+        const match = k !== null ? keyed.get(k) : (cur && key(cur) === null ? cur : null);
+        if (k !== null) keyed.delete(k);
+        if (match) { if (match !== cur) a.insertBefore(match, cur); morph(match, n); }
+        else a.insertBefore(n.cloneNode(true), cur);
+        i++;
+      }
+      while (a.childNodes.length > i) a.lastChild.remove();
     };
+    const key = (n) => n.nodeType === 1 ? n.getAttribute("splash-key") ?? (n.id || null) : null;
     // `el`: the element that sent an event, marked `splash-loading` until the answer is in
     const send = async (kind, body, el) => {
       const my = ++sent;
@@ -195,6 +303,13 @@ let CLIENT = r"""
         const doc = new DOMParser().parseFromString(await r.text(), "text/html");
         const now = document.getElementById("splash"), next = doc.getElementById("splash");
         if (now && next) { morph(now, next); hash = r.headers.get("x-splash-hash") || ""; }
+        // linked stylesheets: follow the new page's list (an edited asset has a new ?v=)
+        const hrefs = (d) => [...d.querySelectorAll("link[data-splash]")].map((l) => l.getAttribute("href"));
+        if (hrefs(document).join("\n") !== hrefs(doc).join("\n")) {
+          const css = document.getElementById("splash-css");
+          for (const l of document.querySelectorAll("link[data-splash]")) l.remove();
+          for (const l of doc.querySelectorAll("link[data-splash]")) document.head.insertBefore(l.cloneNode(true), css);
+        }
         const cs = document.getElementById("splash-css"), ns = doc.getElementById("splash-css");
         if (ns && !cs) document.head.appendChild(ns.cloneNode(true));
         else if (cs && !ns) cs.remove();
@@ -265,7 +380,7 @@ test "a page wraps the view in the live element and runs the client" {
   let p = page("Home & away", "<p>hi</p>")
   assert p.contains("<main id=\"splash\"><p>hi</p></main>")
   assert p.contains("<title>Home &amp; away</title>")
-  assert p.contains("const splashEvery = 500, splashHash = \"{fingerprint(BASE_CSS, "<p>hi</p>")}\";")
+  assert p.contains("const splashEvery = 500, splashHash = \"{fingerprint(titled("x"), "<p>hi</p>")}\";")
   assert p.contains("<style id=\"splash-css\">{BASE_CSS}</style>")
   assert p.contains("[splash-click]") && p.contains("[splash-submit]")
 }
@@ -345,6 +460,67 @@ test "reply: a CSS change alone is a change (no 204)" {
   let poll = get({"x-splash": "poll", "x-splash-hash": h})
   assert reply_styled(poll, "t", "a {{}}", "<b>x</b>").status == 204
   assert reply_styled(poll, "t", "b {{}}", "<b>x</b>").status == 200
+}
+
+test "a Page: title, css, links, interval" {
+  let p = titled("Shop")
+    .with_css("b {{}}")
+    .with_link("/static/a.css?v=1")
+    .with_link("https://x/b.css")
+    .with_every(900)
+  let h = render(p, "<p>v</p>")
+  assert h.contains("<link rel=\"stylesheet\" href=\"/static/a.css?v=1\" data-splash><link rel=\"stylesheet\" href=\"https://x/b.css\" data-splash>")
+  assert h.contains("<style id=\"splash-css\">b {{}}</style>")
+  assert h.contains("const splashEvery = 900,")
+  assert h.contains("<title>Shop</title>")
+}
+
+test "a changed link is a change (no 204)" {
+  let p = titled("t").with_link(asset("a.css", "one"))
+  let h = answer(get({}), p, "v").headers["x-splash-hash"]
+  let poll = get({"x-splash": "poll", "x-splash-hash": h})
+  assert answer(poll, p, "v").status == 204
+  assert answer(poll, titled("t").with_link(asset("a.css", "two")), "v").status == 200
+}
+
+fn files(name: str): str? = match name {
+  "site.css" => some("body {{}}")
+  "js/app.js" => some("go()")
+  _ => none
+}
+
+fn at(path: str, query: str): http.server.Req =
+  http.server.Req { method: "GET", target: path, path, query, headers: {}, body: "" }
+
+test "static files: served, typed, cached when versioned" {
+  let r = static(at("/static/site.css", "v=12"), files) else return fail("not served")
+  assert r.status == 200 && r.body == "body {{}}"
+  assert r.headers["content-type"] == "text/css; charset=utf-8"
+  assert r.headers["cache-control"].contains("immutable")
+  let j = static(at("/static/js/app.js", ""), files) else return fail("not served")
+  assert j.headers["content-type"] == "text/javascript; charset=utf-8"
+  assert j.headers["cache-control"] == "no-cache"
+}
+
+test "static files: 404, 403, and other paths are not static" {
+  assert static(at("/static/nope.css", ""), files)?.status == some(404)
+  for bad in [
+    "/static/../secret",
+    "/static//etc/passwd",
+    "/static/a/../../x",
+    "/static/",
+    "/static/a\\b",
+  ] {
+    assert static(at(bad, ""), files)?.status == some(403)
+  }
+  assert static(at("/", ""), files) is none
+  assert static(at("/staticfile", ""), files) is none
+}
+
+test "asset URLs change with the content" {
+  assert asset("a.css", "x").starts_with("/static/a.css?v=")
+  assert asset("a.css", "x") == asset("a.css", "x")
+  assert asset("a.css", "x") != asset("a.css", "y")
 }
 
 test "respond is a 200 HTML page" {
