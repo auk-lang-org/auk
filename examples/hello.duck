@@ -1,0 +1,5 @@
+/// The smallest Duck program.
+
+fn main() {
+  print("Hello from Duck!")
+}

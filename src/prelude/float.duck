@@ -1,0 +1,4 @@
+/// `float.parse`.
+
+/// Decimal and exponent forms, plus `inf` and `nan`.
+pub extern fn parse(s: str): float! = "duck_float_parse"

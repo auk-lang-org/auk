@@ -1,0 +1,7 @@
+[package]
+name = "log"
+version = "0.1.0"
+effects = []
+
+[deps]
+json = "^0.1"

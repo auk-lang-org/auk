@@ -1,0 +1,10 @@
+def test_hidden_top_n():
+    items = [Item("pen", 2, 10), Item("ink", 30, 1), Item("pad", 5, 2)]
+    assert top_n(items, 2) == ["ink", "pen"]
+    assert top_n(items, 0) == []
+    assert top_n(items, 10) == ["ink", "pen", "pad"]
+    assert top_n([], 3) == []
+    ties = [Item("b", 5, 2), Item("a", 10, 1), Item("c", 1, 10), Item("z", 100, 0), Item("d", 11, 1)]
+    assert top_n(ties, 3) == ["d", "a", "b"]
+    assert top_n(ties, 5) == ["d", "a", "b", "c"]
+    assert top_n([Item("free", 0, 3), Item("gone", 9, 0)], 5) == ["free"]

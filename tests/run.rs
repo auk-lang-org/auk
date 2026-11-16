@@ -1,0 +1,937 @@
+//! The back end end to end: programs are compiled to C, linked with the runtime and run.
+//!
+//! - every `examples` program with a `main` runs and prints its expected output (a `.out`
+//!   file, or fixtures supplied here: a text file for `wc`, a CSV for `csv_stats`, a temp dir for
+//!   `todo`, a local HTTP listener for `fetch`);
+//! - `duck test` passes for every example with tests (except `hatch.duck`, whose holes must fail
+//!   its tests) and for every package, one file at a time and as a flat directory;
+//! - leak checks (`DUCK_LEAK_CHECK`), a sanitizer run, and codegen edge cases;
+//! - every `tests/errors` program fails `duck check` with the code in its header;
+//! - `duck spec` prints docs/spec.md.
+
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::sync::Once;
+use std::{env, fs, thread};
+
+fn duck_cmd() -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_duck"));
+    c.env_remove("DUCK_CFLAGS").env_remove("DUCK_LEAK_CHECK");
+    c
+}
+
+fn duck(args: &[&str]) -> Output {
+    duck_cmd().args(args).output().unwrap()
+}
+
+fn text(o: &Output) -> (String, String) {
+    (String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
+}
+
+/// `quack install` in `dir` (regenerating a stale lock, as tests/check.rs does).
+fn install(dir: &str) {
+    let run = || Command::new(env!("CARGO_BIN_EXE_quack")).arg("install").current_dir(dir).output().unwrap();
+    if !run().status.success() {
+        let _ = fs::remove_file(Path::new(dir).join("quack.lock"));
+        let _ = fs::remove_dir_all(Path::new(dir).join(".quack"));
+        let out = run();
+        assert!(out.status.success(), "quack install in {dir} failed:\n{}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
+fn setup() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        install("examples");
+        install("packages/http");
+        install("packages/url");
+        install("packages/log");
+    });
+}
+
+fn scratch(name: &str) -> PathBuf {
+    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("run").join(name);
+    let _ = fs::remove_dir_all(&d);
+    fs::create_dir_all(&d).unwrap();
+    d
+}
+
+fn abs(p: &str) -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(p).display().to_string()
+}
+
+fn run_ok(args: &[&str]) -> String {
+    let o = duck(args);
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "duck {args:?} failed ({:?}):\n{out}\n{err}", o.status.code());
+    out
+}
+
+// ---- examples with a main ----
+
+/// Examples with a `.out` file: deterministic programs that need no input.
+#[test]
+fn examples_with_expected_output() {
+    setup();
+    let mut n = 0;
+    for e in fs::read_dir("examples").unwrap() {
+        let p = e.unwrap().path();
+        if p.extension().is_none_or(|x| x != "duck") || !p.with_extension("out").is_file() {
+            continue;
+        }
+        let want = fs::read_to_string(p.with_extension("out")).unwrap();
+        let got = run_ok(&["run", p.to_str().unwrap()]);
+        assert_eq!(got, want, "output mismatch for {}", p.display());
+        n += 1;
+    }
+    assert!(n >= 5, "expected fib, hello, inventory, life and tour .out files");
+}
+
+#[test]
+fn wc_counts_words_in_a_file() {
+    setup();
+    let out = run_ok(&["run", "examples/wc.duck", "tests/fixtures/words.txt"]);
+    assert_eq!(
+        out,
+        " 1. the             5\n 2. quack           3\n 3. fox             2\n 4. dog             2\n 5. a               2\n 6. quick           1\n 7. brown           1\n 8. jumps           1\n 9. over            1\n10. lazy            1\n"
+    );
+    let o = duck(&["run", "examples/wc.duck"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(text(&o).0, "usage: wc <file>\n");
+    let o = duck(&["run", "examples/wc.duck", "tests/fixtures/no-such-file.txt"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(text(&o).1.starts_with("error: "), "{}", text(&o).1);
+}
+
+/// `duck run examples/grep.duck <pattern>` with `input` piped to stdin, under the leak check.
+fn grep(args: &[&str], input: &str) -> Output {
+    let mut c = duck_cmd()
+        .args(["run", "examples/grep.duck"])
+        .args(args)
+        .env("DUCK_LEAK_CHECK", "1")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    c.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    c.wait_with_output().unwrap()
+}
+
+#[test]
+fn grep_filters_stdin_with_line_numbers() {
+    setup();
+    let o = grep(&["duck"], "a duck\nno\r\n\nducks quack\nend");
+    assert_eq!(o.status.code(), Some(0), "{:?}", text(&o));
+    assert_eq!(text(&o), ("1: a duck\n4: ducks quack\n".to_string(), String::new()));
+    let o = grep(&["swan"], "a duck\n");
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(text(&o), (String::new(), String::new()));
+    let o = grep(&[], "");
+    assert_eq!(o.status.code(), Some(2));
+    assert_eq!(text(&o), (String::new(), "usage: grep <pattern>\n".to_string()));
+}
+
+#[test]
+fn csv_stats_summarizes_a_column() {
+    setup();
+    let out = run_ok(&["run", "examples/csv_stats.duck", "tests/fixtures/stats.csv", "price"]);
+    assert_eq!(out, "n=4 mean=3.65 min=0.1 max=12.75 sd=5.282\n");
+    let out = run_ok(&["run", "examples/csv_stats.duck", "tests/fixtures/stats.csv", "qty"]);
+    assert_eq!(out, "n=4 mean=5.25 min=1.0 max=10.0 sd=3.491\n");
+    let o = duck(&["run", "examples/csv_stats.duck", "tests/fixtures/stats.csv", "nope"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(text(&o).1, "error: no column nope\n");
+}
+
+#[test]
+fn todo_keeps_a_json_file() {
+    setup();
+    let dir = scratch("todo");
+    let todo = abs("examples/todo.duck");
+    let go = |args: &[&str]| {
+        let o = duck_cmd().arg("run").arg(&todo).args(args).current_dir(&dir).output().unwrap();
+        (o.status.code(), text(&o).0, text(&o).1)
+    };
+    assert_eq!(go(&["add", "buy", "milk"]).0, Some(0));
+    assert_eq!(go(&["add", "walk", "the", "duck"]).0, Some(0));
+    assert_eq!(go(&["done", "1"]).0, Some(0));
+    assert_eq!(go(&["ls"]), (Some(0), "x 1. buy milk\n  2. walk the duck\n".into(), String::new()));
+    assert_eq!(
+        fs::read_to_string(dir.join("todos.json")).unwrap(),
+        r#"[{"done":true,"id":1,"text":"buy milk"},{"done":false,"id":2,"text":"walk the duck"}]"#
+    );
+    assert_eq!(go(&["done", "9"]), (Some(1), String::new(), "error: no todo #9\n".into()));
+    assert_eq!(go(&["done", "x"]), (Some(1), String::new(), "error: not a number: x\n".into()));
+    assert_eq!(go(&[]), (Some(1), String::new(), "error: usage: todo add|done|ls\n".into()));
+}
+
+/// A tiny HTTP server on 127.0.0.1: `/ok` is 200, anything else 404. Serves `n` connections.
+fn serve(n: usize) -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    thread::spawn(move || {
+        for s in l.incoming().take(n) {
+            let Ok(mut s) = s else { continue };
+            let mut req = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                match s.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(k) => req.extend_from_slice(&buf[..k]),
+                }
+            }
+            let line = String::from_utf8_lossy(&req).lines().next().unwrap_or("").to_string();
+            let (status, body) = if line.starts_with("GET /ok ") { ("200 OK", "hello") } else { ("404 Not Found", "nope") };
+            let resp = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let _ = s.write_all(resp.as_bytes());
+        }
+    });
+    port
+}
+
+#[test]
+fn fetch_checks_urls_concurrently() {
+    setup();
+    let port = serve(2);
+    // a port nothing listens on
+    let closed = {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let ok = format!("http://127.0.0.1:{port}/ok");
+    let missing = format!("http://127.0.0.1:{port}/missing");
+    let refused = format!("http://127.0.0.1:{closed}/x");
+    let o = duck(&["run", "examples/fetch.duck", &ok, &missing, &refused]);
+    let (out, err) = text(&o);
+    assert_eq!(o.status.code(), Some(1), "{out}\n{err}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 3, "{out}");
+    assert!(lines[0].starts_with("✓ 200 ") && lines[0].ends_with(&format!("ms {ok}")), "{out}");
+    assert_eq!(lines[1], format!("✗ 404 {missing}"));
+    assert!(lines[2].starts_with("✗ ERR "), "{out}");
+    // all good: exit 0
+    let port = serve(1);
+    let ok = format!("http://127.0.0.1:{port}/ok");
+    let o = duck(&["run", "examples/fetch.duck", &ok]);
+    assert_eq!(o.status.code(), Some(0), "{:?}", text(&o));
+}
+
+// ---- duck test ----
+
+#[test]
+fn example_tests_pass() {
+    setup();
+    let mut n = 0;
+    for name in ["bank", "calc", "fib", "physics", "router", "tour"] {
+        let out = run_ok(&["test", &format!("examples/{name}.duck")]);
+        assert!(out.ends_with(" passed, 0 failed\n") && !out.contains("FAIL"), "{name}:\n{out}");
+        n += 1;
+    }
+    assert_eq!(n, 6);
+}
+
+#[test]
+fn hatch_tests_fail_on_unfilled_holes() {
+    setup();
+    let o = duck(&["test", "examples/hatch.duck"]);
+    let (out, _) = text(&o);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(out.ends_with("0 passed, 3 failed\n"), "{out}");
+    for t in ["median", "dedup", "seconds"] {
+        assert!(out.contains(&format!("FAIL {t}\n")), "{out}");
+    }
+    assert!(out.contains("panic: unfilled hole (expected float)\n      at examples/hatch.duck:"), "{out}");
+    assert!(out.contains("panic: unfilled hole (expected [int])"), "{out}");
+    assert!(out.contains("panic: unfilled hole (expected int!DurErr)"), "{out}");
+}
+
+/// `duck test` on a flat directory (no `src/lib.duck` or `src/main.duck`): every top-level file
+/// with tests is its own program, run in sorted order under a header, with a combined summary.
+#[test]
+fn test_command_runs_each_file_of_a_flat_dir() {
+    setup();
+    let o = duck(&["test", "examples"]);
+    let (out, err) = text(&o);
+    assert_eq!(o.status.code(), Some(1), "hatch's holes must fail the run:\n{out}\n{err}");
+    let headers: Vec<&str> = out.lines().filter(|l| l.starts_with("== ")).collect();
+    assert_eq!(
+        headers,
+        ["== bank.duck", "== calc.duck", "== fib.duck", "== hatch.duck", "== physics.duck", "== router.duck", "== tour.duck", "== 7 files: 6 passed, 3 failed"],
+        "{out}"
+    );
+    // each file's own report sits under its header; only hatch fails
+    let section = |name: &str| out.split(&format!("== {name}\n")).nth(1).unwrap().split("\n== ").next().unwrap().to_string();
+    for name in ["bank", "calc", "fib", "physics", "router", "tour"] {
+        let sec = section(&format!("{name}.duck"));
+        assert!(sec.ends_with(" passed, 0 failed") && !sec.contains("FAIL"), "{name}:\n{sec}");
+    }
+    let hatch = section("hatch.duck");
+    assert!(hatch.contains("FAIL median\n") && hatch.ends_with("0 passed, 3 failed"), "{hatch}");
+    // files without tests (hello, wc, ...) are skipped
+    assert!(!out.contains("hello.duck") && !err.contains("no `test` blocks"), "{out}\n{err}");
+    // a filter applies to every file
+    let out = run_ok(&["test", "examples", "calc"]);
+    assert!(out.contains("== calc.duck\nok calc\n1 passed, 0 failed\n"), "{out}");
+    assert!(out.ends_with("== 7 files: 1 passed, 0 failed\n"), "{out}");
+}
+
+#[test]
+fn package_tests_pass() {
+    setup();
+    // (package, minimum number of test blocks it has), so a silently skipped suite is caught.
+    let pkgs = [
+        ("json", 16), ("csv", 11), ("regex", 15), ("cli", 11), ("http", 31), ("encoding", 8),
+        ("hash", 8), ("datetime", 19), ("url", 13), ("toml", 23), ("log", 6), ("uuid", 8),
+        ("num", 15), ("text", 14), ("glob", 8), ("compress", 9), ("yaml", 14),
+    ];
+    for (pkg, min) in pkgs {
+        let out = run_ok(&["test", &format!("packages/{pkg}/src/lib.duck")]);
+        assert!(out.ends_with(" passed, 0 failed\n") && !out.contains("FAIL"), "{pkg}:\n{out}");
+        let passed: usize = out.lines().last().unwrap().split(' ').next().unwrap().parse().unwrap();
+        assert!(passed >= min, "{pkg}: only {passed} tests ran, expected at least {min}");
+    }
+}
+
+#[test]
+fn test_command_filters_and_takes_a_project_dir() {
+    setup();
+    let out = run_ok(&["test", "packages/regex/src/lib.duck", "captures"]);
+    assert_eq!(out, "ok captures\n1 passed, 0 failed\n");
+    let out = run_ok(&["test", "packages/csv"]);
+    assert!(out.ends_with("11 passed, 0 failed\n"), "{out}");
+    // dependencies' tests are excluded: http depends on json
+    let out = run_ok(&["test", "packages/http/src/lib.duck"]);
+    assert!(!out.contains("ok literals and whitespace"), "{out}");
+}
+
+// ---- leaks and sanitizers ----
+
+#[test]
+fn no_leaks_in_corpus_tests() {
+    setup();
+    for f in ["examples/calc.duck", "examples/bank.duck", "examples/router.duck", "examples/tour.duck", "packages/json/src/lib.duck", "packages/regex/src/lib.duck", "packages/csv/src/lib.duck", "packages/cli/src/lib.duck", "packages/http/src/lib.duck"] {
+        let o = duck_cmd().args(["test", f]).env("DUCK_LEAK_CHECK", "1").output().unwrap();
+        let (out, err) = text(&o);
+        assert!(o.status.success(), "{f} leaks or fails:\n{out}\n{err}");
+        assert!(!out.contains("leak:"), "{f}:\n{out}");
+    }
+}
+
+#[test]
+fn no_leaks_in_programs() {
+    setup();
+    for args in [
+        vec!["run", "examples/inventory.duck"],
+        vec!["run", "examples/life.duck"],
+        vec!["run", "examples/tour.duck"],
+        vec!["run", "examples/wc.duck", "tests/fixtures/words.txt"],
+        vec!["run", "examples/csv_stats.duck", "tests/fixtures/stats.csv", "price"],
+    ] {
+        let o = duck_cmd().args(&args).env("DUCK_LEAK_CHECK", "1").output().unwrap();
+        assert!(o.status.success(), "{args:?}: {:?}", text(&o));
+    }
+}
+
+/// Does clang build and run a program with these sanitizers here?
+fn sanitizers_work(flags: &str) -> bool {
+    let d = scratch("probe");
+    let src = d.join("p.c");
+    fs::write(&src, "#include <stdlib.h>\nint main(void) { char *p = malloc(4); p[0] = 1; int r = p[0] - 1; free(p); return r; }\n").unwrap();
+    let exe = d.join("p");
+    let clang = env::var("CLANG").unwrap_or_else(|_| "clang".into());
+    let ok = Command::new(clang).args(flags.split_whitespace()).arg(&src).arg("-o").arg(&exe).output().is_ok_and(|o| o.status.success());
+    ok && Command::new(&exe).status().is_ok_and(|s| s.success())
+}
+
+#[test]
+fn package_tests_under_sanitizers() {
+    setup();
+    let flags = "-fsanitize=address,undefined -fno-omit-frame-pointer -g";
+    if !sanitizers_work(flags) {
+        eprintln!("skipping: sanitizers unsupported by this toolchain");
+        return;
+    }
+    for pkg in ["json", "csv", "regex", "cli", "http", "encoding", "hash", "datetime", "url", "toml", "log", "uuid", "num", "text", "glob", "compress", "yaml"] {
+        let o = duck_cmd()
+            .args(["test", &format!("packages/{pkg}/src/lib.duck")])
+            .env("DUCK_CFLAGS", flags)
+            .env("ASAN_OPTIONS", "detect_leaks=0:abort_on_error=0")
+            .env("UBSAN_OPTIONS", "halt_on_error=1:print_stacktrace=1")
+            .output()
+            .unwrap();
+        let (out, err) = text(&o);
+        assert!(o.status.success() && out.ends_with(" 0 failed\n"), "{pkg} under sanitizers:\n{out}\n{err}");
+        assert!(!out.contains("runtime error") && !out.contains("AddressSanitizer"), "{pkg}:\n{out}");
+    }
+}
+
+/// The generated C compiles without warnings under `-Wall -Wno-unused`.
+#[test]
+fn generated_c_is_warning_free() {
+    setup();
+    let d = scratch("warnings");
+    let clang = env::var("CLANG").unwrap_or_else(|_| "clang".into());
+    for f in ["examples/calc.duck", "examples/fetch.duck", "examples/grep.duck", "examples/life.duck", "packages/json/src/lib.duck", "packages/csv/src/lib.duck", "packages/http/src/lib.duck"] {
+        let c = d.join("prog.c");
+        let o = duck_cmd().args(["test", f]).env("DUCK_KEEP_C", &c).output().unwrap();
+        assert!(o.status.success(), "{f}: {:?}", text(&o));
+        let o = Command::new(&clang).args(["-std=c11", "-Wall", "-Wno-unused", "-Werror", "-fsyntax-only", "-I", "runtime"]).arg(&c).output().unwrap();
+        assert!(o.status.success(), "{f}: warnings in the generated C:\n{}", text(&o).1);
+    }
+}
+
+// ---- codegen edge cases ----
+
+/// Write a program to a scratch file and `duck run` it with the leak checker on.
+fn run_src(name: &str, src: &str) -> Output {
+    let d = scratch(name);
+    let p = d.join(format!("{name}.duck"));
+    fs::write(&p, src).unwrap();
+    duck_cmd().arg("run").arg(&p).env("DUCK_LEAK_CHECK", "1").current_dir(&d).output().unwrap()
+}
+
+fn expect_out(name: &str, src: &str, want: &str) {
+    let o = run_src(name, src);
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{name} failed ({:?}):\n{out}\n{err}", o.status.code());
+    assert_eq!(out, want, "{name}: stderr:\n{err}");
+}
+
+fn expect_panic(name: &str, src: &str, msg: &str) {
+    let o = run_src(name, src);
+    let (out, err) = text(&o);
+    assert_eq!(o.status.code(), Some(101), "{name}: {out}\n{err}");
+    assert!(err.contains(msg), "{name}: expected {msg:?} in:\n{err}");
+}
+
+/// `x else y` / `x!` as the last expression of `T!`, `T?` and plain functions, with generic
+/// calls returning `T?` (`max`, `min`, `find`, `first`, `get`) and `T!` (with an `else e =>`).
+#[test]
+fn else_in_tail_position_infers_the_value_type() {
+    let f = "tests/fixtures/else_inference.duck";
+    let o = duck(&["check", f]);
+    let (out, err) = text(&o);
+    assert!(o.status.success() && out.is_empty() && err.is_empty(), "{out}\n{err}");
+    let o = duck_cmd().args(["run", f]).env("DUCK_LEAK_CHECK", "1").output().unwrap();
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{out}\n{err}");
+    assert_eq!(out, "9 2 19 a\n5 1 4\ntrue\nnth: short\n-1 7 0  7 7\n8 8\nshort\n2 1 0 - 0 0\n", "stderr:\n{err}");
+}
+
+#[test]
+fn cow_through_var_params() {
+    expect_out(
+        "cow",
+        "fn bump(xs: var [int]) { xs.push(99) }\nstruct Acc { xs: [int], n: int }\nfn add(a: var Acc, x: int) {\n  a.xs.push(x)\n  a.n += 1\n}\nfn main() {\n  let a = [1, 2]\n  var b = a\n  bump(&b)\n  print(\"{a} {b}\")\n  var acc = Acc { xs: a, n: 0 }\n  let snapshot = acc\n  acc.add(5)\n  add(&acc, 6)\n  print(\"{acc.xs} {acc.n} {snapshot.xs} {snapshot.n} {a}\")\n  var m = {\"k\": [1]}\n  let m2 = m\n  m[\"k\"] = [2]\n  print(\"{m} {m2}\")\n}\n",
+        "[1, 2] [1, 2, 99]\n[1, 2, 5, 6] 2 [1, 2] 0 [1, 2]\n{\"k\": [2]} {\"k\": [1]}\n",
+    );
+}
+
+#[test]
+fn closures_capture_values() {
+    expect_out(
+        "closures",
+        "fn adders(): [(int) => int] {\n  var out: [(int) => int] = []\n  for k in 1..=3 {\n    let base = k * 10\n    out.push(x => x + base)\n  }\n  out\n}\nfn twice(f: (int) => int, x: int): int = f(f(x))\nfn main() {\n  print(adders().map(f => f(1)))\n  var n = 5\n  let g = x => x * n\n  n = 100\n  print(g(2))\n  let pre = \"#\"\n  print([\"a\", \"b\"].map(s => pre + s).join(\",\"))\n  print(twice(x => x + 1, 0))\n  let pairs = [(1, \"one\"), (2, \"two\")]\n  print(pairs.map((i, s) => \"{s}={i}\"))\n}\n",
+        "[11, 21, 31]\n10\n#a,#b\n2\n[\"one=1\", \"two=2\"]\n",
+    );
+}
+
+#[test]
+fn nested_and_recursive_enums() {
+    expect_out(
+        "enums",
+        "enum Tree { Leaf(v: int), Node(l: Tree, r: Tree) }\nenum Wrap { A(t: Tree?), B(ws: [Wrap]) }\nstruct User { name: str, boss: User? }\nfn sum(Leaf(v)): int = v\nfn sum(Node(l, r)): int = sum(l) + sum(r)\nfn depth(Leaf(_)): int = 1\nfn depth(Node(l, r)): int = 1 + if depth(l) > depth(r) { depth(l) } else { depth(r) }\nfn main() {\n  let t = Node(Leaf(1), Node(Leaf(2), Leaf(3)))\n  print(\"{sum(t)} {depth(t)} {t}\")\n  print(B([A(some(t)), A(none)]))\n  print(t == Node(Leaf(1), Node(Leaf(2), Leaf(3))))\n  let u = User { name: \"ann\", boss: some(User { name: \"bob\", boss: none }) }\n  print(u.boss?.name else \"-\")\n  print(u.boss?.boss?.name else \"-\")\n  match t {\n    Node(Leaf(a), Node(b, _)) => print(\"{a} {b}\")\n    _ => print(\"?\")\n  }\n}\n",
+        "6 3 Node(Leaf(1), Node(Leaf(2), Leaf(3)))\nB([A(some(Node(Leaf(1), Node(Leaf(2), Leaf(3))))), A(none)])\ntrue\nbob\n-\n1 Leaf(2)\n",
+    );
+}
+
+#[test]
+fn err_payloads_match_after_conversion() {
+    expect_out(
+        "payloads",
+        "enum E { Bad(w: str), Worse }\nfn typed(n: int): int!E {\n  if n == 0 { fail(Bad(\"zero\")) }\n  if n < 0 { fail(Worse) }\n  n\n}\nfn plain(n: int): int! = typed(n)?\nfn show(r: int!): str = match r {\n  err(Bad(why)) => \"bad {why}\"\n  err(e) => \"other {e}\"\n  ok(n) => \"ok {n}\"\n}\nfn main() {\n  print(show(plain(0)))\n  print(show(plain(-1)))\n  print(show(plain(3)))\n  print(typed(-1) is err(Worse))\n  let v = typed(0) else e => match e { Bad(w) => w.len(), Worse => -1 }\n  print(v)\n  let m = plain(0) else e => -2\n  print(m)\n}\n",
+        "bad zero\nother Worse\nok 3\ntrue\n4\n-2\n",
+    );
+}
+
+#[test]
+fn overflow_traps() {
+    expect_panic("ovf_add", "fn main() {\n  var x = 9223372036854775800\n  for _ in 0..10 { x += 1 }\n  print(x)\n}\n", "panic: integer overflow in `+`\n  at ");
+    expect_panic("ovf_mul", "fn big(n: int): int = n * n\nfn main() { print(big(4_000_000_000)) }\n", "integer overflow in `*`");
+    expect_panic("div0", "fn d(a: int, b: int): int = a / b\nfn main() { print(d(1, 0)) }\n", "division by zero");
+    expect_out("wrap", "fn main() { print(9223372036854775807 +% 1) }\n", "-9223372036854775808\n");
+}
+
+#[test]
+fn self_tail_calls_are_loops() {
+    expect_out(
+        "tail",
+        "fn len([], acc: int): int = acc\nfn len([_, ..t]: [int], acc: int): int = len(t, acc + 1)\nfn sum(xs: [int], i: int, acc: int): int {\n  if i == xs.len() { return acc }\n  sum(xs, i + 1, acc + xs[i])\n}\nfn main() {\n  var xs: [int] = []\n  for i in 0..1_000_000 { xs.push(i) }\n  print(len(xs, 0))\n  print(sum(xs, 0, 0))\n}\n",
+        "1000000\n499999500000\n",
+    );
+}
+
+#[test]
+fn peek_prints_source_and_value() {
+    let o = run_src("peek", "fn main() {\n  let x = 21\n  let y = peek x * 2\n  peek \"s{y}\"\n  print(y)\n}\n");
+    let (out, err) = text(&o);
+    assert!(o.status.success(), "{err}");
+    assert_eq!(out, "42\n");
+    assert!(err.contains("peek.duck:3] x * 2 = 42\n"), "{err}");
+    assert!(err.contains("peek.duck:4] \"s{y}\" = s42\n"), "{err}");
+}
+
+#[test]
+fn contract_failures() {
+    expect_panic(
+        "requires",
+        "fn half(n: int): int\n  requires n % 2 == 0\n{ n / 2 }\nfn main() {\n  print(half(4))\n  print(half(3))\n}\n",
+        "panic: requires failed: n % 2 == 0\n  at ",
+    );
+    expect_panic("ensures", "fn bad(n: int): int\n  ensures result > n\n{ n }\nfn main() { print(bad(1)) }\n", "panic: ensures failed: result > n");
+    expect_panic(
+        "old",
+        "struct A { n: int }\nfn inc(a: var A)\n  ensures a.n == old(a.n) + 1\n{ a.n += 2 }\nfn main() {\n  var a = A { n: 1 }\n  inc(&a)\n}\n",
+        "ensures failed: a.n == old(a.n) + 1",
+    );
+    expect_panic("assert", "fn main() {\n  let xs = [1, 2]\n  assert xs == [1, 3]\n}\n", "assertion failed: xs == [1, 3]\n  left: [1, 2]\n  right: [1, 3]");
+    expect_panic("unwrap", "fn main() {\n  let xs: [int] = []\n  print(xs.first()!)\n}\n", "unwrapped `none`");
+}
+
+#[test]
+fn build_refuses_holes() {
+    let d = scratch("holes");
+    let p = d.join("h.duck");
+    fs::write(&p, "fn f(): int { ?? }\nfn main() { print(f()) }\n").unwrap();
+    let o = duck(&["build", p.to_str().unwrap(), "-o", d.join("h").to_str().unwrap()]);
+    let (_, err) = text(&o);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(err.contains("still has 1 unfilled hole(s)") && err.contains("h.duck:1:15: unfilled hole (expected int)"), "{err}");
+    assert!(!d.join("h").exists());
+    // run allows holes and panics when one is reached
+    let o = duck(&["run", p.to_str().unwrap()]);
+    assert_eq!(o.status.code(), Some(101));
+    assert!(text(&o).1.contains("panic: unfilled hole (expected int)"));
+    // a complete program builds and runs
+    fs::write(&p, "fn main(args: [str]): int {\n  print(\"args: {args.len()}\")\n  3\n}\n").unwrap();
+    let exe = d.join("ok");
+    run_ok(&["build", p.to_str().unwrap(), "-o", exe.to_str().unwrap()]);
+    let o = Command::new(&exe).arg("x").output().unwrap();
+    assert_eq!(o.status.code(), Some(3));
+    assert_eq!(text(&o).0, "args: 2\n");
+}
+
+#[test]
+fn async_tasks_and_any_shapes() {
+    expect_out(
+        "async",
+        "shape Area { fn area(self): float }\nstruct Sq { s: float }\nstruct Circ { r: float }\nfn area(q: Sq): float = q.s * q.s\nfn area(c: Circ): float = 3.0 * c.r * c.r\nasync fn slow(n: int): int uses time {\n  time.sleep(5)\n  n * 2\n}\nfn main() uses time {\n  let shapes: [any Area] = [Sq { s: 2.0 }, Circ { r: 1.0 }]\n  print(shapes.map(s => s.area()))\n  let (a, b) = await (slow(1), slow(2))\n  print(a + b)\n  let t = slow(10)\n  print(await t)\n  print(await [1, 2, 3].map(n => slow(n)))\n  print(await slow(7))\n}\n",
+        "[4.0, 3.0]\n6\n20\n[2, 4, 6]\n14\n",
+    );
+}
+
+#[test]
+fn control_flow_and_formatting() {
+    expect_out(
+        "flow",
+        "struct P { x: int, y: int, name: str }\nfn grade(n: int): str when n >= 90 = \"A\"\nfn grade(_: int): str = \"B\"\nfn main() {\n  var i = 0\n  let v = loop {\n    i += 1\n    if i * i > 50 { break i }\n  }\n  print(\"v={v} pi={3.14159:.2} [{\"ab\":>5}] [{42:05}] [{'x':^5}]\")\n  for k, n in {\"b\": 2, \"a\": 1} { print(\"{k}={n}\") }\n  let q = P { x: 9, ..P { x: 1, y: 2, name: \"p\" } }\n  print(q)\n  print(\"{grade(95)}{grade(10)}\")\n  var total = 0\n  for j in 0..10 {\n    if j % 2 == 0 { continue }\n    if j > 7 { break }\n    total += j\n  }\n  print(total)\n  let s = \"GET /users/42\"\n  match s {\n    \"GET /users/\" + id => print(\"user {id}\")\n    _ => print(\"?\")\n  }\n  print([3, 1, 2].sort().reverse())\n  print(\"a b a\".split().counts())\n}\n",
+        "v=8 pi=3.14 [   ab] [00042] [  x  ]\nb=2\na=1\nP { x: 9, y: 2, name: \"p\" }\nAB\n16\nuser 42\n[3, 2, 1]\n{\"a\": 2, \"b\": 1}\n",
+    );
+}
+
+/// Every kind of runtime binding in the prelude links and behaves (externs with element
+/// pointers, out-parameters, `+loc`, `var` containers, `T?`/`T!` results).
+#[test]
+fn runtime_bindings_link() {
+    expect_out(
+        "externs",
+        "fn main() uses rand, env, proc, time, fs {\n  let r = rand.int(1, 6)\n  print(r >= 1 && r <= 6)\n  print(rand.float() < 1.0)\n  print(env.get(\"PATH\") is some(_))\n  print(env.args().len() > 0)\n  print(proc.run(\"echo\", [\"hi\"])!.trim())\n  print(time.now() > 0)\n  print(str.from_utf8([104, 105])!)\n  print(int.parse(\"12\")! + 1)\n  print(float.parse(\"1.5\")!)\n  print(fs.write(\"x.txt\", \"a\\nb\")!)\n  print(fs.lines(\"x.txt\")!)\n  print(\"abc\".repeat(2).upper().find(\"C\"))\n  var xs = [1, 2, 3]\n  xs.insert(0, 9)\n  print(xs.remove(1))\n  print(xs.pop())\n  print(xs)\n  var m = {\"a\": 1}\n  print(m.remove(\"a\"))\n  print(m.get(\"a\"))\n  print(char(65))\n  print(3.7.floor() + abs(-2.0) + (-3).abs().float())\n  print(int(2.9) + int('a'))\n  var s = set([1, 2, 2])\n  s.insert(3)\n  print(s.to_list())\n}\n",
+        "true\ntrue\ntrue\ntrue\nhi\ntrue\nhi\n13\n1.5\n()\n[\"a\", \"b\"]\nsome(2)\n1\nsome(3)\n[9, 2]\nsome(1)\nnone\nsome('A')\n8.0\n99\n[1, 2, 3]\n",
+    );
+}
+
+// ---- compile-time imprints ----
+
+const IMPRINTS: &str = r#"struct Cfg { name: str, ratio: float, tags: [str], limit: int?, nick: str? }
+enum Op { Push(n: int), Pop, Jump(to: int, label: str) }
+enum Tree { Leaf(v: int), Node(l: Tree, r: Tree) }
+struct Emp { name: str, boss: Emp? }
+fn sieve(n: int): [int] {
+  var composite: [bool] = []
+  for _ in 0..=n { composite.push(false) }
+  var out: [int] = []
+  for i in 2..=n {
+    if !composite[i] {
+      out.push(i)
+      var j = i * i
+      while j <= n {
+        composite[j] = true
+        j += i
+      }
+    }
+  }
+  out
+}
+fn build(d: int): Tree = if d == 0 { Leaf(0) } else { Node(build(d - 1), Leaf(d)) }
+let BASE = 1000
+imprint COUNT = PRIMES.len() + BASE
+imprint PRIMES = sieve(200)
+imprint SQUARES = {"one": 1, "two": 4, "three": 9}
+imprint CFG = Cfg { name: "duck \"q\" é\n", ratio: 0.1, tags: ["a", "b"], limit: some(3), nick: none }
+imprint OPS = [Push(1), Pop, Jump(0, "start")]
+imprint TREE = build(2)
+imprint EMP = Emp { name: "a", boss: some(Emp { name: "b", boss: none }) }
+imprint FLOATS = [[1.5, -0.0, 1e300], []]
+imprint V = to_value(CFG)
+fn main() {
+  print(PRIMES.take(10))
+  print(PRIMES.last())
+  print(COUNT)
+  print(SQUARES)
+  print(CFG)
+  print(OPS)
+  print(TREE)
+  print(EMP)
+  print(FLOATS)
+  print(V)
+  var p = PRIMES
+  p.push(1)
+  var e = EMP
+  e.name = "z"
+  var m = SQUARES
+  m["four"] = 16
+  print("{p.len() - PRIMES.len()} {EMP.name} {SQUARES.len()}")
+}
+"#;
+
+#[test]
+fn imprints_are_computed_at_compile_time() {
+    expect_out(
+        "imprints",
+        IMPRINTS,
+        "[2, 3, 5, 7, 11, 13, 17, 19, 23, 29]\nsome(199)\n1046\n{\"one\": 1, \"two\": 4, \"three\": 9}\nCfg { name: \"duck \\\"q\\\" é\\n\", ratio: 0.1, tags: [\"a\", \"b\"], limit: some(3), nick: none }\n[Push(1), Pop, Jump(0, \"start\")]\nNode(Node(Leaf(0), Leaf(1)), Leaf(2))\nEmp { name: \"a\", boss: some(Emp { name: \"b\", boss: none }) }\n[[1.5, -0.0, 1e300], []]\n{\"name\": \"duck \\\"q\\\" é\\n\", \"ratio\": 0.1, \"tags\": [\"a\", \"b\"], \"limit\": 3, \"nick\": Null}\n1 a 3\n",
+    );
+    // the generated C holds the values, not the computation
+    let d = scratch("imprints_ir");
+    let p = d.join("imprints.duck");
+    fs::write(&p, IMPRINTS).unwrap();
+    let ir = run_ok(&["ir", p.to_str().unwrap()]);
+    assert!(ir.contains("INT64_C(193), INT64_C(197), INT64_C(199)}, 46)"), "the primes are a literal");
+    assert!(ir.contains("/* imprint PRIMES: its value, computed at compile time */"));
+    assert!(!ir.contains("_const_PRIMES(void)"), "no initializer function for an imprint");
+    assert!(!ir.contains("_sieve(INT64_C(200))"), "sieve(200) isn't called at run time");
+    assert!(ir.contains("INT64_C(1046)"), "an imprint using another imprint and a `let`");
+}
+
+#[test]
+fn imprint_errors() {
+    let compile_err = |name: &str, src: &str| -> String {
+        let o = run_src(name, src);
+        let (out, err) = text(&o);
+        assert_eq!(o.status.code(), Some(1), "{name}: {out}\n{err}");
+        err
+    };
+    // a panic while computing it, blamed on the imprint (also through another imprint)
+    let err = compile_err(
+        "imprint_panic",
+        "fn fact(n: int): int = if n == 0 { 1 } else { n * fact(n - 1) }\nimprint FACTS = (0..=25).map(n => fact(n))\nimprint N = FACTS.len()\nfn main() { print(N) }\n",
+    );
+    assert!(err.contains("imprint_panic.duck:2:9: error[E0420]: computing `imprint FACTS` at compile time panicked: integer overflow in `*`"), "{err}");
+    assert!(err.contains("note: the panic happened at ") && err.contains("imprint_panic.duck:1:"), "{err}");
+    let err = compile_err("imprint_index", "let XS = [1, 2]\nfn at(i: int): int = XS[i]\nimprint A = at(5)\nfn main() { print(A) }\n");
+    assert!(err.contains("error[E0420]: computing `imprint A` at compile time panicked: index 5 out of range"), "{err}");
+    // a cycle through a function
+    let err = compile_err("imprint_cycle", "fn f(): int = A + 1\nimprint A: int = f()\nfn main() { print(A) }\n");
+    assert!(err.contains("imprint_cycle.duck:2:9: error[E0115]: the constant `A` depends on itself"), "{err}");
+    // the type must be Data (reported by `duck check`)
+    let d = scratch("imprint_data");
+    let p = d.join("t.duck");
+    fs::write(&p, "imprint F = (x: int) => x + 1\nimprint T = (1, 2)\nimprint OK = [some(1), none]\nfn main() { print(F(1)) }\n").unwrap();
+    let o = duck(&["check", p.to_str().unwrap()]);
+    let err = text(&o).1;
+    assert_eq!(o.status.code(), Some(1));
+    assert!(err.contains("t.duck:1:9: error[E0350]: `(int) => int` doesn't fit the shape `Data`, which `imprint F` needs"), "{err}");
+    assert!(err.contains("t.duck:2:9: error[E0350]: `(int, int)` doesn't fit the shape `Data`"), "{err}");
+    assert_eq!(err.matches("error[").count(), 2, "{err}");
+}
+
+// ---- card #510 ----
+
+/// Writing through a boxed (recursive) field copies the box when another value shares it.
+#[test]
+fn cow_through_boxed_fields() {
+    expect_out(
+        "cow_boxed",
+        "struct A { v: int, b: B }\nstruct B { v: int, c: C, xs: [int] }\nstruct C { v: int, a: A? }\nstruct Emp { name: str, pay: int, boss: Boss }\nstruct Boss { name: str, pay: int, up: Emp? }\nfn raise(e: var Emp) { e.boss.pay += 100 }\nfn main() {\n  let x = A { v: 1, b: B { v: 2, c: C { v: 3, a: none }, xs: [1] } }\n  var y = x\n  y.b.c.v += 10\n  y.b.v = 20\n  y.b.xs.push(2)\n  y.b.xs[0] = 9\n  print(\"{x.b.v} {x.b.c.v} {x.b.xs} | {y.b.v} {y.b.c.v} {y.b.xs}\")\n  let e = Emp { name: \"ann\", pay: 1, boss: Boss { name: \"bob\", pay: 10, up: none } }\n  var f = e\n  f.boss.name = \"carl\"\n  raise(&f)\n  var g = f\n  g.boss.pay = 0\n  g.boss = Boss { name: \"dee\", pay: 5, up: some(e) }\n  print(\"{e.boss.name} {e.boss.pay} | {f.boss.name} {f.boss.pay} | {g.boss.name} {g.boss.pay}\")\n}\n",
+        "2 3 [1] | 20 13 [9, 2]\nbob 10 | carl 110 | dee 5\n",
+    );
+}
+
+/// `ensures` on a clause group is checked for whichever clause runs; self tail calls stay loops.
+#[test]
+fn ensures_on_clause_groups() {
+    // `sign(5)` runs the guarded clause (no `ensures`), not the last one
+    let src = "fn sign(0): int\n  ensures result == 0\n{ 0 }\nfn sign(n: int): int when n > 0 { 5 }\nfn sign(n: int): int\n  ensures result == 1\n{ -1 }\nfn main() {\n  print(sign(0))\n  print(sign(5))\n  print(sign(-5))\n}\n";
+    let o = run_src("ensures_clauses", src);
+    let (out, err) = text(&o);
+    assert_eq!(o.status.code(), Some(101), "{out}\n{err}");
+    assert_eq!(out, "0\n5\n");
+    assert!(err.contains("panic: ensures failed: result == 1\n  at ") && err.contains("ensures_clauses.duck:6:11"), "{err}");
+    let src = "fn len([], acc: int): int\n  ensures result == acc\n{ acc }\nfn len([_, ..t]: [int], acc: int): int\n  ensures result > acc\n{ len(t, acc + 1) }\nfn count(n: int, acc: int): int\n  requires n >= 0\n  ensures result == old(acc) + n\n{\n  if n == 0 { return acc }\n  count(n - 1, acc + 1)\n}\nfn grow(xs: var [int], n: int)\n  ensures xs.len() == old(xs.len()) + n\n{\n  if n > 0 {\n    xs.push(n)\n    grow(&xs, n - 1)\n  }\n}\nfn main() {\n  var xs: [int] = []\n  for i in 0..300000 { xs.push(i) }\n  print(len(xs, 0))\n  print(len([], 5))\n  print(count(1000000, 0))\n  var ys = [1]\n  grow(&ys, 3)\n  print(ys)\n}\n";
+    expect_out("ensures_tail", src, "300000\n5\n1000000\n[1, 3, 2, 1]\n");
+    let d = scratch("ensures_tail_ir");
+    let p = d.join("t.duck");
+    fs::write(&p, src).unwrap();
+    let ir = run_ok(&["ir", p.to_str().unwrap()]);
+    assert_eq!(ir.matches("goto dk_tail;").count(), 3, "every self tail call is a loop");
+    assert!(ir.contains("duck_ensures_fail("));
+    // a header's `ensures` covers every clause
+    expect_panic("ensures_header", "fn f(n: int): int\n  ensures result >= 0\nfn f(0): int = 0\nfn f(n: int): int = -n\nfn main() {\n  print(f(0))\n  print(f(3))\n}\n", "ensures failed: result >= 0");
+}
+
+/// Auto-wraps the checker records (shorthand struct fields, `if` without `else` and loops
+/// falling through in `()!` / `()?` functions) need no guessing in codegen.
+#[test]
+fn recorded_auto_wraps() {
+    expect_out(
+        "auto_wraps",
+        "struct P { x: int?, y: str!, name: str }\nfn check(n: int): ()! {\n  if n < 0 { fail(\"negative\") }\n}\nfn opt(n: int): ()? {\n  if n == 0 { return none }\n}\nfn run(n: int): ()! {\n  for i in 0..n { if i > 5 { fail(\"too many\") } }\n}\nfn main() {\n  let x = 3\n  let y = \"why\"\n  let name = \"p\"\n  let p = P { x, y, name }\n  print(\"{p.x} {p.y else \"-\"} {p.name}\")\n  print(\"{check(1) is ok(_)} {check(-1) is err(_)} {opt(0) is none} {opt(1) is some(_)}\")\n  print(\"{run(3) is ok(_)} {run(10) is err(_)}\")\n}\n",
+        "some(3) why p\ntrue true true true\ntrue true\n",
+    );
+}
+
+/// `x?.N`: optional chaining into a tuple element, on a `T?`, in a chain and with `else`
+/// (a `T?` element flattens). Also `?.m()` on an intrinsic method (`len`) of the element.
+#[test]
+fn optional_chaining_into_tuples() {
+    expect_out(
+        "opt_tuple",
+        r#"fn find(xs: [(str, int)], k: str): (str, int)? = xs.find((a, _) => a == k)
+fn main() {
+  let p: (int, str)? = some((1, "one"))
+  let q: (int, str)? = none
+  print("{p?.0} {p?.1} {q?.0} {q?.1}")
+  let xs = [("ab", 1), ("cde", 2)]
+  let ys: [(str, int)] = []
+  print("{xs.first()?.0?.len()} {ys.first()?.0?.len()} {xs.last()?.0?.len() else 0}")
+  print("{find(xs, "cde")?.1 else 0} {find(xs, "z")?.1 else 0}")
+  let nested: ((int, int), str)? = some(((4, 5), "n"))
+  print("{nested?.0?.1} {nested?.1?.len() else -1}")
+  let oo: (int?, str)? = some((none, "x"))
+  print("{oo?.0} {oo?.1} {oo?.0 else 9}")
+  let owned: ([int], str)? = some(([1, 2, 3], "o"))
+  let v = owned?.0 else []
+  print("{v} {owned?.0?.len()}")
+}
+"#,
+        "some(1) some(\"one\") none none\nsome(2) none 3\n2 0\nsome(5) 1\nnone some(\"x\") 9\n[1, 2, 3] some(3)\n",
+    );
+}
+
+/// Loops in tail position of `()!` / `()?` / `T!` / `T?` functions (directly, in `match` arms
+/// and `if` branches), with bare `break`, `break value`, and early `return`/`fail`. A bare
+/// `break` out of a `loop` whose value is `()!` once left the result zeroed (an `err`).
+#[test]
+fn tail_loops_in_result_functions() {
+    expect_out(
+        "tail_loops",
+        r#"fn l1(): ()! {
+  loop { break }
+}
+fn l2(): ()? {
+  loop { break }
+}
+fn l3(n: int): ()! {
+  var i = 0
+  loop {
+    if i == n { break }
+    if i > 5 { fail("big") }
+    i += 1
+  }
+}
+fn l4(n: int): ()? {
+  var i = 0
+  loop {
+    if i > 3 { return none }
+    if i == n { break }
+    i += 1
+  }
+}
+fn w1(n: int): ()! {
+  var i = 0
+  while i < n {
+    if i > 5 { fail("big") }
+    i += 1
+  }
+}
+fn w2(n: int): ()? {
+  var i = 0
+  while i < n {
+    if i > 5 { return none }
+    i += 1
+  }
+}
+fn f1(n: int): ()! {
+  for i in 0..n { if i > 5 { fail("big") } }
+}
+fn f2(n: int): ()? {
+  for i in 0..n { if i > 5 { return none } }
+}
+fn v1(n: int): int! {
+  var i = 0
+  loop {
+    if i > 5 { fail("big") }
+    if i == n { break i * 10 }
+    i += 1
+  }
+}
+fn v2(n: int): str? {
+  var i = 0
+  loop {
+    if i > 5 { return none }
+    if i == n { break "s{i}" }
+    i += 1
+  }
+}
+fn v3(n: int): int! {
+  for i in 0..10 { if i == n { return i } }
+  fail("none")
+}
+fn m1(n: int): ()! {
+  match n {
+    0 => loop { break },
+    1 => while false {},
+    2 => for _ in 0..3 {},
+    _ => fail("bad"),
+  }
+}
+fn m2(n: int): ()? {
+  match n {
+    0 => loop { break },
+    _ => loop { if n > 3 { return none } else { break } },
+  }
+}
+fn m3(n: int): int! {
+  match n {
+    0 => loop { break 7 },
+    _ => loop { if n > 3 { fail("big") } else { break n } },
+  }
+}
+fn i1(n: int): ()! {
+  if n == 0 { loop { break } } else if n == 1 { for _ in 0..2 {} } else { loop { if n > 2 { fail("x") }
+  break } }
+}
+fn i2(n: int): ()? {
+  if n == 0 { loop { break } } else { while true { if n > 1 { return none }
+  break } }
+}
+fn i3(n: int): int! {
+  if n == 0 { loop { break 1 } } else { loop { if n > 1 { fail("x") }
+  break 2 } }
+}
+fn ok(r: ()!): str {
+  match r {
+    ok(_) => "ok",
+    err(e) => "err({e})",
+  }
+}
+fn main() {
+  print("{ok(l1())} {l2() is some(_)}")
+  print("{ok(l3(2))} {ok(l3(9))} {l4(2) is some(_)} {l4(9) is none}")
+  print("{ok(w1(2))} {ok(w1(9))} {w2(2) is some(_)} {w2(9) is none}")
+  print("{ok(f1(2))} {ok(f1(9))} {f2(2) is some(_)} {f2(9) is none}")
+  print("{v1(2) else -1} {v1(9) else -1} {v2(3) else "-"} {v2(9) else "-"} {v3(4) else -1} {v3(40) else -1}")
+  print("{ok(m1(0))} {ok(m1(1))} {ok(m1(2))} {ok(m1(3))}")
+  print("{m2(0) is some(_)} {m2(1) is some(_)} {m2(5) is none}")
+  print("{m3(0) else -1} {m3(2) else -1} {m3(5) else -1}")
+  print("{ok(i1(0))} {ok(i1(1))} {ok(i1(2))} {ok(i1(3))}")
+  print("{i2(0) is some(_)} {i2(1) is some(_)} {i2(2) is none}")
+  print("{i3(0) else -1} {i3(1) else -1} {i3(2) else -1}")
+  let r: ()! = loop { break }
+  let s: ()? = loop { break }
+  print("{ok(r)} {s is some(_)}")
+}
+"#,
+        "ok true\nok err(big) true true\nok err(big) true true\nok err(big) true true\n20 -1 s3 - 4 -1\nok ok ok err(bad)\ntrue true true\n7 2 -1\nok ok ok err(x)\ntrue true true\n1 2 -1\nok true\n",
+    );
+}
+
+// ---- error programs, spec ----
+
+fn error_files() -> Vec<PathBuf> {
+    let mut paths: Vec<_> = fs::read_dir("tests/errors")
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "duck"))
+        .collect();
+    paths.sort();
+    assert!(paths.len() >= 10, "too few error programs: {paths:?}");
+    paths
+}
+
+/// Every `tests/errors/X.duck` starts with `// error: E0xxx <message substring>` and must fail
+/// `duck check` with exactly that code (the first error reported) and message, in both output modes.
+#[test]
+fn error_programs_fail_with_their_code() {
+    for path in error_files() {
+        let p = path.to_str().unwrap();
+        let src = fs::read_to_string(&path).unwrap();
+        let header = src.lines().next().and_then(|l| l.strip_prefix("// error: "));
+        let Some((code, msg)) = header.and_then(|h| h.split_once(' ')) else {
+            panic!("{p} must start with `// error: E0xxx <message>`");
+        };
+        assert!(code.len() == 5 && code.starts_with('E'), "{p}: bad code {code:?}");
+
+        let o = duck(&["check", p]);
+        let (_, err) = text(&o);
+        assert_eq!(o.status.code(), Some(1), "{p} should fail to check:\n{err}");
+        let first = err.lines().find(|l| l.contains(": error[")).unwrap_or_else(|| panic!("{p}: no error in:\n{err}"));
+        assert!(first.contains(&format!("error[{code}]: ")), "{p}: expected {code} first, got:\n{err}");
+        assert!(first.contains(msg), "{p}: expected {msg:?} in:\n{first}");
+
+        let o = duck(&["check", p, "--json"]);
+        let (json, _) = text(&o);
+        assert!(!o.status.success(), "{p}: {json}");
+        assert!(json.contains(r#""ok":false"#) && json.contains(&format!(r#""code":"{code}","severity":"error""#)), "{p}: {json}");
+    }
+}
+
+/// `duck check` accepts every example, with an empty JSON report.
+#[test]
+fn examples_check_clean_as_json() {
+    setup();
+    for e in fs::read_dir("examples").unwrap() {
+        let p = e.unwrap().path();
+        if p.extension().is_none_or(|x| x != "duck") {
+            continue;
+        }
+        let p = p.to_str().unwrap();
+        let o = duck(&["check", p, "--json"]);
+        let (json, _) = text(&o);
+        assert!(o.status.success() && json.contains(r#""ok":true,"diagnostics":[]"#), "{p}: {json}");
+    }
+}
+
+/// `duck spec` prints the embedded language reference.
+#[test]
+fn spec() {
+    let o = duck(&["spec"]);
+    assert!(o.status.success());
+    assert_eq!(text(&o).0, fs::read_to_string("docs/spec.md").unwrap());
+}
+
+/// `duck` with no command, or an unknown one, prints the usage (listing every command) and exits 2.
+#[test]
+fn usage_lists_every_command() {
+    for args in [&[][..], &["frobnicate"][..], &["check"][..]] {
+        let o = duck(args);
+        let (_, err) = text(&o);
+        assert_eq!(o.status.code(), Some(2), "{args:?}");
+        for cmd in ["run", "build", "check", "test", "fmt", "explain", "pond", "lsp", "ir", "spec", "quack"] {
+            assert!(err.contains(&format!("  {cmd} ")) || err.contains(&format!("`{cmd}`")), "{args:?}: no {cmd} in:\n{err}");
+        }
+    }
+}

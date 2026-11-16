@@ -1,0 +1,8 @@
+[package]
+name = "http"
+version = "0.1.0"
+effects = ["net"]
+
+[deps]
+json = "^0.1"
+url = "^0.1"

@@ -1,0 +1,1 @@
+Count how often each word occurs in a text. Words are separated by any run of whitespace (spaces, tabs, newlines) and compared case-insensitively: convert every word to lowercase. Punctuation is part of the word ("hi," and "hi" are different words). Return a map from lowercase word to its count, with keys in order of first occurrence.

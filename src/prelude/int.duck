@@ -1,0 +1,4 @@
+/// `int.parse`.
+
+/// An optional sign and decimal digits (`_` allowed between digits); no surrounding whitespace.
+pub extern fn parse(s: str): int! = "duck_int_parse"

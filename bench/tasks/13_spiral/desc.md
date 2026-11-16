@@ -1,0 +1,1 @@
+Return the elements of a rectangular matrix (a list of rows, all the same length) in clockwise spiral order, starting at the top-left corner and moving right first. The matrix may be empty (no rows) or have empty rows.

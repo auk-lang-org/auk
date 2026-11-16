@@ -1,0 +1,8 @@
+[package]
+name = "examples"
+version = "0.1.0"
+effects = ["fs", "net", "time", "env", "proc"]
+
+[deps]
+http = "^0.1"
+json = "^0.1"

@@ -1,0 +1,1 @@
+Return the names of the `n` items with the highest total value (`price * qty`), highest first. Ties are broken by name, alphabetically ascending. Items with `qty` 0 are excluded. If fewer than `n` items qualify, return all of them. `n` is at least 0.

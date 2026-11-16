@@ -1,0 +1,1 @@
+Merge intervals. Each interval `(start, end)` is inclusive with `start <= end`; the input is in no particular order. Merge intervals that overlap or touch at a point (`(1, 3)` and `(3, 5)` become `(1, 5)`; `(1, 2)` and `(3, 4)` stay separate). Return the merged intervals sorted by start.

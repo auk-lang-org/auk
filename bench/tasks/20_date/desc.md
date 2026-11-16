@@ -1,0 +1,1 @@
+Validate a date string. Return true only if `s` is exactly `YYYY-MM-DD`: 4 ASCII digits, `-`, 2 ASCII digits, `-`, 2 ASCII digits, nothing else (no spaces, no signs). The year must be 1..9999, the month 1..12, and the day must exist in that month of the proleptic Gregorian calendar (leap years: divisible by 4, except centuries not divisible by 400).

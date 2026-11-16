@@ -1,0 +1,16 @@
+/// A TCP echo server: serves one connection on 127.0.0.1, echoing every byte until the client
+/// closes, then exits. `duck run examples/echo.duck [port]` (default 0: any free port).
+
+fn main(args: [str]): ()! uses net {
+  let port = if args.len() > 1 { int.parse(args[1])? } else { 0 }
+  var l = net.listen("127.0.0.1", port)?
+  eprint("echo: listening on 127.0.0.1:{l.port()}")
+  var c = l.accept()?
+  var buf = c.read(4096)?
+  while buf.len() > 0 {
+    c.write(buf)?
+    buf = c.read(4096)?
+  }
+  c.close()
+  l.close()
+}

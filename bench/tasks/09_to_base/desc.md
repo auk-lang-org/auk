@@ -1,0 +1,1 @@
+Convert an integer to its representation in a base from 2 to 36. Digits are 0-9 then lowercase a-z. Negative numbers get a leading `-`; zero is "0"; no leading zeros otherwise. `n` can be any signed 64-bit integer, from -9223372036854775808 to 9223372036854775807 inclusive.

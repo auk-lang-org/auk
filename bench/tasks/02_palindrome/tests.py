@@ -1,0 +1,11 @@
+def test_hidden_is_palindrome():
+    assert is_palindrome("A man, a plan, a canal: Panama")
+    assert not is_palindrome("race a car")
+    assert is_palindrome("")
+    assert is_palindrome(".,! ?")
+    assert not is_palindrome("0P")
+    assert not is_palindrome("ab2a")
+    assert is_palindrome("No 'x' in Nixon")
+    assert is_palindrome("12321")
+    assert is_palindrome("a")
+    assert not is_palindrome("ab")

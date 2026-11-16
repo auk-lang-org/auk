@@ -1,0 +1,7 @@
+[package]
+name = "bad"
+version = "0.1.0"
+effects = []
+
+[deps]
+fetch = "^0.3"  # needs net, which bad does not declare

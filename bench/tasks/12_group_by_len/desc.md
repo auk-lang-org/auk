@@ -1,0 +1,1 @@
+Group words by their length in characters (not bytes). Within each group keep the words in their original order and drop repeated words (keep the first occurrence). The result's keys are in increasing order of length.

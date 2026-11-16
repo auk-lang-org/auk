@@ -1,0 +1,1 @@
+Binary search. `xs` is sorted in ascending order and may contain duplicates. Return the index of the FIRST element equal to `target`, or missing (none / None) if there is no such element. It must take O(log n) comparisons.

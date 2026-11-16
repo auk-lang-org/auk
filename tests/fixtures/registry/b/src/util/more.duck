@@ -1,0 +1,3 @@
+pub fn twice(x: int): int {
+    x * 2
+}
