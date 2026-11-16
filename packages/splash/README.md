@@ -184,10 +184,17 @@ an open `<details>` inside a row stays with its row.
   `x-splash: event`. The response is patched in the same way, without waiting for the next
   refresh.
 - **Ordering.** Every request is numbered, and an answer older than the one already on the page is
-  dropped. A slow refresh can't undo a click that was answered after it.
+  dropped, so a slow refresh can't undo a click that was answered after it.
 - **Patching.** The client walks the old and new live element together, changing only the text,
   attributes and nodes that differ. An input being typed in is never replaced, so it keeps its
   focus, cursor and text.
+- **Event fields show the server's state.** A field with `splash-change` or `splash-input` also
+  gets its live state set (`selectedIndex`, `checked`, `value`), not just its attributes, unless
+  it's the field being used. Browsers stop applying `selected` to an option once the user has
+  picked it, so without this a dropdown could stay stuck on an old choice. Plain form fields, such
+  as an unsent draft, are left alone.
+- **Ordering.** Answers to requests sent before the latest event are dropped, so a refresh that
+  raced your click can't briefly show the old state.
 - **Hidden tabs** don't poll; they catch up as soon as they're visible again.
 - **Server unreachable** (for example, while it restarts): `<html>` gets the class
   `splash-offline` and polling backs off up to 5 s. Style it to show "reconnecting…". The last

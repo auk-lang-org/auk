@@ -377,7 +377,7 @@ fn boot(every: int, h: str): str =
 let CLIENT = r"""
   <script>
   (() => {
-    let hash = splashHash, delay = splashEvery, timer, sent = 0, shown = 0;
+    let hash = splashHash, delay = splashEvery, timer, sent = 0, shown = 0, lastEvent = 0;
     const root = document.documentElement;
     const morph = (a, b) => {
       if (a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) { a.replaceWith(b.cloneNode(true)); return; }
@@ -399,11 +399,21 @@ let CLIENT = r"""
         i++;
       }
       while (a.childNodes.length > i) a.lastChild.remove();
+      // a field the server owns (an event field) shows the server's state, unless it's the one
+      // being used: browsers display a field's current state, which stops following its
+      // attributes once touched (an option the user picked ignores `selected` from then on)
+      if ((a.hasAttribute("splash-change") || a.hasAttribute("splash-input")) && a !== document.activeElement) {
+        if (a.tagName === "SELECT") { if (a.selectedIndex !== b.selectedIndex) a.selectedIndex = b.selectedIndex; }
+        else if (a.type === "checkbox" || a.type === "radio") a.checked = b.hasAttribute("checked");
+        else if (a.tagName === "TEXTAREA") { if (a.value !== b.textContent) a.value = b.textContent; }
+        else if ("value" in a) { const v = b.getAttribute("value") ?? ""; if (a.value !== v) a.value = v; }
+      }
     };
     const key = (n) => n.nodeType === 1 ? n.getAttribute("splash-key") ?? (n.id || null) : null;
     // `el`: the element that sent an event, marked `splash-loading` until the answer is in
     const send = async (kind, body, el) => {
       const my = ++sent;
+      if (kind === "event") lastEvent = my;
       const headers = { "x-splash": kind, "x-splash-hash": hash };
       if (body) headers["content-type"] = "application/x-www-form-urlencoded";
       if (el) { el.classList.add("splash-loading"); el.setAttribute("aria-busy", "true"); }
@@ -411,7 +421,9 @@ let CLIENT = r"""
         const r = await fetch(location.href, { method: body ? "POST" : "GET", headers, body });
         root.classList.remove("splash-offline");
         delay = splashEvery;
-        if (my < shown) return;  // a later request's answer is already on the page
+        // a later request's answer is already on the page, or this one was sent before the
+        // latest event and shows the state from before it
+        if (my < shown || my < lastEvent) return;
         shown = my;
         if (r.status === 204) return;
         const doc = new DOMParser().parseFromString(await r.text(), "text/html");
