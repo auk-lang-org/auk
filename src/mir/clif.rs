@@ -1375,6 +1375,28 @@ pub fn jit(prog: &Program, info: &TyInfo, opt: bool) -> Result<Jit, String> {
     Ok(Jit { module: Some(module), entry })
 }
 
+/// The debugger's evaluation module (src/dbg_eval.rs): compiled in memory for good (its code
+/// may be called any time later); returns the entry (the evaluation function) and `dk_init`.
+pub fn jit_eval(prog: &Program, info: &TyInfo) -> Result<(*const u8, *const u8), String> {
+    let isa = isa(false, false)?;
+    let mut jb = cranelift_jit::JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+    for (name, addr) in crate::rt_symbols::rt_symbols() {
+        jb.symbol(name, addr);
+    }
+    let mut module = cranelift_jit::JITModule::new(jb);
+    let entry = compile(&mut module, prog, info, "dk_entry", None)?;
+    module.finalize_definitions().map_err(|e| e.to_string())?;
+    let entry = module.get_finalized_function(entry);
+    let init = module
+        .declarations()
+        .get_functions()
+        .find(|(_, d)| d.name.as_deref() == Some("dk_init"))
+        .map(|(id, _)| module.get_finalized_function(id))
+        .ok_or("no dk_init")?;
+    std::mem::forget(module);
+    Ok((entry, init))
+}
+
 /// A program compiled for `duck run --live`: every call to a function in `slots` goes through
 /// the live table at `table` (8-byte code pointers), so a later compile can replace bodies.
 pub struct LiveJit {

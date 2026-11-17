@@ -641,3 +641,130 @@ fn native_line_tables() {
     assert!(o.status.success());
     assert!(!dir.join("plain.dSYM").exists());
 }
+
+// ---- expressions at a stop, conditional breakpoints ----
+
+const EVAL: &str = r#"struct Point { x: int, y: int }
+
+fn dist2(p: Point): int = p.x * p.x + p.y * p.y
+
+fn fact(n: int): int {
+    if n <= 1 {
+        return 1
+    }
+    n * fact(n - 1)
+}
+
+fn main() {
+    let pts = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
+    var total = 0
+    for i in 0..5 {
+        total += i
+    }
+    print("{total} {fact(5)} {pts.len()}")
+}
+"#;
+
+#[test]
+fn expressions_and_conditions() {
+    let mut s = Session::start("eval", EVAL);
+    let b = s.cmd("break prog.duck:16 if i == 3");
+    assert_eq!(b.get("cond").as_str(), Some("i == 3"));
+    s.cmd("break fact if n == 2");
+    // stops only where the condition holds
+    assert_eq!(s.go("run"), ("breakpoint".into(), "prog.main".into(), 16));
+    let ev = |s: &mut Session, e: &str| -> Result<String, String> {
+        let r = s.cmd(&format!("eval 0 1 {e}"));
+        match r.get("ev").as_str() {
+            Some("value") => Ok(format!("{}: {}", r.get("value").as_str().unwrap(), r.get("type").as_str().unwrap())),
+            _ => Err(r.get("msg").as_str().unwrap_or("").to_string()),
+        }
+    };
+    assert_eq!(ev(&mut s, "i").as_deref(), Ok("3: int"));
+    assert_eq!(ev(&mut s, "i * 10 + total").as_deref(), Ok("33: int"));
+    assert_eq!(ev(&mut s, "dist2(pts[1])").as_deref(), Ok("25: int"));
+    assert_eq!(ev(&mut s, "pts.map(p => p.x)").as_deref(), Ok("[1, 3]: [int]"));
+    assert_eq!(ev(&mut s, "pts[0]").as_deref(), Ok("Point { x: 1, y: 2 }: Point"));
+    assert_eq!(ev(&mut s, "nope"), Err("unknown name `nope`".into()));
+    assert!(ev(&mut s, "1 +").is_err());
+    // a panic in the expression is an error; the program lives on
+    assert_eq!(ev(&mut s, "pts[7]"), Err("panic: index 7 out of range for length 2".into()));
+    // an assignment changes the frame's variable
+    assert_eq!(ev(&mut s, "total = total + 100").as_deref(), Ok("(): ()"));
+    assert_eq!(ev(&mut s, "total").as_deref(), Ok("103: int"));
+    assert_eq!(s.go("continue"), ("breakpoint".into(), "prog.fact".into(), 6));
+    assert_eq!(s.vars(0), ["n=2"]);
+    // a caller's frame
+    assert_eq!(s.cmd("eval 1 1 n + 1").get("value").as_str(), Some("4"));
+    s.cmd("delete");
+    // a condition that doesn't compile stops, and says why
+    s.cmd("break fact if n <");
+    let (reason, ..) = s.go("continue");
+    assert_eq!(reason, "breakpoint");
+    s.cmd("delete");
+    s.cmd("continue");
+    s.wait("exited");
+    // 103 at i == 3, then + 3 + 4
+    assert_eq!(s.finish(), (0, "110 120 2\n".into()));
+}
+
+#[test]
+fn expressions_in_duck_debug() {
+    let f = prog_file("evalcli", EVAL);
+    let (code, out) = debug_cmd(&["-b", "prog.duck:16 if i % 2 == 1", "-p", "total,pts[1].x", "-e", "dist2(pts[0]) + i"], &f);
+    assert_eq!(code, 0, "{out}");
+    let want = "\
+#1 breakpoint at prog.duck:16 in prog.main
+  total = 0
+  pts[1].x = 3
+  dist2(pts[0]) + i = 6
+#2 breakpoint at prog.duck:16 in prog.main
+  total = 3
+  pts[1].x = 3
+  dist2(pts[0]) + i = 8
+";
+    assert!(out.replace(&format!("{}/", fs::canonicalize(f.parent().unwrap()).unwrap().display()), "").starts_with(want), "{out}");
+    // the prompt: `p <expression>`, `p x = v`, `b <line> if <cond>`
+    let mut c = duck_cmd().arg("debug").arg("--repl").arg(&f).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    c.stdin.take().unwrap().write_all(b"b 16 if i == 2\nr\np i * 100\np total = 1000\np total\nd\nc\n").unwrap();
+    let o = c.wait_with_output().unwrap();
+    let out = String::from_utf8_lossy(&o.stdout).replace(&format!("{}/", fs::canonicalize(f.parent().unwrap()).unwrap().display()), "");
+    for want in ["breakpoint 1 at prog.duck:16 if i == 2", "i * 100: int = 200", "total: int = 1000", "1009 120 2"] {
+        assert!(out.contains(want), "missing {want:?} in:\n{out}");
+    }
+}
+
+#[test]
+fn dap_expressions() {
+    let f = prog_file("dapeval", EVAL);
+    let path = f.display().to_string();
+    let mut d = Dap::start();
+    let init = d.req("initialize", Json::Null);
+    assert_eq!(init.at(&["body", "supportsConditionalBreakpoints"]), &Json::Bool(true));
+    d.req("launch", json::obj([("program", path.as_str().into())]));
+    d.event("initialized");
+    let bp = json::obj([("line", 16i64.into()), ("condition", "i == 4".into())]);
+    d.req("setBreakpoints", json::obj([("source", json::obj([("path", path.as_str().into())])), ("breakpoints", Json::Arr(vec![bp]))]));
+    d.req("configurationDone", Json::Null);
+    d.event("stopped");
+    let (fid, locals) = d.top();
+    assert!(locals.iter().any(|(n, _)| n == "i=4"), "{locals:?}");
+    let ev = |d: &mut Dap, e: &str| d.req("evaluate", json::obj([("expression", e.into()), ("frameId", fid.into()), ("context", "watch".into())]));
+    assert_eq!(ev(&mut d, "pts.map(p => dist2(p))").at(&["body", "result"]).as_str(), Some("[5, 25]"));
+    // a path keeps its parts expandable
+    assert!(ev(&mut d, "pts[1]").at(&["body", "variablesReference"]).as_i64().unwrap() > 0);
+    assert_eq!(ev(&mut d, "nope").get("success"), &Json::Bool(false));
+    // setVariable on a frame's local
+    let st = d.req("stackTrace", json::obj([("threadId", 1i64.into())]));
+    let fid = st.at(&["body", "stackFrames"]).as_arr()[0].get("id").as_i64().unwrap();
+    let sc = d.req("scopes", json::obj([("frameId", fid.into())]));
+    let r = sc.at(&["body", "scopes"]).as_arr()[0].get("variablesReference").as_i64().unwrap();
+    let set = d.req("setVariable", json::obj([("variablesReference", r.into()), ("name", "total".into()), ("value", "50".into())]));
+    assert_eq!(set.at(&["body", "value"]).as_str(), Some("50"), "{set:?}");
+    d.req("setBreakpoints", json::obj([("source", json::obj([("path", path.as_str().into())])), ("breakpoints", Json::Arr(vec![]))]));
+    d.req("continue", json::obj([("threadId", 1i64.into())]));
+    assert_eq!(d.event("output").at(&["body", "output"]).as_str(), Some("54 120 2\n"));
+    d.event("terminated");
+    d.req("disconnect", Json::Null);
+    d.child.wait().unwrap();
+}

@@ -168,6 +168,48 @@ pub fn emit_instance(g: &mut Gen, i: InstId) {
     }
 }
 
+/// The debugger's evaluation function for `value`, an expression inserted into the body of
+/// instance `i` (`src/dbg_eval.rs`): `DuckStr *f(void **slots)` reads each local of `binds` from
+/// the address in the same position of `slots` and returns the value shown (debug `Show`).
+pub fn emit_eval(g: &mut Gen, i: InstId, value: &Expr, binds: &[LocalId]) -> FuncId {
+    let tp = g.tp;
+    let (m, _) = g.body_item(tp.instances[i].body);
+    let f = g.declare("dk_dbg_eval".into(), vec![MTy::void_ptr()], MTy::D(Ty::Str), Abi::C);
+    let mut lw = Lower {
+        tp,
+        m,
+        t: &tp.tables[m],
+        inst: i,
+        subst: tp.instances[i].subst(&tp.fns),
+        file: tp.program.mods[m].file.clone(),
+        f: FnState::new(Ty::unit()),
+        saved: Vec::new(),
+        g,
+    };
+    let ps = lw.begin_fn(f, Ty::Str);
+    lw.push(ScopeKind::Block);
+    for (k, &l) in binds.iter().enumerate() {
+        let ty = lw.local_ty(l);
+        // slots[k]: the local's address in the stopped frame
+        let at = Ex::bin(BOp::Add, ps[0].clone().cast(MTy::I64), Ex::int_as(8 * k as i64, MTy::I64)).cast(MTy::ptr(MTy::void_ptr()));
+        let place = at.deref(MTy::void_ptr()).cast(MTy::ptr(d(&ty))).deref(d(&ty));
+        lw.f.locals.insert(l, Slot { c: place, ty });
+    }
+    let v = lw.expr(value);
+    let shown = if v.is_never() || v.ty.is_unit() {
+        Ex::rt("duck_str_from_bytes", vec![Ex::cstr("()"), Ex::int(2)], MTy::D(Ty::Str))
+    } else {
+        let c = v.c.clone();
+        lw.trace_show(&v.ty, c)
+    };
+    let r = lw.f.b.decl(shown);
+    lw.cleanup_from(0);
+    lw.emit(Stmt::Ret(Some(r)));
+    lw.f.scopes.clear();
+    lw.end(f);
+    f
+}
+
 /// `ss` with `leave` (popping the debugger frame) before every return; a returned value is
 /// computed first, so a call in return position runs with the frame still pushed.
 fn dbg_rets(ss: Vec<Stmt>, vars: &mut Vec<MTy>, leave: &Stmt) -> Vec<Stmt> {
@@ -469,7 +511,9 @@ impl<'g, 'a> Lower<'g, 'a> {
         let k = self.g.fresh();
         let agg = self.g.agg(format!("DkDbgFrame{k}"), vec![MTy::I64, MTy::void_ptr(), MTy::I64]);
         let frame = self.f.b.new_var(MTy::Agg(agg));
-        self.g.dbg_info.fns.push(super::progen::DbgFn { name, locals: Vec::new() });
+        let inst = &self.tp.instances[self.inst];
+        let (body, type_args) = (inst.body, inst.type_args.clone());
+        self.g.dbg_info.fns.push(super::progen::DbgFn { name, locals: Vec::new(), body, type_args });
         let func = self.g.dbg_info.fns.len() as u32 - 1;
         self.f.dbg = Some(FnDbg { frame, agg, func, slots: HashMap::new(), vis: Vec::new(), in_let: false });
     }
@@ -509,7 +553,7 @@ impl<'g, 'a> Lower<'g, 'a> {
 
     /// A debugger stop point: record the statement's site in the frame and call the debugger
     /// while it is armed (one load otherwise).
-    fn dbg_hook(&mut self, span: crate::diag::Span) {
+    fn dbg_hook(&mut self, span: crate::diag::Span, wrap: bool) {
         if self.g.lines {
             self.g.prog.locs.push((self.file.clone(), span.line, span.col));
             let i = self.g.prog.locs.len() as u32 - 1;
@@ -517,7 +561,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         }
         let Some(d) = &self.f.dbg else { return };
         let vis = d.vis.iter().map(|&(x, _)| x).collect();
-        let site = super::progen::DbgSite { func: d.func, file: self.file.clone(), line: span.line, col: span.col, vis };
+        let site = super::progen::DbgSite { func: d.func, file: self.file.clone(), line: span.line, col: span.col, end_line: span.end_line, end_col: span.end_col, wrap, vis };
         let frame = d.frame.clone();
         self.g.dbg_info.sites.push(site);
         let id = self.g.dbg_info.sites.len() as i64 - 1;
@@ -749,7 +793,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         self.push(ScopeKind::Block);
         let v = match &c.body {
             Some(FnBody::Expr(e)) => {
-                self.dbg_hook(e.span);
+                self.dbg_hook(e.span, true);
                 self.expr_t(e, true)
             }
             Some(FnBody::Block(b)) => self.block(b, true),
@@ -1028,7 +1072,7 @@ impl<'g, 'a> Lower<'g, 'a> {
     // ---- statements and blocks ----
 
     fn stmt(&mut self, e: &Expr) {
-        self.dbg_hook(e.span);
+        self.dbg_hook(e.span, false);
         self.push(ScopeKind::Stmt);
         let _ = self.expr(e);
         self.pop();
@@ -1044,7 +1088,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 self.stmt(s);
                 continue;
             }
-            self.dbg_hook(s.span);
+            self.dbg_hook(s.span, false);
             let v = self.expr_t(s, tail);
             if v.is_never() {
                 out = v;
@@ -3338,7 +3382,7 @@ impl<'g, 'a> Lower<'g, 'a> {
             }
         }
         if !matches!(body.kind, EK::Block(_)) {
-            self.dbg_hook(body.span);
+            self.dbg_hook(body.span, true);
         }
         let v = self.expr(body);
         if ret.is_unit() {

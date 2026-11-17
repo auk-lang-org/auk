@@ -16,6 +16,7 @@
 //!   run                         start the program (after setting breakpoints)
 //!   break <file>:<line>         line breakpoint (moves to the next line with code)
 //!   break <function>            function breakpoint (`f`, or `mod.f`)
+//!   break <place> if <cond>     only where the Duck expression `cond` is true
 //!   delete [id]                 remove one breakpoint, or all
 //!   catch all|uncaught|none     stop on panics (default `uncaught`: not under a recovery point)
 //!   pause                       stop every thread at its next statement
@@ -25,8 +26,11 @@
 //!   stack [thread]              the frames, innermost first
 //!   vars [frame] [thread]       the frame's locals in scope, shown
 //!   threads                     every thread with its innermost frame
-//! Events are JSON lines: `ready`, `ok`, `error`, `break`, `stopped`, `stack`, `vars`,
-//! `threads`, `exited`. When one thread stops, every other thread stops at its next statement
+//!   kids <frame> <thread> <local> [i...]   the parts of a local (or of part i, j...)
+//!   eval <frame> <thread> <expr>           a Duck expression's value there (an assignment
+//!                               `x = v` changes a `var` local; src/dbg_eval.rs compiles it)
+//! Events are JSON lines: `ready`, `ok`, `error`, `break`, `stopped`, `stack`, `vars`, `kids`,
+//! `value`, `threads`, `exited`. When one thread stops, every other thread stops at its next statement
 //! (all-stop); a thread blocked in a call (sleep, recv, I/O) stops when it returns.
 
 use crate::{DuckStr, ShowFn, cstr, sbytes};
@@ -126,6 +130,8 @@ enum CatchMode {
 struct Bp {
     id: i64,
     sites: Vec<u32>,
+    /// Stop only where this Duck expression is true.
+    cond: Option<String>,
 }
 
 /// A thread the debugger knows: its id and where its frame pointer cell lives.
@@ -148,7 +154,7 @@ struct State {
     bps: Vec<Bp>,
     next_bp: i64,
     /// Commands for the stopped focus thread: (seq, words).
-    queue: VecDeque<(Option<i64>, Vec<String>)>,
+    queue: VecDeque<(Option<i64>, String)>,
     threads: Vec<ThreadRef>,
 }
 
@@ -242,17 +248,143 @@ pub unsafe extern "C" fn duck_dbg_hook(f: *mut Frame) {
             s = wait(s);
         }
     }
+    let mut extra = None;
     let reason = if s.pause_req {
         s.pause_req = false;
         "pause"
     } else if info.bp.get(site as usize).is_some_and(|b| b.load(Relaxed) > 0) {
-        "breakpoint"
+        // conditions: evaluated here, without the lock (they run Duck code)
+        let conds: Vec<Option<String>> = s.bps.iter().filter(|b| b.sites.contains(&(site as u32))).map(|b| b.cond.clone()).collect();
+        drop(s);
+        let mut hit = false;
+        for c in conds {
+            let Some(c) = c else {
+                hit = true;
+                break;
+            };
+            let r = BUSY.with(|b| b.replace(true));
+            let v = eval_at(f, &c);
+            BUSY.with(|b| b.set(r));
+            match v {
+                Ok((v, _)) if v == "true" => {
+                    hit = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    let mut o = String::from(",\"cond_error\":");
+                    json_str(&mut o, &format!("{c}: {e}"));
+                    extra = Some(o);
+                    hit = true;
+                    break;
+                }
+            }
+        }
+        s = st();
+        while s.stopped {
+            let g = s.epoch;
+            while s.stopped && s.epoch == g {
+                s = wait(s);
+            }
+        }
+        if hit {
+            "breakpoint"
+        } else if step_done(&s, info, site) {
+            "step"
+        } else {
+            return;
+        }
     } else if step_done(&s, info, site) {
         "step"
     } else {
         return;
     };
-    stop(s, me, reason, None);
+    stop(s, me, reason, extra);
+}
+
+// ---- evaluating Duck expressions --------------------------------------------------------
+
+/// What the compiler hands back for an expression at a site: a function of the addresses of
+/// the locals it uses (in `slots` order) that returns the value shown, and its type.
+pub struct Compiled {
+    pub run: unsafe extern "C" fn(*const *mut c_void) -> *mut DuckStr,
+    pub slots: Vec<u32>,
+    pub ty: String,
+}
+
+/// The compiler's side (src/dbg_eval.rs, in the same process for `duck run --debug`): compile
+/// `expr` at `site` of debug function `func`.
+pub type EvalHook = fn(func: u32, site: u32, expr: &str) -> Result<Compiled, String>;
+
+static EVAL_HOOK: OnceLock<EvalHook> = OnceLock::new();
+/// A compiled expression (or why it doesn't compile), by (site, text).
+type Cached = ((u32, String), std::sync::Arc<Result<Compiled, String>>);
+static EVALS: Mutex<Vec<Cached>> = Mutex::new(Vec::new());
+
+pub fn set_eval_hook(h: EvalHook) {
+    let _ = EVAL_HOOK.set(h);
+}
+
+/// Evaluate a Duck expression in frame `f`: (value shown, type).
+fn eval_at(f: *mut Frame, expr: &str) -> Result<(String, String), String> {
+    let hook = EVAL_HOOK.get().ok_or("this program can't evaluate expressions")?;
+    let (func, site) = unsafe { ((*f).func as u32, (*f).site as u32) };
+    let key = (site, expr.trim().to_string());
+    let found = EVALS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == key).map(|(_, c)| c.clone());
+    let c = match found {
+        Some(c) => c,
+        None => {
+            let c = std::sync::Arc::new(hook(func, site, &key.1));
+            EVALS.lock().unwrap_or_else(|e| e.into_inner()).push((key, c.clone()));
+            c
+        }
+    };
+    let c = c.as_ref().as_ref().map_err(|e| e.clone())?;
+    let mut args = Vec::new();
+    for &slot in &c.slots {
+        let p = unsafe { *(*f).slots.as_ptr().add(slot as usize) };
+        if p.is_null() {
+            return Err("a variable it uses has no value yet".into());
+        }
+        args.push(p);
+    }
+    struct Env {
+        run: unsafe extern "C" fn(*const *mut c_void) -> *mut DuckStr,
+        args: *const *mut c_void,
+    }
+    unsafe extern "C" fn tramp(env: *mut c_void, out: *mut c_void) {
+        let e = unsafe { &*(env as *const Env) };
+        unsafe { *(out as *mut *mut DuckStr) = (e.run)(e.args) };
+    }
+    let mut env = Env { run: c.run, args: args.as_ptr() };
+    let mut out: *mut DuckStr = std::ptr::null_mut();
+    let left = crate::trace::show_left();
+    crate::trace::set_show_left(1024);
+    let r = unsafe { crate::catch::run(tramp, (&mut env as *mut Env).cast(), (&mut out as *mut *mut DuckStr).cast()) };
+    crate::trace::set_show_left(left);
+    if let Some(p) = r {
+        return Err(format!("panic: {}", p.msg));
+    }
+    let mut v = String::from_utf8_lossy(unsafe { sbytes(out) }).into_owned();
+    unsafe { crate::rc::release(out) };
+    if v.len() > 1000 {
+        let mut end = 1000;
+        while !v.is_char_boundary(end) {
+            end -= 1;
+        }
+        v.truncate(end);
+        v += "…";
+    }
+    Ok((v, c.ty.clone()))
+}
+
+/// `text` after its first `n` whitespace-separated words.
+fn after_words(text: &str, n: usize) -> &str {
+    let mut t = text.trim_start();
+    for _ in 0..n {
+        t = t.find(char::is_whitespace).map_or("", |i| &t[i..]).trim_start();
+    }
+    t
 }
 
 /// Has this thread's step finished at `site`?
@@ -358,10 +490,11 @@ fn stop(mut s: MutexGuard<'static, State>, me: i64, reason: &str, extra: Option<
             // detached
             return;
         }
-        let (seq, words) = s.queue.pop_front().expect("command");
+        let (seq, text) = s.queue.pop_front().expect("command");
+        let words: Vec<String> = text.split_whitespace().map(String::from).collect();
         drop(s);
         let resume = BUSY.with(|b| b.replace(true));
-        let r = serve(seq, &words, me);
+        let r = serve(seq, &words, &text, me);
         BUSY.with(|b| b.set(resume));
         s = st();
         if let Some(kind) = r {
@@ -384,7 +517,7 @@ fn stop(mut s: MutexGuard<'static, State>, me: i64, reason: &str, extra: Option<
 }
 
 /// Serve one command of the stopped focus thread: Some(step kind) for a resume.
-fn serve(seq: Option<i64>, w: &[String], me: i64) -> Option<StepKind> {
+fn serve(seq: Option<i64>, w: &[String], text: &str, me: i64) -> Option<StepKind> {
     let arg = |i: usize| w.get(i).and_then(|x| x.parse::<i64>().ok());
     match w[0].as_str() {
         "continue" | "c" => return Some(StepKind::None),
@@ -426,6 +559,26 @@ fn serve(seq: Option<i64>, w: &[String], me: i64) -> Option<StepKind> {
             });
             match r {
                 Ok(items) => reply(seq, "kids", &items),
+                Err(e) => reply(seq, "error", &format!(",\"msg\":\"{}\"", esc(&e))),
+            }
+        }
+        // `eval <frame> <thread> <expression>`
+        "eval" | "e" => {
+            let n = arg(1).unwrap_or(0);
+            let t = arg(2).unwrap_or(me);
+            let expr = after_words(text, 3);
+            if expr.is_empty() {
+                reply(seq, "error", ",\"msg\":\"eval: which expression?\"");
+                return None;
+            }
+            let r = frame_at(t, n, me).and_then(|f| eval_at(f, expr));
+            match r {
+                Ok((v, ty)) => {
+                    let (mut a, mut b) = (String::new(), String::new());
+                    json_str(&mut a, &v);
+                    json_str(&mut b, &ty);
+                    reply(seq, "value", &format!(",\"value\":{a},\"type\":{b}"));
+                }
                 Err(e) => reply(seq, "error", &format!(",\"msg\":\"{}\"", esc(&e))),
             }
         }
@@ -810,9 +963,11 @@ fn reader(conn: UnixStream) {
         let Ok(line) = line else { break };
         let mut words: Vec<String> = line.split_whitespace().map(String::from).collect();
         let mut seq = None;
+        let mut text = line.trim().to_string();
         if let Some(n) = words.first().and_then(|w| w.strip_prefix('@')).and_then(|n| n.parse().ok()) {
             seq = Some(n);
             words.remove(0);
+            text = after_words(&text, 1).to_string();
         }
         if words.is_empty() {
             continue;
@@ -827,20 +982,30 @@ fn reader(conn: UnixStream) {
                 reply(seq, "ok", "");
             }
             "break" | "b" => {
-                let spec = words[1..].join(" ");
-                match resolve(info, &spec) {
+                // `break <spec> [if <condition>]`
+                let rest = after_words(&text, 1);
+                let (spec, cond) = match rest.find(" if ") {
+                    Some(i) => (rest[..i].trim(), Some(rest[i + 4..].trim().to_string()).filter(|c| !c.is_empty())),
+                    None => (rest.trim(), None),
+                };
+                match resolve(info, spec) {
                     Ok((sites, file, line)) => {
                         for &x in &sites {
                             info.bp[x as usize].fetch_add(1, SeqCst);
                         }
                         let id = s.next_bp;
                         s.next_bp += 1;
-                        s.bps.push(Bp { id, sites });
+                        let c = cond.as_deref().map(|c| {
+                            let mut o = String::from(",\"cond\":");
+                            json_str(&mut o, c);
+                            o
+                        });
+                        s.bps.push(Bp { id, sites, cond });
                         rearm(&s);
                         drop(s);
                         let mut f = String::new();
                         json_str(&mut f, &file);
-                        reply(seq, "break", &format!(",\"id\":{id},\"file\":{f},\"line\":{line}"));
+                        reply(seq, "break", &format!(",\"id\":{id},\"file\":{f},\"line\":{line}{}", c.unwrap_or_default()));
                     }
                     Err(e) => {
                         drop(s);
@@ -887,7 +1052,7 @@ fn reader(conn: UnixStream) {
                 };
             }
             _ if s.stopped => {
-                s.queue.push_back((seq, words));
+                s.queue.push_back((seq, text));
                 CV.notify_all();
             }
             _ => {

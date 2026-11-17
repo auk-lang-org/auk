@@ -10,6 +10,7 @@ mod rt_symbols {
 }
 mod check;
 mod dap;
+mod dbg_eval;
 mod debug;
 mod diag;
 mod effects;

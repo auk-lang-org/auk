@@ -26,8 +26,10 @@ use super::json::{self, Json, obj};
 
 const USAGE: &str = "\
 usage: duck debug [options] <file.duck> [args...]
-  --break, -b <file:line|fn>   stop there (repeatable)
-  --print, -p <a,b,...>        batch: show only these locals at each stop (default: all)
+  --break, -b <file:line|fn>   stop there (repeatable); `<place> if <cond>`: only when cond holds
+  --print, -p <a,b,...>        batch: show only these locals at each stop (default: all);
+                               an item that isn't a name is evaluated (`p.x`, `xs[0]`)
+  --eval, -e <expr>            batch: also evaluate this Duck expression at each stop
   --catch all|uncaught|none    stop on panics (default: uncaught)
   --max-stops N                batch: end the program after N stops (default 20)
   --timeout S                  batch: after S seconds, pause, report where it is, end it
@@ -41,7 +43,8 @@ const REPL_HELP: &str = "\
   next, n               step over                  catch all|uncaught|none   stop on panics
   step, s               step into                  bt, where                 the stack
   finish, f             step out                   frame N, up, down         select a frame
-  print, p [names]      locals of the frame        threads, thread N         list / select threads
+  print, p [names|expr] locals, or a Duck expression (`p xs.len()`, `p x = 5`)
+  threads, thread N     list / select threads      break <place> if <cond>   conditional
   list, l               source around the line     quit, q                   end the program
   (an empty line repeats the last command; Ctrl-C pauses a running program)";
 
@@ -54,6 +57,8 @@ struct Opts {
     catch: Option<String>,
     max_stops: usize,
     timeout: Option<f64>,
+    /// `--eval`: expressions shown at each stop.
+    exprs: Vec<String>,
     json: bool,
     batch: Option<bool>,
 }
@@ -65,6 +70,7 @@ fn parse_opts(args: &[String]) -> Result<Opts, String> {
         let mut val = |name: &str| it.next().cloned().ok_or(format!("{name} needs a value"));
         match a.as_str() {
             "--break" | "-b" => o.breaks.push(val(a)?),
+            "--eval" | "-e" => o.exprs.push(val(a)?),
             "--print" | "-p" => o.print = Some(val(a)?.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()),
             "--catch" => o.catch = Some(val(a)?),
             "--max-stops" => o.max_stops = val(a)?.parse().map_err(|_| "--max-stops needs a number")?,
@@ -397,7 +403,7 @@ fn batch_run(o: &Opts) -> i32 {
         }
         match ev {
             In::Ev(e) if timed_out && e.get("ev").as_str() == Some("stopped") => {
-                let mut r = record(&mut s, &e, o.print.as_deref());
+                let mut r = record(&mut s, &e, o.print.as_deref(), &o.exprs);
                 if let Json::Obj(fs) = &mut r {
                     fs[0].1 = "timeout".into();
                 }
@@ -407,7 +413,7 @@ fn batch_run(o: &Opts) -> i32 {
                 break;
             }
             In::Ev(e) if e.get("ev").as_str() == Some("stopped") => {
-                stops.push(record(&mut s, &e, o.print.as_deref()));
+                stops.push(record(&mut s, &e, o.print.as_deref(), &o.exprs));
                 if stops.len() >= o.max_stops {
                     killed = true;
                     s.cmd("kill");
@@ -459,7 +465,7 @@ fn batch_run(o: &Opts) -> i32 {
 }
 
 /// A stop as JSON: {reason, fn, file, line, [msg, loc], locals: {name: value}, stack: ["fn (file:line)"]}.
-fn record(s: &mut Session, e: &Json, names: Option<&[String]>) -> Json {
+fn record(s: &mut Session, e: &Json, names: Option<&[String]>, exprs: &[String]) -> Json {
     let f = e.get("frame");
     let mut fields: Vec<(String, Json)> = vec![("reason".into(), e.get("reason").clone())];
     if let Some(t) = e.get("thread").as_i64()
@@ -477,8 +483,22 @@ fn record(s: &mut Session, e: &Json, names: Option<&[String]>) -> Json {
             fields.push((k.into(), v.into()));
         }
     }
+    if let Some(c) = e.get("cond_error").as_str() {
+        fields.push(("cond_error".into(), c.into()));
+    }
+    // `--print`: names of locals, or expressions (evaluated there)
+    let is_name = |n: &str| !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_');
     let vars = s.cmd("vars 0");
-    let ls = locals(&vars, names).into_iter().map(|(n, _, v)| (n, Json::Str(v))).collect();
+    let only: Option<Vec<String>> = names.map(|ns| ns.iter().filter(|n| is_name(n)).cloned().collect());
+    let mut ls: Vec<(String, Json)> = locals(&vars, only.as_deref()).into_iter().map(|(n, _, v)| (n, Json::Str(v))).collect();
+    for x in names.unwrap_or(&[]).iter().filter(|n| !is_name(n)).chain(exprs) {
+        let v = s.cmd(&format!("eval 0 {} {x}", e.get("thread").as_i64().unwrap_or(1)));
+        let shown = match v.get("ev").as_str() {
+            Some("value") => v.get("value").as_str().unwrap_or("").to_string(),
+            _ => format!("error: {}", v.get("msg").as_str().unwrap_or("can't evaluate")),
+        };
+        ls.push((x.clone(), Json::Str(shown)));
+    }
     fields.push(("locals".into(), Json::Obj(ls)));
     let st = s.cmd("stack");
     fields.push(("stack".into(), Json::Arr(st.get("frames").as_arr().iter().map(|f| at(f).into()).collect())));
@@ -495,6 +515,9 @@ fn print_stop(n: usize, st: &Json) {
     };
     let thread = st.get("thread").as_i64().map(|t| format!(" [thread {t}]")).unwrap_or_default();
     println!("#{n} {what} at {file}:{line} in {}{thread}", st.get("fn").as_str().unwrap_or("?"));
+    if let Some(c) = st.get("cond_error").as_str() {
+        println!("  (the breakpoint's condition failed: {c})");
+    }
     if let Json::Obj(ls) = st.get("locals") {
         for (k, v) in ls {
             println!("  {k} = {}", v.as_str().unwrap_or(""));
@@ -649,6 +672,9 @@ impl Repl {
             Some("breakpoint") => {
                 let ids: Vec<String> = e.get("bps").as_arr().iter().filter_map(|b| b.as_i64()).map(|b| b.to_string()).collect();
                 println!("breakpoint {} in {}{thread}", ids.join(","), at(f));
+                if let Some(c) = e.get("cond_error").as_str() {
+                    println!("  (its condition failed: {c})");
+                }
             }
             Some("pause") => println!("paused in {}{thread}", at(f)),
             _ => {}
@@ -721,21 +747,26 @@ impl Repl {
                 } else {
                     rest.join(" ")
                 };
-                // `break 12`: a line of the current (or the program's) file
-                let spec = match spec.parse::<u32>() {
+                // `break 12 [if c]`: a line of the current (or the program's) file
+                let (place, cond) = match spec.find(" if ") {
+                    Some(i) => (spec[..i].trim().to_string(), spec[i..].to_string()),
+                    None => (spec.clone(), String::new()),
+                };
+                let spec = match place.parse::<u32>() {
                     Ok(n) => {
                         let file = self.here.as_ref().map(|(f, _)| f.clone()).unwrap_or_else(|| self.file.clone());
-                        format!("{file}:{n}")
+                        format!("{file}:{n}{cond}")
                     }
                     Err(_) => spec,
                 };
                 let r = self.s.cmd(&format!("break {spec}"));
                 match r.get("ev").as_str() {
                     Some("break") => println!(
-                        "breakpoint {} at {}:{}",
+                        "breakpoint {} at {}:{}{}",
                         r.get("id").as_i64().unwrap_or(0),
                         short(r.get("file").as_str().unwrap_or("?")),
-                        r.get("line").as_i64().unwrap_or(0)
+                        r.get("line").as_i64().unwrap_or(0),
+                        r.get("cond").as_str().map(|c| format!(" if {c}")).unwrap_or_default()
                     ),
                     _ => println!("{}", r.get("msg").as_str().unwrap_or("cannot set the breakpoint")),
                 }
@@ -780,6 +811,17 @@ impl Repl {
                 if need_stop(self) {
                     let r = self.s.cmd(&format!("vars {} {}", self.frame, self.thread));
                     let names: Vec<String> = rest.iter().filter(|w| **w != "locals").map(|w| w.to_string()).collect();
+                    // not just names of locals: a Duck expression (or an assignment, `x = 5`)
+                    let known = locals(&r, None);
+                    if !names.is_empty() && !names.iter().all(|n| known.iter().any(|(k, _, _)| k == n)) {
+                        let text = line.split_once(char::is_whitespace).map_or("", |(_, t)| t.trim());
+                        let v = self.s.cmd(&format!("eval {} {} {text}", self.frame, self.thread));
+                        match v.get("ev").as_str() {
+                            Some("value") => println!("{}: {} = {}", text, v.get("type").as_str().unwrap_or("?"), v.get("value").as_str().unwrap_or("")),
+                            _ => println!("{}", v.get("msg").as_str().unwrap_or("can't evaluate that")),
+                        }
+                        return true;
+                    }
                     let ls = locals(&r, if names.is_empty() { None } else { Some(&names) });
                     if ls.is_empty() {
                         println!("{}", if names.is_empty() { "no locals here" } else { "no such local here" });

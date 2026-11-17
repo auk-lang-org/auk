@@ -78,6 +78,8 @@ pub fn run() -> i32 {
                     ("supportsFunctionBreakpoints", true.into()),
                     ("supportsTerminateRequest", true.into()),
                     ("supportsEvaluateForHovers", true.into()),
+                    ("supportsConditionalBreakpoints", true.into()),
+                    ("supportsSetVariable", true.into()),
                     ("exceptionBreakpointFilters", filters),
                 ]);
                 d.respond(&req, true, Some(caps), None);
@@ -250,7 +252,13 @@ impl Dap {
                 fs.push(("description".into(), "Panic".into()));
                 fs.push(("text".into(), e.get("msg").clone()));
             }
-            "breakpoint" => fs.push(("hitBreakpointIds".into(), Json::Arr(hit.into_iter().map(Json::from).collect()))),
+            "breakpoint" => {
+                fs.push(("hitBreakpointIds".into(), Json::Arr(hit.into_iter().map(Json::from).collect())));
+                if let Some(c) = e.get("cond_error").as_str() {
+                    fs.push(("text".into(), format!("the breakpoint's condition failed: {c}").into()));
+                    self.output("console", &format!("the breakpoint's condition failed: {c}\n"));
+                }
+            }
             _ => {}
         }
         fs.insert(0, ("reason".into(), reason.into()));
@@ -271,7 +279,8 @@ impl Dap {
                 let mut out = Vec::new();
                 for b in a.get("breakpoints").as_arr() {
                     let line = b.get("line").as_i64().unwrap_or(0);
-                    let r = self.cmd(&format!("break {path}:{line}"));
+                    let cond = b.get("condition").as_str().map(str::trim).filter(|c| !c.is_empty()).map(|c| format!(" if {c}")).unwrap_or_default();
+                    let r = self.cmd(&format!("break {path}:{line}{cond}"));
                     out.push(self.bp_result(&r, line));
                     if let Some(id) = r.get("id").as_i64() {
                         ids.push(id);
@@ -287,7 +296,8 @@ impl Dap {
                 let mut out = Vec::new();
                 for b in a.get("breakpoints").as_arr() {
                     let name = b.get("name").as_str().unwrap_or("");
-                    let r = self.cmd(&format!("break {name}"));
+                    let cond = b.get("condition").as_str().map(str::trim).filter(|c| !c.is_empty()).map(|c| format!(" if {c}")).unwrap_or_default();
+                    let r = self.cmd(&format!("break {name}{cond}"));
                     out.push(self.bp_result(&r, 0));
                     if let Some(id) = r.get("id").as_i64() {
                         self.fn_bps.push(id);
@@ -390,6 +400,27 @@ impl Dap {
                 };
                 self.respond(req, true, Some(obj([("variables", Json::Arr(vars))])), None);
             }
+            "setVariable" => {
+                // a local of a frame: `name = value`, evaluated there
+                let r = a.get("variablesReference").as_i64().unwrap_or(0);
+                let (name, value) = (a.get("name").as_str().unwrap_or(""), a.get("value").as_str().unwrap_or(""));
+                let res = match self.handles.get((r - 1).max(0) as usize).cloned() {
+                    Some(Handle::Frame { thread, frame }) => {
+                        let set = self.cmd(&format!("eval {frame} {thread} {name} = ({value})"));
+                        if set.get("ev").as_str() == Some("value") {
+                            let v = self.cmd(&format!("eval {frame} {thread} {name}"));
+                            Ok(obj([("value", v.get("value").clone()), ("type", v.get("type").clone())]))
+                        } else {
+                            Err(set.get("msg").as_str().unwrap_or("can't set it").to_string())
+                        }
+                    }
+                    _ => Err("only a local of a frame can be set".to_string()),
+                };
+                match res {
+                    Ok(b) => self.respond(req, true, Some(b), None),
+                    Err(e) => self.respond(req, false, None, Some(&e)),
+                }
+            }
             "evaluate" => match self.evaluate(a) {
                 Ok(b) => self.respond(req, true, Some(b), None),
                 Err(e) => self.respond(req, false, None, Some(&e)),
@@ -439,11 +470,33 @@ impl Dap {
         obj([("name", x.get("name").clone()), ("value", x.get("value").clone()), ("type", x.get("type").clone()), ("variablesReference", r.into())])
     }
 
-    /// `name`, or a path into it: `p.x`, `xs.2`, `xs[2]`, `m["k"]` (a part by its name as listed).
+    /// A local or a path into it (expandable), else any Duck expression, evaluated in the frame
+    /// (an assignment `x = 5` changes a `var` local).
     fn evaluate(&mut self, a: &Json) -> Result<Json, String> {
         if !self.stopped {
             return Err("the program is running".into());
         }
+        let path_err = match self.eval_path(a) {
+            Ok(j) => return Ok(j),
+            Err(e) => e,
+        };
+        let (thread, frame) = match self.handles.get((a.get("frameId").as_i64().unwrap_or(0) - 1).max(0) as usize) {
+            Some(Handle::Frame { thread, frame }) => (*thread, *frame),
+            _ => (1, 0),
+        };
+        let expr = a.get("expression").as_str().unwrap_or("").trim();
+        if expr.is_empty() {
+            return Err(path_err);
+        }
+        let v = self.cmd(&format!("eval {frame} {thread} {expr}"));
+        match v.get("ev").as_str() {
+            Some("value") => Ok(obj([("result", v.get("value").clone()), ("type", v.get("type").clone()), ("variablesReference", 0i64.into())])),
+            _ => Err(v.get("msg").as_str().unwrap_or("can't evaluate that").to_string()),
+        }
+    }
+
+    /// `name`, or a path into it: `p.x`, `xs.2`, `xs[2]`, `m["k"]` (a part by its name as listed).
+    fn eval_path(&mut self, a: &Json) -> Result<Json, String> {
         let (thread, frame) = match self.handles.get((a.get("frameId").as_i64().unwrap_or(0) - 1).max(0) as usize) {
             Some(Handle::Frame { thread, frame }) => (*thread, *frame),
             _ => (1, 0),

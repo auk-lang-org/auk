@@ -213,7 +213,8 @@ pub fn tools() -> Vec<Json> {
              the call stack. Returns JSON {stops: [{reason, fn, file, line, msg?, locals: {name: value}, stack}], \
              exit_code, stdout, stderr, note?, errors?}. `reason` is breakpoint, panic or timeout (still running when \
              the time ran out: where it was, e.g. an endless loop). Use it to see the actual values instead of \
-             guessing or adding prints; a breakpoint inside a loop stops on every iteration (see max_stops).",
+             guessing or adding prints; a breakpoint inside a loop stops on every iteration (see max_stops), or only \
+             where its condition holds (`file:line if i == 99`).",
             schema(
                 [
                     ("path", path("the .duck file with `fn main`")),
@@ -222,7 +223,7 @@ pub fn tools() -> Vec<Json> {
                         obj([
                             ("type", "array".into()),
                             ("items", obj([("type", "string".into())])),
-                            ("description", "Where to stop: `file:line` (the next line with code) or a function name.".into()),
+                            ("description", "Where to stop: `file:line` (the next line with code) or a function name, optionally followed by ` if <Duck condition>` (e.g. `main.duck:12 if n > 3`).".into()),
                         ]),
                     ),
                     (
@@ -230,7 +231,7 @@ pub fn tools() -> Vec<Json> {
                         obj([
                             ("type", "array".into()),
                             ("items", obj([("type", "string".into())])),
-                            ("description", "Only these locals at each stop (default: every local in scope).".into()),
+                            ("description", "What to show at each stop instead of every local: names of locals, or Duck expressions evaluated there (`xs.len()`, `p.x * 2`, calls to the program's functions).".into()),
                         ]),
                     ),
                     ("catch", prop("string", "Stop on panics: `uncaught` (default), `all` (also inside `catch`) or `none`.")),

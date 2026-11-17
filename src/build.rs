@@ -37,6 +37,8 @@ pub const LINK_LIBS: &[&str] = if cfg!(target_os = "macos") {
 /// A generated program (MIR), plus the holes found in it.
 pub struct Generated {
     pub prog: Program,
+    /// The debug info (`--debug`).
+    pub dbg: mir::progen::DbgInfo,
     pub holes: Vec<String>,
     /// The number of tests registered (test mode).
     pub tests: usize,
@@ -138,7 +140,8 @@ pub fn generate(tp: &TypedProgram, mode: Mode, trace: Trace) -> Result<Generated
     g.define(entry, b);
     g.prog.entry = Some(entry);
     let holes = g.holes.clone();
-    Ok(Generated { prog: g.prog, holes, tests: ntests })
+    let dbg = std::mem::take(&mut g.dbg_info);
+    Ok(Generated { prog: g.prog, dbg, holes, tests: ntests })
 }
 
 fn emit(g: &mut Gen, i: usize) {
@@ -212,7 +215,7 @@ fn dbg_tables(g: &mut Gen) -> (String, mir::GlobalId, mir::GlobalId) {
     (out, shows, kids_g)
 }
 
-fn drain(g: &mut Gen) {
+pub(crate) fn drain(g: &mut Gen) {
     while let Some(j) = g.queue.pop() {
         emit(g, j);
     }
@@ -519,7 +522,11 @@ pub fn build_native(path: &Path, out: &Path, debuginfo: bool) -> Result<(), Stri
 /// returns its exit code.
 pub fn jit_run(path: &Path, args: &[String], mode: Mode, trace: Trace) -> Result<i32, String> {
     let tp = check(path)?;
-    let g = generate(&tp, mode, trace)?;
+    let mut g = generate(&tp, mode, trace)?;
+    if trace.debug {
+        // a debugger may evaluate expressions at its stops
+        super::dbg_eval::install(path, &tp, std::mem::take(&mut g.dbg));
+    }
     if mode == Mode::Test && g.tests == 0 {
         eprintln!("note: {} has no `test` blocks", path.display());
     }

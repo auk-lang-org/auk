@@ -59,6 +59,11 @@ pub struct DbgSite {
     pub file: String,
     pub line: u32,
     pub col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
+    /// An expression body (`= e`, `x => e`) rather than a statement of a block: an evaluated
+    /// expression goes into a block around it instead of before it.
+    pub wrap: bool,
     /// The frame slots of the locals in scope at the statement.
     pub vis: Vec<u32>,
 }
@@ -69,10 +74,13 @@ pub struct DbgSite {
 pub struct DbgFn {
     pub name: String,
     pub locals: Vec<(String, u32)>,
+    /// Its body (the enclosing function's, for a closure) and type arguments.
+    pub body: BodyRef,
+    pub type_args: Vec<Ty>,
 }
 
 /// The debug info of a program built with `Debug::on`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct DbgInfo {
     pub sites: Vec<DbgSite>,
     pub fns: Vec<DbgFn>,
