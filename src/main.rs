@@ -94,6 +94,10 @@ fn usage() -> ! {
 }
 
 fn main() {
+    // started by a `gui.open` in a program run by this command, to own its windows
+    if env::var_os("DUCK_GUI_HOST").is_some() {
+        std::process::exit(duck_rt::gui_host::host_main());
+    }
     let args: Vec<String> = env::args().skip(1).collect();
     let Some((cmd, rest)) = args.split_first() else { usage() };
     let code = match cmd.as_str() {
@@ -108,12 +112,12 @@ fn main() {
         "fmt" => fmt::run(rest),
         "holes" => holes::run(rest),
         "hatch" => hatch::run(rest),
+        "debug" => debug::run(rest),
+        "dap" => dap::run(),
         "run" | "build" | "ir" | "test" => build::cli(cmd, rest),
         "__jit" => build::jit_cli(rest),
         "check" => match rest {
             [file] => check_file(file, false),
-        "debug" => debug::run(rest),
-        "dap" => dap::run(),
             [file, flag] if flag == "--json" => check_file(file, true),
             _ => usage(),
         },
@@ -132,7 +136,14 @@ fn main() {
 /// `duck check`: load the module tree (project, dependencies, core) and type-check it. Returns
 /// the exit code. Warnings (E0411) are reported but don't fail the check.
 fn check_file(path: &str, json: bool) -> i32 {
-    let diags = match resolve::load(Path::new(path)) {
+    let src = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: cannot read {path}: {e}");
+            return 1;
+        }
+    };
+    let diags = match resolve::load_in_package(Path::new(path), src) {
         Ok(prog) => check::check_all(prog).1,
         Err(ds) => ds,
     };

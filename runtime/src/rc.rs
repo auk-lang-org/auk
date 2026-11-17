@@ -155,6 +155,7 @@ pub unsafe fn free_now(p: *mut c_void) {
             DUCK_K_CONN => crate::core::duck__conn_free(p.cast()),
             DUCK_K_LISTENER => crate::core::duck__listener_free(p.cast()),
             DUCK_K_CHAN => crate::chan::duck__chan_free(p.cast()),
+            DUCK_K_FRAME => duck__free_obj(p),
             DUCK_K_OBJ => {
                 let o = p as *mut DuckObj;
                 if let Some(d) = (*o).drop {
@@ -368,6 +369,69 @@ pub extern "C" fn duck_fceil(a: f64) -> f64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn duck_fround(a: f64) -> f64 {
     a.round()
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_fsin(a: f64) -> f64 {
+    a.sin()
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_fcos(a: f64) -> f64 {
+    a.cos()
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_ftan(a: f64) -> f64 {
+    a.tan()
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_fasin(a: f64) -> f64 {
+    a.asin()
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_facos(a: f64) -> f64 {
+    a.acos()
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_fatan(a: f64) -> f64 {
+    a.atan()
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_fexp(a: f64) -> f64 {
+    a.exp()
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_fln(a: f64) -> f64 {
+    a.ln()
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_flog10(a: f64) -> f64 {
+    a.log10()
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_flog2(a: f64) -> f64 {
+    a.log2()
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_fatan2(y: f64, x: f64) -> f64 {
+    y.atan2(x)
+}
+/// The IEEE 754 bits of a float, as an int.
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_fbits(a: f64) -> i64 {
+    a.to_bits() as i64
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_ffrom_bits(n: i64) -> f64 {
+    f64::from_bits(n as u64)
+}
+/// The bits of a float rounded to single precision (0 to 2^32 - 1).
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_fbits32(a: f64) -> i64 {
+    i64::from((a as f32).to_bits())
+}
+/// A single-precision float from its low 32 bits.
+#[unsafe(no_mangle)]
+pub extern "C" fn duck_ffrom_bits32(n: i64) -> f64 {
+    f64::from(f32::from_bits(n as u32))
 }
 
 #[unsafe(no_mangle)]

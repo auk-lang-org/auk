@@ -183,7 +183,18 @@ fn main() {
 
 fn hover_value(c: &mut Client, uri: &str, line: u32, ch: u32) -> String {
     let h = c.request("textDocument/hover", doc_pos(uri, line, ch));
-    h.at(&["contents", "value"]).as_str().unwrap_or_else(|| panic!("no hover at {line}:{ch}: {h}")).to_string()
+    let v = h.at(&["contents", "value"]).as_str().unwrap_or_else(|| panic!("no hover at {line}:{ch}: {h}")).to_string();
+    // links to files keep only the file name: `[util.duck:2](file:///tmp/…/util.duck#L2)` → `(util.duck#L2)`
+    let mut out = String::new();
+    let mut rest = v.as_str();
+    while let Some(i) = rest.find("](file://") {
+        out.push_str(&rest[..i + 2]);
+        let url = &rest[i + 2..];
+        let end = url.find(')').unwrap_or(url.len());
+        out.push_str(&url[url[..end].rfind('/').map_or(0, |j| j + 1)..end]);
+        rest = &url[end..];
+    }
+    out + rest
 }
 
 #[test]
@@ -239,7 +250,7 @@ fn lsp_session() {
     assert_eq!(hover_value(&mut c, &uri, 6, 7), "```duck\nlet total: int\n```");
     assert_eq!(hover_value(&mut c, &uri, 6, 15), "```duck\nfn add(a: int, b: int): int\n```\n\nAdds two numbers.");
     assert_eq!(hover_value(&mut c, &uri, 7, 7), "```duck\nlet pair: (str, int)\n```");
-    assert_eq!(hover_value(&mut c, &uri, 10, 33), "```duck\npub fn double(n: int): int\n```\n\nDoubles n.");
+    assert_eq!(hover_value(&mut c, &uri, 10, 33), "```duck\npub fn double(n: int): int\n```\n\nDefined in `app.util` (this package) — [util.duck:2](util.duck#L2)\n\nDoubles n.");
 
     // didChange fixing both errors: empty diagnostics
     let change = obj([
@@ -255,9 +266,12 @@ fn lsp_session() {
     assert_eq!(hover_value(&mut c, &uri, 6, 15), "```duck\nfn add(a: int, b: int): int\n```\n\nAdds two numbers.");
     assert_eq!(hover_value(&mut c, &uri, 7, 7), "```duck\nlet pair: (str, int)\n```");
     assert_eq!(hover_value(&mut c, &uri, 3, 9), "```duck\nvar n: int\n```");
-    assert_eq!(hover_value(&mut c, &uri, 10, 33), "```duck\npub fn double(n: int): int\n```\n\nDoubles n.");
+    assert_eq!(hover_value(&mut c, &uri, 10, 33), "```duck\npub fn double(n: int): int\n```\n\nDefined in `app.util` (this package) — [util.duck:2](util.duck#L2)\n\nDoubles n.");
     // the whole call expression `add(1, 2)`: its type
     assert_eq!(hover_value(&mut c, &uri, 6, 23), "```duck\nint\n```");
+    // a core function: where it comes from, without a link (the prelude is compiled in)
+    let h = hover_value(&mut c, &uri, 10, 3);
+    assert!(h.contains("(core library)") && !h.contains("]("), "{h}");
     assert!(c.request("textDocument/hover", doc_pos(&uri, 4, 0)).is_null());
 
     // definition: a function in another module of the project, a local function, a local
@@ -409,13 +423,13 @@ fn main() {
     assert_eq!(def(12, 35), there(5, 7, 5, 11), "dependency function");
     assert_eq!(def(12, 26), there(1, 19, 1, 20), "dependency field");
 
-    assert_eq!(hover_value(&mut c, &uri, 12, 26), "```duck\nx: float\n```");
-    assert_eq!(hover_value(&mut c, &uri, 6, 15), "```duck\npub struct Point\n```\n\nA point.");
-    assert_eq!(hover_value(&mut c, &uri, 9, 5), "```duck\nShape.Circle(r: float)\n```");
-    assert_eq!(hover_value(&mut c, &uri, 7, 21), "```duck\nShape.Circle(r: float)\n```");
+    assert_eq!(hover_value(&mut c, &uri, 12, 26), "```duck\nx: float\n```\n\nDefined in `geo` (library `geo`) — [lib.duck:2](lib.duck#L2)");
+    assert_eq!(hover_value(&mut c, &uri, 6, 15), "```duck\npub struct Point\n```\n\nDefined in `geo` (library `geo`) — [lib.duck:2](lib.duck#L2)\n\nA point.");
+    assert_eq!(hover_value(&mut c, &uri, 9, 5), "```duck\nShape.Circle(r: float)\n```\n\nDefined in `geo` (library `geo`) — [lib.duck:4](lib.duck#L4)");
+    assert_eq!(hover_value(&mut c, &uri, 7, 21), "```duck\nShape.Circle(r: float)\n```\n\nDefined in `geo` (library `geo`) — [lib.duck:4](lib.duck#L4)");
     assert_eq!(hover_value(&mut c, &uri, 2, 40), "```duck\nlet i: Item\n```");
-    assert_eq!(hover_value(&mut c, &uri, 12, 35), "```duck\npub fn area(s: Shape): float\n```");
-    assert_eq!(hover_value(&mut c, &uri, 12, 31), "```duck\nmodule geo\n```");
+    assert_eq!(hover_value(&mut c, &uri, 12, 35), "```duck\npub fn area(s: Shape): float\n```\n\nDefined in `geo` (library `geo`) — [lib.duck:6](lib.duck#L6)");
+    assert_eq!(hover_value(&mut c, &uri, 12, 31), "```duck\nmodule geo\n```\n\nDefined in `geo` (library `geo`) — [lib.duck:1](lib.duck#L1)");
     assert_eq!(hover_value(&mut c, &uri, 13, 28), "```duck\nint?\n```", "`?.1` of a tuple");
     assert!(c.request("textDocument/definition", doc_pos(&uri, 13, 28)).is_null(), "a tuple element has no definition");
 

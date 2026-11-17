@@ -922,6 +922,35 @@ pub unsafe extern "C" fn duck_env_args() -> *mut DuckArr {
     g.0
 }
 
+/// Whether file descriptor `fd` (0 stdin, 1 stdout, 2 stderr) is a terminal.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn duck_env_is_terminal(fd: i64) -> bool {
+    (0..=2).contains(&fd) && unsafe { libc::isatty(fd as c_int) } == 1
+}
+
+/// The terminal's width in columns: from stdout, stderr or stdin (the first that is a
+/// terminal), else `$COLUMNS`, else none.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn duck_env_columns() -> DuckOpt_int {
+    unsafe {
+        for fd in [1, 2, 0] {
+            let mut ws: libc::winsize = std::mem::zeroed();
+            if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 {
+                return DuckOpt::some(ws.ws_col as i64);
+            }
+        }
+        let v = libc::getenv(c"COLUMNS".as_ptr());
+        if !v.is_null() {
+            if let Ok(n) = std::ffi::CStr::from_ptr(v).to_string_lossy().trim().parse::<i64>() {
+                if n > 0 {
+                    return DuckOpt::some(n);
+                }
+            }
+        }
+        DuckOpt::none()
+    }
+}
+
 // stdin: read through stdio (one buffer shared by read_line, read_all and lines). Stdout is
 // flushed first, so a prompt printed without a newline-terminated flush still shows.
 

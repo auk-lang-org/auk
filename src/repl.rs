@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! <every definition of the session>
-//! fn main(): ()! uses fs, net, time, rand, env, proc {
+//! fn main(): ()! uses fs, net, time, rand, env, proc, audio_out, gui {
 //!   <every earlier statement, replayed>
 //!   print("\u{1}pond-start")        // the marker: only output after it is shown
 //!   <the new input>
@@ -54,7 +54,7 @@ const CONT: &str = ".. ";
 const MARK: &str = "\u{1}pond-start\n";
 const VALUE_MARK: &str = "\u{1}pond-value\n";
 /// The effects `main` declares, so any input may use them.
-const EFFECTS: &[&str] = &["fs", "net", "time", "rand", "env", "proc"];
+const EFFECTS: &[&str] = &["fs", "net", "time", "rand", "env", "proc", "audio_out", "gui"];
 /// The name of the binding an expression's value is stored in.
 const RESULT: &str = "__pond_r";
 

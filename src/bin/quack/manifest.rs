@@ -6,10 +6,10 @@ use super::{Error, Res, err};
 use std::path::Path;
 
 /// Effects a package may declare.
-pub const EFFECTS: [&str; 7] = ["fs", "net", "time", "rand", "env", "proc", "ffi"];
+pub const EFFECTS: [&str; 9] = ["fs", "net", "time", "rand", "env", "proc", "audio_out", "gui", "ffi"];
 
 /// Core module names, which no package may take.
-const CORE: [&str; 13] = ["fs", "net", "time", "rand", "env", "proc", "ffi", "str", "int", "float", "bool", "math", "core"];
+const CORE: [&str; 16] = ["fs", "net", "time", "rand", "env", "proc", "audio_out", "gui", "pixels", "ffi", "str", "int", "float", "bool", "math", "core"];
 
 /// A parsed `quack.toml`.
 #[derive(Debug)]

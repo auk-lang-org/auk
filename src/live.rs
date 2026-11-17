@@ -489,6 +489,9 @@ pub fn cli(args: &[String]) -> i32 {
     let mut argv = vec![file.clone()];
     argv.extend(rest.iter().cloned());
     let mut last: Files = vec![(path.clone(), mtime(&path))];
+    // every run of the program shares one window process (gui.rs), so a restart keeps its windows
+    let session = std::env::temp_dir().join(format!("duck-gui-{}.sock", std::process::id()));
+    unsafe { std::env::set_var("DUCK_GUI_SESSION", &session) };
     loop {
         let mut slots = HashMap::new();
         let b = match build(&path, &mut slots) {
@@ -520,6 +523,8 @@ pub fn cli(args: &[String]) -> i32 {
             let p = path.clone();
             std::thread::spawn(move || watch(p, slots, files, lay, seen, me));
             let code = b.jit.jit.run(&argv);
+            // a normal end: its windows close now instead of waiting for the next run
+            duck_rt::gui::shutdown();
             unsafe {
                 libc::fflush(std::ptr::null_mut());
                 libc::_exit(code);

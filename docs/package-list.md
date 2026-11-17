@@ -291,9 +291,13 @@ pub fn find(pattern: str): [str]! uses fs    // "src/**/*.duck"
 | `semver` | versions, requirements, matching | semver (#59) | none | S |
 | `prop` | property-based testing with shrinking (deterministic seed) | proptest (227,414,436), quickcheck (76,763,225) | none | M |
 | `snap` | snapshot assertions with readable diffs | insta (120,156,469), similar (234,546,854) | `fs` | S |
+| `audio` | *Done (0.1.0).* Decode/encode WAV, AIFF/AIFC, AU and FLAC; resampling, filters, dynamics, EBU R128 loudness, ffmpeg-style `-af` graphs | symphonia, hound, claxon, rubato, dasp, ebur128 | none | L |
+| `graphics` | *Started (0.1.0).* Drawing into `pixels` frames. `graphics.font`: parse TrueType fonts, rasterize glyphs, draw and measure text | ab_glyph, fontdue, rusttype, ttf-parser | `fs` (loading only) | M |
 
 - **`crypto`**: write it as thin bindings over the same vetted C library the runtime links for TLS, not as pure Duck. Constant-time code and side-channel safety are hard to get right in a refcounted, bounds-checked language.
 - **`semver`** ranks high (#59), but most of its downloads come from Rust build tooling (`rustc_version`, cargo plugins). AI-written apps rarely need it.
+- **`audio`** is pure Duck and checked against ffmpeg and libFLAC: every decoder is bit-exact with ffmpeg; the G.711 encoders, biquads, `tremolo`, `acompressor` and `agate` match ffmpeg's output; loudness matches its `ebur128`; FLAC output passes `flac -t` and compresses like `flac -5`/`-8`. Not yet: lossy codecs (MP3, AAC, Vorbis, Opus) and Ogg/MP4/Matroska containers. Needed core math (`sin cos tan asin acos atan atan2 exp ln log10 log2`, `float.pi`, and float bit conversions for binary formats), which is now in core.
+- **`graphics`** is pure Duck, made for `gui`. The glyph masks of `graphics.font` agree with Core Text's to within 1.3% of total coverage at 40 px (2.6–6.6% at 24 and 13 px), with glyphs at the same positions. Not yet: hinting, CFF outlines, complex shaping, line wrapping.
 - **`sqlite`** sits well below the top 300 in Rust because Rust's database users spread across many drivers. It's still a frequent need in small AI-written apps, so it's worth doing once `ffi` is mature.
 
 **Considered and not proposed:**

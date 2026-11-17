@@ -228,6 +228,10 @@ pub unsafe extern "C" fn duck_test_main(argc: c_int, argv: *mut *mut c_char) -> 
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn duck_main_wrapper(argc: c_int, argv: *mut *mut c_char, user_main: DuckMainFn) -> c_int {
+    // started by a `gui.open` of this same program to own its windows (gui.rs)
+    if std::env::var_os("DUCK_GUI_HOST").is_some() {
+        return crate::gui_host::host_main();
+    }
     unsafe {
         crate::core::duck_env_set_args(argc, argv);
         let r = user_main(crate::core::duck_env_args());

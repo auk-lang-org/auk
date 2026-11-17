@@ -45,6 +45,13 @@ fn arith_checked() {
         assert!(duck_fround(2.5) == 3.0 && duck_fround(-2.5) == -3.0);
         assert!(duck_fsqrt(16.0) == 4.0 && duck_ffloor(-1.5) == -2.0 && duck_fceil(1.2) == 2.0);
         assert!(duck_fpow(2.0, 10.0) == 1024.0);
+        assert!(duck_fsin(0.0) == 0.0 && duck_fcos(0.0) == 1.0 && (duck_fatan2(1.0, 1.0) - std::f64::consts::FRAC_PI_4).abs() < 1e-15);
+        assert!(duck_fexp(0.0) == 1.0 && duck_fln(1.0) == 0.0 && duck_flog10(1000.0) == 3.0 && duck_flog2(8.0) == 3.0);
+        assert!((duck_ftan(0.5) - 0.5f64.tan()).abs() < 1e-15 && duck_fasin(1.0) == std::f64::consts::FRAC_PI_2 && duck_facos(1.0) == 0.0 && duck_fatan(0.0) == 0.0);
+        assert_eq!(duck_fbits(1.5), 1.5f64.to_bits() as i64);
+        assert!(duck_ffrom_bits(duck_fbits(-0.1)) == -0.1);
+        assert_eq!(duck_fbits32(0.5), 0x3f00_0000);
+        assert!(duck_ffrom_bits32(0x3f00_0000) == 0.5 && duck_ffrom_bits32(0xbf80_0000) == -1.0);
         assert!(duck_float_cmp(f64::NAN, 1.0) > 0 && duck_float_cmp(1.0, 2.0) < 0);
     });
 }

@@ -1,0 +1,118 @@
+// Text in a native window (M3 of docs/gui-plan.md), drawn by `graphics.font` on a
+// `graphics.canvas`: after the first frame, an edit redraws and shows only the input box and the
+// status line. Type to edit the line under the heading; ←/→ and clicks move the caret, ⌫ deletes.
+// Close it with the close button, ⌘Q or Escape.
+//
+//   duck run examples/gui_text.duck            (or `duck run --live`, and edit `draw_box`)
+//   duck run examples/gui_text.duck --for 2000 (closes itself after 2 s; for tests)
+
+struct Ui {
+  head: graphics.font.Face,
+  body: graphics.font.Face,
+  mono: graphics.font.Face,
+  pad: int,
+}
+
+let BG = 0xf6f4ef
+
+let SAMPLE =
+  "Quick wafting zephyrs vex bold Jim.\nAVATAR, Toast, WAVE: kerned pairs; fjord, éàü 12345."
+
+// where things go, from the top
+fn box_y(ui: Ui): int = ui.pad + ui.head.line_height() + ui.pad / 2
+
+fn box_h(ui: Ui): int = ui.body.line_height() + ui.pad / 2
+
+fn info_y(ui: var Ui): int = box_y(ui) + box_h(ui) + ui.pad / 2 + ui.body.measure(SAMPLE).1 + ui.pad
+
+/// Everything: after opening and after a resize.
+fn draw_all(ui: var Ui, c: var graphics.canvas.Canvas, line: str, caret: int, info: str) {
+  let p = ui.pad
+  c.fill(0, 0, c.width(), c.height(), BG)
+  c.text(&ui.head, p, p, "Text, drawn in Duck", 0x1d2a3a)
+  c.text(&ui.body, p, box_y(ui) + box_h(ui) + p / 2, SAMPLE, 0x333333)
+  draw_box(&ui, &c, line, caret)
+  draw_info(&ui, &c, info)
+}
+
+/// The editable line in its box, with the caret: redrawn on each edit, and only it is shown.
+fn draw_box(ui: var Ui, c: var graphics.canvas.Canvas, line: str, caret: int) {
+  let p = ui.pad
+  let w = c.width()
+  let y = box_y(ui)
+  let lh = ui.body.line_height()
+  c.fill(p, y, w - 2 * p, box_h(ui), 0xffffff)
+  c.blend(p, y + box_h(ui) - 2, w - 2 * p, 2, 0x5f3b6fd6)  // 0x5f: a little transparent
+  let tx = p + p / 4
+  let ty = y + p / 4
+  c.text(&ui.body, tx, ty, line, 0x111111)
+  let cx = tx + int(round(ui.body.caret_x(line, caret)))
+  c.fill(cx, ty, int(ceil(ui.body.size / 16.0)), lh, 0x3b6fd6)
+}
+
+fn draw_info(ui: var Ui, c: var graphics.canvas.Canvas, info: str) {
+  let y = info_y(&ui)
+  c.fill(0, y, c.width(), ui.mono.line_height(), BG)
+  let _ = c.text(&ui.mono, ui.pad, y, info, 0x7a6f5c)
+}
+
+fn main(args: [str]): int! uses gui, fs, time {
+  let limit = match args {
+    [_, "--for", ms] => int.parse(ms) else 0
+    _ => 0
+  }
+  let start = time.now()
+  let win = gui.open("duck: text", 640, 300)?
+  let s = gui.scale(win)
+  let sans = graphics.font.system_sans()?
+  var ui = Ui {
+    head: graphics.font.face(sans, 28.0 * s),
+    body: graphics.font.face(sans, 17.0 * s),
+    mono: graphics.font.face(graphics.font.system_mono()?, 12.0 * s),
+    pad: int(16.0 * s),
+  }
+  var c = graphics.canvas.canvas(gui.width(win), gui.height(win), BG)
+  var line = "Edit me: héllo, wörld"
+  var caret = line.len()
+  var frames = 0
+  var ms = 0
+  var resized = true
+  loop {
+    let t0 = time.now()
+    let info = "{c.width()}x{c.height()} px, scale {s}, last frame {ms} ms"
+    if resized {
+      draw_all(&ui, &c, line, caret, info)
+    } else {
+      draw_box(&ui, &c, line, caret)
+      draw_info(&ui, &c, info)
+    }
+    resized = false
+    c.show(win)?  // just the box and the info line, after the first time
+    ms = time.now() - t0
+    frames += 1
+    if limit > 0 && time.now() - start > limit { break }
+    match gui.next_event(win, if limit > 0 { 50 } else { -1 }) {
+      some(gui.Close) => break
+      some(gui.KeyDown(53, _, _)) => break             // Escape
+      some(gui.KeyDown(51, _, _)) when caret > 0 => {  // Backspace
+        line = line[0..caret - 1] + line[caret..line.len()]
+        caret -= 1
+      }
+      some(gui.KeyDown(123, _, _)) when caret > 0 => caret -= 1           // ←
+      some(gui.KeyDown(124, _, _)) when caret < line.len() => caret += 1  // →
+      some(gui.Text(t)) => {
+        line = line[0..caret] + t + line[caret..line.len()]
+        caret += t.len()
+      }
+      some(gui.MouseDown(0, x, _, _)) => caret = ui.body.hit(line, float(x - ui.pad - ui.pad / 4))
+      some(gui.Resize(nw, nh)) => {
+        c.resize(nw, nh, BG)
+        resized = true
+      }
+      _ => {}
+    }
+  }
+  gui.close(win)
+  print("{frames} frames; text ok")
+  0
+}

@@ -49,7 +49,7 @@ pub struct Heap {
 
 /// Is an object of this kind a handle (never tracked, shared by reference count)?
 pub fn is_handle(kind: u32) -> bool {
-    matches!(kind, DUCK_K_TASK | DUCK_K_CONN | DUCK_K_LISTENER | DUCK_K_CHAN)
+    matches!(kind, DUCK_K_TASK | DUCK_K_CONN | DUCK_K_LISTENER | DUCK_K_CHAN | DUCK_K_FRAME)
 }
 
 /// The current task took (`+1`) or gave back (`-1`) a reference to the handle `p`.

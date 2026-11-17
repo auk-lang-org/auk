@@ -7,7 +7,8 @@
 //!   related information). Errors in other files of the program are published to those files.
 //! - **Code actions**: each diagnostic's fix-its become one quick fix (a `WorkspaceEdit`).
 //! - **Hover**: the type of the innermost expression or pattern under the cursor (from the
-//!   `TypedProgram` side tables), a function's signature and `///` docs, a type's docs.
+//!   `TypedProgram` side tables), a function's signature and `///` docs, a type's docs, and
+//!   where it is defined when that is another file (core, a library, or this package).
 //! - **Go to definition**: locals, constants, functions (the first clause of a clause group),
 //!   structs, enums, shapes, variants and fields, across modules and dependencies. When the
 //!   program doesn't type-check, names and paths are looked up syntactically in the module tree.
@@ -245,13 +246,13 @@ fn doc_path(uri: &str) -> PathBuf {
 
 /// Load and check the program rooted at `path` with the given root text.
 fn analyze(path: &Path, text: &str) -> (Model, Vec<FileDiag>) {
-    let run = || match resolve::load_source(path, text.to_string()) {
+    let run = || match resolve::load_in_package(path, text.to_string()) {
         Err(ds) => (Model::default(), ds),
         Ok(prog) => {
             let (tp, ds) = check::check_partial(prog);
             // warnings are only shown alongside errors (as `check::check` does)
             let ds = if ds.iter().all(|d| d.diag.is_warning()) { Vec::new() } else { ds };
-            let prog = if tp.is_none() { resolve::load_source(path, text.to_string()).ok() } else { None };
+            let prog = if tp.is_none() { resolve::load_in_package(path, text.to_string()).ok() } else { None };
             (Model { typed: tp, prog }, ds)
         }
     };
@@ -908,7 +909,7 @@ type Loc = (ModId, Span);
 
 fn definition(doc: &Doc, pos: (u32, u32)) -> Option<Json> {
     let prog = doc.model.program()?;
-    let m = prog.root;
+    let m = prog.focus;
     let hit = find(prog, m, pos)?;
     let (dm, span) = doc.model.typed.as_ref().and_then(|tp| typed_definition(tp, m, hit)).or_else(|| syntactic_definition(prog, m, hit))?;
     let file = &prog.mods[dm].file;
@@ -1133,15 +1134,59 @@ fn find_item(prog: &Program, m: ModId, path: &[&str]) -> Option<Loc> {
 
 fn hover(doc: &Doc, pos: (u32, u32)) -> Option<Json> {
     let tp = doc.model.typed.as_ref()?;
-    let m = tp.program.root;
+    let m = tp.program.focus;
     let hit = find(&tp.program, m, pos)?;
     let (code, docs) = hover_text(tp, m, hit)?;
     let mut value = format!("```duck\n{code}\n```");
+    if let Some(o) = hover_origin(tp, m, hit).and_then(|loc| origin_text(&tp.program, m, loc)) {
+        value += "\n\n";
+        value += &o;
+    }
     if let Some(d) = docs.filter(|d| !d.trim().is_empty()) {
         value += "\n\n";
         value += d.trim();
     }
     Some(obj([("contents", obj([("kind", "markdown".into()), ("value", value.into())]))]))
+}
+
+/// Where the thing under the cursor is defined, for the hover's "Defined in" line.
+fn hover_origin(tp: &TypedProgram, m: ModId, hit: Hit) -> Option<Loc> {
+    let module_start = |mm: ModId| (mm, Span { line: 1, col: 1, end_line: 1, end_col: 1 });
+    match hit {
+        Hit::TypePath(path, i) => find_item(&tp.program, m, &path[..=i].iter().map(|x| x.name.as_str()).collect::<Vec<_>>()),
+        Hit::FnDecl(..) | Hit::Decl(_) => None,
+        Hit::Expr(e, _) | Hit::Member(e, _, _) => typed_definition(tp, m, hit).or_else(|| {
+            // a module path (`util`, `audio.out`): the module itself
+            if tp.tables[m].types.contains_key(&e.id) {
+                return None;
+            }
+            module_path(&tp.program, m, &as_path(e)?).map(module_start)
+        }),
+        _ => typed_definition(tp, m, hit),
+    }
+}
+
+/// "Defined in `core.list` (core library)", "Defined in `audio.out` (library `audio`) — [out.duck:12](…)";
+/// nothing for what is defined in the file itself.
+fn origin_text(prog: &Program, m: ModId, (dm, span): Loc) -> Option<String> {
+    if dm == m {
+        return None;
+    }
+    let md = &prog.mods[dm];
+    let pkg = &prog.pkgs[md.pkg];
+    let whose = if pkg.is_core {
+        "core library".to_string()
+    } else if md.pkg == prog.mods[m].pkg {
+        "this package".to_string()
+    } else {
+        format!("library `{}`", pkg.name)
+    };
+    let mut s = format!("Defined in `{}` ({whose})", prog.name(dm));
+    if let Some(uri) = file_uri(&md.file) {
+        let base = Path::new(&md.file).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+        s += &format!(" — [{base}:{}]({uri}#L{})", span.line, span.line);
+    }
+    Some(s)
 }
 
 /// `pub async fn name<A: Show>(a: int, xs: var [A]): str uses fs`.

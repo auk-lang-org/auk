@@ -1661,7 +1661,9 @@ impl<'g, 'a> Lower<'g, 'a> {
                     let generic = gp.is_some_and(|p| matches!(p.ty, Ty::Param(_)));
                     cs.push(match a {
                         ArgV::Addr(p, ty) => {
-                            if matches!(ty, Ty::List(_) | Ty::Map(..)) {
+                            // the runtime changes these in place (copying them first if shared),
+                            // so it gets the variable; other `var` arguments go by value
+                            if matches!(ty, Ty::List(_) | Ty::Map(..)) || self.g.info.is_cow_opaque(ty) {
                                 p.clone()
                             } else {
                                 p.clone().deref(d(ty))

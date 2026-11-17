@@ -57,6 +57,10 @@ pub mod catch;
 pub mod heap;
 pub mod copy;
 pub mod chan;
+pub mod audio_out;
+pub mod gui;
+pub mod gui_host;
+pub mod pixels;
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::atomic::AtomicI64;
@@ -72,6 +76,7 @@ pub const DUCK_K_TASK: u32 = 6;
 pub const DUCK_K_CONN: u32 = 7;
 pub const DUCK_K_LISTENER: u32 = 8;
 pub const DUCK_K_CHAN: u32 = 9;
+pub const DUCK_K_FRAME: u32 = 10;
 
 /// Every heap object begins with this. rc < 0 marks an immortal object.
 #[repr(C)]
@@ -298,6 +303,17 @@ pub struct DuckConn {
     pub h: DuckHeader,
     pub fd: c_int,
     pub tls: *mut c_void,
+}
+
+/// A `pixels.Frame`: `w`×`h` colors 0xTTRRGGBB (T: transparency, 0 opaque), rows top to
+/// bottom, stored inline after the header. A handle (shared between tasks by reference count,
+/// never tracked by a task's heap) that is copied before a write when shared.
+#[repr(C)]
+pub struct DuckFrame {
+    pub h: DuckHeader,
+    pub w: i64,
+    pub hgt: i64,
+    pub data: [u32; 0],
 }
 
 #[repr(C)]

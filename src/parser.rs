@@ -468,7 +468,7 @@ impl Parser {
         };
         let mut uses = Vec::new();
         if self.eat(&Tok::Uses) {
-            uses.push(self.ident("an effect name after `uses` (fs, net, time, rand, env, proc, ffi)")?);
+            uses.push(self.ident("an effect name after `uses` (fs, net, time, rand, env, proc, audio_out, gui, ffi)")?);
             while self.eat(&Tok::Comma) {
                 uses.push(self.ident("an effect name after `,`")?);
             }

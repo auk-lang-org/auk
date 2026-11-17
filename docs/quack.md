@@ -3,7 +3,7 @@
 `quack` fetches, pins and audits Duck packages. Its one unusual feature is that **packages declare their effects**, and `quack` refuses to install a package that needs an effect your project hasn't allowed. Because of that, a project's `quack.toml` tells you the most that any dependency can do.
 
 ## Core vs packages
-- **Core** (always available, no install): collections, strings, math, `Set<T>`, `Value`, and the effect primitives `fs`, `net`, `env`, `proc`, `time`, `rand`. Core is kept to what the language itself needs:
+- **Core** (always available, no install): collections, strings, math, `Set<T>`, `Value`, and the effect primitives `fs`, `net`, `env`, `proc`, `time`, `rand`, `audio_out`, `gui`. Core is kept to what the language itself needs:
   - Console: `print(x)` and `eprint(x)` (stdout and stderr; no effect needed). Stdin is part of `env`, alongside arguments and environment variables (all three are input the invoker hands the program, so no separate effect): `env.read_line(): str?` (none at end of input), `env.read_all(): str!`, `env.lines(): [str]`. `proc.exit(code: int): never uses proc` ends the program (stdout/stderr flushed).
   - Files (`uses fs`): `read`, `write`, `append`, `lines`, `read_bytes(p): [int]!`, `write_bytes(p, bs: [int]): ()!` (bytes as ints 0–255; an Err if one is out of range), `exists(p): bool`, `is_dir(p): bool`, `list(dir): [str]!` (sorted names), `mkdir(p): ()!` (with parents), `remove(p): ()!` (file or empty dir), `rename(a, b): ()!`, `temp_dir(): str!` (a new private dir).
   - Random (`uses rand`): `rand.int(lo, hi)`, `rand.float()`, `rand.shuffle(xs): [T]` and `rand.choice(xs): T?` come from a fast generator that `rand.seed(n)` makes repeatable for tests (not cryptographic); `rand.bytes(n): [int]` comes from the OS's cryptographic generator and ignores the seed.
@@ -28,6 +28,7 @@
 | `toml` | TOML 1.0 `parse` (text → core `Value`), `str`, `decode`/`encode` for any `Data` | none |
 | `log` | leveled logfmt / JSON-lines logging to stderr through a `Logger` value (depends on `json`) | none |
 | `xml` | XML 1.0 `parse` into an `Element` tree, queries (`child`, `all`, `descendants`, `text`), `str`/`pretty` writers | none |
+| `audio` | decode/encode WAV, AIFF/AIFC, AU, FLAC; `probe`; resample, remix, filters, dynamics, time stretch, EBU R128 loudness, spectra; ffmpeg-style `apply("highpass=f=80,loudnorm")` | none |
 
 ## Project layout
 ```

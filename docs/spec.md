@@ -114,7 +114,7 @@ let m = xs.max()!                              // unwrap or panic
 Maps keep insertion order. `m[k]` panics if the key is missing; `m[k] = v` inserts or replaces; `m.get(k)`/`xs.get(i)` return `V?`/`T?`.
 
 ## Effects
-A function touching the outside world declares it: `uses fs, net, time, rand, env, proc, ffi`. Without `uses` it is pure; `print` is always allowed.
+A function touching the outside world declares it: `uses fs, net, time, rand, env, proc, audio_out, gui, ffi`. Without `uses` it is pure; `print` is always allowed.
 
 ## Async
 ```
@@ -158,5 +158,6 @@ fn main(args: [str]): int! uses fs {    // the parameters and return type are op
 `fs`: `read write append lines read_bytes write_bytes exists is_dir list mkdir remove rename temp_dir` · `net.tcp(host, port): net.Conn!`, `net.tls` (cert-verified): `read(max): [int]! write(bytes) close()` · `net.listen(host, port): net.Listener!` (port 0: any): `accept(): Conn! port() close()` · `time.now()` (ms) `sleep(ms)` · `rand`: `int(lo, hi) float shuffle choice seed(n)`, secure `bytes(n)` · `env`: `get(k): str? args`, stdin `read_line(): str? read_all lines` · `proc`: `run(cmd, args): str! exit(code)` · `eprint` (stderr)
 `enum Value { Null, Bool(b), Int(i), Float(f), Str(s), List(xs), Map(m) }`: structs and enums get `to_value(x)` and `from_value(v): T!`.
 Collections: `len push pop(): T? insert remove contains get first last min max: T? map filter flat_map reduce(init, f) find(pred): T? find_index: int? take skip take_while any all sum reverse chunks(n) windows(n) counts(): {T: int} group_by(key): {K: [T]} unique zip enum join(sep)` · `sort sort_by(key)`: stable sorted copies; tuples and lists compare element by element: `sort_by(p => (-p.n, p.name))` · maps: `remove(k): V? keys values entries`.
-Strings: `len split(sep = whitespace) trim lines starts_with ends_with replace find(sub): int? (char index) contains upper lower repeat(n) chars bytes` · chars: `is_digit is_alpha is_space upper lower` (ASCII) · `int.parse float.parse str.from_utf8`. Floats: `sqrt abs floor ceil round`.
-Prefer these to hand-written loops. Packages (quack): `json csv regex cli http encoding hash datetime url toml log uuid num text glob compress yaml xml sup splash`.
+Strings: `len split(sep = whitespace) trim lines starts_with ends_with replace find(sub): int? (char index) contains upper lower repeat(n) chars bytes` · chars: `is_digit is_alpha is_space upper lower` (ASCII) · `int.parse float.parse str.from_utf8`. Floats: `sqrt abs floor ceil round sin cos tan asin acos atan atan2(y, x) exp ln log10 log2`, `x.bits()`/`float.from_bits(n)` (and `bits32`/`from_bits32` for f32), `float.pi` `float.e`.
+`gui` (windows, in a separate window process; macOS so far): `open(title, w, h): int! present(win, f)! present_rect(win, f, x, y, w, h)! present_rects(win, f, [x, y, w, h, ...])! next_event(win, ms): gui.Event? width height scale close` · `pixels` (pure): `pixels.Frame`, 32-bit pixels `0xTTRRGGBB` where the top byte is transparency (0 opaque, so `0xRRGGBB` is opaque; `CLEAR` = `0xff000000`), copy-on-write like any value: `frame(w, h, color) from_list(w, h, px) to_list width height get set fill blend blit composite blit_mask argb(a, r, g, b) alpha(c)`.
+Prefer these to hand-written loops. Packages (quack): `json csv regex cli http encoding hash datetime url toml log uuid num text glob compress yaml xml sup splash audio graphics term template markdown`.

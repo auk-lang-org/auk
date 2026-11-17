@@ -146,6 +146,25 @@ fn csv_stats_summarizes_a_column() {
     assert_eq!(text(&o).1, "error: no column nope\n");
 }
 
+/// `examples/aconv.duck`: generate a tone, filter it into a FLAC file, probe it, and measure it.
+#[test]
+fn aconv_generates_converts_and_probes() {
+    setup();
+    let d = scratch("aconv");
+    let flac = d.join("tone.flac");
+    let f = flac.to_str().unwrap();
+    let out = run_ok(&["run", "examples/aconv.duck", "-f", "lavfi", "-i", "sine=f=1000:d=0.5:r=8000", "-af", "volume=6dB,afade=t=out:d=0.1", "-metadata", "title=Beep", f]);
+    assert!(out.contains("tone.flac: flac, 8000 Hz, 1 ch, 00:00:00.500,"), "{out}");
+    let out = run_ok(&["run", "examples/aconv.duck", "-i", f]);
+    assert!(out.contains("Stream: Audio: flac (flac), 8000 Hz, 1 channels, 16 bits") && out.contains("title           : Beep"), "{out}");
+    let wav = d.join("half.wav");
+    let out = run_ok(&["run", "examples/aconv.duck", "-i", f, "-t", "0.25", "-ar", "16000", "-ac", "2", "-sample_fmt", "s24", "-stats", wav.to_str().unwrap()]);
+    assert!(out.contains("channel 1: peak -12.0") && out.contains("half.wav: pcm_s24le, 16000 Hz, 2 ch, 00:00:00.250"), "{out}");
+    let o = duck(&["run", "examples/aconv.duck", "-i", "tests/fixtures/words.txt"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(text(&o).1.contains("unsupported: unknown file format"), "{:?}", text(&o));
+}
+
 #[test]
 fn todo_keeps_a_json_file() {
     setup();
@@ -285,7 +304,7 @@ fn package_tests_pass() {
     let pkgs = [
         ("json", 16), ("csv", 11), ("regex", 15), ("cli", 11), ("http", 32), ("encoding", 8),
         ("hash", 8), ("datetime", 19), ("url", 13), ("toml", 23), ("log", 6), ("uuid", 8),
-        ("num", 15), ("text", 14), ("glob", 8), ("compress", 9), ("yaml", 14), ("xml", 11), ("sup", 7), ("splash", 24),
+        ("num", 15), ("text", 14), ("glob", 8), ("compress", 9), ("yaml", 14), ("xml", 11), ("sup", 7), ("splash", 24), ("audio", 17), ("graphics", 7),
     ];
     for (pkg, min) in pkgs {
         let out = run_ok(&["test", &format!("packages/{pkg}/src/lib.duck")]);
@@ -341,7 +360,7 @@ fn no_leaks_in_programs() {
 fn package_tests_are_leak_free() {
     setup();
     // sup's tests crash and cancel children on purpose: their heaps must be swept clean
-    for pkg in ["json", "csv", "regex", "cli", "http", "encoding", "hash", "datetime", "url", "toml", "log", "uuid", "num", "text", "glob", "compress", "yaml", "xml", "sup", "splash"] {
+    for pkg in ["json", "csv", "regex", "cli", "http", "encoding", "hash", "datetime", "url", "toml", "log", "uuid", "num", "text", "glob", "compress", "yaml", "xml", "sup", "splash", "audio"] {
         let o = duck_cmd().args(["test", &format!("packages/{pkg}/src/lib.duck")]).env("DUCK_LEAK_CHECK", "1").output().unwrap();
         let (out, err) = text(&o);
         assert!(o.status.success() && out.ends_with(" 0 failed\n"), "{pkg} with the leak checker:\n{out}\n{err}");
@@ -1301,4 +1320,132 @@ fn usage_lists_every_command() {
             assert!(err.contains(&format!("  {cmd} ")) || err.contains(&format!("`{cmd}`")), "{args:?}: no {cmd} in:\n{err}");
         }
     }
+}
+
+// ---- gui ----
+
+/// Core's pure `pixels` helpers (no window needed): fill, blend, blit, blit_mask, clipping.
+#[test]
+fn gui_pixel_helpers_draw_and_clip() {
+    setup();
+    let d = scratch("gui_pixels");
+    let f = d.join("px.duck");
+    fs::write(
+        &f,
+        r#"
+fn hx(n: int): str = "0123456789abcdef"[n / 16 % 16..n / 16 % 16 + 1] + "0123456789abcdef"[n % 16..n % 16 + 1]
+
+// the transparency byte only when it isn't 0 (opaque)
+fn hex(f: pixels.Frame): str = f.to_list().map(p => (if p >> 24 == 0 { "" } else { hx(p >> 24 & 255) + ":" }) + hx(p >> 16 & 255) + hx(p >> 8 & 255) + hx(p & 255)).join(" ")
+
+fn row(f: pixels.Frame, y: int): pixels.Frame {
+  var r = pixels.frame(f.width(), 1, 0)
+  r.blit(0, 0, f, 0, y, f.width(), 1)
+  r
+}
+
+async fn total(f: pixels.Frame): int = f.to_list().map(p => p & 255).sum()
+
+fn main() {
+  var f = pixels.frame(4, 3, 0x000000)
+  f.fill(1, 1, 10, 10, 0xff0000)                      // clipped at the right and bottom
+  print(hex(f))
+  f.blend(0, 0, 2, 1, 0x7fffffff)                      // half white over black
+  print(hex(row(f, 0)))
+  let src = pixels.from_list(2, 2, [0x111111, 0x222222, 0x333333, 0x444444])
+  f.blit(-1, 2, src, 0, 0, 2, 2)                       // half off the left and bottom
+  print(hex(row(f, 2)))
+  f.blit_mask(2, 0, [255, 0, 51, 128], 2, 0x00ff00)
+  print(hex(row(f, 0)) + " / " + hex(row(f, 1)))
+  var same = pixels.frame(3, 1, 0x0000ff)
+  let before = same
+  same.set(0, 0, 0xffffff)                             // copy-on-write: `before` keeps its pixels
+  print("{hex(before)} / {hex(same)}")
+  // transparency: a clear frame, half-transparent white composited onto opaque blue
+  var t = pixels.frame(2, 1, pixels.CLEAR)
+  t.set(0, 0, pixels.argb(128, 255, 255, 255))
+  print(hex(t))
+  var b = pixels.frame(2, 1, 0x0000ff)
+  b.composite(0, 0, t, 0, 0, 2, 1)
+  print(hex(b))
+  b.blit(1, 0, b, 0, 0, 1, 1)                          // from itself
+  print("{hex(b)} {await total(b)}")
+}
+"#,
+    )
+    .unwrap();
+    let out = run_ok(&["run", f.to_str().unwrap()]);
+    assert_eq!(
+        out,
+        "000000 000000 000000 000000 000000 ff0000 ff0000 ff0000 000000 ff0000 ff0000 ff0000\n\
+         808080 808080 000000 000000\n\
+         222222 ff0000 ff0000 ff0000\n\
+         808080 808080 00ff00 000000 / 000000 ff0000 cc3300 7f8000\n\
+         0000ff 0000ff 0000ff / ffffff 0000ff 0000ff\n\
+         7f:ffffff ff:000000\n\
+         8080ff 0000ff\n\
+         8080ff 8080ff 510\n"
+    );
+}
+
+/// A real window through the window process: open, present a frame and a rectangle, read
+/// events, close. It shows a window for a moment, so it only runs on request:
+/// `cargo test --test run gui_window -- --ignored`.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore]
+fn gui_window_round_trip() {
+    setup();
+    let out = run_ok(&["run", "examples/gui_gradient.duck", "--for", "800"]);
+    // a full frame at the start, one more per resize the system made (a display change), and a
+    // partial one per mouse move over the window
+    assert!(out.ends_with(" partial; 0x0 after closing\n") && out.contains(" full frames, "), "{out}");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore]
+fn gui_text_window() {
+    setup();
+    let out = run_ok(&["run", "examples/gui_text.duck", "--for", "500"]);
+    assert!(out.ends_with("frames; text ok\n"), "{out}");
+}
+
+/// The pixels a program presents are what the window shows: `gui_gradient` is green at the
+/// bottom left and yellow at the bottom right (`DUCK_GUI_SNAP` saves the window as it closes).
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore]
+fn gui_window_shows_the_frame() {
+    setup();
+    let snap = std::env::temp_dir().join(format!("duck-gui-snap-{}.ppm", std::process::id()));
+    let _ = fs::remove_file(&snap);
+    let o = duck_cmd().args(["run", "examples/gui_gradient.duck", "--for", "600"]).env("DUCK_GUI_SNAP", &snap).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    // the window process writes it just after the program ends
+    let mut data = Vec::new();
+    for _ in 0..50 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if let Ok(d) = fs::read(&snap) {
+            if !d.is_empty() {
+                data = d;
+                break;
+            }
+        }
+    }
+    let _ = fs::remove_file(&snap);
+    let mut parts = data.splitn(4, |&b| b == b'\n');
+    let (_, size, _, px) = (parts.next().unwrap(), parts.next().unwrap(), parts.next().unwrap(), parts.next().unwrap());
+    let size = String::from_utf8_lossy(size);
+    let (w, h): (usize, usize) = size.split_once(' ').map(|(a, b)| (a.parse().unwrap(), b.parse().unwrap())).unwrap();
+    let at = |x: usize, y: usize| {
+        let i = (y * w + x) * 3;
+        (px[i] as i32, px[i + 1] as i32, px[i + 2] as i32)
+    };
+    // the capture is in the display's color space (Display P3 turns sRGB (8, 243, 153) into about
+    // (112, 239, 161)), so check which channels lead rather than exact values
+    let (r, g, b) = at(30, h - 30);
+    assert!(g > 200 && g > r + 60 && g > b + 40, "bottom left is {:?}", (r, g, b));
+    let (r, g, b) = at(w - 30, h - 30);
+    assert!(r > 200 && g > 200 && b + 100 < r, "bottom right is {:?}", (r, g, b));
 }

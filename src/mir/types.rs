@@ -55,6 +55,14 @@ impl<'a> TyInfo<'a> {
         matches!(t, Ty::Named(d, _) if matches!(self.tp.defs.types[*d].kind, TypeDefKind::Opaque { .. }))
     }
 
+    /// Is it an opaque type the runtime changes in place, copying it first when shared (a
+    /// `pixels.Frame`)? An extern's `var` parameter of such a type gets the variable's address,
+    /// as lists and maps do, so the runtime can swap in the copy. Other opaque types are handles
+    /// (`net.Conn`): a `var` one is passed by value.
+    pub fn is_cow_opaque(&self, t: &Ty) -> bool {
+        self.opaque_c(t) == Some("DuckFrame *")
+    }
+
     /// The opaque type's runtime C spelling (`DuckErr *`, `DuckConn *`).
     pub fn opaque_c(&self, t: &Ty) -> Option<&str> {
         match t {

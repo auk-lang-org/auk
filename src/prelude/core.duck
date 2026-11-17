@@ -171,6 +171,23 @@ pub extern fn floor(x: float): float = "duck_ffloor"
 pub extern fn ceil(x: float): float = "duck_fceil"
 /// Rounds half away from zero.
 pub extern fn round(x: float): float = "duck_fround"
+pub extern fn sin(x: float): float = "duck_fsin"
+pub extern fn cos(x: float): float = "duck_fcos"
+pub extern fn tan(x: float): float = "duck_ftan"
+pub extern fn asin(x: float): float = "duck_fasin"
+pub extern fn acos(x: float): float = "duck_facos"
+pub extern fn atan(x: float): float = "duck_fatan"
+/// The angle of the point (x, y): `atan2(y, x)`, in -pi..pi.
+pub extern fn atan2(y: float, x: float): float = "duck_fatan2"
+pub extern fn exp(x: float): float = "duck_fexp"
+/// The natural logarithm.
+pub extern fn ln(x: float): float = "duck_fln"
+pub extern fn log10(x: float): float = "duck_flog10"
+pub extern fn log2(x: float): float = "duck_flog2"
+/// The IEEE 754 double-precision bits; `float.from_bits` undoes it.
+pub extern fn bits(x: float): int = "duck_fbits"
+/// The single-precision bits of `x` rounded to f32 (0 to 2^32 - 1); `float.from_bits32` undoes it.
+pub extern fn bits32(x: float): int = "duck_fbits32"
 
 // ---- lists: primitives ----
 

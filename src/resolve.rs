@@ -42,6 +42,9 @@ pub const PRELUDE: &[(&str, &str)] = &[
     ("rand", include_str!("prelude/rand.duck")),
     ("env", include_str!("prelude/env.duck")),
     ("proc", include_str!("prelude/proc.duck")),
+    ("audio_out", include_str!("prelude/audio_out.duck")),
+    ("gui", include_str!("prelude/gui.duck")),
+    ("pixels", include_str!("prelude/pixels.duck")),
     ("str", include_str!("prelude/str.duck")),
     ("int", include_str!("prelude/int.duck")),
     ("float", include_str!("prelude/float.duck")),
@@ -113,6 +116,9 @@ pub struct Program {
     pub mods: Vec<Module>,
     /// The root module (the file given on the command line).
     pub root: ModId,
+    /// The module being looked at: `root`, except from `load_in_package`, where it is the
+    /// submodule whose file was given (and `root` is its package's `lib.duck`/`main.duck`).
+    pub focus: ModId,
     pub core_pkg: PkgId,
     pub core_root: ModId,
 }
@@ -455,7 +461,32 @@ pub fn load_source(path: &Path, src: String) -> Result<Program, Vec<FileDiag>> {
     if !l.errs.is_empty() {
         return Err(l.errs);
     }
-    Ok(Program { pkgs: l.pkgs, mods: l.mods, root, core_pkg, core_root })
+    Ok(Program { pkgs: l.pkgs, mods: l.mods, root, focus: root, core_pkg, core_root })
+}
+
+/// Like `load_source`, for looking at one file of a project (`duck check`, the language server):
+/// a project file other than the package root (`src/wav.duck`) is checked as the module it is
+/// (`audio.wav`), in the program rooted at the project's `src/lib.duck` or `src/main.duck`, so
+/// paths through the package root (`audio.Fmt`) resolve. `Program::focus` is that module.
+pub fn load_in_package(path: &Path, src: String) -> Result<Program, Vec<FileDiag>> {
+    let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let root_file = abs.parent().and_then(find_project).and_then(|proj| {
+        let src_dir = proj.join("src");
+        if !abs.starts_with(&src_dir) {
+            return None;
+        }
+        let root = ["lib.duck", "main.duck"].iter().map(|f| src_dir.join(f)).find(|f| f.is_file())?;
+        (!same_file(&root, &abs)).then_some(root)
+    });
+    let Some(root_file) = root_file else { return load_source(path, src) };
+    let key = abs.display().to_string();
+    let mut srcs = OVERRIDES.with(|o| o.borrow().clone());
+    srcs.insert(key.clone(), src);
+    let mut prog = with_sources(&srcs, || load(&root_file))?;
+    if let Some(m) = prog.mods.iter().position(|m| m.file == key) {
+        prog.focus = m;
+    }
+    Ok(prog)
 }
 
 #[cfg(test)]
@@ -483,6 +514,8 @@ mod tests {
             ("rand", &["duck_rand_"]),
             ("env", &["duck_env_"]),
             ("proc", &["duck_proc_"]),
+            ("audio_out", &["duck_audio_out_"]),
+            ("gui", &["duck_gui_"]),
         ];
         let mut checked = 0;
         for (module, src) in PRELUDE {

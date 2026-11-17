@@ -26,7 +26,7 @@ use super::typed::{BodyRef, Callee, FnId, FnKind, InstId, NameRef, Target, Typed
 use super::types::ShapeId;
 
 /// The effects a function may declare.
-pub const EFFECTS: &[&str] = &["fs", "net", "time", "rand", "env", "proc", "ffi"];
+pub const EFFECTS: &[&str] = &["fs", "net", "time", "rand", "env", "proc", "audio_out", "gui", "ffi"];
 
 type Set = BTreeSet<String>;
 
