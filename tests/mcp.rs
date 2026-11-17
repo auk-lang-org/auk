@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use json::{Json, obj};
 
-const TOOLS: &[&str] = &["duck_spec", "duck_check", "duck_run", "duck_test", "duck_fmt", "duck_explain", "duck_holes"];
+const TOOLS: &[&str] = &["duck_spec", "duck_check", "duck_run", "duck_test", "duck_debug", "duck_fmt", "duck_explain", "duck_holes"];
 
 struct Client {
     child: Child,
@@ -250,7 +250,7 @@ fn fmt_messy_source() {
 #[test]
 fn errors() {
     let mut c = Client::start();
-    for tool in ["duck_check", "duck_run", "duck_test", "duck_fmt", "duck_holes"] {
+    for tool in ["duck_check", "duck_run", "duck_test", "duck_debug", "duck_fmt", "duck_holes"] {
         let (text, is_error) = c.call(tool, obj([("path", "examples/no_such_file.duck".into())]));
         assert!(is_error, "{tool}: {text}");
         assert!(text.contains("no such file"), "{tool}: {text}");
@@ -271,6 +271,27 @@ fn errors() {
     assert_eq!(c.recv().at(&["error", "code"]).as_i64(), Some(-32700));
     // still serving
     assert!(c.request("ping", obj([])).get("error").is_null());
+}
+
+#[test]
+fn debug_reports_stops() {
+    let mut c = Client::start();
+    let args = obj([
+        ("path", "examples/fib.duck".into()),
+        ("breakpoints", Json::Arr(vec!["examples/fib.duck:5".into()])),
+        ("max_stops", 2i64.into()),
+    ]);
+    let (text, is_error) = c.call("duck_debug", args);
+    assert!(!is_error, "{text}");
+    let r = json::parse(text.trim()).unwrap();
+    let stops = r.get("stops").as_arr();
+    assert_eq!(stops.len(), 2, "{text}");
+    assert_eq!(stops[0].get("fn").as_str(), Some("fib.fib"), "{text}");
+    assert!(stops[0].at(&["locals", "n"]).as_str().is_some(), "{text}");
+    assert!(r.get("note").as_str().is_some_and(|n| n.contains("max-stops")), "{text}");
+    // a missing file is an error result
+    let (text, is_error) = c.call("duck_debug", obj([("path", "tests/fixtures/no_such.duck".into())]));
+    assert!(is_error, "{text}");
 }
 
 #[test]

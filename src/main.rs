@@ -9,6 +9,7 @@ mod rt_symbols {
     include!(concat!(env!("OUT_DIR"), "/rt_symbols.rs"));
 }
 mod check;
+mod debug;
 mod diag;
 mod effects;
 mod explain;
@@ -49,6 +50,10 @@ commands:
   run --debug <file> [args...]
                            build with debugger hooks; a front end attaches through
                            DUCK_DEBUG=<unix socket> (see docs/compiler.md, Debugger)
+  debug [--break <file:line|fn>]... [--print a,b] [--json] <file> [args...]
+                           debug the program: an interactive prompt on a terminal;
+                           otherwise (or --json/--batch) run to each breakpoint and
+                           panic and report the locals and stack there
   run --live <file> [args...]
                            run, swapping in new code on every save (state survives;
                            a changed struct/enum layout restarts the tasks using it)
@@ -102,6 +107,7 @@ fn main() {
         "__jit" => build::jit_cli(rest),
         "check" => match rest {
             [file] => check_file(file, false),
+        "debug" => debug::run(rest),
             [file, flag] if flag == "--json" => check_file(file, true),
             _ => usage(),
         },

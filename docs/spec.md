@@ -143,6 +143,7 @@ peek x * 2         // prints [file:line] x * 2 = 84, returns the value
 imprint T = table()   // computed at compile time (pure fns only)
 ```
 `assert (a, b) == (1, 2)` checks the whole comparison.
+To see values without editing code: `duck debug -b f.duck:12 -p x,y f.duck` runs to each breakpoint (`file:line` or a function) and panic and prints the locals and stack there (`--json`, `--timeout S`).
 
 ## Modules, packages, program entry
 A file is a module, a folder a package; refer to anything by path, no imports: `geo.area(s)`, `json.parse(t)`. A local named like a project module or dependency is an error; one named like a core module shadows it (`core.env` still reaches core). `regex(p)` is `regex.regex(p)`. In a package its own name is its root (`http.Resp`). Add dependencies with `quack add http`.

@@ -294,3 +294,93 @@ fn detached_and_flagless_programs() {
         assert!(dbg.contains("duck_dbg_hook(") && dbg.contains("duck_dbg_init("), "{f}");
     }
 }
+
+// ---- duck debug ----
+
+fn prog_file(name: &str, src: &str) -> PathBuf {
+    let f = scratch(name).join("prog.duck");
+    fs::write(&f, src).unwrap();
+    f
+}
+
+fn debug_cmd(args: &[&str], f: &Path) -> (i32, String) {
+    let o = duck_cmd().arg("debug").args(args).arg(f).stdin(Stdio::null()).output().unwrap();
+    (o.status.code().unwrap_or(-1), format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)))
+}
+
+#[test]
+fn batch_text_report() {
+    let f = prog_file("batch", PROG);
+    // stdin is not a terminal: batch mode
+    let (code, out) = debug_cmd(&["-b", "prog.duck:5", "-b", "fact", "-p", "n,nx", "--max-stops", "3"], &f);
+    assert_eq!(code, 137, "{out}");
+    let want = "\
+#1 breakpoint at prog.duck:5 in prog.add
+  nx = 4
+  called from prog.main (prog.duck:21)
+#2 breakpoint at prog.duck:10 in prog.fact
+  n = 3
+  called from prog.main (prog.duck:23)
+#3 breakpoint at prog.duck:10 in prog.fact
+  n = 2
+  called from prog.fact (prog.duck:13) < prog.main (prog.duck:23)
+ended after 3 stops (--max-stops)
+exit 137
+";
+    // paths are shown relative to the working directory: compare from the first stop's file name
+    let out = out.replace(&format!("{}/", fs::canonicalize(f.parent().unwrap()).unwrap().display()), "");
+    assert_eq!(out, want);
+    // no breakpoints: runs to the end
+    let (code, out) = debug_cmd(&[], &f);
+    assert_eq!((code, out.as_str()), (0, "stdout:\n4 7\nexit 0\n"));
+}
+
+#[test]
+fn batch_json_panic_and_timeout() {
+    let f = prog_file("json", "fn f(n: int): int {\n    100 / n\n}\n\nfn main() {\n    print(\"hi\")\n    let k = 0\n    print(\"{f(k)}\")\n}\n");
+    let (code, out) = debug_cmd(&["--json"], &f);
+    assert_eq!(code, 101, "{out}");
+    let r = json::parse(out.trim()).unwrap_or_else(|e| panic!("{e}: {out}"));
+    let s = &r.get("stops").as_arr()[0];
+    assert_eq!((s.get("reason").as_str(), s.get("line").as_i64(), s.at(&["locals", "n"]).as_str()), (Some("panic"), Some(2), Some("0")));
+    assert!(s.get("msg").as_str().is_some_and(|m| m.contains("division by zero")), "{out}");
+    assert_eq!(s.get("stack").as_arr().len(), 2);
+    assert_eq!(r.get("stdout").as_str(), Some("hi\n"));
+    // an endless loop: where it is when the time runs out
+    let f = prog_file("spin", "fn main() {\n    var n = 0\n    while true {\n        n += 1\n    }\n}\n");
+    let (code, out) = debug_cmd(&["--json", "--timeout", "0.5"], &f);
+    assert_eq!(code, 137, "{out}");
+    let r = json::parse(out.trim()).unwrap();
+    let s = &r.get("stops").as_arr()[0];
+    assert_eq!(s.get("reason").as_str(), Some("timeout"), "{out}");
+    assert!(s.at(&["locals", "n"]).as_str().is_some(), "{out}");
+    // a program that doesn't compile: its errors and the compiler's exit code
+    let f = prog_file("bad", "fn main() {\n    let x: int = \"a\"\n}\n");
+    let (code, out) = debug_cmd(&[], &f);
+    assert!(code != 0 && out.contains("E0200"), "{out}");
+}
+
+#[test]
+fn interactive_prompt() {
+    let f = prog_file("repl", PROG);
+    let mut c = duck_cmd().arg("debug").arg("--repl").arg(&f).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    // typed ahead: what is typed while the program runs waits for the next stop
+    c.stdin.take().unwrap().write_all(b"b add\nr\nn\n\np nx\nup\nbt\nfinish\np total\nnope\nd\nc\n").unwrap();
+    let o = c.wait_with_output().unwrap();
+    let out = String::from_utf8_lossy(&o.stdout).replace(&format!("{}/", fs::canonicalize(f.parent().unwrap()).unwrap().display()), "");
+    for want in [
+        "breakpoint 1 at prog.duck:4",
+        "breakpoint 1 in prog.add (prog.duck:4)\n4\t    let nx = p.x + d",
+        "6\t    Point { x: nx, y: ny }",
+        "nx: int = 4",
+        "#1 prog.main (prog.duck:21)",
+        " #0 prog.add (prog.duck:6)\n*#1 prog.main (prog.duck:21)",
+        "total: int = 3",
+        "unknown command `nope`",
+        "4 7\n",
+        "program exited with code 0",
+    ] {
+        assert!(out.contains(want), "missing {want:?} in:\n{out}");
+    }
+    assert_eq!(o.status.code(), Some(0));
+}

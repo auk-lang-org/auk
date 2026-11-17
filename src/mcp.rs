@@ -207,6 +207,41 @@ pub fn tools() -> Vec<Json> {
             ),
         ),
         tool(
+            "duck_debug",
+            "Debug a Duck program: RUN it (this executes code on the user's machine) and stop at each breakpoint \
+             and at a panic, recording where it stopped, the local variables there (shown as Duck prints them) and \
+             the call stack. Returns JSON {stops: [{reason, fn, file, line, msg?, locals: {name: value}, stack}], \
+             exit_code, stdout, stderr, note?, errors?}. `reason` is breakpoint, panic or timeout (still running when \
+             the time ran out: where it was, e.g. an endless loop). Use it to see the actual values instead of \
+             guessing or adding prints; a breakpoint inside a loop stops on every iteration (see max_stops).",
+            schema(
+                [
+                    ("path", path("the .duck file with `fn main`")),
+                    (
+                        "breakpoints",
+                        obj([
+                            ("type", "array".into()),
+                            ("items", obj([("type", "string".into())])),
+                            ("description", "Where to stop: `file:line` (the next line with code) or a function name.".into()),
+                        ]),
+                    ),
+                    (
+                        "print",
+                        obj([
+                            ("type", "array".into()),
+                            ("items", obj([("type", "string".into())])),
+                            ("description", "Only these locals at each stop (default: every local in scope).".into()),
+                        ]),
+                    ),
+                    ("catch", prop("string", "Stop on panics: `uncaught` (default), `all` (also inside `catch`) or `none`.")),
+                    ("max_stops", prop("number", "End the program after this many stops (default 20).")),
+                    ("args", obj([("type", "array".into()), ("items", obj([("type", "string".into())])), ("description", "Command-line arguments for the program.".into())])),
+                    ("timeout_seconds", timeout(30)),
+                ],
+                &["path"],
+            ),
+        ),
+        tool(
             "duck_fmt",
             &format!(
                 "Format Duck code in the canonical style. With `source`, returns the formatted source and changes no \
@@ -256,6 +291,7 @@ fn call(params: &Json) -> Result<Json, String> {
         "duck_check" => check(args),
         "duck_run" => run_program(args),
         "duck_test" => test(args),
+        "duck_debug" => debug(args),
         "duck_fmt" => format(args),
         "duck_explain" => explain(args),
         "duck_holes" => holes(args),
@@ -407,6 +443,47 @@ fn run_program(args: &Json) -> Result<Outcome, String> {
     }
     let text = Json::Obj(fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect());
     Ok(Outcome { text: text.to_string(), is_error: !out.success() })
+}
+
+fn str_list(args: &Json, key: &str) -> Result<Vec<String>, String> {
+    match args.get(key) {
+        Json::Null => Ok(Vec::new()),
+        Json::Arr(xs) => xs.iter().map(|x| x.as_str().map(String::from).ok_or(format!("argument `{key}` must be an array of strings"))).collect(),
+        _ => Err(format!("argument `{key}` must be an array of strings")),
+    }
+}
+
+fn debug(args: &Json) -> Result<Outcome, String> {
+    let path = path_arg(args, "path")?;
+    let timeout = timeout_arg(args, 30)?;
+    let mut argv: Vec<String> = vec!["debug".into(), "--json".into()];
+    for b in str_list(args, "breakpoints")? {
+        argv.extend(["--break".into(), b]);
+    }
+    let print = str_list(args, "print")?;
+    if !print.is_empty() {
+        argv.extend(["--print".into(), print.join(",")]);
+    }
+    if let Some(c) = str_arg(args, "catch")? {
+        argv.extend(["--catch".into(), c.to_string()]);
+    }
+    match args.get("max_stops") {
+        Json::Null => {}
+        Json::Num(n) if *n >= 1.0 => argv.extend(["--max-stops".into(), (*n as u64).to_string()]),
+        _ => return Err("argument `max_stops` must be a positive number".into()),
+    }
+    // the debugger reports where a program still running at the timeout is, then ends it
+    argv.extend(["--timeout".into(), format!("{}", timeout.as_secs_f64())]);
+    argv.push(path);
+    argv.extend(str_list(args, "args")?);
+    let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+    let out = run_tool(&argv, timeout + Duration::from_secs(30))?;
+    let report = out.stdout.trim();
+    // a report, or (the program didn't compile) the compiler's errors
+    match json::parse(report) {
+        Ok(j) if j.get("error").is_null() => ok(report),
+        _ => Err(out.report()),
+    }
 }
 
 fn test(args: &Json) -> Result<Outcome, String> {
