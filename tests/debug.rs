@@ -49,7 +49,23 @@ impl Session {
         let sock = dir.join("s");
         let l = UnixListener::bind(&sock).unwrap();
         let child = duck_cmd().arg("run").arg("--debug").arg(&file).env("DUCK_DEBUG", &sock).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-        let (conn, _) = l.accept().unwrap();
+        // the program connects once it compiles (a test program that doesn't would hang here)
+        l.set_nonblocking(true).unwrap();
+        let mut child = child;
+        let conn = loop {
+            match l.accept() {
+                Ok((c, _)) => break c,
+                Err(_) => {
+                    if let Some(st) = child.try_wait().unwrap() {
+                        let mut e = String::new();
+                        std::io::Read::read_to_string(child.stderr.as_mut().unwrap(), &mut e).unwrap();
+                        panic!("the program ended ({st}) without connecting:\n{e}");
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        };
+        conn.set_nonblocking(false).unwrap();
         conn.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
         let wr = conn.try_clone().unwrap();
         let mut s = Session { child: Some(child), rd: BufReader::new(conn), wr, seq: 0, pending: Vec::new() };
@@ -383,4 +399,197 @@ fn interactive_prompt() {
         assert!(out.contains(want), "missing {want:?} in:\n{out}");
     }
     assert_eq!(o.status.code(), Some(0));
+}
+
+// ---- parts of values, `duck dap` ----
+
+const SCENE: &str = r#"struct Point { x: int, y: int }
+enum Shape { Circle(c: Point, r: float), Square(Point, float), Empty }
+struct Scene { name: str, shapes: [Shape], tags: {str: int}, best: Point?, pair: (int, str) }
+
+fn main() {
+    let s = Scene { name: "demo", shapes: [Circle(Point { x: 1, y: 2 }, 3.0), Square(Point { x: 0, y: 0 }, 1.5), Empty], tags: {"a": 1, "b": 2}, best: Point { x: 9, y: 9 }, pair: (7, "seven") }
+    let big = 0..1500
+    print(s.name)
+}
+"#;
+
+#[test]
+fn parts_of_values() {
+    let mut s = Session::start("kids", SCENE);
+    s.cmd("break prog.duck:8");
+    assert_eq!(s.go("run").2, 8);
+    let kids = |s: &mut Session, c: &str| -> Vec<String> {
+        let r = s.cmd(&format!("kids 0 1 {c}"));
+        r.get("kids").as_arr().iter().map(|k| format!("{}={}{}", k.get("name").as_str().unwrap(), k.get("value").as_str().unwrap(), if k.get("kids") == &Json::Bool(true) { "+" } else { "" })).collect()
+    };
+    let v = s.cmd("vars");
+    assert_eq!(v.get("vars").as_arr()[0].get("kids"), &Json::Bool(true));
+    assert_eq!(kids(&mut s, "s")[0], "name=\"demo\"");
+    assert_eq!(kids(&mut s, "s 1"), ["0=Circle(Point { x: 1, y: 2 }, 3.0)+", "1=Square(Point { x: 0, y: 0 }, 1.5)+", "2=Empty"]);
+    assert_eq!(kids(&mut s, "s 1 0"), ["c=Point { x: 1, y: 2 }+", "r=3.0"]);
+    assert_eq!(kids(&mut s, "s 1 1"), ["0=Point { x: 0, y: 0 }+", "1=1.5"]);
+    assert_eq!(kids(&mut s, "s 1 0 0"), ["x=1", "y=2"]);
+    assert_eq!(kids(&mut s, "s 2"), ["\"a\"=1", "\"b\"=2"]);
+    assert_eq!(kids(&mut s, "s 3"), ["some=Point { x: 9, y: 9 }+"]);
+    assert_eq!(kids(&mut s, "s 4"), ["0=7", "1=\"seven\""]);
+    // long lists: the first 1000, and how many more
+    let r = s.cmd("kids 0 1 big");
+    assert_eq!((r.get("kids").as_arr().len(), r.get("more").as_i64()), (1000, Some(500)));
+    // an element past the first 1000 can still be reached by its index (an int has no parts)
+    assert_eq!(s.cmd("kids 0 1 big 1234").get("msg").as_str(), Some("no such part"));
+    for bad in ["s 1 7", "s 0", "nope"] {
+        assert_eq!(s.cmd(&format!("kids 0 1 {bad}")).get("ev").as_str(), Some("error"), "{bad}");
+    }
+    s.cmd("kill");
+}
+
+/// A DAP client of `duck dap`.
+struct Dap {
+    child: Child,
+    out: BufReader<std::process::ChildStdout>,
+    seq: i64,
+    seen: Vec<Json>,
+}
+
+impl Dap {
+    fn start() -> Dap {
+        let mut child = duck_cmd().arg("dap").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn().unwrap();
+        let out = BufReader::new(child.stdout.take().unwrap());
+        Dap { child, out, seq: 0, seen: Vec::new() }
+    }
+
+    fn read(&mut self) -> Json {
+        let mut len = 0;
+        loop {
+            let mut l = String::new();
+            assert!(self.out.read_line(&mut l).unwrap() > 0, "duck dap closed");
+            let l = l.trim();
+            if l.is_empty() {
+                break;
+            }
+            if let Some(n) = l.strip_prefix("Content-Length:") {
+                len = n.trim().parse().unwrap();
+            }
+        }
+        let mut b = vec![0u8; len];
+        std::io::Read::read_exact(&mut self.out, &mut b).unwrap();
+        json::parse(std::str::from_utf8(&b).unwrap()).unwrap()
+    }
+
+    fn req(&mut self, cmd: &str, args: Json) -> Json {
+        self.seq += 1;
+        let m = json::obj([("seq", self.seq.into()), ("type", "request".into()), ("command", cmd.into()), ("arguments", args)]).to_string();
+        let stdin = self.child.stdin.as_mut().unwrap();
+        write!(stdin, "Content-Length: {}\r\n\r\n{m}", m.len()).unwrap();
+        stdin.flush().unwrap();
+        loop {
+            let r = self.read();
+            if r.get("type").as_str() == Some("response") && r.get("request_seq").as_i64() == Some(self.seq) {
+                return r;
+            }
+            self.seen.push(r);
+        }
+    }
+
+    fn event(&mut self, name: &str) -> Json {
+        if let Some(i) = self.seen.iter().position(|e| e.get("event").as_str() == Some(name)) {
+            return self.seen.remove(i);
+        }
+        loop {
+            let e = self.read();
+            if e.get("event").as_str() == Some(name) {
+                return e;
+            }
+            self.seen.push(e);
+        }
+    }
+
+    /// The top frame's id and its locals as "name=value".
+    fn top(&mut self) -> (i64, Vec<(String, i64)>) {
+        let st = self.req("stackTrace", json::obj([("threadId", 1i64.into())]));
+        let fid = st.at(&["body", "stackFrames"]).as_arr()[0].get("id").as_i64().unwrap();
+        let sc = self.req("scopes", json::obj([("frameId", fid.into())]));
+        let r = sc.at(&["body", "scopes"]).as_arr()[0].get("variablesReference").as_i64().unwrap();
+        (fid, self.vars(r))
+    }
+
+    fn vars(&mut self, r: i64) -> Vec<(String, i64)> {
+        let v = self.req("variables", json::obj([("variablesReference", r.into())]));
+        v.at(&["body", "variables"]).as_arr().iter().map(|x| (format!("{}={}", x.get("name").as_str().unwrap(), x.get("value").as_str().unwrap()), x.get("variablesReference").as_i64().unwrap())).collect()
+    }
+}
+
+#[test]
+fn dap_session() {
+    let f = prog_file("dap", SCENE);
+    let path = f.display().to_string();
+    let mut d = Dap::start();
+    let init = d.req("initialize", json::obj([("adapterID", "duck".into())]));
+    assert_eq!(init.at(&["body", "supportsConfigurationDoneRequest"]), &Json::Bool(true));
+    let r = d.req("launch", json::obj([("program", path.as_str().into()), ("stopOnEntry", true.into())]));
+    assert_eq!(r.get("success"), &Json::Bool(true), "{r:?}");
+    d.event("initialized");
+    let bps = d.req("setBreakpoints", json::obj([("source", json::obj([("path", path.as_str().into())])), ("breakpoints", Json::Arr(vec![json::obj([("line", 7i64.into())]), json::obj([("line", 99i64.into())])]))]));
+    let b = bps.at(&["body", "breakpoints"]).as_arr();
+    assert_eq!((b[0].get("verified"), b[0].get("line").as_i64(), b[1].get("verified")), (&Json::Bool(true), Some(7), &Json::Bool(false)));
+    d.req("setExceptionBreakpoints", json::obj([("filters", Json::Arr(vec!["uncaught".into()]))]));
+    d.req("configurationDone", Json::Null);
+    let st = d.event("stopped");
+    assert_eq!(st.at(&["body", "reason"]).as_str(), Some("entry"));
+    d.req("continue", json::obj([("threadId", 1i64.into())]));
+    let st = d.event("stopped");
+    assert_eq!(st.at(&["body", "reason"]).as_str(), Some("breakpoint"));
+    let (fid, locals) = d.top();
+    assert_eq!(locals.len(), 1);
+    assert!(locals[0].0.starts_with("s=Scene { name: \"demo\""), "{locals:?}");
+    // expand s.shapes[0].c
+    let s = d.vars(locals[0].1);
+    let shapes = s.iter().find(|(n, _)| n.starts_with("shapes=")).unwrap().1;
+    let circle = d.vars(shapes)[0].1;
+    let c = d.vars(circle);
+    assert_eq!(c[0].0, "c=Point { x: 1, y: 2 }");
+    assert_eq!(d.vars(c[0].1).into_iter().map(|x| x.0).collect::<Vec<_>>(), ["x=1", "y=2"]);
+    // hover a path
+    let ev = d.req("evaluate", json::obj([("expression", "s.shapes[1].0.x".into()), ("frameId", fid.into()), ("context", "hover".into())]));
+    assert_eq!(ev.at(&["body", "result"]).as_str(), Some("0"), "{ev:?}");
+    assert_eq!(d.req("evaluate", json::obj([("expression", "s.nope".into()), ("frameId", fid.into())])).get("success"), &Json::Bool(false));
+    d.req("next", json::obj([("threadId", 1i64.into())]));
+    assert_eq!(d.event("stopped").at(&["body", "reason"]).as_str(), Some("step"));
+    d.req("setBreakpoints", json::obj([("source", json::obj([("path", path.as_str().into())])), ("breakpoints", Json::Arr(vec![]))]));
+    d.req("continue", json::obj([("threadId", 1i64.into())]));
+    let out = d.event("output");
+    assert_eq!(out.at(&["body", "output"]).as_str(), Some("demo\n"));
+    assert_eq!(d.event("exited").at(&["body", "exitCode"]).as_i64(), Some(0));
+    d.event("terminated");
+    d.req("disconnect", Json::Null);
+    assert!(d.child.wait().unwrap().success());
+}
+
+#[test]
+fn dap_panics_and_compile_errors() {
+    let f = prog_file("dappanic", "fn main() {\n    let xs = [1, 2]\n    print(\"{xs[5]}\")\n}\n");
+    let mut d = Dap::start();
+    d.req("initialize", Json::Null);
+    d.req("launch", json::obj([("program", f.display().to_string().into())]));
+    d.event("initialized");
+    d.req("setExceptionBreakpoints", json::obj([("filters", Json::Arr(vec!["uncaught".into()]))]));
+    d.req("configurationDone", Json::Null);
+    let st = d.event("stopped");
+    assert_eq!(st.at(&["body", "reason"]).as_str(), Some("exception"));
+    assert!(st.at(&["body", "text"]).as_str().unwrap().contains("out of range"), "{st:?}");
+    d.req("terminate", Json::Null);
+    d.event("terminated");
+    d.req("disconnect", Json::Null);
+    d.child.wait().unwrap();
+    // a program that doesn't compile: its errors in the console, a failed launch
+    let f = prog_file("dapbad", "fn main() {\n    let x: int = \"a\"\n}\n");
+    let mut d = Dap::start();
+    d.req("initialize", Json::Null);
+    let r = d.req("launch", json::obj([("program", f.display().to_string().into())]));
+    assert_eq!(r.get("success"), &Json::Bool(false));
+    let out = d.seen.iter().find(|e| e.get("event").as_str() == Some("output")).cloned().unwrap_or_else(|| d.event("output"));
+    assert!(out.at(&["body", "output"]).as_str().unwrap().contains("E0200"), "{out:?}");
+    d.req("disconnect", Json::Null);
+    d.child.wait().unwrap();
 }

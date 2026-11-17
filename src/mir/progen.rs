@@ -1249,6 +1249,87 @@ impl<'a> Gen<'a> {
         b
     }
 
+    /// The debugger's children function of type `t` (type index `idx`): `void f(void *value,
+    /// void *ctx)` reports each part of the value (a struct's fields, a tuple's or a variant's
+    /// fields, an option's or a result's value, a list's elements, a map's entries) to the runtime
+    /// (`duck_dbg_kid`, runtime/src/dbg.rs) with its type index and address. None for a type
+    /// without parts.
+    pub fn dbg_kids_fn(&mut self, t: &Ty, idx: usize) -> Option<FuncId> {
+        let has_parts = match t {
+            Ty::Tuple(ts) => !ts.is_empty(),
+            Ty::Opt(_) | Ty::Res(..) | Ty::List(_) | Ty::Map(..) => true,
+            Ty::Named(dd, _) if self.tp.defs.is_struct(*dd) => {
+                matches!(&self.tp.defs.types[*dd].kind, TypeDefKind::Struct { fields } if !fields.is_empty())
+            }
+            Ty::Named(dd, _) => self.tp.defs.variants(*dd).iter().any(|v| !v.fields.is_empty()),
+            _ => false,
+        };
+        if !has_parts {
+            return None;
+        }
+        let cv = MTy::void_ptr();
+        let f = self.declare(format!("dk_dbgkids{idx}"), vec![cv.clone(), cv.clone()], MTy::Void, Abi::C);
+        let (mut b, ps) = self.body_for(f);
+        let v = b.decl(ps[0].clone().cast(MTy::ptr(d(t))).deref(d(t)));
+        let ctx = ps[1].clone();
+        let kid = |g: &mut Gen, b: &mut Body, name: &str, ty: &Ty, e: Ex| {
+            let tid = g.dbg_info.type_id(ty);
+            let tmp = b.decl_as(d(ty), e);
+            b.do_(Ex::rt("duck_dbg_kid", vec![ctx.clone(), Ex::cstr(name), Ex::int_as(tid as i64, MTy::I64), tmp.addr().cast(MTy::void_ptr())], MTy::Void));
+        };
+        match t {
+            Ty::Tuple(ts) => {
+                for (i, x) in ts.iter().enumerate() {
+                    let e = self.fld(&v, Sel::F(i as u32));
+                    kid(self, &mut b, &i.to_string(), x, e);
+                }
+            }
+            Ty::Opt(x) | Ty::Res(x, _) => {
+                b.open_if(self.fld(&v, Sel::F(0)));
+                let e = self.fld(&v, Sel::F(1));
+                kid(self, &mut b, if matches!(t, Ty::Opt(_)) { "some" } else { "ok" }, x, e);
+                b.close();
+            }
+            Ty::List(x) => {
+                let tid = self.dbg_info.type_id(x);
+                let size = Ex::size_of(d(x)).cast(MTy::I64);
+                b.do_(Ex::rt("duck_dbg_kid_arr", vec![ctx.clone(), v.clone().cast(cv.clone()), Ex::int_as(tid as i64, MTy::I64), size], MTy::Void));
+            }
+            Ty::Map(_, x) => {
+                let tid = self.dbg_info.type_id(x);
+                b.do_(Ex::rt("duck_dbg_kid_map", vec![ctx.clone(), v.clone().cast(cv.clone()), Ex::int_as(tid as i64, MTy::I64)], MTy::Void));
+            }
+            Ty::Named(dd, args) if self.tp.defs.is_struct(*dd) => {
+                let s = self.tp.defs.subst_of(*dd, args);
+                let TypeDefKind::Struct { fields } = self.tp.defs.types[*dd].kind.clone() else { unreachable!() };
+                for (i, fd) in fields.iter().enumerate() {
+                    let e = self.field_get(t, i, &v);
+                    kid(self, &mut b, &fd.name, &fd.ty.subst(&s), e);
+                }
+            }
+            Ty::Named(dd, _) => {
+                let vs = self.tp.defs.variants(*dd).to_vec();
+                let layout = self.info.enum_layout(t);
+                for (vi, var) in vs.iter().enumerate() {
+                    if var.fields.is_empty() {
+                        continue;
+                    }
+                    b.open_if(self.variant_tag(t, vi, &v));
+                    for (fi, (ft, _)) in layout[vi].iter().enumerate() {
+                        let name = var.fields.get(fi).and_then(|f| f.0.clone()).unwrap_or_else(|| fi.to_string());
+                        let e = self.variant_field(t, vi, fi, &v);
+                        kid(self, &mut b, &name, ft, e);
+                    }
+                    b.close();
+                }
+            }
+            _ => unreachable!(),
+        }
+        b.emit(Stmt::Ret(None));
+        self.define(f, b);
+        Some(f)
+    }
+
     // ---- Eq / Ord / hash ----
 
     /// `bool f(T a, T b)`, or None when the type has no equality.

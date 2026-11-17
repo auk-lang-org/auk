@@ -124,8 +124,9 @@ pub fn generate(tp: &TypedProgram, mode: Mode, trace: Trace) -> Result<Generated
     }
     drain(&mut g);
     if g.dbg.on {
-        let (info, shows) = dbg_tables(&mut g);
-        b.do_(Ex::rt("duck_dbg_init", vec![Ex::cstr(&info), Ex::new(mir::K::GlobalAddr(shows), MTy::void_ptr())], MTy::Void));
+        let (info, shows, kids) = dbg_tables(&mut g);
+        let addr = |gl| Ex::new(mir::K::GlobalAddr(gl), MTy::void_ptr());
+        b.do_(Ex::rt("duck_dbg_init", vec![Ex::cstr(&info), addr(shows), addr(kids)], MTy::Void));
     }
     let (init, cleanup) = g.init_and_cleanup();
     b.do_(g.call(init, vec![]));
@@ -151,8 +152,9 @@ fn emit(g: &mut Gen, i: usize) {
 /// parses it), and a constant array of show functions, one per type of a named local
 /// (`DuckStr *show(void *value)`). Showing a type can instantiate more (instrumented) code, so
 /// this runs to a fixpoint.
-fn dbg_tables(g: &mut Gen) -> (String, mir::GlobalId) {
+fn dbg_tables(g: &mut Gen) -> (String, mir::GlobalId, mir::GlobalId) {
     let mut fns = Vec::new();
+    let mut kids = Vec::new();
     while fns.len() < g.dbg_info.types.len() {
         let t = g.dbg_info.types[fns.len()].clone();
         let f = g.declare(format!("dk_dbgshow{}", fns.len()), vec![MTy::void_ptr()], MTy::D(Ty::Str), Abi::C);
@@ -167,12 +169,17 @@ fn dbg_tables(g: &mut Gen) -> (String, mir::GlobalId) {
         };
         b.emit(Stmt::Ret(Some(s)));
         g.define(f, b);
+        let k = g.dbg_kids_fn(&t, fns.len());
         fns.push(f);
+        kids.push(k);
         drain(g);
     }
     let a = g.agg("DkDbgShows".into(), vec![MTy::Code; fns.len().max(1)]);
     let init = Ex::agg(MTy::Agg(a), fns.iter().enumerate().map(|(i, &f)| (Sel::F(i as u32), Ex::fn_addr(f))).collect());
     let shows = g.global("dk_dbgshows".into(), MTy::Agg(a), Some(init), true);
+    let a = g.agg("DkDbgKids".into(), vec![MTy::Code; kids.len().max(1)]);
+    let init = Ex::agg(MTy::Agg(a), kids.iter().enumerate().map(|(i, k)| (Sel::F(i as u32), k.map_or(Ex::zero(MTy::Code), Ex::fn_addr))).collect());
+    let kids_g = g.global("dk_dbgkids".into(), MTy::Agg(a), Some(init), true);
     // the text: `p <file>`, `t <type>`, `f <function>` followed by `v <type> <local>` per
     // frame slot, then `s <fn> <file> <line> <col> <slot,...>` per site (ids in order)
     let info = &g.dbg_info;
@@ -201,7 +208,7 @@ fn dbg_tables(g: &mut Gen) -> (String, mir::GlobalId) {
         let vis: Vec<String> = s.vis.iter().map(|v| v.to_string()).collect();
         let _ = writeln!(out, "s {} {file} {} {} {}", s.func, s.line, s.col, vis.join(","));
     }
-    (out, shows)
+    (out, shows, kids_g)
 }
 
 fn drain(g: &mut Gen) {

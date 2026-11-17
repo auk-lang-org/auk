@@ -112,29 +112,43 @@ pub fn run(args: &[String]) -> i32 {
 
 // ---- the session ------------------------------------------------------------------------
 
-/// What the front end waits for: an engine event, a line typed, or Ctrl-C.
-enum In {
+/// What a front end waits for: an engine event, the program's output (stderr: `true`), a
+/// request (DAP), a line typed, or Ctrl-C.
+pub(crate) enum In {
     Ev(Json),
     Closed,
+    Out(bool, String),
+    Req(Json),
     Line(String),
     Eof,
     Interrupt,
 }
 
-struct Session {
-    child: Child,
+/// Where the program's stdout and stderr go.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Capture {
+    /// Our own (interactive).
+    Inherit,
+    /// Collected for the report (batch).
+    Collect,
+    /// As `In::Out` events, as they come (DAP).
+    Stream,
+}
+
+pub(crate) struct Session {
+    pub child: Child,
     wr: UnixStream,
     rx: Receiver<In>,
-    tx: Sender<In>,
+    pub tx: Sender<In>,
     seq: i64,
     pending: VecDeque<In>,
-    /// The program's stdout and stderr, when captured (batch).
+    /// The program's stdout and stderr, when collected (batch).
     output: Option<thread::JoinHandle<(String, String)>>,
 }
 
 /// Start `duck run --debug <file>` and wait for its engine to say `ready`. Err: the exit code
-/// of a program that never connected (it didn't compile; its errors went to our stderr).
-fn launch(o: &Opts, capture: bool) -> Result<Session, i32> {
+/// of a program that never connected (it didn't compile) and its output (Inherit: already shown).
+pub(crate) fn launch(file: &str, args: &[String], capture: Capture) -> Result<Session, (i32, String)> {
     let dir = env::temp_dir();
     static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let sock = dir.join(format!("duck-dbg-{}-{}.sock", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
@@ -142,27 +156,40 @@ fn launch(o: &Opts, capture: bool) -> Result<Session, i32> {
     let l = match UnixListener::bind(&sock) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("duck debug: cannot listen on {}: {e}", sock.display());
-            return Err(1);
+            return Err((1, format!("duck debug: cannot listen on {}: {e}\n", sock.display())));
         }
     };
     let _ = l.set_nonblocking(true);
     let exe = env::current_exe().unwrap_or_else(|_| PathBuf::from("duck"));
     let mut cmd = Command::new(exe);
-    cmd.arg("run").arg("--debug").arg(&o.file).args(&o.args).env("DUCK_DEBUG", &sock).stdin(Stdio::null());
+    cmd.arg("run").arg("--debug").arg(file).args(args).env("DUCK_DEBUG", &sock).stdin(Stdio::null());
     // its own process group: Ctrl-C reaches only the debugger, which pauses the program
     cmd.process_group(0);
-    if capture {
+    if capture != Capture::Inherit {
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     }
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => {
-            eprintln!("duck debug: cannot start the program: {e}");
-            return Err(1);
-        }
+        Err(e) => return Err((1, format!("duck debug: cannot start the program: {e}\n"))),
     };
-    let output = if capture {
+    let (tx, rx) = channel();
+    let mut streams = Vec::new();
+    if capture == Capture::Stream {
+        let so: Box<dyn Read + Send> = Box::new(child.stdout.take().unwrap());
+        let se: Box<dyn Read + Send> = Box::new(child.stderr.take().unwrap());
+        for (is_err, mut r) in [(false, so), (true, se)] {
+            let tx = tx.clone();
+            streams.push(thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = r.read(&mut buf) {
+                    if n == 0 || tx.send(In::Out(is_err, String::from_utf8_lossy(&buf[..n]).into_owned())).is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
+    }
+    let output = if capture == Capture::Collect {
         let (mut so, mut se) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
         Some(thread::spawn(move || {
             let e = thread::spawn(move || {
@@ -183,26 +210,32 @@ fn launch(o: &Opts, capture: bool) -> Result<Session, i32> {
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 if let Ok(Some(st)) = child.try_wait() {
                     let _ = fs::remove_file(&sock);
+                    let mut text = String::new();
                     if let Some(h) = output {
                         let (so, se) = h.join().unwrap_or_default();
-                        print!("{so}");
-                        eprint!("{se}");
+                        text = so + &se;
                     }
-                    return Err(st.code().unwrap_or(1));
+                    for h in streams {
+                        let _ = h.join();
+                    }
+                    for x in rx.try_iter() {
+                        if let In::Out(_, t) = x {
+                            text += &t;
+                        }
+                    }
+                    return Err((st.code().unwrap_or(1), text));
                 }
                 thread::sleep(Duration::from_millis(5));
             }
             Err(e) => {
-                eprintln!("duck debug: {e}");
                 let _ = child.kill();
-                return Err(1);
+                return Err((1, format!("duck debug: {e}\n")));
             }
         }
     };
     let _ = fs::remove_file(&sock);
     let _ = conn.set_nonblocking(false);
     let rd = conn.try_clone().expect("socket");
-    let (tx, rx) = channel();
     let t2 = tx.clone();
     thread::spawn(move || {
         for line in BufReader::new(rd).lines() {
@@ -217,15 +250,14 @@ fn launch(o: &Opts, capture: bool) -> Result<Session, i32> {
     match s.next() {
         In::Ev(e) if e.get("ev").as_str() == Some("ready") => Ok(s),
         _ => {
-            eprintln!("duck debug: the program did not start its debugger");
             let _ = s.child.kill();
-            Err(1)
+            Err((1, "duck debug: the program did not start its debugger\n".into()))
         }
     }
 }
 
 impl Session {
-    fn next(&mut self) -> In {
+    pub fn next(&mut self) -> In {
         if let Some(x) = self.pending.pop_front() {
             return x;
         }
@@ -246,7 +278,7 @@ impl Session {
     }
 
     /// Send a command and wait for its reply (Null if the program went away).
-    fn cmd(&mut self, c: &str) -> Json {
+    pub fn cmd(&mut self, c: &str) -> Json {
         self.seq += 1;
         if writeln!(self.wr, "@{} {c}", self.seq).is_err() {
             return Json::Null;
@@ -267,7 +299,7 @@ impl Session {
     }
 
     /// The program's exit code (after it ends or is killed).
-    fn wait(&mut self) -> i32 {
+    pub fn wait(&mut self) -> i32 {
         match self.child.wait() {
             Ok(st) => st.code().unwrap_or_else(|| {
                 use std::os::unix::process::ExitStatusExt;
@@ -321,9 +353,10 @@ fn locals(r: &Json, names: Option<&[String]>) -> Vec<(String, String, String)> {
 // ---- batch ------------------------------------------------------------------------------
 
 fn batch_run(o: &Opts) -> i32 {
-    let mut s = match launch(o, true) {
+    let mut s = match launch(&o.file, &o.args, Capture::Collect) {
         Ok(s) => s,
-        Err(code) => {
+        Err((code, text)) => {
+            eprint!("{text}");
             if o.json {
                 println!("{}", obj([("error", "the program did not compile".into()), ("exit_code", i64::from(code).into())]));
             }
@@ -494,9 +527,12 @@ struct Repl {
 }
 
 fn repl(o: &Opts) -> i32 {
-    let s = match launch(o, false) {
+    let s = match launch(&o.file, &o.args, Capture::Inherit) {
         Ok(s) => s,
-        Err(code) => return code,
+        Err((code, text)) => {
+            eprint!("{text}");
+            return code;
+        }
     };
     // stdin and Ctrl-C feed the same queue as the engine's events
     let tx = s.tx.clone();
@@ -585,6 +621,7 @@ fn repl(o: &Opts) -> i32 {
                 _ => {}
             },
             In::Closed => break,
+            In::Out(..) | In::Req(_) => {}
         }
     }
     let code = r.s.wait();

@@ -52,6 +52,9 @@ pub struct Frame {
     slots: [*mut c_void; 0],
 }
 
+/// `void kids(void *value, void *ctx)`: reports each part through `duck_dbg_kid`.
+type KidsFn = unsafe extern "C" fn(*mut c_void, *mut c_void);
+
 struct Site {
     func: u32,
     file: u32,
@@ -72,6 +75,8 @@ struct Info {
     fns: Vec<FnInfo>,
     sites: Vec<Site>,
     shows: *const ShowFn,
+    /// The children function of each type (NULL: a type without parts).
+    kids: *const Option<KidsFn>,
     /// Breakpoints set at each site (a count: several breakpoints may share one).
     bp: Vec<AtomicU32>,
 }
@@ -404,21 +409,25 @@ fn serve(seq: Option<i64>, w: &[String], me: i64) -> Option<StepKind> {
         "vars" | "locals" => {
             let n = arg(1).unwrap_or(0);
             let t = arg(2).unwrap_or(me);
-            let Some(mut f) = thread_top(t, me) else {
-                reply(seq, "error", &format!(",\"msg\":\"no thread {t}\""));
-                return None;
-            };
-            for _ in 0..n {
-                if f.is_null() {
-                    break;
-                }
-                f = unsafe { (*f).parent };
+            match frame_at(t, n, me) {
+                Ok(f) => reply(seq, "vars", &format!(",\"thread\":{t},\"frame\":{n},\"vars\":[{}]", vars_json(f))),
+                Err(e) => reply(seq, "error", &format!(",\"msg\":\"{}\"", esc(&e))),
             }
-            if f.is_null() {
-                reply(seq, "error", &format!(",\"msg\":\"no frame {n}\""));
-                return None;
+        }
+        // `kids <frame> <thread> <local> [i...]`: the parts of a local, or of its part i, j...
+        "kids" => {
+            let n = arg(1).unwrap_or(0);
+            let t = arg(2).unwrap_or(me);
+            let path: Vec<u32> = w.iter().skip(4).filter_map(|x| x.parse().ok()).collect();
+            let r = frame_at(t, n, me).and_then(|f| {
+                let name = w.get(3).ok_or("kids: which local?")?;
+                let (_, ty, p) = locals_of(f).into_iter().find(|(x, _, _)| x == name).ok_or(format!("no local `{name}` here"))?;
+                kids_json(ty, p, path)
+            });
+            match r {
+                Ok(items) => reply(seq, "kids", &items),
+                Err(e) => reply(seq, "error", &format!(",\"msg\":\"{}\"", esc(&e))),
             }
-            reply(seq, "vars", &format!(",\"thread\":{t},\"frame\":{n},\"vars\":[{}]", vars_json(f)));
         }
         "threads" => {
             let ts: Vec<(i64, *mut Frame)> = st().threads.iter().map(|r| (r.id, unsafe { (*r.top).get() })).collect();
@@ -434,6 +443,18 @@ fn serve(seq: Option<i64>, w: &[String], me: i64) -> Option<StepKind> {
         other => reply(seq, "error", &format!(",\"msg\":\"unknown command `{}`\"", esc(other))),
     }
     None
+}
+
+/// Frame `n` (0 = innermost) of thread `t`.
+fn frame_at(t: i64, n: i64, me: i64) -> Result<*mut Frame, String> {
+    let mut f = thread_top(t, me).ok_or(format!("no thread {t}"))?;
+    for _ in 0..n {
+        if f.is_null() {
+            break;
+        }
+        f = unsafe { (*f).parent };
+    }
+    if f.is_null() { Err(format!("no frame {n}")) } else { Ok(f) }
 }
 
 /// The innermost frame of thread `t` (stopped: its frames don't change).
@@ -464,36 +485,190 @@ fn frame_json(f: *mut Frame) -> Option<String> {
     Some(o)
 }
 
-/// The locals in scope at a frame's current statement (a shadowed name shows its latest
-/// binding), each `{"name","type","value"}`.
-fn vars_json(f: *mut Frame) -> String {
-    let Some(info) = INFO.get() else { return String::new() };
+/// The locals in scope at a frame's current statement, in binding order: (name, type, address).
+/// A shadowed name gives only its latest binding.
+fn locals_of(f: *mut Frame) -> Vec<(String, u32, *mut c_void)> {
+    let Some(info) = INFO.get() else { return Vec::new() };
     let (func, site) = unsafe { ((*f).func as usize, (*f).site) };
-    let (Some(fi), Some(s)) = (info.fns.get(func), info.sites.get(site as usize)) else { return String::new() };
-    let mut seen: Vec<&str> = Vec::new();
-    let mut items = Vec::new();
+    let (Some(fi), Some(s)) = (info.fns.get(func), info.sites.get(site as usize)) else { return Vec::new() };
+    let mut out: Vec<(String, u32, *mut c_void)> = Vec::new();
     for &slot in s.vis.iter().rev() {
         let Some((name, ty)) = fi.locals.get(slot as usize) else { continue };
-        if seen.contains(&name.as_str()) || name == "_" {
+        if name == "_" || out.iter().any(|(n, _, _)| n == name) {
             continue;
         }
-        seen.push(name);
         let p = unsafe { *(*f).slots.as_ptr().add(slot as usize) };
-        if p.is_null() {
-            continue;
+        if !p.is_null() {
+            out.push((name.clone(), *ty, p));
         }
-        let value = show(info, *ty, p);
-        let mut o = String::from("{\"name\":");
-        json_str(&mut o, name);
-        o += ",\"type\":";
-        json_str(&mut o, &info.types[*ty as usize]);
-        o += ",\"value\":";
-        json_str(&mut o, &value);
-        o.push('}');
-        items.push(o);
     }
-    items.reverse();
-    items.join(",")
+    out.reverse();
+    out
+}
+
+/// `{"name","type","value"[,"kids":true]}` of a value of type `ty` at `p`.
+fn item_json(info: &Info, name: &str, ty: u32, p: *mut c_void) -> String {
+    let value = show(info, ty, p);
+    let mut o = String::from("{\"name\":");
+    json_str(&mut o, name);
+    o += ",\"type\":";
+    json_str(&mut o, info.types.get(ty as usize).map_or("?", |s| s.as_str()));
+    o += ",\"value\":";
+    json_str(&mut o, &value);
+    if has_parts(info, ty, p) {
+        o += ",\"kids\":true";
+    }
+    o.push('}');
+    o
+}
+
+/// The locals in scope at a frame's current statement, as JSON items.
+fn vars_json(f: *mut Frame) -> String {
+    let Some(info) = INFO.get() else { return String::new() };
+    locals_of(f).iter().map(|(n, ty, p)| item_json(info, n, *ty, *p)).collect::<Vec<_>>().join(",")
+}
+
+/// At most this many parts of one value are listed.
+const KIDS_MAX: usize = 1000;
+
+/// The walk of a value's parts: down `path` (a part index per level), then listing the parts
+/// of the value reached.
+struct KidCtx {
+    path: Vec<u32>,
+    depth: usize,
+    counter: u32,
+    listing: bool,
+    /// Listing only counts (in `more`).
+    count_only: bool,
+    found: bool,
+    done: bool,
+    out: Vec<String>,
+    more: usize,
+}
+
+/// `,"kids":[...]` (and `"more":N`) for the parts of the value at `p` reached by `path`.
+fn kids_json(ty: u32, p: *mut c_void, path: Vec<u32>) -> Result<String, String> {
+    let info = INFO.get().ok_or("no debug info")?;
+    let listing = path.is_empty();
+    let mut c = KidCtx { path, depth: 0, counter: 0, listing, count_only: false, found: listing, done: false, out: Vec::new(), more: 0 };
+    let Some(k) = (unsafe { *info.kids.add(ty as usize) }) else { return Err("the value has no parts".into()) };
+    unsafe { k(p, (&mut c as *mut KidCtx).cast()) };
+    if !c.found {
+        return Err("no such part".into());
+    }
+    let more = if c.more > 0 { format!(",\"more\":{}", c.more) } else { String::new() };
+    Ok(format!(",\"kids\":[{}]{more}", c.out.join(",")))
+}
+
+/// Does this value have parts (a variant with fields, a non-empty list...)?
+fn has_parts(info: &Info, ty: u32, p: *mut c_void) -> bool {
+    let Some(k) = (unsafe { *info.kids.add(ty as usize) }) else { return false };
+    let mut c = KidCtx { path: Vec::new(), depth: 0, counter: 0, listing: true, count_only: true, found: true, done: false, out: Vec::new(), more: 0 };
+    unsafe { k(p, (&mut c as *mut KidCtx).cast()) };
+    c.more > 0
+}
+
+/// One part (index `counter`) of the value being walked.
+unsafe fn kid(ctx: *mut c_void, name: &dyn Fn() -> String, ty: u32, p: *mut c_void) {
+    let Some(info) = INFO.get() else { return };
+    let c = unsafe { &mut *(ctx as *mut KidCtx) };
+    if c.done {
+        return;
+    }
+    if c.listing {
+        if c.count_only || c.out.len() >= KIDS_MAX {
+            c.more += 1;
+            // one part is enough to know there are some
+            c.done = c.count_only;
+        } else {
+            let item = item_json(info, &name(), ty, p);
+            unsafe { (*(ctx as *mut KidCtx)).out.push(item) };
+        }
+        return;
+    }
+    let i = c.counter;
+    c.counter += 1;
+    if i != c.path[c.depth] {
+        return;
+    }
+    // the part on the path: walk into it (only one path, so the walk ends after it)
+    let Some(k) = (unsafe { *info.kids.add(ty as usize) }) else {
+        c.done = true;
+        return;
+    };
+    if c.depth + 1 == c.path.len() {
+        c.listing = true;
+        c.found = true;
+    } else {
+        c.depth += 1;
+        c.counter = 0;
+    }
+    unsafe { k(p, ctx) };
+    let c = unsafe { &mut *(ctx as *mut KidCtx) };
+    c.listing = false;
+    c.done = true;
+}
+
+/// Generated children functions report a named part.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn duck_dbg_kid(ctx: *mut c_void, name: *const c_char, ty: i64, p: *mut c_void) {
+    unsafe { kid(ctx, &|| cstr(name).to_string(), ty as u32, p) }
+}
+
+/// The elements of a list (`elem` bytes each).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn duck_dbg_kid_arr(ctx: *mut c_void, a: *mut c_void, ty: i64, elem: i64) {
+    let a = a as *const crate::DuckArr;
+    if a.is_null() {
+        return;
+    }
+    let (len, data) = unsafe { ((*a).len, (*a).data) };
+    let c = unsafe { &mut *(ctx as *mut KidCtx) };
+    if c.done {
+        return;
+    }
+    let at = |i: i64| unsafe { data.add((i * elem) as usize).cast::<c_void>() };
+    if !c.listing {
+        // walking through: straight to the element on the path
+        let i = c.path[c.depth] as i64;
+        if i < len {
+            c.counter = i as u32;
+            unsafe { kid(ctx, &|| i.to_string(), ty as u32, at(i)) };
+        } else {
+            c.done = true;
+        }
+        return;
+    }
+    let shown = if c.count_only { 0 } else { (len as usize).min(KIDS_MAX.saturating_sub(c.out.len())) };
+    for i in 0..shown as i64 {
+        unsafe { kid(ctx, &|| i.to_string(), ty as u32, at(i)) };
+    }
+    unsafe { (*(ctx as *mut KidCtx)).more += len as usize - shown };
+}
+
+/// The entries of a map: each value, named by its key shown.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn duck_dbg_kid_map(ctx: *mut c_void, m: *mut c_void, ty: i64) {
+    let m = m as *const crate::DuckMap;
+    if m.is_null() {
+        return;
+    }
+    let (mut it, mut k, mut v): (i64, *mut c_void, *mut c_void) = (0, std::ptr::null_mut(), std::ptr::null_mut());
+    while unsafe { crate::map::duck_map_next(m, &mut it, &mut k, &mut v) } {
+        let key = k;
+        let name = || unsafe {
+            match (*(*m).kops).show {
+                Some(show) => {
+                    let s = show(key);
+                    let out = String::from_utf8_lossy(sbytes(s)).into_owned();
+                    crate::rc::release(s);
+                    out
+                }
+                None => "?".into(),
+            }
+        };
+        unsafe { kid(ctx, &name, ty as u32, v) };
+    }
 }
 
 /// A value of type `ty` at `p`, shown (cut to about 1000 chars).
@@ -558,8 +733,8 @@ fn json_str(o: &mut String, s: &str) {
 }
 
 /// Parse the debug info text (see `dbg_tables` in src/build.rs).
-fn parse(text: &str, shows: *const ShowFn) -> Info {
-    let mut info = Info { files: Vec::new(), types: Vec::new(), fns: Vec::new(), sites: Vec::new(), shows, bp: Vec::new() };
+fn parse(text: &str, shows: *const ShowFn, kids: *const Option<KidsFn>) -> Info {
+    let mut info = Info { files: Vec::new(), types: Vec::new(), fns: Vec::new(), sites: Vec::new(), shows, kids, bp: Vec::new() };
     for line in text.lines() {
         let Some((k, rest)) = line.split_once(' ') else { continue };
         match k {
@@ -742,7 +917,7 @@ extern "C" fn at_exit() {
 /// Start the debugger (generated `main`, before anything else runs): attach to the front end
 /// named by `DUCK_DEBUG` and wait for `run`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_dbg_init(text: *const c_char, shows: *const ShowFn) {
+pub unsafe extern "C" fn duck_dbg_init(text: *const c_char, shows: *const ShowFn, kids: *const Option<KidsFn>) {
     let Some(path) = std::env::var_os("DUCK_DEBUG") else { return };
     let conn = match UnixStream::connect(&path) {
         Ok(c) => c,
@@ -751,8 +926,10 @@ pub unsafe extern "C" fn duck_dbg_init(text: *const c_char, shows: *const ShowFn
             return;
         }
     };
+    // under a debugger, output shows up as it is written (it goes to a pipe)
+    unsafe { libc::setvbuf(crate::c_stdout(), std::ptr::null_mut(), libc::_IOLBF, 0) };
     let text = unsafe { cstr(text) };
-    let _ = INFO.set(parse(&text, shows));
+    let _ = INFO.set(parse(&text, shows, kids));
     let Ok(rd) = conn.try_clone() else { return };
     *OUT.lock().unwrap_or_else(|e| e.into_inner()) = Some(conn);
     ATTACHED.store(true, SeqCst);
