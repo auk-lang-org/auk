@@ -47,7 +47,8 @@ pub fn generate(tp: &TypedProgram, mode: Mode, trace: Trace) -> Result<Generated
     let imprints = eval_imprints(tp)?;
     let mut g = Gen::new(tp, mode);
     g.imprints = imprints;
-    g.trace = trace;
+    g.trace = Trace { debug: false, ..trace };
+    g.dbg = mir::progen::Debug { on: trace.debug, core: false };
     let mut tests = Vec::new();
     for (i, inst) in tp.instances.iter().enumerate() {
         // an imprint's initializer ran at compile time; only its value is emitted
@@ -122,6 +123,10 @@ pub fn generate(tp: &TypedProgram, mode: Mode, trace: Trace) -> Result<Generated
         }
     }
     drain(&mut g);
+    if g.dbg.on {
+        let (info, shows) = dbg_tables(&mut g);
+        b.do_(Ex::rt("duck_dbg_init", vec![Ex::cstr(&info), Ex::new(mir::K::GlobalAddr(shows), MTy::void_ptr())], MTy::Void));
+    }
     let (init, cleanup) = g.init_and_cleanup();
     b.do_(g.call(init, vec![]));
     b.do_(Ex::rt("duck_set_cleanup", vec![Ex::fn_addr(cleanup)], MTy::Void));
@@ -140,6 +145,63 @@ fn emit(g: &mut Gen, i: usize) {
     }
     g.emitted.insert(i);
     mir::lower::emit_instance(g, i);
+}
+
+/// The debugger's tables (`--debug`): the debug info as text for `duck_dbg_init` (runtime/src/dbg.rs
+/// parses it), and a constant array of show functions, one per type of a named local
+/// (`DuckStr *show(void *value)`). Showing a type can instantiate more (instrumented) code, so
+/// this runs to a fixpoint.
+fn dbg_tables(g: &mut Gen) -> (String, mir::GlobalId) {
+    let mut fns = Vec::new();
+    while fns.len() < g.dbg_info.types.len() {
+        let t = g.dbg_info.types[fns.len()].clone();
+        let f = g.declare(format!("dk_dbgshow{}", fns.len()), vec![MTy::void_ptr()], MTy::D(Ty::Str), Abi::C);
+        let (mut b, ps) = g.body_for(f);
+        let v = ps[0].clone().cast(MTy::ptr(MTy::D(t.clone()))).deref(MTy::D(t.clone()));
+        let s = match g.dshow_fn(&t) {
+            Some(sf) => g.call_ref(&sf, vec![v], MTy::D(Ty::Str)),
+            None => {
+                let text = format!("<{}>", g.show_ty(&t));
+                Ex::rt("duck_str_from_bytes", vec![Ex::cstr(&text), Ex::int(text.len() as i64)], MTy::D(Ty::Str))
+            }
+        };
+        b.emit(Stmt::Ret(Some(s)));
+        g.define(f, b);
+        fns.push(f);
+        drain(g);
+    }
+    let a = g.agg("DkDbgShows".into(), vec![MTy::Code; fns.len().max(1)]);
+    let init = Ex::agg(MTy::Agg(a), fns.iter().enumerate().map(|(i, &f)| (Sel::F(i as u32), Ex::fn_addr(f))).collect());
+    let shows = g.global("dk_dbgshows".into(), MTy::Agg(a), Some(init), true);
+    // the text: `p <file>`, `t <type>`, `f <function>` followed by `v <type> <local>` per
+    // frame slot, then `s <fn> <file> <line> <col> <slot,...>` per site (ids in order)
+    let info = &g.dbg_info;
+    let mut out = String::new();
+    let mut files: Vec<&str> = Vec::new();
+    for s in &info.sites {
+        if !files.contains(&s.file.as_str()) {
+            files.push(&s.file);
+        }
+    }
+    for f in &files {
+        let abs = fs::canonicalize(f).map(|p| p.display().to_string()).unwrap_or_else(|_| f.to_string());
+        let _ = writeln!(out, "p {abs}");
+    }
+    for t in &info.types {
+        let _ = writeln!(out, "t {}", g.show_ty(t).replace('\n', " "));
+    }
+    for f in &info.fns {
+        let _ = writeln!(out, "f {}", f.name);
+        for (n, t) in &f.locals {
+            let _ = writeln!(out, "v {t} {n}");
+        }
+    }
+    for s in &info.sites {
+        let file = files.iter().position(|f| *f == s.file).unwrap_or(0);
+        let vis: Vec<String> = s.vis.iter().map(|v| v.to_string()).collect();
+        let _ = writeln!(out, "s {} {file} {} {} {}", s.func, s.line, s.col, vis.join(","));
+    }
+    (out, shows)
 }
 
 fn drain(g: &mut Gen) {
@@ -386,7 +448,8 @@ pub fn jit_cli(args: &[String]) -> i32 {
     };
     let Some((file, args)) = rest.split_first() else { return 2 };
     let on = env::var_os("DUCK_TRACE").is_some();
-    match jit_run(Path::new(file), args, mode, Trace { on, core }) {
+    let debug = env::var_os("DUCK_DEBUG").is_some();
+    match jit_run(Path::new(file), args, mode, Trace { on, core, debug }) {
         Ok(code) => exit_now(code),
         Err(e) => {
             eprint!("{e}");
@@ -511,12 +574,14 @@ pub struct TraceOpts {
     pub limit: Option<u64>,
     /// Trace core library functions too.
     pub core: bool,
+    /// `--debug`: instrument the program for the debugger (runtime/src/dbg.rs).
+    pub debug: bool,
 }
 
 impl TraceOpts {
     /// The codegen flag.
     pub fn codegen(&self) -> Trace {
-        Trace { on: self.dest.is_some(), core: self.core }
+        Trace { on: self.dest.is_some(), core: self.core, debug: self.debug }
     }
 
     /// Configure the environment of a traced program (`dest` overrides `self.dest`).
@@ -571,6 +636,8 @@ pub fn trace_flags(args: &[String], leading: bool) -> Result<(TraceOpts, Vec<Str
             limit_seen = true;
         } else if a == "--trace-core" {
             o.core = true;
+        } else if a == "--debug" {
+            o.debug = true;
         } else {
             rest.push(a.clone());
         }

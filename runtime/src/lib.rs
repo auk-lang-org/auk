@@ -51,6 +51,7 @@ pub mod core;
 pub mod tls;
 pub mod testing;
 pub mod trace;
+pub mod dbg;
 pub mod compiler;
 pub mod catch;
 pub mod heap;

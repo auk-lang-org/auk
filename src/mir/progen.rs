@@ -33,8 +33,61 @@ pub enum Mode {
 pub struct Trace {
     /// Wrap the traced functions, set call sites, and start the tracer in `main`.
     pub on: bool,
-    /// Trace the core library's Duck functions too.
+    /// Trace the core library's Duck functions too (with `debug`: instrument them too).
     pub core: bool,
+    /// Instrument for the debugger (`duck run --debug`; see `Debug`).
+    pub debug: bool,
+}
+
+/// Debugger instrumentation (`duck run --debug`). With `on` unset (every other build) the
+/// generated program is exactly what it would be without it. With it, every Duck function outside
+/// core (with `core`, core's too) keeps a frame record on the thread's debugger stack (its
+/// function, current site and the address of each named local), and every statement first
+/// stores its site and calls `duck_dbg_hook` while `duck_dbg_armed` is set (runtime/src/dbg.rs).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Debug {
+    pub on: bool,
+    pub core: bool,
+}
+
+/// A statement the debugger can stop at.
+#[derive(Debug, Clone)]
+pub struct DbgSite {
+    pub func: u32,
+    pub file: String,
+    pub line: u32,
+    pub col: u32,
+    /// The frame slots of the locals in scope at the statement.
+    pub vis: Vec<u32>,
+}
+
+/// An instrumented function: its name, and the name and type (index into `DbgInfo::types`) of
+/// each frame slot.
+#[derive(Debug, Clone)]
+pub struct DbgFn {
+    pub name: String,
+    pub locals: Vec<(String, u32)>,
+}
+
+/// The debug info of a program built with `Debug::on`.
+#[derive(Debug, Default)]
+pub struct DbgInfo {
+    pub sites: Vec<DbgSite>,
+    pub fns: Vec<DbgFn>,
+    pub types: Vec<Ty>,
+    type_ids: HashMap<Ty, u32>,
+}
+
+impl DbgInfo {
+    pub fn type_id(&mut self, t: &Ty) -> u32 {
+        if let Some(&i) = self.type_ids.get(t) {
+            return i;
+        }
+        self.types.push(t.clone());
+        let i = self.types.len() as u32 - 1;
+        self.type_ids.insert(t.clone(), i);
+        i
+    }
 }
 
 /// A value computed at compile time: the `Value` tree of an evaluated imprint.
@@ -96,6 +149,8 @@ pub struct Gen<'a> {
     pub imprints: HashMap<ConstId, CVal>,
     imprint_inits: Vec<FuncId>,
     pub trace: Trace,
+    pub dbg: Debug,
+    pub dbg_info: DbgInfo,
 }
 
 impl<'a> Gen<'a> {
@@ -121,12 +176,19 @@ impl<'a> Gen<'a> {
             imprints: HashMap::new(),
             imprint_inits: Vec::new(),
             trace: Trace::default(),
+            dbg: Debug::default(),
+            dbg_info: DbgInfo::default(),
         }
     }
 
     /// Is a function of module `m` traced?
     pub fn traced(&self, m: ModId) -> bool {
         self.trace.on && (self.trace.core || !self.tp.program.is_core(m))
+    }
+
+    /// Are the functions of module `m` instrumented for the debugger?
+    pub fn dbg_on(&self, m: ModId) -> bool {
+        self.dbg.on && (self.dbg.core || !self.tp.program.is_core(m))
     }
 
     pub fn debug(&self) -> bool {

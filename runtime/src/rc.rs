@@ -201,6 +201,7 @@ pub fn panic_msg(loc: *const c_char, msg: &str) -> ! {
         msg = &msg[..end];
     }
     let loc_s = if loc.is_null() { "<unknown>".into() } else { unsafe { cstr(loc) } };
+    crate::dbg::on_panic(&loc_s, msg, crate::catch::recoverable());
     // inside `catch` (or on a task thread, whose awaiter re-raises it): record it, jump back
     if crate::catch::recoverable() {
         crate::trace::duck__trace_panic(loc, msg, true);

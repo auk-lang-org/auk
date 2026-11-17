@@ -50,10 +50,12 @@ pub fn throw(loc: &str, msg: &str) -> ! {
 /// Run `f(env, out)` under a recovery point: None if it finished, the panic if one jumped back.
 pub unsafe fn run(f: DuckThunk, env: *mut c_void, out: *mut c_void) -> Option<Panic> {
     let saved = crate::trace::save_state();
+    let dbg = crate::dbg::save_state();
     if unsafe { duck__catch_run(f, env, out) } == 0 {
         return None;
     }
     crate::trace::restore_state(saved);
+    crate::dbg::restore_state(dbg);
     Some(CAUGHT.with(|c| c.borrow_mut().take()).unwrap_or(Panic { msg: "panic".into(), loc: "<unknown>".into() }))
 }
 

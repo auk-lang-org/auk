@@ -46,6 +46,9 @@ commands:
   run [--trace=json|<file>] <file> [args...]
                            compile and run the program (--trace: log calls, returns,
                            errors, peeks and panics as JSON lines; json = stderr)
+  run --debug <file> [args...]
+                           build with debugger hooks; a front end attaches through
+                           DUCK_DEBUG=<unix socket> (see docs/compiler.md, Debugger)
   run --live <file> [args...]
                            run, swapping in new code on every save (state survives;
                            a changed struct/enum layout restarts the tasks using it)

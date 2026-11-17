@@ -195,7 +195,7 @@ impl Lower<'_, '_> {
             && !self.t.variants.contains_key(&p.id)
         {
             if let Some(&l) = self.t.binds.get(&p.id) {
-                self.f.locals.insert(l, Slot { c: v.clone(), ty: ty.clone() });
+                self.bind_name(l, Slot { c: v.clone(), ty: ty.clone() });
             }
             return;
         }
@@ -247,7 +247,7 @@ impl Lower<'_, '_> {
                     if let PatKind::Bind(_) = &rp.kind
                         && let Some(&l) = self.t.binds.get(&rp.id)
                     {
-                        self.f.locals.insert(l, Slot { c: n, ty: ty.clone() });
+                        self.bind_name(l, Slot { c: n, ty: ty.clone() });
                         return;
                     }
                     self.bind_sub(rp, &n);
@@ -305,7 +305,7 @@ impl Lower<'_, '_> {
                     let s = Ex::rt("duck_str_slice", vec![v.clone(), Ex::int(nchars), len, Ex::cstr("")], MTy::D(Ty::Str));
                     let n = self.decl(&Ty::Str, s);
                     self.register_local(&n, &Ty::Str);
-                    self.f.locals.insert(l, Slot { c: n, ty: Ty::Str });
+                    self.bind_name(l, Slot { c: n, ty: Ty::Str });
                 }
             }
             PatKind::Some(q) | PatKind::Ok(q) => {
@@ -337,6 +337,6 @@ impl Lower<'_, '_> {
             self.emit(r);
         }
         self.register_local(&n, ty);
-        self.f.locals.insert(l, Slot { c: n, ty: ty.clone() });
+        self.bind_name(l, Slot { c: n, ty: ty.clone() });
     }
 }

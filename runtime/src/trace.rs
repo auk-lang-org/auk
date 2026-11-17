@@ -57,13 +57,13 @@ fn live() -> bool {
 /// `duck__show_exhausted` (duck_internal.h).
 #[inline]
 pub fn show_exhausted() -> bool {
-    live() && SHOW_LEFT.with(|c| c.get()) == 0
+    (live() || crate::dbg::showing()) && SHOW_LEFT.with(|c| c.get()) == 0
 }
 
 /// `duck__show_take` (duck_internal.h): count n appended bytes against the budget; false = drop them.
 #[inline]
 pub fn show_take(n: i64) -> bool {
-    if !live() {
+    if !live() && !crate::dbg::showing() {
         return true;
     }
     SHOW_LEFT.with(|c| {
