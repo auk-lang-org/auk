@@ -337,7 +337,7 @@ struct Decls {
 /// Compile `prog` into module `m`; returns the entry function's id. `entry_name`: the symbol of
 /// the entry point (exported).
 pub fn compile<M: Module>(m: &mut M, prog: &Program, info: &TyInfo, entry_name: &str, dump: Option<&mut String>) -> Result<CFuncId, String> {
-    compile_with(m, prog, info, entry_name, dump, None)
+    compile_with(m, prog, info, entry_name, dump, None, None)
 }
 
 fn compile_with<M: Module>(
@@ -347,6 +347,7 @@ fn compile_with<M: Module>(
     entry_name: &str,
     mut dump: Option<&mut String>,
     live: Option<(usize, HashMap<u32, usize>)>,
+    mut lines: Option<&mut Vec<super::dwarf::FnLines>>,
 ) -> Result<CFuncId, String> {
     let lay = Layouts::new(info, &prog.aggs);
     let cc = m.isa().default_call_conv();
@@ -408,6 +409,17 @@ fn compile_with<M: Module>(
             out.push_str(&format!("; {}\n{}\n", f.name, ctx.func.display()));
         }
         m.define_function(d.funcs[i], &mut ctx).map_err(|e| format!("compiling {}: {e:?}\n{}", f.name, ctx.func.display()))?;
+        if let (Some(ls), Some(cc)) = (lines.as_deref_mut(), ctx.compiled_code()) {
+            let rows = cc
+                .buffer
+                .get_srclocs_sorted()
+                .iter()
+                .filter(|l| l.loc.is_abs() && !l.loc.as_abs().is_default())
+                .map(|l| (l.start, l.loc.as_abs().bits() - 1))
+                .collect();
+            let name = prog.names.get(&(i as u32)).cloned().unwrap_or_else(|| f.name.clone());
+            ls.push(super::dwarf::FnLines { func: d.funcs[i], name, size: cc.code_info().total_size, rows });
+        }
         m.clear_context(&mut ctx);
     }
     Ok(d.funcs[entry as usize])
@@ -688,6 +700,11 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
     }
 
     fn stmt(&mut self, s: &Stmt) -> Result<(), String> {
+        if let Stmt::Loc(i) = s {
+            // the instructions from here on come from this source location (0 is "none")
+            self.b.set_srcloc(ir::SourceLoc::new(i + 1));
+            return Ok(());
+        }
         if let Stmt::Label(l) = s {
             let blk = self.label_block(*l);
             if !self.terminated {
@@ -780,6 +797,7 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
                 self.b.ins().trap(TrapCode::unwrap_user(1));
                 self.terminated = true;
             }
+            Stmt::Loc(_) => {}
         }
         Ok(())
     }
@@ -1377,7 +1395,7 @@ pub fn jit_live(prog: &Program, info: &TyInfo, table: usize, slots: &HashMap<u32
         jb.symbol(name, addr);
     }
     let mut module = cranelift_jit::JITModule::new(jb);
-    let entry = compile_with(&mut module, prog, info, "dk_entry", None, Some((table, slots.clone())))?;
+    let entry = compile_with(&mut module, prog, info, "dk_entry", None, Some((table, slots.clone())), None)?;
     module.finalize_definitions().map_err(|e| e.to_string())?;
     let entry = module.get_finalized_function(entry);
     let ids: Vec<CFuncId> = module.declarations().get_functions().map(|(id, _)| id).collect();
@@ -1517,8 +1535,15 @@ pub fn object(prog: &Program, info: &TyInfo, opt: bool) -> Result<Vec<u8>, Strin
     let isa = isa(opt, true)?;
     let ob = cranelift_object::ObjectBuilder::new(isa, "duck", cranelift_module::default_libcall_names()).map_err(|e| e.to_string())?;
     let mut module = cranelift_object::ObjectModule::new(ob);
-    compile(&mut module, prog, info, "main", None)?;
-    module.finish().emit().map_err(|e| e.to_string())
+    // with source locations (`duck build -g`): DWARF line tables
+    let mut lines = Vec::new();
+    let want = !prog.locs.is_empty();
+    compile_with(&mut module, prog, info, "main", None, None, want.then_some(&mut lines))?;
+    let mut product = module.finish();
+    if want {
+        super::dwarf::emit(&mut product, prog, &lines)?;
+    }
+    product.emit().map_err(|e| e.to_string())
 }
 
 /// The Cranelift IR of every function, as text (`duck ir --clif`).

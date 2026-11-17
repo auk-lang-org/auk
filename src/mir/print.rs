@@ -387,6 +387,11 @@ impl Printer<'_, '_> {
             Stmt::Unreachable => {
                 let _ = writeln!(out, "{pad}__builtin_unreachable();");
             }
+            Stmt::Loc(i) => {
+                if let Some((f, l, c)) = self.p.locs.get(*i as usize) {
+                    let _ = writeln!(out, "{pad}// {f}:{l}:{c}");
+                }
+            }
         }
     }
 

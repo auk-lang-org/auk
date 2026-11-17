@@ -258,7 +258,9 @@ dependencies = [
  "cranelift-native",
  "cranelift-object",
  "duck_rt",
+ "gimli",
  "libc",
+ "object",
 ]
 
 [[package]]

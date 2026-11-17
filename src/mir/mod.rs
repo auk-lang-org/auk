@@ -14,6 +14,7 @@
 
 pub mod print;
 pub mod clif;
+pub mod dwarf;
 pub mod progen;
 pub mod lower;
 pub mod types;
@@ -331,6 +332,8 @@ pub enum Stmt {
     Ret(Option<Ex>),
     /// Control never gets here (after a call that doesn't return).
     Unreachable,
+    /// The code from here on comes from source location `Program::locs[i]` (debug info).
+    Loc(u32),
 }
 
 /// A generated function.
@@ -385,6 +388,12 @@ pub struct Program {
     /// A key for each user function instance that stays the same across compiles of edited
     /// source (its module, name and signature): `duck run --live` swaps bodies by it.
     pub live_keys: std::collections::HashMap<FuncId, String>,
+    /// Source locations (file, line, column) that `Stmt::Loc` refers to: set only when building
+    /// with debug info (`duck build -g`).
+    pub locs: Vec<(String, u32, u32)>,
+    /// The Duck name of each function that holds a Duck body (`mod.f`, `mod.f.<fn:12>`,
+    /// `test "t"`): debug info names functions by it. Set with `locs`.
+    pub names: std::collections::HashMap<FuncId, String>,
 }
 
 // ---- building function bodies -----------------------------------------------------------

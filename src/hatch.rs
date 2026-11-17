@@ -342,7 +342,7 @@ fn run_tests(root: &Path, names: &[&str]) -> Result<(), String> {
     // compiled here (the candidate is an in-memory source), run in a forked child in its own
     // process group, killed after TEST_TIMEOUT
     let tp = super::build::check(root)?;
-    let g = super::build::generate(&tp, super::mir::progen::Mode::Test, super::mir::progen::Trace { on: true, core: false, debug: false })?;
+    let g = super::build::generate(&tp, super::mir::progen::Mode::Test, super::mir::progen::Trace { on: true, core: false, debug: false, lines: false })?;
     let info = super::mir::types::TyInfo::new(&tp);
     let j = super::mir::clif::jit(&g.prog, &info, false)?;
     let n = RUN_N.fetch_add(1, Ordering::Relaxed);

@@ -453,6 +453,13 @@ impl<'g, 'a> Lower<'g, 'a> {
         func.vars = vars;
     }
 
+    /// Record the Duck name of a generated function (for debug info).
+    fn name_fn(&mut self, f: FuncId, name: &str) {
+        if self.g.lines {
+            self.g.prog.names.insert(f, name.to_string());
+        }
+    }
+
     /// Instrument the function being lowered for the debugger (when its module is), under the
     /// name the debugger shows.
     fn dbg_begin(&mut self, name: String) {
@@ -503,6 +510,11 @@ impl<'g, 'a> Lower<'g, 'a> {
     /// A debugger stop point: record the statement's site in the frame and call the debugger
     /// while it is armed (one load otherwise).
     fn dbg_hook(&mut self, span: crate::diag::Span) {
+        if self.g.lines {
+            self.g.prog.locs.push((self.file.clone(), span.line, span.col));
+            let i = self.g.prog.locs.len() as u32 - 1;
+            self.emit(Stmt::Loc(i));
+        }
         let Some(d) = &self.f.dbg else { return };
         let vis = d.vis.iter().map(|&(x, _)| x).collect();
         let site = super::progen::DbgSite { func: d.func, file: self.file.clone(), line: span.line, col: span.col, vis };
@@ -548,6 +560,7 @@ impl<'g, 'a> Lower<'g, 'a> {
 
         let args = self.begin_fn(body_name, ret.clone());
         let dname = format!("{}.{}", self.trace_mod_name(info.module), info.name);
+        self.name_fn(body_name, &dname);
         self.dbg_begin(dname);
         // var parameters bound to plain names (tail calls may pass them through)
         for c in &cls {
@@ -882,7 +895,9 @@ impl<'g, 'a> Lower<'g, 'a> {
         let inner = self.g.declare(format!("{base}_body"), Vec::new(), d(&ret), Abi::Duck);
         self.begin_fn(inner, ret.clone());
         if let BodyRef::Test(t) = self.tp.instances[self.inst].body {
-            self.dbg_begin(format!("test \"{}\"", self.tp.tests[t].name));
+            let n = format!("test \"{}\"", self.tp.tests[t].name);
+            self.name_fn(inner, &n);
+            self.dbg_begin(n);
         }
         self.push(ScopeKind::Block);
         for s in &body.stmts {
@@ -3301,7 +3316,9 @@ impl<'g, 'a> Lower<'g, 'a> {
             BodyRef::Fn(f) => format!("{}.{}", self.trace_mod_name(self.tp.fns[f].module), self.tp.fns[f].name),
             _ => self.trace_mod_name(self.m),
         };
-        self.dbg_begin(format!("{owner}.<fn:{}>", e.span.line));
+        let n = format!("{owner}.<fn:{}>", e.span.line);
+        self.name_fn(fname, &n);
+        self.dbg_begin(n);
         self.push(ScopeKind::Block);
         if let Some((a, _)) = env {
             let ev = pv[0].clone().cast(MTy::ptr(MTy::Agg(a))).deref(MTy::Agg(a));

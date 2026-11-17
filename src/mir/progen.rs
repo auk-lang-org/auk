@@ -37,6 +37,8 @@ pub struct Trace {
     pub core: bool,
     /// Instrument for the debugger (`duck run --debug`; see `Debug`).
     pub debug: bool,
+    /// Source locations for DWARF line tables (`duck build -g`).
+    pub lines: bool,
 }
 
 /// Debugger instrumentation (`duck run --debug`). With `on` unset (every other build) the
@@ -151,6 +153,8 @@ pub struct Gen<'a> {
     pub trace: Trace,
     pub dbg: Debug,
     pub dbg_info: DbgInfo,
+    /// Emit `Stmt::Loc` at every statement (DWARF line tables, `duck build -g`).
+    pub lines: bool,
 }
 
 impl<'a> Gen<'a> {
@@ -178,6 +182,7 @@ impl<'a> Gen<'a> {
             trace: Trace::default(),
             dbg: Debug::default(),
             dbg_info: DbgInfo::default(),
+            lines: false,
         }
     }
 

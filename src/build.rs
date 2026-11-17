@@ -47,7 +47,8 @@ pub fn generate(tp: &TypedProgram, mode: Mode, trace: Trace) -> Result<Generated
     let imprints = eval_imprints(tp)?;
     let mut g = Gen::new(tp, mode);
     g.imprints = imprints;
-    g.trace = Trace { debug: false, ..trace };
+    g.trace = Trace { debug: false, lines: false, ..trace };
+    g.lines = trace.lines;
     g.dbg = mir::progen::Debug { on: trace.debug, core: false };
     let mut tests = Vec::new();
     for (i, inst) in tp.instances.iter().enumerate() {
@@ -456,7 +457,7 @@ pub fn jit_cli(args: &[String]) -> i32 {
     let Some((file, args)) = rest.split_first() else { return 2 };
     let on = env::var_os("DUCK_TRACE").is_some();
     let debug = env::var_os("DUCK_DEBUG").is_some();
-    match jit_run(Path::new(file), args, mode, Trace { on, core, debug }) {
+    match jit_run(Path::new(file), args, mode, Trace { on, core, debug, lines: false }) {
         Ok(code) => exit_now(code),
         Err(e) => {
             eprint!("{e}");
@@ -468,9 +469,10 @@ pub fn jit_cli(args: &[String]) -> i32 {
 /// `duck build`: compile `path` (a release build: optimized, no `ensures`, no holes allowed)
 /// to an object file with Cranelift and link it with the runtime library into `out`. The
 /// linker is the system C compiler driver (`cc`; `DUCK_LINKER` overrides it).
-pub fn build_native(path: &Path, out: &Path) -> Result<(), String> {
+/// `duck build`: `debuginfo` (`-g`) adds DWARF line tables (on macOS, in `<out>.dSYM`).
+pub fn build_native(path: &Path, out: &Path, debuginfo: bool) -> Result<(), String> {
     let tp = check(path)?;
-    let g = generate(&tp, Mode::Release, Trace::default())?;
+    let g = generate(&tp, Mode::Release, Trace { lines: debuginfo, ..Trace::default() })?;
     if !g.holes.is_empty() {
         let mut s = format!("error: `{}` still has {} unfilled hole(s); `duck build` needs a complete program\n", path.display(), g.holes.len());
         for h in &g.holes {
@@ -499,6 +501,13 @@ pub fn build_native(path: &Path, out: &Path) -> Result<(), String> {
             .map_err(|e| format!("error: cannot run the linker `{linker}`: {e}\n"))?;
         if !output.status.success() {
             return Err(format!("error: linking failed:\n{}", String::from_utf8_lossy(&output.stderr)));
+        }
+        // the macOS linker leaves DWARF in the object file (deleted below): gather it first
+        if debuginfo && cfg!(target_os = "macos") {
+            let r = Command::new("dsymutil").arg(out).output().map_err(|e| format!("error: cannot run dsymutil (for -g): {e}\n"))?;
+            if !r.status.success() {
+                return Err(format!("error: dsymutil failed:\n{}", String::from_utf8_lossy(&r.stderr)));
+            }
         }
         Ok(())
     })();
@@ -588,7 +597,7 @@ pub struct TraceOpts {
 impl TraceOpts {
     /// The codegen flag.
     pub fn codegen(&self) -> Trace {
-        Trace { on: self.dest.is_some(), core: self.core, debug: self.debug }
+        Trace { on: self.dest.is_some(), core: self.core, debug: self.debug, lines: false }
     }
 
     /// Configure the environment of a traced program (`dest` overrides `self.dest`).
@@ -739,9 +748,12 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
         eprint!("{msg}");
         1
     };
-    // trace flags: anywhere for `test`, before the file for `run`/`ir` (not for `build`)
+    // trace flags: anywhere for `test`, before the file for `run`/`ir` (not for `build`, which
+    // takes `-g`: debug info)
+    let mut debuginfo = false;
     let (trace, args) = if cmd == "build" {
-        (TraceOpts::default(), args.to_vec())
+        debuginfo = args.iter().any(|a| a == "-g");
+        (TraceOpts::default(), args.iter().filter(|a| *a != "-g").cloned().collect())
     } else {
         match trace_flags(args, cmd != "test") {
             Ok(x) => x,
@@ -827,11 +839,11 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
                         [] => path.with_extension(""),
                         [flag, out] if flag == "-o" => PathBuf::from(out),
                         _ => {
-                            eprintln!("usage: duck build <file.duck> [-o out]");
+                            eprintln!("usage: duck build [-g] <file.duck> [-o out]");
                             return 2;
                         }
                     };
-                    match build_native(path, &out) {
+                    match build_native(path, &out, debuginfo) {
                         Ok(()) => 0,
                         Err(e) => fail(e),
                     }

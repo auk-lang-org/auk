@@ -593,3 +593,51 @@ fn dap_panics_and_compile_errors() {
     d.req("disconnect", Json::Null);
     d.child.wait().unwrap();
 }
+
+// ---- native debug info (`duck build -g`) ----
+
+fn have(tool: &str) -> bool {
+    Command::new("which").arg(tool).output().is_ok_and(|o| o.status.success())
+}
+
+#[test]
+fn native_line_tables() {
+    let f = prog_file("native", PROG);
+    let dir = f.parent().unwrap();
+    let out = dir.join("prog");
+    let o = duck_cmd().arg("build").arg("-g").arg(&f).arg("-o").arg(&out).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(String::from_utf8_lossy(&Command::new(&out).output().unwrap().stdout), "4 7\n");
+    if !cfg!(target_os = "macos") || !have("lldb") || !have("dwarfdump") {
+        eprintln!("skipped: needs macOS with lldb and dwarfdump");
+        return;
+    }
+    let dsym = dir.join("prog.dSYM");
+    assert!(dsym.is_dir(), "no .dSYM");
+    // a compile unit for the program, with its functions by their Duck names and a line table
+    let info = String::from_utf8_lossy(&Command::new("dwarfdump").arg("--debug-info").arg(&dsym).output().unwrap().stdout).into_owned();
+    assert!(info.contains("(\"duck ") && info.contains("(\"prog.fact\")") && info.contains("(\"prog.main\")"), "{info:.2000}");
+    // lldb: line and function breakpoints, the backtrace in Duck terms
+    let o = Command::new("lldb")
+        .current_dir(dir)
+        .args(["-b", "-o", "b prog.duck:5", "-o", "b prog.fact", "-o", "run", "-o", "bt 2", "-o", "c", "-o", "bt 2", "-o", "kill"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    let t = String::from_utf8_lossy(&o.stdout);
+    for want in [
+        "Breakpoint 1: where = prog`prog.add",
+        "at prog.duck:5:5",
+        "Breakpoint 2: where = prog`prog.fact",
+        "frame #0: 0x",
+        "prog`prog.add at prog.duck:5:5",
+        "prog`prog.main at prog.duck:21:5",
+        "prog`prog.fact at prog.duck:10:5",
+    ] {
+        assert!(t.contains(want), "missing {want:?} in:\n{t}");
+    }
+    // without -g: no debug info
+    let o = duck_cmd().arg("build").arg(&f).arg("-o").arg(dir.join("plain")).output().unwrap();
+    assert!(o.status.success());
+    assert!(!dir.join("plain.dSYM").exists());
+}
