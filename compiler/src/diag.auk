@@ -113,3 +113,46 @@ test "json report" {
     "{{\"file\":\"f.auk\",\"ok\":false,\"diagnostics\":[{{\"code\":\"E0200\",\"severity\":\"error\",\"line\":1,\"col\":2,\"end_line\":1,\"end_col\":5,\"message\":\"a \\\"b\\\"\\n\\u000d\",\"notes\":[\"n\"],\"fixes\":[{{\"line\":1,\"col\":2,\"end_line\":1,\"end_col\":2,\"text\":\"x\"}}],\"explain\":\"auk explain E0200\"}}]}}"
   assert json_report_files("f.auk", [FileDiag { file: "g.auk", diag: new("E0411", NONE, "w") }]).starts_with("{{\"file\":\"f.auk\",\"ok\":true,\"diagnostics\":[{{\"file\":\"g.auk\",\"code\":\"E0411\",\"severity\":\"warning\"")
 }
+
+/// `file:line:col: error[E0012]: msg`, then the source line with a caret underline across the
+/// span (to the end of the line for a multi-line span), then notes, fixes and a pointer to
+/// `auk explain`.
+pub fn render(d: Diag, path: str, src: str): str {
+  let s = d.span
+  let ls = src.lines()
+  let text = if s.line >= 1 && s.line <= ls.len() { ls[s.line - 1] } else { "" }
+  let last = text.len() + 1
+  let end = if s.end_line == s.line { min(s.end_col, max(last, s.col + 1)) } else { last }
+  let carets = "^".repeat(max(end - s.col, 1))
+  let ws = " ".repeat("{s.line}".len())
+  let pad = " ".repeat(max(s.col - 1, 0))
+  var out = [
+    "{path}:{s.line}:{s.col}: {d.severity()}[{d.code}]: {d.message}\n",
+    "{ws} |\n{s.line} | {text}\n{ws} | {pad}{carets}\n",
+  ]
+  for n in d.notes { out.push("{ws} = note: {n}\n") }
+  for f in d.fixes {
+    let at = show_at(f.span)
+    let what = if f.text == "" {
+      "remove the text at {at}"
+    } else if f.span.col == f.span.end_col && f.span.line == f.span.end_line {
+      "insert `{f.text}` at {at}"
+    } else {
+      "replace the text at {at} with `{f.text}`"
+    }
+    out.push("{ws} = fix: {what}\n")
+  }
+  out.push("{ws} = help: run `{d.explain()}` for details\n")
+  out.join("")
+}
+
+test "render underlines the span" {
+  let sp = Span { line: 2, col: 5, end_line: 2, end_col: 8 }
+  let d = new("E0020", sp, "expected `)`, found `let`")
+    .note("a note")
+    .fix(Span { line: 2, col: 5, end_line: 2, end_col: 5 }, ")")
+  assert d.render("a.auk", "fn f() {{\n  f(let)\n}}\n") ==
+    "a.auk:2:5: error[E0020]: expected `)`, found `let`\n  |\n2 |   f(let)\n  |     ^^^\n  = note: a note\n  = fix: insert `)` at 2:5\n  = help: run `auk explain E0020` for details\n"
+  let w = new("E0411", Span { line: 1, col: 15, end_line: 1, end_col: 17 }, "unused")
+  assert w.render("a.auk", "fn f(): int uses fs = 1\n").starts_with("a.auk:1:15: warning[E0411]: ")
+}
