@@ -964,6 +964,52 @@ compiler gained `auk dump mir`, `auk ir --llvm=LEVEL`/`--release`/`-g`/`--test`/
   dumps, diff_llvm 6 programs / 78 IR texts, run_backend 48 programs, 0 differ. The x86-64 C
   ABI rules (`c_pass`'s float eightbytes) are ported but unexercised.
 
+### hatch
+
+`src/hatch.rs` (484 lines, 2 tests) is `compiler/src/hatch.auk` (`compiler hatch`, same
+arguments), line by line on the ported `holes`, `resolve` (`with_sources`), `check_all`,
+`diag` and `fmt`: 874 lines as `auk fmt` lays them out, ~300 of them what Rust gets from
+`std` (spawning a process, its exit status's text, lossy UTF-8, Unicode `trim`). The two Rust
+tests are `test` blocks, with three more (arguments, lossy decoding, statuses).
+
+**The tests of a candidate** need the back end, which is not ported yet: the port runs
+`auk __jit test <file>` of the Rust `auk` (the checkout's `target/release/auk`, or `$AUK_BIN`)
+with the candidate's file texts in a file named by `AUK_SOURCES` (new in `jit_cli`:
+`resolve::set_sources`, the in-process `with_sources` of another process), merged output, stdin
+from `/dev/null`, its own process group, killed after 60 s, as Rust's forked JIT child. When
+the back end is ported this becomes a call.
+
+**Oracle.** `scripts/diff_hatch.sh` runs 37 hatch commands with each binary in the same scratch
+directory, with `AUK_HATCH_CMD` a script that saves every prompt and replies from a list, and
+compares stdout, stderr, exit code and the whole tree after each (the written sources and every
+prompt, with the language reference, the type errors' JSON and the failing tests' traces):
+usage errors, unreadable/ill-typed/hole-free files, fenced/plain/unfenced and indented answers,
+`--dry-run` diffs, retries through type errors, `??` left in and empty answers, contracts,
+panics, a stack overflow, a test that only reaches another hole, a missing/failing/killed
+model command and the default `claude -p`, holes in two modules of a project, a read-only file.
+**0 differ**; `--slow` adds an answer that loops forever (killed at 60 s): 0 differ too.
+
+### Gaps found (hatch)
+
+1. **No child process with stdin, stderr or a status in core**: `proc.run(cmd, args)` returns
+   stdout or an `Err`. The port spawns with `posix_spawnp` over `ffi` (file actions to redirect,
+   attributes for the process group, `waitpid` with `WNOHANG` polling for the timeout, `kill`);
+   flag values differ by OS (`O_CREAT`), the environment comes from `ffi.symbol("environ")`, and
+   Rust's `ExitStatus` text (`signal: 9 (SIGKILL)`) is a table per OS.
+2. **No setting an environment variable** (for a child): C `setenv`/`unsetenv`.
+3. **No lossy UTF-8 decoding**: `str.from_utf8` fails on bad bytes and `fs.read` too; the
+   port's `lossy` is `String::from_utf8_lossy` (U+FFFD per maximal invalid subsequence).
+4. **An `#embed` constant needs `uses ffi`** in every caller: the prompt embeds
+   `docs/spec.md` (`extern fn spec(): str = "#embed ../../docs/spec.md"`, which works), so
+   `prompt`, a pure function in Rust, `uses ffi`.
+5. **No mutable module state**: Rust's `RUN_N` counter for temporary names is gone (one run at
+   a time: the names carry the pid).
+6. **A local named like a module is E0116** (`let holes = ...` beside `holes.`): renamed.
+7. **Lexer port bug (fixed)**: its approximate `is_alphabetic` took U+FFFD (what a model's
+   undecodable bytes become) for a letter, so the spliced answer lexed as an identifier where
+   Rust reports E0001. The Specials block (U+FFF0..U+FFFF) is now excluded;
+   `compiler/tests/lex/replacement_char.auk` keeps it covered.
+
 ## Reproduce
 
 ```
@@ -989,6 +1035,7 @@ scripts/diff_mir.sh           # MIR round trip: 1045 dumps, 0 differ
 scripts/diff_llvm.sh          # LLVM IR: 26 programs, 338 IR texts, 0 differ
 scripts/run_backend.sh        # JIT runs and executables: 48 programs, 0 differ
 scripts/backend_time.sh 7     # code generation, Rust vs Auk
+scripts/diff_hatch.sh         # hatch: 37 commands, 0 differ (--slow: 38, with a 60 s timeout)
 scripts/pilot_time.sh 7 20    # the tables above
 auk test compiler             # the ported unit tests
 auk build compiler/bench/cliffs.auk -o /tmp/cliffs && /tmp/cliffs 80000

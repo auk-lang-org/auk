@@ -462,7 +462,13 @@ Port onto the Auk compiler, each with its existing tests passing:
       the build-time code E0420 (`ir` with the imprint helper). Gaps: pilot-report.md, "Phase 5".
 - [ ] `repl.rs` (878), `dive`
 - [ ] `dap.rs` (521), `debug.rs` (887), `dbg_eval.rs` (149)
-- [ ] `live.rs` (549), `hatch.rs` (484)
+- [ ] `live.rs` (549)
+- [x] `hatch.rs` (484): `compiler/src/hatch.auk`, `compiler hatch <file> [--hole N] [--tries N]
+      [--dry-run]`; the model command via `posix_spawnp` (ffi), the candidates' tests still built
+      and run by the Rust back end (`auk __jit test`, texts in `AUK_SOURCES`) until Phase 4 lands.
+      `scripts/diff_hatch.sh`: 37 commands with a scripted model (every flag and usage error,
+      retries, contracts, traces, model failures, a project, a write error): 0 differ, prompts
+      included. Gaps: pilot-report.md, "Phase 5", hatch.
 - [x] `raft` (492 + manifest 297, toml 358, semver 127, sha256 65): the Auk project `raft/`
       (`auk build raft/src/main.auk`; `main`, `manifest`, `toml`, `semver`, `sha256` line by line,
       plus `res` (the error type) and `paths`; 1.6k lines without tests), all five commands with
