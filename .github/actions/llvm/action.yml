@@ -7,8 +7,13 @@ runs:
       if: runner.os == 'macOS'
       shell: bash
       run: |
-        brew install llvm@23 openssl@3 sqlite
-        echo "LLVM_CONFIG=$(brew --prefix llvm@23)/bin/llvm-config" >> "$GITHUB_ENV"
+        # llvm@23 where Homebrew has the versioned formula, else llvm (when it is 23)
+        if brew info llvm@23 > /dev/null 2>&1; then f=llvm@23; else f=llvm; fi
+        brew install "$f" openssl@3 sqlite
+        cfg="$(brew --prefix "$f")/bin/llvm-config"
+        v="$("$cfg" --version)"
+        case "$v" in 23.*) ;; *) echo "::error::Homebrew's $f is LLVM $v, not 23"; exit 1 ;; esac
+        echo "LLVM_CONFIG=$cfg" >> "$GITHUB_ENV"
     - name: Linux (apt.llvm.org)
       if: runner.os == 'Linux'
       shell: bash

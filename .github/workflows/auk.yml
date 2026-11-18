@@ -73,7 +73,6 @@ jobs:
           git worktree add ../rust v0-rust-final
           cd ../rust
           LLVM_SYS_231_PREFIX="$("$LLVM_CONFIG" --prefix)" cargo build --release
-          ./target/release/auk run examples/hello.auk
       - name: Build this commit to the fixed point with it
         run: ./build.sh --seed ../rust/target/release/auk --check
       - name: Tests (informational)

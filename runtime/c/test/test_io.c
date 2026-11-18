@@ -110,6 +110,8 @@ static void exit_cleanup(void) {
 static void exit_leak_child(void *ctx) {
     bool leak = *(bool *)ctx;
     setenv("AUK_LEAK_CHECK", "1", 1);
+    /* count only this child's objects, not what the forked parent's earlier tests left live */
+    auk_leak_baseline();
     exit_global = s("global"); /* released by the cleanup */
     auk_set_cleanup(exit_cleanup);
     AukStr *leaked = leak ? s("leaked") : NULL;

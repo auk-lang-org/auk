@@ -235,11 +235,14 @@ static void closures_env_rc(void) {
 typedef struct SleepArgs {
     int64_t ms;
     AukStr *tag;
+    int64_t *span; /* where to record when the sleep started and ended (or NULL) */
 } SleepArgs;
 
 static void sleep_thunk(void *args, void *result) {
     SleepArgs *a = args;
+    if (a->span) a->span[0] = auk_time_now();
     auk_time_sleep(a->ms);
+    if (a->span) a->span[1] = auk_time_now();
     AukStrBuf b = {0};
     auk_sb_str(&b, a->tag);
     auk_sb_lit(&b, " done");
@@ -249,8 +252,9 @@ static void sleep_thunk(void *args, void *result) {
 
 static void tasks_run_concurrently(void) {
     int64_t t0 = auk_time_now();
-    SleepArgs a1 = {200, s("a")};
-    SleepArgs a2 = {200, s("b")};
+    static int64_t span1[2], span2[2];
+    SleepArgs a1 = {200, s("a"), span1};
+    SleepArgs a2 = {200, s("b"), span2};
     size_t sz = sizeof(SleepArgs), ps = sizeof(AukStr *);
     AukTask *ts[2] = {
         auk_task_spawn(sleep_thunk, &a1, sz, ps, &auk_ops_str, NULL, NULL, NULL),
@@ -260,7 +264,13 @@ static void tasks_run_concurrently(void) {
     auk_task_await_all(ts, 2, outs);
     int64_t dt = auk_time_now() - t0;
     CHECK(dt >= 195);
-    if (dt >= 350) t_fail(__FILE__, __LINE__, "two 200ms tasks took %lldms", (long long)dt);
+    /* concurrent: each sleep started before the other ended (not a wall-clock bound, which a
+       loaded CI machine breaks) */
+    if (!(span1[0] < span2[1] && span2[0] < span1[1])) {
+        t_fail(__FILE__, __LINE__, "the two sleeps didn't overlap: [%lld, %lld] and [%lld, %lld] (ms from start)",
+               (long long)(span1[0] - t0), (long long)(span1[1] - t0), (long long)(span2[0] - t0),
+               (long long)(span2[1] - t0));
+    }
     CHECK_STR(outs[0], "a done");
     CHECK_STR(outs[1], "b done");
     /* awaiting again hands out another reference */
