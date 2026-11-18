@@ -113,6 +113,7 @@ empty [] 0
 checksum 1026
 bytes [250, 251, 252] [1, 2, 255, 0]
 cstr hi
+fnptr 42 4.5 hi ptr
 ";
 
 fn marshalling_project(name: &str) -> PathBuf {
@@ -255,6 +256,8 @@ extern fn k(x: var str): int = "int f(char **)"
 extern fn l(): [int] = "int *f(void)"
 extern fn m<T>(x: T): int = "int f(int)"
 extern type Bad = "int"
+extern fn n(x: int): int = "int (*)(int)"
+extern fn o(f: int, x: int): int = "int (*)(int)"
 fn main() {}
 "#;
     let (ok, err) = check("e0040", "\"ffi\"", src);
@@ -273,10 +276,12 @@ fn main() {}
         "a C function can't return a list",
         "the C function `m` can't be generic",
         "`int` can't be an `extern type`",
+        "`n` has 1 parameter(s), but a call through a function pointer with this prototype takes 2",
+        "parameter 1 of `o` is `int`, which doesn't fit the C type `void *`",
     ] {
         assert!(err.contains(want), "missing {want:?} in:\n{err}");
     }
-    assert_eq!(err.matches("error[E0040]").count(), 13, "{err}");
+    assert_eq!(err.matches("error[E0040]").count(), 15, "{err}");
 }
 
 #[test]

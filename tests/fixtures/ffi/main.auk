@@ -45,6 +45,11 @@ extern fn checksum(buf: [int], n: int): int = "unsigned t_checksum(const void *,
 extern fn bytes_out(buf: var [int], n: int) = "void t_bytes_out(uint8_t *, size_t)"
 extern fn blob(n: var int): ffi.Ptr = "const void *t_blob(size_t *n)"
 
+extern fn fn_ptr(which: int): ffi.Ptr = "void *t_fn(int)"
+extern fn call_add(f: ffi.Ptr, a: int, b: int): int = "long long (*)(long long, long long)"
+extern fn call_scale(f: ffi.Ptr, x: float, k: int): float = "double (*)(double x, int32_t k)"
+extern fn call_greet(f: ffi.Ptr, name: str): str = "const char *(*)(const char *)"
+
 fn ints() uses ffi {
   print("ints {i8(200)} {u8(-1)} {i16(70000)} {u16(-2)} {i32(4294967295)} {u32(-1)} {u64(-1)} {add(2, 40)} {next_char(65)}")
 }
@@ -116,6 +121,10 @@ fn buffers() uses ffi {
   ffi.free(q)
 }
 
+fn pointers() uses ffi {
+  print("fnptr {call_add(fn_ptr(0), 40, 2)} {call_scale(fn_ptr(1), 1.5, 3)} {call_greet(fn_ptr(2), "ptr")}")
+}
+
 fn main(args: [str]) uses ffi {
   if args.len() > 1 {
     print(null_str_panics())
@@ -127,4 +136,5 @@ fn main(args: [str]) uses ffi {
   handles()
   lists()
   buffers()
+  pointers()
 }

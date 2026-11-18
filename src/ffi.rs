@@ -81,6 +81,9 @@ pub struct CSig {
     /// `+free(fn)`: the function that frees the `char *` strings this function hands over
     /// (its result, or a `char **` out-parameter); they are copied to Auk strings first.
     pub free: Option<String>,
+    /// A call through a function pointer (`"int64_t (*)(int64_t, int64_t)"`): `params[0]` is the
+    /// function's address (`void *`, an Auk `ffi.Ptr`), the rest are the C function's parameters.
+    pub indirect: bool,
 }
 
 // ---- parsing ------------------------------------------------------------------------------
@@ -320,6 +323,12 @@ pub fn parse_proto(src: &str) -> Result<CSig, String> {
     let toks = lex(proto.trim().trim_end_matches(';'))?;
     let mut p = P { toks, pos: 0 };
     let (ret, name) = p.decl("the result type", true)?;
+    // `T (*)(params)`: a call through the function pointer passed first
+    let indirect = name.is_none() && p.toks.get(p.pos..p.pos + 3) == Some(&[Tok::LParen, Tok::Star, Tok::RParen][..]);
+    if indirect {
+        p.pos += 3;
+    }
+    let name = if indirect { Some("(*)".to_string()) } else { name };
     let Some(name) = name else {
         return Err("expected a C prototype like \"int abs(int)\" (the result type, the C function's name, its parameter types)".into());
     };
@@ -328,6 +337,9 @@ pub fn parse_proto(src: &str) -> Result<CSig, String> {
     }
     p.pos += 1;
     let mut params = Vec::new();
+    if indirect {
+        params.push(CTy::Ptr { to: Box::new(CTy::Void), konst: false });
+    }
     if p.peek() == Some(&Tok::RParen) || (p.word() == Some("void") && p.toks.get(p.pos + 1) == Some(&Tok::RParen)) {
         if p.peek() != Some(&Tok::RParen) {
             p.pos += 1;
@@ -356,7 +368,7 @@ pub fn parse_proto(src: &str) -> Result<CSig, String> {
     if p.pos < p.toks.len() {
         return Err("unexpected text after the prototype".into());
     }
-    Ok(CSig { name, ret, params, free })
+    Ok(CSig { name, ret, params, free, indirect })
 }
 
 // ---- matching Auk types to C types ----------------------------------------------------------
@@ -563,6 +575,11 @@ mod tests {
         assert!(parse_proto("abs").is_err());
         assert!(parse_proto("long double f(void)").is_err());
         assert_eq!(parse_type("LLVMModuleRef").unwrap(), CTy::Named("LLVMModuleRef".into()));
+        let s = parse_proto("int64_t (*)(int64_t a, int64_t)").unwrap();
+        assert!(s.indirect);
+        assert_eq!(s.params, vec![CTy::Ptr { to: Box::new(CTy::Void), konst: false }, i(8, true), i(8, true)]);
+        assert_eq!(parse_proto("void (*)(void)").unwrap().params.len(), 1);
+        assert!(!parse_proto("int abs(int)").unwrap().indirect);
         assert!(parse_type("struct sqlite3 *").unwrap().same(&parse_type("sqlite3*").unwrap()));
     }
 }

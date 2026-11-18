@@ -138,3 +138,14 @@ const void *t_blob(size_t *n) {
     *n = sizeof blob;
     return blob;
 }
+
+/* function pointers, called from Auk through `"T (*)(...)"` prototypes */
+static double t_scale3(double x, int32_t k) { return x * k; }
+void *t_fn(int which) {
+    switch (which) {
+    case 0: return (void *)t_add;
+    case 1: return (void *)t_scale3;
+    case 2: return (void *)t_greet;
+    default: return (void *)0;
+    }
+}

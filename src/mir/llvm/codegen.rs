@@ -149,7 +149,7 @@ fn writes(ss: &[Stmt], set: &mut Vec<bool>, addr: &mut Vec<bool>) {
             }
             K::And(xs) => xs.iter().for_each(|x| ex(x, addr)),
             K::Call(c, args) => {
-                if let Callee::Indirect(x, _) = c {
+                if let Callee::Indirect(x, _) | Callee::CPtr(x) = c {
                     ex(x, addr);
                 }
                 args.iter().for_each(|x| ex(x, addr));
@@ -1288,6 +1288,14 @@ impl<'p, 'a> Gen<'p, 'a> {
                 let (mut vals, out) = self.auk_args(ps, args, ret, &none);
                 let call = self.build_call(&sig, cv, &mut vals);
                 self.auk_result(call, out, ret)
+            }
+            Callee::CPtr(code) => {
+                let cv = self.val(code);
+                let ps: Vec<MTy> = args.iter().map(|a| a.ty.clone()).collect();
+                let (sig, pp, rp) = self.c_sig(&ps, ret);
+                let (mut vals, out) = self.c_args(&pp, &ps, args, &rp, ret);
+                let call = self.build_call(&sig, cv, &mut vals);
+                self.c_result(call, out, &rp, ret)
             }
             Callee::Rt(sym) => {
                 if let Some(v) = self.rt_inline(sym, args, ret) {

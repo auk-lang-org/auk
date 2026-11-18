@@ -155,6 +155,7 @@ fn refs_ex(e: &Ex, out: &mut Vec<FuncId>, ind: &mut Vec<String>) {
                     ind.push(sig_key(ps, &e.ty));
                     refs_ex(code, out, ind);
                 }
+                Callee::CPtr(code) => refs_ex(code, out, ind),
                 Callee::Rt(_) => {}
             }
             for a in args {

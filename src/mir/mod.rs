@@ -144,6 +144,9 @@ pub enum Callee {
     Rt(String),
     /// A call through a code pointer to a generated function with these parameter types.
     Indirect(Box<Ex>, Vec<MTy>),
+    /// A call through a pointer to a C function (C ABI, like `Rt`; the argument and result types
+    /// are the expressions' types): `extern fn` with a `"T (*)(...)"` prototype.
+    CPtr(Box<Ex>),
 }
 
 /// A typed expression.

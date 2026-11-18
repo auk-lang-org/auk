@@ -575,8 +575,13 @@ impl Checker {
         if sig.params.len() != params.len() {
             self.err_in(
                 m,
-                e40(at, format!("`{name}` has {} parameter(s), but the C prototype of `{}` has {}", params.len(), sig.name, sig.params.len()))
-                    .note("each Auk parameter matches the C parameter in the same position"),
+                if sig.indirect {
+                    e40(at, format!("`{name}` has {} parameter(s), but a call through a function pointer with this prototype takes {}", params.len(), sig.params.len()))
+                        .note("the first parameter is the function's address (`ffi.Ptr`), then one per C parameter")
+                } else {
+                    e40(at, format!("`{name}` has {} parameter(s), but the C prototype of `{}` has {}", params.len(), sig.name, sig.params.len()))
+                        .note("each Auk parameter matches the C parameter in the same position")
+                },
             );
             return None;
         }

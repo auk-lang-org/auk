@@ -526,6 +526,12 @@ impl Printer<'_, '_> {
                         let code = self.ex(code);
                         format!("(({r} (*)({}))({code}))({a})", ps.join(", "))
                     }
+                    Callee::CPtr(code) => {
+                        let r = self.ct(&e.ty);
+                        let ps: Vec<String> = args.iter().map(|x| self.ct(&x.ty)).collect();
+                        let code = self.ex(code);
+                        format!("(({r} (*)({}))({code}))({a})", ps.join(", "))
+                    }
                 }
             }
             K::Agg(ms) => {

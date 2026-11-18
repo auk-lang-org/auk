@@ -6,7 +6,7 @@
 use super::{ArgV, Lower, Val};
 use crate::ffi::{CSig, Conv};
 use crate::mir::progen::d;
-use crate::mir::{BOp, Ex, MTy, Sel, Stmt};
+use crate::mir::{BOp, Callee, Ex, K, MTy, Sel, Stmt};
 use crate::typed::{FnId, FnKind};
 use crate::types::Ty;
 
@@ -52,7 +52,7 @@ impl Lower<'_, '_> {
         let tp = self.tp;
         let FnKind::Ffi { sig, convs, .. } = &tp.fns[f].kind else { panic!("ffi_call of a non-C function") };
         let sig: &CSig = sig;
-        if !self.g.prog.c_syms.contains(&sig.name) {
+        if !sig.indirect && !self.g.prog.c_syms.contains(&sig.name) {
             self.g.prog.c_syms.push(sig.name.clone());
         }
         let mut cs = Vec::new();
@@ -99,7 +99,12 @@ impl Lower<'_, '_> {
             cs.push(c);
         }
         let rconv = convs.last().expect("result conversion");
-        let call = Ex::rt(&sig.name, cs, c_mty(rconv));
+        let call = if sig.indirect {
+            let code = cs.remove(0);
+            Ex::new(K::Call(Callee::CPtr(Box::new(code)), cs), c_mty(rconv))
+        } else {
+            Ex::rt(&sig.name, cs, c_mty(rconv))
+        };
         let raw = if *rconv == Conv::Unit {
             self.do_(call);
             None
