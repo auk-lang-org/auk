@@ -46,9 +46,10 @@ const USAGE: &str = "\
 usage: duck <command> [args]
 
 commands:
-  run [--trace=json|<file>] <file> [args...]
-                           compile and run the program (--trace: log calls, returns,
-                           errors, peeks and panics as JSON lines; json = stderr)
+  run [-O] [--trace=json|<file>] <file> [args...]
+                           compile and run the program (-O: optimize fully, slower to
+                           start; --trace: log calls, returns, errors, peeks and panics
+                           as JSON lines; json = stderr)
   run --debug <file> [args...]
                            build with debugger hooks; a front end attaches through
                            DUCK_DEBUG=<unix socket> (see docs/compiler.md, Debugger)
@@ -78,7 +79,7 @@ commands:
   pond [--quiet]           the interactive REPL (--quiet: no banner or prompts)
   lsp                      run the language server (LSP over stdio)
   mcp                      run the MCP server for AI agents (tools over stdio)
-  ir [--clif] <file>       print the program's MIR (--clif: its Cranelift IR)
+  ir [--llvm|--clif] <file>  print the program's MIR (--llvm: its LLVM IR; --clif: Cranelift IR)
   spec                     print the compact language reference
 
 packages are managed by `quack` (see docs/quack.md).

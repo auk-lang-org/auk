@@ -14,6 +14,10 @@
 
 pub mod print;
 pub mod clif;
+pub mod layout;
+pub mod exec;
+pub mod backend;
+pub mod llvm;
 pub mod dwarf;
 pub mod progen;
 pub mod lower;

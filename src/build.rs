@@ -276,9 +276,9 @@ pub fn eval_imprints(tp: &TypedProgram) -> Result<HashMap<ConstId, CVal>, String
     let errs = dir.join("imprints.err");
     // in a forked child: an imprint may panic (or loop; that is the program's own bug)
     let run = || -> Result<(Option<i32>, String), String> {
-        let j = mir::clif::jit(&g.prog, &info, false)?;
+        let j = mir::backend::jit(&g.prog, &info, mir::backend::Opt::None)?;
         let args = vec!["imprints".to_string(), records.display().to_string()];
-        let code = j.run_forked(&args, mir::clif::Redirect { stdout: Some(Path::new("/dev/null")), stderr: Some(&errs), ..Default::default() })?;
+        let code = j.run_forked(&args, mir::backend::Redirect { stdout: Some(Path::new("/dev/null")), stderr: Some(&errs), ..Default::default() })?;
         Ok((code, fs::read_to_string(&errs).unwrap_or_default()))
     };
     let res = run().and_then(|(code, stderr)| imprint_results(tp, &records, code, &stderr));
@@ -460,7 +460,7 @@ pub fn jit_cli(args: &[String]) -> i32 {
     let Some((file, args)) = rest.split_first() else { return 2 };
     let on = env::var_os("DUCK_TRACE").is_some();
     let debug = env::var_os("DUCK_DEBUG").is_some();
-    match jit_run(Path::new(file), args, mode, Trace { on, core, debug, lines: false }) {
+    match jit_run(Path::new(file), args, mode, Trace { on, core, debug, lines: false }, false) {
         Ok(code) => exit_now(code),
         Err(e) => {
             eprint!("{e}");
@@ -485,7 +485,7 @@ pub fn build_native(path: &Path, out: &Path, debuginfo: bool) -> Result<(), Stri
         return Err(s);
     }
     let info = TyInfo::new(&tp);
-    let obj = mir::clif::object(&g.prog, &info, true).map_err(|e| format!("error: code generation failed (this is a duck compiler bug): {e}\n"))?;
+    let obj = mir::backend::object(&g.prog, &info, true).map_err(|e| format!("error: code generation failed (this is a duck compiler bug): {e}\n"))?;
     let dir = scratch()?;
     let res = (|| {
         let o = dir.join("prog.o");
@@ -519,8 +519,9 @@ pub fn build_native(path: &Path, out: &Path, debuginfo: bool) -> Result<(), Stri
 }
 
 /// Compile `path` in memory and run it in this process with `args` (`argv[0]` is the file);
-/// returns its exit code.
-pub fn jit_run(path: &Path, args: &[String], mode: Mode, trace: Trace) -> Result<i32, String> {
+/// returns its exit code. `full_opt`: `duck run -O` (a run otherwise gets light optimizations;
+/// tests and debugger builds none).
+pub fn jit_run(path: &Path, args: &[String], mode: Mode, trace: Trace, full_opt: bool) -> Result<i32, String> {
     let tp = check(path)?;
     let mut g = generate(&tp, mode, trace)?;
     if trace.debug {
@@ -531,7 +532,13 @@ pub fn jit_run(path: &Path, args: &[String], mode: Mode, trace: Trace) -> Result
         eprintln!("note: {} has no `test` blocks", path.display());
     }
     let info = TyInfo::new(&tp);
-    let j = mir::clif::jit(&g.prog, &info, false)?;
+    let opt = match mode {
+        Mode::Run if trace.debug => mir::backend::Opt::None,
+        Mode::Run if full_opt => mir::backend::Opt::Full,
+        Mode::Run => mir::backend::Opt::Light,
+        _ => mir::backend::Opt::None,
+    };
+    let j = mir::backend::jit(&g.prog, &info, opt)?;
     let mut argv = vec![path.display().to_string()];
     argv.extend(args.iter().cloned());
     Ok(j.run(&argv))
@@ -599,6 +606,8 @@ pub struct TraceOpts {
     pub core: bool,
     /// `--debug`: instrument the program for the debugger (runtime/src/dbg.rs).
     pub debug: bool,
+    /// `-O` (`duck run`): the full optimizer.
+    pub opt: bool,
 }
 
 impl TraceOpts {
@@ -661,6 +670,8 @@ pub fn trace_flags(args: &[String], leading: bool) -> Result<(TraceOpts, Vec<Str
             o.core = true;
         } else if a == "--debug" {
             o.debug = true;
+        } else if a == "-O" {
+            o.opt = true;
         } else {
             rest.push(a.clone());
         }
@@ -801,19 +812,19 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
                 Err(e) => return fail(e),
             };
             trace.apply_here(dest.as_deref());
-            match jit_run(&root, filter.as_slice(), Mode::Test, trace.codegen()) {
+            match jit_run(&root, filter.as_slice(), Mode::Test, trace.codegen(), false) {
                 Ok(code) => exit_now(code),
                 Err(e) => fail(e),
             }
         }
         "run" | "build" | "ir" => {
-            // `duck ir --clif`: the Cranelift IR instead of the MIR
-            let clif = cmd == "ir" && args.first().is_some_and(|a| a == "--clif");
-            let args = if clif { &args[1..] } else { &args[..] };
+            // `duck ir --llvm` / `--clif`: the back end's IR instead of the MIR
+            let backend_ir = if cmd == "ir" { args.first().filter(|a| *a == "--llvm" || *a == "--clif").cloned() } else { None };
+            let args = if backend_ir.is_some() { &args[1..] } else { &args[..] };
             let [file, rest @ ..] = args else {
                 let flags = match cmd {
                     "build" => "",
-                    "ir" => "[--clif] [--trace=json|<file>] [--trace-core] ",
+                    "ir" => "[--llvm|--clif] [--trace=json|<file>] [--trace-core] ",
                     _ => "[--trace=json|<file>] [--trace-limit N] [--trace-core] ",
                 };
                 eprintln!("usage: duck {cmd} {flags}<file.duck>");
@@ -831,8 +842,9 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
                         Err(e) => return fail(e),
                     };
                     let info = TyInfo::new(&tp);
-                    if clif {
-                        match mir::clif::ir_text(&g.prog, &info) {
+                    if let Some(which) = &backend_ir {
+                        let ir = if which == "--llvm" { mir::backend::llvm_ir(&g.prog, &info) } else { mir::backend::clif_ir(&g.prog, &info) };
+                        match ir {
                             Ok(t) => print!("{t}"),
                             Err(e) => return fail(format!("error: {e}\n")),
                         }
@@ -857,7 +869,7 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
                 }
                 _ => {
                     trace.apply_here(None);
-                    match jit_run(path, rest, Mode::Run, trace.codegen()) {
+                    match jit_run(path, rest, Mode::Run, trace.codegen(), trace.opt) {
                         Ok(code) => exit_now(code),
                         Err(e) => fail(e),
                     }

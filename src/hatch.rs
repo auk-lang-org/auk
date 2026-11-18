@@ -344,7 +344,7 @@ fn run_tests(root: &Path, names: &[&str]) -> Result<(), String> {
     let tp = super::build::check(root)?;
     let g = super::build::generate(&tp, super::mir::progen::Mode::Test, super::mir::progen::Trace { on: true, core: false, debug: false, lines: false })?;
     let info = super::mir::types::TyInfo::new(&tp);
-    let j = super::mir::clif::jit(&g.prog, &info, false)?;
+    let j = super::mir::backend::jit(&g.prog, &info, crate::mir::backend::Opt::None)?;
     let n = RUN_N.fetch_add(1, Ordering::Relaxed);
     let file = env::temp_dir().join(format!("duck-hatch-{}-{n}.out", std::process::id()));
     // SAFETY: hatch is single-threaded here
@@ -352,8 +352,8 @@ fn run_tests(root: &Path, names: &[&str]) -> Result<(), String> {
         env::set_var("DUCK_TRACE", "-");
         env::set_var("DUCK_TRACE_TAIL", TRACE_TAIL);
     }
-    let r = super::mir::clif::Redirect { merged: Some(&file), stdin_null: true, ..Default::default() };
-    let w = j.spawn(&[root.display().to_string()], r, true).and_then(|pid| super::mir::clif::wait_child(pid, Some(TEST_TIMEOUT)));
+    let r = super::mir::backend::Redirect { merged: Some(&file), stdin_null: true, ..Default::default() };
+    let w = j.spawn(&[root.display().to_string()], r, true).and_then(|pid| super::mir::backend::wait_child(pid, Some(TEST_TIMEOUT)));
     unsafe {
         env::remove_var("DUCK_TRACE");
         env::remove_var("DUCK_TRACE_TAIL");

@@ -17,7 +17,6 @@
 //!   on x86-64 a float register for an all-float eightbyte); a bigger result is returned
 //!   through the struct-return pointer.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
@@ -27,8 +26,10 @@ use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{DataDescription, DataId, FuncId as CFuncId, Linkage, Module};
 
+use super::exec::{Jit, LiveJit};
+use super::layout::{CPass, Lay, Layouts, Sc, align_up};
 use super::types::TyInfo;
-use super::{Abi, AggDef, BOp, Callee, Ex, FRef, Func, K, LabelId, MTy, Program, Rt, RtF, Sel, Stmt, UOp, VarId};
+use super::{Abi, BOp, Callee, Ex, FRef, Func, K, LabelId, MTy, Program, RtF, Stmt, UOp, VarId};
 use crate::types::Ty;
 
 const PTR: Type = types::I64;
@@ -45,263 +46,55 @@ pub fn isa(opt: bool, pic: bool) -> Result<OwnedTargetIsa, String> {
     builder.finish(settings::Flags::new(flags)).map_err(|e| e.to_string())
 }
 
-// ---- layout ----------------------------------------------------------------------------
+// ---- layouts and signatures (mir/layout.rs) in Cranelift terms -------------------------
 
-#[derive(Clone, Copy, Debug)]
-struct Lay {
-    size: u32,
-    align: u32,
-}
-
-fn align_up(x: u32, a: u32) -> u32 {
-    x.div_ceil(a) * a
-}
-
-/// A type's layout, its member offsets (struct-like) and per-variant field offsets within the
-/// union (enums; the union starts at the first member offset).
-type LayInfo = (Lay, Vec<u32>, Vec<Vec<u32>>);
-
-/// Sizes, alignments and member offsets of MIR types.
-pub struct Layouts<'p, 'a> {
-    info: &'p TyInfo<'a>,
-    aggs: &'p [AggDef],
-    memo: RefCell<HashMap<MTy, LayInfo>>,
-}
-
-impl<'p, 'a> Layouts<'p, 'a> {
-    pub fn new(info: &'p TyInfo<'a>, aggs: &'p [AggDef]) -> Self {
-        Layouts { info, aggs, memo: RefCell::new(HashMap::new()) }
-    }
-
-    /// The Cranelift type of a scalar, or None for an aggregate (or `Void`).
-    fn scalar(&self, t: &MTy) -> Option<Type> {
-        Some(match t {
-            MTy::Void => return None,
-            MTy::Bool => types::I8,
-            MTy::I32 | MTy::U32 => types::I32,
-            MTy::I64 | MTy::U64 => types::I64,
-            MTy::Ptr(_) | MTy::CStr | MTy::Code => PTR,
-            MTy::D(t) => match t {
-                Ty::Int => types::I64,
-                Ty::Float => types::F64,
-                Ty::Bool | Ty::Never => types::I8,
-                Ty::Char => types::I32,
-                t if t.is_unit() => types::I8,
-                t if self.info.is_ptr(t) => PTR,
-                _ => return None,
-            },
-            MTy::Agg(_) | MTy::Rt(_) => return None,
-        })
-    }
-
-    fn is_agg(&self, t: &MTy) -> bool {
-        !matches!(t, MTy::Void) && self.scalar(t).is_none()
-    }
-
-    /// Is the scalar signed (sign-extended when widened)?
-    fn signed(t: &MTy) -> bool {
-        matches!(t, MTy::I32 | MTy::I64 | MTy::D(Ty::Int))
-    }
-
-    /// The members of a struct-like aggregate (not enums).
-    fn members(&self, t: &MTy) -> Vec<MTy> {
-        let info = self.info;
-        match t {
-            MTy::Agg(a) => {
-                let fs = self.aggs[*a as usize].fields.clone();
-                if fs.is_empty() { vec![MTy::I32] } else { fs }
-            }
-            MTy::Rt(Rt::StrBuf) => vec![MTy::void_ptr(), MTy::I64, MTy::I64],
-            MTy::Rt(Rt::Obj) => vec![MTy::I64, MTy::U32, MTy::Code, MTy::Code],
-            MTy::Rt(Rt::ElemOps) => vec![MTy::U64, MTy::Code, MTy::Code, MTy::Code, MTy::Code, MTy::Code, MTy::Code, MTy::Code],
-            MTy::D(d) => match d {
-                Ty::Tuple(ts) => ts.iter().map(|x| MTy::D(x.clone())).collect(),
-                Ty::Opt(x) => vec![MTy::Bool, MTy::D((**x).clone())],
-                Ty::Res(x, _) => vec![MTy::Bool, MTy::D((**x).clone()), MTy::void_ptr()],
-                Ty::Fn(..) => vec![MTy::Code, MTy::obj_ptr()],
-                Ty::Any(_) => vec![MTy::obj_ptr(), MTy::void_ptr()],
-                _ if info.is_struct(d) => {
-                    let n = info.struct_layout(d).len();
-                    if n == 0 {
-                        vec![MTy::Bool]
-                    } else {
-                        (0..n).map(|i| info.member_ty(t, Sel::F(i as u32), self.aggs)).collect()
-                    }
-                }
-                _ => panic!("clif: no members for {}", info.show_ty(d)),
-            },
-            _ => panic!("clif: no members for {t:?}"),
-        }
-    }
-
-    fn is_enum_like(&self, t: &MTy) -> bool {
-        matches!(t, MTy::D(d) if self.info.is_value(d) || matches!(d, Ty::Named(..)) && !self.info.is_struct(d) && !self.info.is_opaque(d))
-    }
-
-    /// Layout, member offsets (struct-like), and per-variant field offsets within the union
-    /// (enums; the union starts at `offs[0]`).
-    fn get(&self, t: &MTy) -> LayInfo {
-        if let Some(x) = self.memo.borrow().get(t) {
-            return x.clone();
-        }
-        let r = if let Some(s) = self.scalar(t) {
-            let n = s.bytes();
-            (Lay { size: n, align: n }, vec![], vec![])
-        } else if self.is_enum_like(t) {
-            let MTy::D(d) = t else { unreachable!() };
-            let variants = self.info.enum_layout(d);
-            let mut ualign = 1;
-            let mut usize_ = 0;
-            let mut voffs = Vec::new();
-            for (vi, fs) in variants.iter().enumerate() {
-                let ms: Vec<MTy> = (0..fs.len()).map(|fi| self.info.member_ty(t, Sel::V(vi as u32, fi as u32), self.aggs)).collect();
-                let (l, offs) = self.struct_of(&ms);
-                if !ms.is_empty() {
-                    ualign = ualign.max(l.align);
-                    usize_ = usize_.max(l.size);
-                }
-                voffs.push(offs);
-            }
-            if usize_ == 0 {
-                (Lay { size: 4, align: 4 }, vec![4], voffs)
-            } else {
-                let uoff = align_up(4, ualign);
-                let a = ualign.max(4);
-                (Lay { size: align_up(uoff + usize_, a), align: a }, vec![uoff], voffs)
-            }
-        } else {
-            let ms = self.members(t);
-            let (l, offs) = self.struct_of(&ms);
-            (l, offs, vec![])
-        };
-        self.memo.borrow_mut().insert(t.clone(), r.clone());
-        r
-    }
-
-    fn struct_of(&self, ms: &[MTy]) -> (Lay, Vec<u32>) {
-        let mut off = 0;
-        let mut align = 1;
-        let mut offs = Vec::new();
-        for m in ms {
-            let l = self.get(m).0;
-            off = align_up(off, l.align);
-            offs.push(off);
-            off += l.size;
-            align = align.max(l.align);
-        }
-        (Lay { size: align_up(off.max(if ms.is_empty() { 1 } else { 0 }), align), align }, offs)
-    }
-
-    fn lay(&self, t: &MTy) -> Lay {
-        self.get(t).0
-    }
-
-    /// The offset of member `s` in a value of type `t`.
-    fn offset(&self, t: &MTy, s: Sel) -> u32 {
-        let (_, offs, voffs) = self.get(t);
-        match s {
-            Sel::Tag => 0,
-            Sel::F(i) => offs[i as usize],
-            Sel::V(vi, fi) => offs[0] + voffs[vi as usize][fi as usize],
-        }
-    }
-
-    /// The scalar leaves of a type: (offset, type), unions included (for C ABI classification).
-    fn leaves(&self, t: &MTy, base: u32, out: &mut Vec<(u32, Type)>) {
-        if let Some(s) = self.scalar(t) {
-            out.push((base, s));
-            return;
-        }
-        if self.is_enum_like(t) {
-            out.push((base, types::I32));
-            let MTy::D(d) = t else { unreachable!() };
-            for (vi, fs) in self.info.enum_layout(d).iter().enumerate() {
-                for fi in 0..fs.len() {
-                    let s = Sel::V(vi as u32, fi as u32);
-                    let mt = self.info.member_ty(t, s, self.aggs);
-                    self.leaves(&mt, base + self.offset(t, s), out);
-                }
-            }
-            return;
-        }
-        for (i, m) in self.members(t).iter().enumerate() {
-            self.leaves(m, base + self.offset(t, Sel::F(i as u32)), out);
-        }
+fn ty(s: Sc) -> Type {
+    match s {
+        Sc::I8 => types::I8,
+        Sc::I32 => types::I32,
+        Sc::I64 => types::I64,
+        Sc::F64 => types::F64,
+        Sc::Ptr => PTR,
     }
 }
 
-// ---- the C ABI ------------------------------------------------------------------------
-
-/// How a value crosses a C call boundary.
-#[derive(Clone, Debug)]
-enum CPass {
-    None,
-    /// One scalar.
-    Scalar(Type),
-    /// An aggregate of at most 16 bytes, as register-sized words.
-    Words(Vec<Type>),
-    /// A result returned through the struct-return pointer.
-    Sret,
+trait ClifLay {
+    fn cscalar(&self, t: &MTy) -> Option<Type>;
+    fn clif_sig(&self, cc: CallConv, params: &[MTy], ret: &MTy) -> (Signature, Vec<CPass>, CPass);
+    fn duck_sig(&self, cc: CallConv, params: &[MTy], ret: &MTy) -> Signature;
 }
 
-fn is_x86() -> bool {
-    cfg!(target_arch = "x86_64")
-}
-
-impl Layouts<'_, '_> {
-    fn c_pass(&self, t: &MTy) -> CPass {
-        if let MTy::Void = t {
-            return CPass::None;
-        }
-        if let Some(s) = self.scalar(t) {
-            return CPass::Scalar(s);
-        }
-        let l = self.lay(t);
-        if l.size > 16 {
-            return CPass::Sret;
-        }
-        let n = l.size.div_ceil(8);
-        let mut leaves = Vec::new();
-        self.leaves(t, 0, &mut leaves);
-        let words = (0..n)
-            .map(|k| {
-                let (lo, hi) = (k * 8, k * 8 + 8);
-                let inside: Vec<_> = leaves.iter().filter(|(o, ty)| *o < hi && o + ty.bytes() > lo).collect();
-                if is_x86() && !inside.is_empty() && inside.iter().all(|(_, ty)| *ty == types::F64) { types::F64 } else { types::I64 }
-            })
-            .collect();
-        CPass::Words(words)
+fn ext(t: &MTy, s: Type) -> AbiParam {
+    let p = AbiParam::new(s);
+    if s.bits() < 64 && !s.is_float() {
+        if Layouts::signed(t) { p.sext() } else { p.uext() }
+    } else {
+        p
     }
+}
 
-    fn ext(t: &MTy, s: Type) -> AbiParam {
-        let p = AbiParam::new(s);
-        if s.bits() < 64 && !s.is_float() {
-            if Self::signed(t) { p.sext() } else { p.uext() }
-        } else {
-            p
-        }
+impl ClifLay for Layouts<'_, '_> {
+    fn cscalar(&self, t: &MTy) -> Option<Type> {
+        self.scalar(t).map(ty)
     }
 
     /// A C signature: (signature, how each parameter passes, how the result returns).
-    fn c_sig(&self, cc: CallConv, params: &[MTy], ret: &MTy) -> (Signature, Vec<CPass>, CPass) {
+    fn clif_sig(&self, cc: CallConv, params: &[MTy], ret: &MTy) -> (Signature, Vec<CPass>, CPass) {
         let mut sig = Signature::new(cc);
-        let rp = self.c_pass(ret);
+        let (pp, rp) = self.c_sig(params, ret);
         match &rp {
             CPass::None => {}
-            CPass::Scalar(s) => sig.returns.push(Self::ext(ret, *s)),
-            CPass::Words(ws) => sig.returns.extend(ws.iter().map(|w| AbiParam::new(*w))),
+            CPass::Scalar(s) => sig.returns.push(ext(ret, ty(*s))),
+            CPass::Words(ws) => sig.returns.extend(ws.iter().map(|w| AbiParam::new(ty(*w)))),
             CPass::Sret => sig.params.push(AbiParam::special(PTR, ArgumentPurpose::StructReturn)),
         }
-        let mut pp = Vec::new();
-        for p in params {
-            let c = self.c_pass(p);
-            match &c {
-                CPass::Scalar(s) => sig.params.push(Self::ext(p, *s)),
-                CPass::Words(ws) => sig.params.extend(ws.iter().map(|w| AbiParam::new(*w))),
+        for (p, c) in params.iter().zip(&pp) {
+            match c {
+                CPass::Scalar(s) => sig.params.push(ext(p, ty(*s))),
+                CPass::Words(ws) => sig.params.extend(ws.iter().map(|w| AbiParam::new(ty(*w)))),
                 CPass::Sret => sig.params.push(AbiParam::new(PTR)),
                 CPass::None => {}
             }
-            pp.push(c);
         }
         (sig, pp, rp)
     }
@@ -311,15 +104,16 @@ impl Layouts<'_, '_> {
         let mut sig = Signature::new(cc);
         if self.is_agg(ret) {
             sig.params.push(AbiParam::new(PTR));
-        } else if let Some(s) = self.scalar(ret) {
+        } else if let Some(s) = self.cscalar(ret) {
             sig.returns.push(AbiParam::new(s));
         }
         for p in params {
-            sig.params.push(AbiParam::new(self.scalar(p).unwrap_or(PTR)));
+            sig.params.push(AbiParam::new(self.cscalar(p).unwrap_or(PTR)));
         }
         sig
     }
 }
+
 
 // ---- compiling a program ----------------------------------------------------------------
 
@@ -430,7 +224,7 @@ fn func_sig(lay: &Layouts, cc: CallConv, f: &Func) -> Signature {
     let params: Vec<MTy> = f.params.iter().map(|&v| f.vars[v as usize].clone()).collect();
     match f.abi {
         Abi::Duck => lay.duck_sig(cc, &params, &f.ret),
-        Abi::C => lay.c_sig(cc, &params, &f.ret).0,
+        Abi::C => lay.clif_sig(cc, &params, &f.ret).0,
     }
 }
 
@@ -567,7 +361,7 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
         let mut addr = vec![false; f.vars.len()];
         addressed(&f.body, &mut addr);
         for (v, t) in f.vars.iter().enumerate() {
-            let loc = match self.lay.scalar(t) {
+            let loc = match self.lay.cscalar(t) {
                 Some(s) if !addr[v] => VarLoc::Reg(self.b.declare_var(s)),
                 _ => {
                     let l = self.lay.lay(t);
@@ -599,7 +393,7 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
             }
             Abi::C => {
                 let ps: Vec<MTy> = f.params.iter().map(|&v| f.vars[v as usize].clone()).collect();
-                let (_, pp, rp) = self.lay.c_sig(self.cc, &ps, &f.ret);
+                let (_, pp, rp) = self.lay.clif_sig(self.cc, &ps, &f.ret);
                 if let CPass::Sret = rp {
                     self.sret = Some(params[0]);
                     k = 1;
@@ -637,16 +431,16 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
 
     fn ret_default(&mut self) {
         let f = self.f;
-        match (f.abi, self.lay.scalar(&f.ret)) {
+        match (f.abi, self.lay.cscalar(&f.ret)) {
             (_, Some(s)) => {
                 let z = self.zero_scalar(s);
                 self.b.ins().return_(&[z]);
             }
             (Abi::C, None) if self.lay.is_agg(&f.ret) => {
                 let ps: Vec<MTy> = f.params.iter().map(|&v| f.vars[v as usize].clone()).collect();
-                match self.lay.c_sig(self.cc, &ps, &f.ret).2 {
+                match self.lay.clif_sig(self.cc, &ps, &f.ret).2 {
                     CPass::Words(ws) => {
-                        let vals: Vec<Value> = ws.iter().map(|w| self.zero_scalar(*w)).collect();
+                        let vals: Vec<Value> = ws.iter().map(|w| self.zero_scalar(ty(*w))).collect();
                         self.b.ins().return_(&vals);
                     }
                     _ => {
@@ -809,7 +603,7 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
             return;
         };
         let x = self.ex(e);
-        if let Some(s) = self.lay.scalar(&f.ret) {
+        if let Some(s) = self.lay.cscalar(&f.ret) {
             let v = self.scalar_of(x, &e.ty, &f.ret, s);
             self.b.ins().return_(&[v]);
             return;
@@ -823,9 +617,9 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
             }
             Abi::C => {
                 let ps: Vec<MTy> = f.params.iter().map(|&v| f.vars[v as usize].clone()).collect();
-                match self.lay.c_sig(self.cc, &ps, &f.ret).2 {
+                match self.lay.clif_sig(self.cc, &ps, &f.ret).2 {
                     CPass::Words(ws) => {
-                        let vals: Vec<Value> = ws.iter().enumerate().map(|(k, w)| self.b.ins().load(*w, mem(), src, (k * 8) as i32)).collect();
+                        let vals: Vec<Value> = ws.iter().enumerate().map(|(k, w)| self.b.ins().load(ty(*w), mem(), src, (k * 8) as i32)).collect();
                         self.b.ins().return_(&vals);
                     }
                     _ => {
@@ -843,7 +637,7 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
     fn store_var(&mut self, v: VarId, t: &MTy, x: V, from: &MTy) {
         match self.vars[v as usize] {
             VarLoc::Reg(var) => {
-                let s = self.lay.scalar(t).unwrap();
+                let s = self.lay.cscalar(t).unwrap();
                 let val = self.scalar_of(x, from, t, s);
                 self.b.def_var(var, val);
             }
@@ -855,7 +649,7 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
     }
 
     fn store_at(&mut self, a: Value, t: &MTy, x: V, from: &MTy) {
-        if let Some(s) = self.lay.scalar(t) {
+        if let Some(s) = self.lay.cscalar(t) {
             let val = self.scalar_of(x, from, t, s);
             self.b.ins().store(mem(), val, a, 0);
         } else if let V::M(src) = self.as_mem(x, from) {
@@ -893,7 +687,7 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
 
     fn convert(&mut self, v: Value, from: &MTy, to: &MTy) -> Value {
         let ft = self.b.func.dfg.value_type(v);
-        let Some(tt) = self.lay.scalar(to) else { return v };
+        let Some(tt) = self.lay.cscalar(to) else { return v };
         if ft == tt {
             return v;
         }
@@ -922,7 +716,7 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
     /// A scalar expression's value.
     fn val(&mut self, e: &Ex) -> Value {
         let x = self.ex(e);
-        let s = self.lay.scalar(&e.ty).unwrap_or(types::I8);
+        let s = self.lay.cscalar(&e.ty).unwrap_or(types::I8);
         self.scalar_of(x, &e.ty, &e.ty, s)
     }
 
@@ -980,7 +774,7 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
 
     /// Load a value of type `t` from address `a`: a scalar, or the address itself.
     fn load(&mut self, a: Value, t: &MTy) -> V {
-        match self.lay.scalar(t) {
+        match self.lay.cscalar(t) {
             Some(s) => V::S(self.b.ins().load(s, mem(), a, 0)),
             None => V::M(a),
         }
@@ -1043,14 +837,14 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
                 let a = self.b.ins().iadd_imm_s(base, off as i64);
                 self.load(a, &e.ty)
             }
-            K::Int(n) => match self.lay.scalar(&e.ty) {
+            K::Int(n) => match self.lay.cscalar(&e.ty) {
                 Some(s) if s.is_float() => V::S(self.b.ins().f64const(*n as f64)),
                 Some(s) => V::S(self.b.ins().iconst(s, if s.bits() < 64 { *n & ((1i64 << s.bits()) - 1) } else { *n })),
                 None => V::None,
             },
             K::Float(x) => V::S(self.b.ins().f64const(*x)),
             K::CStr(s) => V::S(self.cstr_addr(s)),
-            K::Zero => match self.lay.scalar(&e.ty) {
+            K::Zero => match self.lay.cscalar(&e.ty) {
                 Some(s) => V::S(self.zero_scalar(s)),
                 None => V::None,
             },
@@ -1094,7 +888,7 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
             }
             K::Cast(x) => {
                 let v = self.ex(x);
-                match (v, self.lay.scalar(&e.ty)) {
+                match (v, self.lay.cscalar(&e.ty)) {
                     (V::S(s), Some(_)) => V::S(self.convert(s, &x.ty, &e.ty)),
                     (V::M(a), Some(s)) => V::S(self.b.ins().load(s, mem(), a, 0)),
                     (v, _) => v,
@@ -1115,7 +909,7 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
             }
             K::Cond(c, a, b) => {
                 let cv = self.val(c);
-                let s = self.lay.scalar(&e.ty).expect("clif: aggregate conditional");
+                let s = self.lay.cscalar(&e.ty).expect("clif: aggregate conditional");
                 let (tb, eb, done) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
                 self.b.append_block_param(done, s);
                 self.b.ins().brif(cv, tb, &[], eb, &[]);
@@ -1199,7 +993,7 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
                         self.duck_result(inst, out, &fret)
                     }
                     Abi::C => {
-                        let (_, pp, rp) = self.lay.c_sig(self.cc, &ps, &fret);
+                        let (_, pp, rp) = self.lay.clif_sig(self.cc, &ps, &fret);
                         let (vals, out) = self.c_args(&pp, &ps, args, &rp, &fret);
                         let inst = self.b.ins().call_indirect(sr, code, &vals);
                         self.c_result(inst, out, &rp, &fret)
@@ -1218,7 +1012,7 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
                     }
                     Abi::C => {
                         let fret = func.ret.clone();
-                        let (_, pp, rp) = self.lay.c_sig(self.cc, &ps, &fret);
+                        let (_, pp, rp) = self.lay.clif_sig(self.cc, &ps, &fret);
                         let (vals, out) = self.c_args(&pp, &ps, args, &rp, &fret);
                         let inst = self.b.ins().call(fr, &vals);
                         self.c_result(inst, out, &rp, &fret)
@@ -1235,7 +1029,7 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
             }
             Callee::Rt(sym) => {
                 let ps: Vec<MTy> = args.iter().map(|a| a.ty.clone()).collect();
-                let (sig, pp, rp) = self.lay.c_sig(self.cc, &ps, ret);
+                let (sig, pp, rp) = self.lay.clif_sig(self.cc, &ps, ret);
                 let (vals, out) = self.c_args(&pp, &ps, args, &rp, ret);
                 let inst = match self.d.rt_funcs.get(sym) {
                     Some((id, s)) if *s == sig => {
@@ -1277,7 +1071,7 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
                 vals.push(m);
             } else {
                 let x = self.ex(a);
-                let s = self.lay.scalar(p).unwrap();
+                let s = self.lay.cscalar(p).unwrap();
                 let v = self.scalar_of(x, &a.ty, p, s);
                 vals.push(v);
             }
@@ -1309,13 +1103,13 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
             match c {
                 CPass::Scalar(s) => {
                     let x = self.ex(a);
-                    let v = self.scalar_of(x, &a.ty, p, *s);
+                    let v = self.scalar_of(x, &a.ty, p, ty(*s));
                     vals.push(v);
                 }
                 CPass::Words(ws) => {
                     let m = self.mem_of(a);
                     for (k, w) in ws.iter().enumerate() {
-                        let v = self.b.ins().load(*w, mem(), m, (k * 8) as i32);
+                        let v = self.b.ins().load(ty(*w), mem(), m, (k * 8) as i32);
                         vals.push(v);
                     }
                 }
@@ -1354,12 +1148,6 @@ impl<M: Module> FnCx<'_, '_, '_, '_, '_, M> {
 
 // ---- drivers --------------------------------------------------------------------------
 
-/// A program compiled in memory; keep it alive while its code runs.
-pub struct Jit {
-    module: Option<cranelift_jit::JITModule>,
-    entry: *const u8,
-}
-
 /// Compile a program in memory (resolving runtime symbols to the runtime linked into this
 /// process).
 pub fn jit(prog: &Program, info: &TyInfo, opt: bool) -> Result<Jit, String> {
@@ -1372,7 +1160,7 @@ pub fn jit(prog: &Program, info: &TyInfo, opt: bool) -> Result<Jit, String> {
     let entry = compile(&mut module, prog, info, "dk_entry", None)?;
     module.finalize_definitions().map_err(|e| e.to_string())?;
     let entry = module.get_finalized_function(entry);
-    Ok(Jit { module: Some(module), entry })
+    Ok(Jit::new(entry, Box::new(ClifCode(Some(module)))))
 }
 
 /// The debugger's evaluation module (src/dbg_eval.rs): compiled in memory for good (its code
@@ -1397,19 +1185,6 @@ pub fn jit_eval(prog: &Program, info: &TyInfo) -> Result<(*const u8, *const u8),
     Ok((entry, init))
 }
 
-/// A program compiled for `duck run --live`: every call to a function in `slots` goes through
-/// the live table at `table` (8-byte code pointers), so a later compile can replace bodies.
-pub struct LiveJit {
-    pub jit: Jit,
-    /// (slot, code address) of each function in `slots`, to store into the table.
-    pub entries: Vec<(usize, *const u8)>,
-    /// The program's `dk_init` (literals, imprints, constants), to run before a reloaded module's
-    /// code is used.
-    pub init: *const u8,
-    /// Each function's code address, by name (to tell which code a running task started in).
-    pub addrs: HashMap<String, *const u8>,
-}
-
 pub fn jit_live(prog: &Program, info: &TyInfo, table: usize, slots: &HashMap<u32, usize>) -> Result<LiveJit, String> {
     let isa = isa(false, false)?;
     let mut jb = cranelift_jit::JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
@@ -1431,122 +1206,16 @@ pub fn jit_live(prog: &Program, info: &TyInfo, table: usize, slots: &HashMap<u32
     }
     let init = addr(&module, "dk_init").ok_or("no dk_init")?;
     let addrs = prog.funcs.iter().filter_map(|f| addr(&module, &f.name).map(|a| (f.name.clone(), a))).collect();
-    Ok(LiveJit { jit: Jit { module: Some(module), entry }, entries, init, addrs })
+    Ok(LiveJit { jit: Jit::new(entry, Box::new(ClifCode(Some(module)))), entries, init, addrs })
 }
 
-impl Jit {
-    /// Leave the compiled code in memory for good (a live reload: old frames may still run it).
-    pub fn leak(mut self) {
-        std::mem::forget(self.module.take());
-    }
+/// A Cranelift JIT module as the owner of a program's code (`exec::Jit`).
+struct ClifCode(Option<cranelift_jit::JITModule>);
 
-    /// Call the entry point with these arguments (`argv[0]` first); returns its exit code.
-    pub fn run(&self, args: &[String]) -> i32 {
-        let cs: Vec<std::ffi::CString> = args.iter().map(|a| std::ffi::CString::new(a.as_bytes()).unwrap_or_default()).collect();
-        let mut argv: Vec<*const std::ffi::c_char> = cs.iter().map(|c| c.as_ptr()).collect();
-        argv.push(std::ptr::null());
-        let f: extern "C" fn(i32, *const *const std::ffi::c_char) -> i32 = unsafe { std::mem::transmute(self.entry) };
-        f(cs.len() as i32, argv.as_ptr())
-    }
-}
-
-/// Where a forked program's standard streams go.
-#[derive(Default)]
-pub struct Redirect<'p> {
-    pub stdout: Option<&'p std::path::Path>,
-    pub stderr: Option<&'p std::path::Path>,
-    /// stdout and stderr both to this file, in order.
-    pub merged: Option<&'p std::path::Path>,
-    pub stdin_null: bool,
-}
-
-impl Jit {
-    /// Run the entry point in a forked child process with its streams redirected; returns its
-    /// exit code (None: killed by a signal).
-    pub fn run_forked(&self, args: &[String], r: Redirect) -> Result<Option<i32>, String> {
-        let pid = self.spawn(args, r, false)?;
-        wait_child(pid, None).map(|w| w.unwrap_or(None))
-    }
-
-    /// Start the entry point in a forked child process (`own_group`: in a new process group);
-    /// returns its pid.
-    pub fn spawn(&self, args: &[String], r: Redirect, own_group: bool) -> Result<i32, String> {
-        use std::os::fd::IntoRawFd;
-        let open = |p: Option<&std::path::Path>| -> Result<Option<i32>, String> {
-            match p {
-                Some(p) => std::fs::File::create(p).map(|f| Some(f.into_raw_fd())).map_err(|e| format!("error: cannot create {}: {e}\n", p.display())),
-                None => Ok(None),
-            }
-        };
-        let (out, err, both) = (open(r.stdout)?, open(r.stderr)?, open(r.merged)?);
-        let null = if r.stdin_null { std::fs::File::open("/dev/null").ok().map(|f| f.into_raw_fd()) } else { None };
-        unsafe {
-            libc::fflush(std::ptr::null_mut());
-            let pid = libc::fork();
-            if pid < 0 {
-                return Err("error: fork failed\n".into());
-            }
-            if pid == 0 {
-                if own_group {
-                    libc::setpgid(0, 0);
-                }
-                if let Some(fd) = null {
-                    libc::dup2(fd, 0);
-                }
-                if let Some(fd) = out.or(both) {
-                    libc::dup2(fd, 1);
-                }
-                if let Some(fd) = err.or(both) {
-                    libc::dup2(fd, 2);
-                }
-                let code = self.run(args);
-                libc::fflush(std::ptr::null_mut());
-                libc::_exit(code);
-            }
-            if own_group {
-                libc::setpgid(pid, pid);
-            }
-            for fd in [out, err, both, null].into_iter().flatten() {
-                libc::close(fd);
-            }
-            Ok(pid)
-        }
-    }
-}
-
-/// Wait for a child process: Ok(Some(exit code, or None if killed by a signal)), or Ok(None)
-/// when `limit` passed first (the child is then killed with its process group).
-pub fn wait_child(pid: i32, limit: Option<std::time::Duration>) -> Result<Option<Option<i32>>, String> {
-    let start = std::time::Instant::now();
-    loop {
-        let mut status = 0;
-        let flags = if limit.is_some() { libc::WNOHANG } else { 0 };
-        let r = unsafe { libc::waitpid(pid, &mut status, flags) };
-        if r == pid {
-            return Ok(Some(if libc::WIFEXITED(status) { Some(libc::WEXITSTATUS(status)) } else { None }));
-        }
-        if r < 0 {
-            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
-                continue;
-            }
-            return Err("error: waitpid failed\n".into());
-        }
-        if limit.is_some_and(|l| start.elapsed() > l) {
-            unsafe {
-                libc::kill(-pid, libc::SIGKILL);
-                libc::kill(pid, libc::SIGKILL);
-                libc::waitpid(pid, &mut status, 0);
-            }
-            return Ok(None);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-}
-
-impl Drop for Jit {
+impl Drop for ClifCode {
     fn drop(&mut self) {
-        if let Some(m) = self.module.take() {
-            // SAFETY: nothing from this module runs any more (forked children own their copies)
+        // SAFETY: nothing from this module runs any more (forked children own their copies)
+        if let Some(m) = self.0.take() {
             unsafe { m.free_memory() };
         }
     }

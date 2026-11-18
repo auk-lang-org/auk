@@ -625,8 +625,11 @@ fn native_line_tables() {
         .output()
         .unwrap();
     let t = String::from_utf8_lossy(&o.stdout);
+    // the line breakpoint is in `add`, which an optimized build may have inlined into its caller
+    // (`where = prog`dk_main_shim + 220 [inlined] prog.add + 16 at prog.duck:5:5`)
+    let bp1 = t.lines().find(|l| l.starts_with("Breakpoint 1: where = prog`")).unwrap_or_else(|| panic!("no breakpoint 1 in:\n{t}"));
+    assert!(bp1.contains("prog`prog.add") || bp1.contains("[inlined] prog.add"), "{bp1}");
     for want in [
-        "Breakpoint 1: where = prog`prog.add",
         "at prog.duck:5:5",
         "Breakpoint 2: where = prog`prog.fact",
         "frame #0: 0x",

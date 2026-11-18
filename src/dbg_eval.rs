@@ -141,7 +141,7 @@ fn compile_as(cx: &Cx, func: usize, site: usize, expr: &str) -> Result<Compiled,
     let _ = g.init_and_cleanup();
     g.prog.entry = Some(run);
     let info = TyInfo::new(&tp);
-    let (entry, init) = super::mir::clif::jit_eval(&g.prog, &info)?;
+    let (entry, init) = super::mir::backend::jit_eval(&g.prog, &info)?;
     // its string literals and constants
     unsafe { std::mem::transmute::<*const u8, extern "C" fn()>(init)() };
     let run = unsafe { std::mem::transmute::<*const u8, unsafe extern "C" fn(*const *mut std::ffi::c_void) -> *mut duck_rt::DuckStr>(entry) };

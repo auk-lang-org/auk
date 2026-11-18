@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::build::check;
-use crate::mir::clif::{LiveJit, jit_live};
+use crate::mir::backend::{LiveJit, jit_live};
 use crate::mir::{Callee, Ex, FRef, FuncId, K, MTy, Program, Stmt};
 use crate::types::Ty;
 use crate::mir::progen::{Mode, Trace};
@@ -532,7 +532,7 @@ pub fn cli(args: &[String]) -> i32 {
         }
         // the parent: the child has the program now
         b.jit.jit.leak();
-        let code = match crate::mir::clif::wait_child(pid, None) {
+        let code = match crate::mir::backend::wait_child(pid, None) {
             Ok(Some(c)) => c,
             _ => None,
         };

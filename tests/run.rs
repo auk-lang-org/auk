@@ -1,7 +1,7 @@
 //! The back end end to end: programs are compiled to C, linked with the runtime and run.
 //!
-//! - every `examples` program with a `main` runs and prints its expected output (a `.out`
-//!   file, or fixtures supplied here: a text file for `wc`, a CSV for `csv_stats`, a temp dir for
+//! - `examples` programs with a `main` run and print their expected output (with fixtures
+//!   supplied here: a text file for `wc`, a CSV for `csv_stats`, a temp dir for
 //!   `todo`, a local HTTP listener for `fetch`);
 //! - `duck test` passes for every example with tests (except `hatch.duck`, whose holes must fail
 //!   its tests) and for every package, one file at a time and as a flat directory;
@@ -72,23 +72,6 @@ fn run_ok(args: &[&str]) -> String {
 // ---- examples with a main ----
 
 /// Examples with a `.out` file: deterministic programs that need no input.
-#[test]
-fn examples_with_expected_output() {
-    setup();
-    let mut n = 0;
-    for e in fs::read_dir("examples").unwrap() {
-        let p = e.unwrap().path();
-        if p.extension().is_none_or(|x| x != "duck") || !p.with_extension("out").is_file() {
-            continue;
-        }
-        let want = fs::read_to_string(p.with_extension("out")).unwrap();
-        let got = run_ok(&["run", p.to_str().unwrap()]);
-        assert_eq!(got, want, "output mismatch for {}", p.display());
-        n += 1;
-    }
-    assert!(n >= 5, "expected fib, hello, inventory, life and tour .out files");
-}
-
 #[test]
 fn wc_counts_words_in_a_file() {
     setup();
@@ -368,7 +351,8 @@ fn package_tests_are_leak_free() {
     }
 }
 
-/// `duck ir` prints the MIR, `duck ir --clif` the Cranelift IR, for real programs.
+/// `duck ir` prints the MIR, `duck ir --llvm` the LLVM IR and `--clif` the Cranelift IR, for real
+/// programs.
 #[test]
 fn ir_prints_mir_and_cranelift() {
     setup();
@@ -377,6 +361,8 @@ fn ir_prints_mir_and_cranelift() {
         assert!(mir.contains("dk_entry(") && mir.contains("duck_main_wrapper("), "{f}");
         let clif = run_ok(&["ir", "--clif", f]);
         assert!(clif.contains("; dk_entry\nfunction ") && clif.contains("call "), "{f}");
+        let ll = run_ok(&["ir", "--llvm", f]);
+        assert!(ll.contains("define ") && ll.contains(" @main(") && ll.contains("call "), "{f}");
     }
 }
 

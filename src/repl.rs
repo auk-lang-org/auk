@@ -711,14 +711,14 @@ impl Session {
             Err(e) => return (false, e),
         };
         let info = crate::mir::types::TyInfo::new(tp);
-        let j = match crate::mir::clif::jit(&g.prog, &info, false) {
+        let j = match crate::mir::backend::jit(&g.prog, &info, crate::mir::backend::Opt::None) {
             Ok(j) => j,
             Err(e) => return (false, format!("error: {e}\n")),
         };
         self.builds += 1;
         let out_file = self.dir.join(format!("out{}", self.builds));
         let args = vec![self.src_path.display().to_string()];
-        let r = j.run_forked(&args, crate::mir::clif::Redirect { merged: Some(&out_file), stdin_null: true, ..Default::default() });
+        let r = j.run_forked(&args, crate::mir::backend::Redirect { merged: Some(&out_file), stdin_null: true, ..Default::default() });
         let out = fs::read(&out_file).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let _ = fs::remove_file(&out_file);
         let ok = match r {
