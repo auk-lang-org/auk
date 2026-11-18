@@ -2,7 +2,7 @@
 # Build Auk without Rust (docs/self-host-plan.md, Phase 6): the runtime (C), then the compiler
 # and raft (Auk), from a seed `auk`.
 #
-#   ./build.sh [--check] [--test] [--seed <auk>]
+#   ./build.sh [--check] [--test] [--seed <auk> | --from-seed]
 #
 # Steps:
 #   1. runtime   runtime/c → target/auk-rt/libauk_rt.a and auk_rt.bc, with the clang of the LLVM
@@ -20,19 +20,22 @@
 #                target/bin/raft.
 #
 # The seed: --seed, else $AUK_SEED, else the target/bin/auk of an earlier build, else `auk` on
-# the PATH. (Phase 6 adds a checked-in seed for a fresh clone.)
+# the PATH, else (or with --from-seed) the checked-in seed: seed/<os>-<arch>.bc.xz, the
+# compiler as LLVM bitcode (scripts/cut_seed.sh), compiled with clang and linked with cc into
+# target/auk-build/seed/auk. A fresh clone needs only LLVM 23, xz and a C linker.
 # LLVM: $LLVM_CONFIG, else Homebrew's llvm@23 (macOS) or llvm-config-23 (Linux).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-CHECK=0 TEST=0 SEED="${AUK_SEED:-}"
+CHECK=0 TEST=0 FROM_SEED=0 SEED="${AUK_SEED:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK=1 ;;
     --test) TEST=1 ;;
     --seed) SEED="$2"; shift ;;
-    -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --from-seed) FROM_SEED=1 ;;
+    -h|--help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "build.sh: unknown argument $1" >&2; exit 2 ;;
   esac
   shift
@@ -54,17 +57,37 @@ LLVM_BIN="$("$LLVM_CONFIG" --bindir)"
 CLANG="$LLVM_BIN/clang"
 [ -x "$CLANG" ] || die "no clang in $LLVM_BIN"
 
-if [ -z "$SEED" ]; then
+BUILD="$ROOT/target/auk-build"
+mkdir -p "$BUILD" target/auk-rt target/bin
+
+if [ "$FROM_SEED" = 0 ] && [ -z "$SEED" ]; then
   if [ -x target/bin/auk ]; then SEED="$ROOT/target/bin/auk"
   elif command -v auk > /dev/null; then SEED="$(command -v auk)"
-  else die "no seed auk: pass --seed <auk> or set AUK_SEED"
+  else FROM_SEED=1
   fi
+fi
+if [ "$FROM_SEED" = 1 ]; then
+  ARCH="$(uname -m)"; [ "$ARCH" = aarch64 ] && ARCH=arm64
+  bc="seed/$OS-$ARCH.bc.xz"
+  [ -f "$bc" ] || die "no auk to start from and no seed for $OS-$ARCH ($bc): pass --seed <auk>"
+  t0=$(ms)
+  say "seed ($bc, $(sed -n 's/^commit //p' "seed/$OS-$ARCH.txt" | cut -c1-12))"
+  mkdir -p "$BUILD/seed"
+  xz -d -c "$bc" > "$BUILD/seed/seed.bc"
+  "$CLANG" -c -Wno-override-module "$BUILD/seed/seed.bc" -o "$BUILD/seed/seed.o"
+  if [ "$OS" = macos ]; then
+    libs=("$("$LLVM_CONFIG" --libdir)/libLLVM.dylib" -framework CoreFoundation -framework Security
+      -framework Network -lm -lpthread -Wl,-export_dynamic)
+  else
+    libs=("$("$LLVM_CONFIG" --libdir)/libLLVM.so" -ldl -lpthread -lm -rdynamic)
+  fi
+  "${CC:-cc}" "$BUILD/seed/seed.o" "${libs[@]}" -o "$BUILD/seed/auk" || die "linking the seed failed"
+  rm -f "$BUILD/seed/seed.bc" "$BUILD/seed/seed.o"
+  SEED="$BUILD/seed/auk"
+  echo "   target/auk-build/seed/auk ($(secs "$t0"))"
 fi
 [ -x "$SEED" ] || SEED="$(command -v "$SEED" || true)"
 [ -n "$SEED" ] && [ -x "$SEED" ] || die "the seed is not an executable"
-
-BUILD="$ROOT/target/auk-build"
-mkdir -p "$BUILD" target/auk-rt target/bin
 
 # ---- 1. runtime ----------------------------------------------------------------------------
 t0=$(ms)

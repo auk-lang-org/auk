@@ -230,7 +230,17 @@ pub fn jit_eval(prog: mir.Program, info: mir.types.TyInfo): (ffi.Ptr, ffi.Ptr)! 
 /// with the runtime's inlinable functions).
 pub fn object(prog: mir.Program, info: mir.types.TyInfo, opt: bool): [int]! uses fs, env, ffi {
   let level = if opt { Level.O2 } else { Level.O0 }
-  emit(build(prog, info, exports("main"), none, level, opt, false)?)
+  let b = build(prog, info, exports("main"), none, level, opt, false)?
+  // AUK_EMIT_BC=<file>: also write the module the object is made from, as bitcode (cutting the
+  // bootstrap seed: scripts/cut_seed.sh)
+  match env.get("AUK_EMIT_BC") {
+    some(p) when p != "" => match fs.write_bytes(p, llvm.kit.bitcode(b.m)) {
+      ok(_) => {}
+      err(e) => return fail("cannot write {p}: {e}")
+    }
+    _ => {}
+  }
+  emit(b)
 }
 
 /// The program's LLVM IR at `level` (`o0`, `light`, `o2`, `o3`, or `build`: O2 with the
