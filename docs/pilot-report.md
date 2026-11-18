@@ -704,6 +704,69 @@ slow, but Auk's dump-and-strip is slower).
 
 No compiler or runtime bug was hit; no compiler or runtime change was needed.
 
+### raft
+
+| Rust (`src/bin/`) | Auk (`raft/src/`) |
+|---|---|
+| `raft.rs` (492) | `main.auk` (552) + `res.auk` (17, `Error`/`Res`) + `paths.auk` (136; 148 with its test) |
+| `raft/manifest.rs` (297, 3 tests) | `manifest.auk` (460, the same 3 tests) |
+| `raft/toml.rs` (358, 3 tests) | `toml.auk` (371, the same 3) |
+| `raft/semver.rs` (127, 3 tests) | `semver.auk` (123, the same 3) |
+| `raft/sha256.rs` (65, 1 test) | `sha256.auk` (130: `auk fmt` puts each of the 64 constants on its own line) |
+
+A separate Auk project, `raft/` (`auk build raft/src/main.auk -o raft`), with every command
+(`new [--lib]`, `add [--path]`, `remove`, `install`, `list`, `help`, usage errors), the same
+stdout, stderr and exit codes, the same in-place `raft.toml` edits (comments kept), a
+byte-identical `raft.lock` and identical `.raft/` trees (including the stale-entry cleanup and
+the copy-then-rename update). Line by line with the same names and order; the shape differences
+are listed at the top of each file: `Res<T>` is `T!res.Fail`, paths are `str`s, the closures of
+`list` and `new` are functions.
+
+**Oracle.** `tests/raft.rs` runs against `$RAFT_BIN` when set: **10/10 pass** with the port.
+`scripts/diff_raft.sh` runs one scenario with each binary in the same directory (91 commands:
+help and usage errors, every `new` error, adds with transitive deps, effect violations direct and
+transitive, version mismatches, missing packages, path deps and their errors, a dependency cycle,
+two sources for one package, stale/hidden/symlinked entries in `.raft/`, a modified installed
+package, a tampered lock, a regenerated lock, 13 malformed manifests and locks, the repository's
+`packages/` from the default registry, and a copy of `examples/live-site` with its committed,
+stale lock and then a new one) and compares each command's stdout, stderr and exit code and the
+SHA-256 of every file in the tree after it: **0 differ**, on the first full run.
+
+**Timing.** Commands are dominated by process start and file I/O: `raft install` of
+`examples/live-site` (7 packages) from nothing takes 27 ms (Rust) vs 43 ms (Auk), a no-op
+install 18 vs 32 ms (10 runs each, `rm` included). The port's SHA-256 works on `[int]` bytes.
+
+### Gaps found (raft)
+
+1. **No current directory or executable path in core.** `paths.cwd()` is C `realpath(".")`
+   (as in `compiler/src/paths.auk`), and the executable is `argv[0]` looked up in `$PATH`
+   (`std::env::current_exe` has no equivalent), so raft needs the `ffi` effect.
+2. **No build-time constants.** Rust bakes the checkout's `packages/` in (`env!("CARGO_MANIFEST_DIR")`);
+   the port finds the checkout upward from its executable (a directory with `packages/` and
+   `src/prelude/core.auk`). A port binary copied outside the checkout needs `RAFT_REGISTRY`.
+3. **Filesystem:** no `copy`, no recursive remove, no way to tell a symbolic link (`is_dir`
+   and `exists` follow links), no permissions. `paths.remove_all` recurses itself and spots a
+   link by comparing `realpath`s, so a link in `.raft/` is removed, not followed (as Rust's
+   `remove_dir_all`); `paths.copy` is `read_bytes` + `write_bytes` (Rust's `fs::copy` also
+   copies the mode, which only matters for executable files). `fs` errors read `fs.read <path>:
+   <strerror>`; Rust's `io::Error` text (`... (os error 2)`) comes from a table (`io_error`).
+4. **No code sharing between projects without installing.** `paths.auk` is copied from
+   `compiler/src/`, and SHA-256 is ported rather than taken from `packages/hash`: raft is the
+   tool that fills `.raft/`, so it must build without one.
+5. **No nested or-patterns**: `["help" | "--help"]` is E0020; written `["help"] | ["--help"]`.
+6. **`uses` is a keyword**, so Rust's `uses(effects)` is `uses_note`.
+7. **No dynamic width in a format spec** (Rust's `{head:width$}`): padded by hand.
+8. **Core `trim`/`trim_start` are ASCII-only**; `manifest.auk` has `utrim`/`utrim_start` over
+   Unicode White_Space for Rust's `str::trim` (the `[deps]` editor), and `is_whitespace` for
+   `[link]` names.
+9. **No `Result::ok()` on a `T!E`**, and `x else none` (E0248's own suggestion) is typed `str`, not `str?`,
+   when nothing expects a type (`(checksum(d) else none) == want` is E0201): a small `ok_sum`
+   helper with a `match`.
+10. Smaller: `T!E` still needs an enum (`enum Fail { Bad(e: Error) }`, as in fmt); version
+    components are `int`, so one above 2^63 - 1 is rejected where Rust's `u64` takes it.
+
+No compiler or runtime bug was hit; no compiler or runtime change was needed.
+
 ## Reproduce
 
 ```
@@ -722,6 +785,7 @@ scripts/diff_typed.sh         # typed: 924 files, 0 differ, and typed --core
 scripts/diff_ir.sh            # ir: 1045 outputs (209 programs x 5 variants), 26 helpers, 0 differ
 scripts/ir_time.sh 3          # the 3c timing table
 scripts/diff_fmt.sh           # fmt: 258 files, 0 differ, 0 not idempotent
+scripts/diff_raft.sh          # raft: 91 commands, 0 differ; tests/raft.rs against the port
 scripts/pilot_time.sh 7 20    # the tables above
 auk test compiler             # the ported unit tests
 auk build compiler/bench/cliffs.auk -o /tmp/cliffs && /tmp/cliffs 80000

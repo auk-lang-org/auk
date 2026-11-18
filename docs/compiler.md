@@ -55,6 +55,7 @@ source ─▶ lex ─▶ parse ─▶ resolve ─▶ check ─▶ lower ─▶ M
 | `src/fmt/` | `auk fmt`: a Wadler-style document printer over the AST |
 | `src/repl.rs`, `src/lsp.rs`, `src/json.rs` | `auk dive` (the REPL), `auk lsp` (the language server) and its JSON |
 | `src/bin/raft.rs`, `src/bin/raft/` | the `raft` package manager (manifest, semver, TOML, SHA-256) |
+| `raft/` | the Auk port of `raft` (an Auk project, `auk build raft/src/main.auk`; self-host plan, Phase 5): same output, files and exit codes, checked by `scripts/diff_raft.sh` |
 | `runtime/c/*.c` | the runtime (C, below): one file per area (`rc`, `heap`, `str`, `arr`, `map`, `err`, `value`, `copy`, `catch`, `stack`, `task`, `chan`, `core`, `tls`, `testing`, `trace`, `dbg`, `pixels`, `gui`, `gui_host`, `audio_out`, plus `compiler`: entry points only generated code uses); `auk_rt.h` declares everything, `AUK_API` marking what generated code calls; its unit tests in `runtime/c/test/` |
 
 ## Runtime ABI (`runtime/c/auk_rt.h` is the source of truth)
@@ -118,7 +119,7 @@ source ─▶ lex ─▶ parse ─▶ resolve ─▶ check ─▶ lower ─▶ M
 - `tests/trace.rs`: execution traces (call/ret nesting, errors through `?`, panics, peeks, the limit, a failing test's trace, valid JSON, an identical program without the flag, leak-free traced builds).
 - `tests/units.rs`: units of measure (inference, every unit error, the `3<x` lexing rule, fmt, interpolation, and erasure: the generated program is the same as without units).
 - `tests/fmt.rs`, `lsp.rs`, `explain.rs`, `dive.rs`: the formatter (the corpus is fmt-clean), the language server, `auk explain` and the REPL.
-- `tests/raft.rs`: the package manager against the registry in `tests/fixtures/registry/`.
+- `tests/raft.rs`: the package manager against the registry in `tests/fixtures/registry/`; `RAFT_BIN=<path>` runs it against another build (the Auk port: `scripts/diff_raft.sh`, which also diffs a 91-command scenario of both, outputs and trees).
 - `sh runtime/c/test/run.sh [filter]`: the runtime's own unit tests (`runtime/c/test/`), built without cargo. `ASAN=1` builds them with AddressSanitizer and UBSan (LeakSanitizer on), `TSAN=1` with ThreadSanitizer; `test_conc.c` is the concurrency stress set it is for (`TSAN=1 sh runtime/c/test/run.sh conc`: tasks spawned, awaited, cancelled and linked; heaps swept on other threads; channels with several senders and receivers; handle refcounts on many threads; the trace's and the debugger's locks). A sanitizer report in a forked child fails its test. `AUK_NET_TESTS=1` makes the tls tests reach real hosts.
 
 **Everything at once: `scripts/check.sh [step...]`** runs `cargo test --release`, the runtime's C tests, the pilot diffs (`scripts/diff_tokens.sh`, `diff_ast.sh`), golden self-consistency and a bench smoke (every `bench/perf` program built and JIT-run on a small input, same output both ways), then lists the steps that failed (steps: `cargo runtime pilot golden bench`). About 4 minutes on an M5. Real-host TLS tests are off unless `AUK_NET_TESTS=1`.

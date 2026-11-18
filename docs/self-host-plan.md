@@ -409,7 +409,19 @@ Port onto the Auk compiler, each with its existing tests passing:
 - [ ] `repl.rs` (878), `explain.rs` (169), `dive`
 - [ ] `lsp.rs` (1420), `dap.rs` (521), `debug.rs` (887), `dbg_eval.rs` (149)
 - [ ] `mcp.rs` (705), `live.rs` (549), `hatch.rs` (484)
-- [ ] `raft` (492 + manifest 276, toml 358, semver 127, sha256 65) — HTTP via the runtime's net/tls
+- [x] `raft` (492 + manifest 297, toml 358, semver 127, sha256 65): the Auk project `raft/`
+      (`auk build raft/src/main.auk`; `main`, `manifest`, `toml`, `semver`, `sha256` line by line,
+      plus `res` (the error type) and `paths`; 1.6k lines without tests), all five commands with
+      the same stdout, stderr, exit codes, `raft.toml` edits, byte-identical `raft.lock` and
+      identical `.raft/` trees. The Rust unit tests are `test` blocks (`auk test raft`: 11 pass).
+      `tests/raft.rs` takes `RAFT_BIN`: all 10 pass against the port. `scripts/diff_raft.sh` runs a
+      scenario of every command and error (fixture registry, the repository's `packages/`, a copy
+      of `examples/live-site`) with both, comparing every output and the whole tree after each
+      command: 0 differ. No HTTP was needed: the Rust raft's registry is a directory
+      (`RAFT_REGISTRY`, default the checkout's `packages/`), and the port reads the same one. A
+      separate project rather than a second binary of `compiler/`: it shares no code with the
+      compiler beyond `paths.auk` (copied), and it builds without a `.raft/` of its own.
+      Results and gaps: pilot-report.md, "Phase 5", raft.
 - [ ] Threads: tools that use `std::thread` (`dap`, `debug`, `mcp`, `live`, `hatch`) use Auk
       tasks/channels instead.
 - [ ] Integration tests: `tests/*.rs` (24 files) become an Auk test runner over the same
