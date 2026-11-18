@@ -100,6 +100,59 @@ int64_t auk__cancel_running(bool (*pick)(void *ctx, uintptr_t entry, uintptr_t h
     return n;
 }
 
+/* ---- `auk run --live` in the self-hosted driver (compiler/src/live.auk), which can't pass a
+ * callback to C or store atomically: the same steps as auk__cancel_running and src/live.rs's
+ * `install`, split so the choice is made in Auk. */
+
+/* The (thunk address, closure hint) of each running task, as pairs into out (room for cap
+ * pairs); returns how many tasks are running (more than cap: call again with more room). */
+int64_t auk__live_running(int64_t *out, int64_t cap) {
+    pthread_mutex_lock(&running_lock);
+    int64_t n = nrunning;
+    for (int64_t i = 0; i < nrunning && i < cap; i++) {
+        out[2 * i] = (int64_t)(uintptr_t)running[i]->fn;
+        out[2 * i + 1] = (int64_t)running[i]->hint;
+    }
+    pthread_mutex_unlock(&running_lock);
+    return n;
+}
+
+/* Cancel each running task whose (thunk address, closure hint) is one of the n pairs; returns
+ * how many. */
+int64_t auk__live_cancel(const int64_t *pairs, int64_t n) {
+    pthread_mutex_lock(&running_lock);
+    int64_t k = 0;
+    for (int64_t i = 0; i < nrunning; i++) {
+        AukTask *t = running[i];
+        for (int64_t j = 0; j < n; j++) {
+            if ((uintptr_t)pairs[2 * j] == (uintptr_t)t->fn && (uintptr_t)pairs[2 * j + 1] == t->hint) {
+                auk_task_cancel(t);
+                k++;
+                break;
+            }
+        }
+    }
+    pthread_mutex_unlock(&running_lock);
+    return k;
+}
+
+/* Make a compiled module the current code: run its dk_init off any task's heap (what it makes
+ * is the whole program's), then store each (slot, code address) of the n pairs into the live
+ * table (a release store: the code's data is ready before a call can reach it). */
+void auk__live_install(void (*init)(void), _Atomic uintptr_t *table, const int64_t *pairs, int64_t n) {
+    AukHeap *old = auk__heap_switch(NULL);
+    init();
+    auk__heap_switch(old);
+    for (int64_t i = 0; i < n; i++) {
+        atomic_store_explicit(&table[pairs[2 * i]], (uintptr_t)pairs[2 * i + 1], memory_order_release);
+    }
+}
+
+/* Count a reload (`reloads()`). */
+void auk__live_reloaded(void) {
+    atomic_fetch_add(&auk__live_reloads, 1);
+}
+
 /* Has the task running on this thread been cancelled? */
 bool auk__task_cancelled(void) {
     return cur_task != NULL && atomic_load(&cur_task->cancel);
