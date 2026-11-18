@@ -15,6 +15,8 @@ use std::time::Duration;
 
 use json::{Json, obj};
 
+mod auk_bin;
+
 struct Client {
     child: Child,
     stdin: ChildStdin,
@@ -46,7 +48,7 @@ fn read_frame(r: &mut impl BufRead) -> Option<String> {
 
 impl Client {
     fn start() -> Client {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_auk"))
+        let mut child = Command::new(auk_bin::auk_bin())
             .arg("lsp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
