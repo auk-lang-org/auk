@@ -126,6 +126,7 @@ fn build(prog: &Program, info: &TyInfo, ex: &Exports, live: Option<(usize, HashM
         let cx = LLVMContextCreate();
         let m = {
             let mut g = Gen::new(cx, "duck", prog, info, live);
+            g.inline_rt = level != Level::O0;
             g.program(ex)?;
             g.m
         };

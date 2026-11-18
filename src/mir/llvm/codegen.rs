@@ -19,6 +19,9 @@
 use std::collections::HashMap;
 use std::ffi::CString;
 
+#[path = "intrin.rs"]
+mod intrin;
+
 use llvm_sys::core::*;
 use llvm_sys::prelude::*;
 use llvm_sys::{LLVMIntPredicate, LLVMLinkage, LLVMRealPredicate, LLVMTypeKind, LLVMUnnamedAddr};
@@ -92,6 +95,10 @@ pub struct Gen<'p, 'a> {
     live: Option<(usize, HashMap<u32, usize>)>,
     /// Which aggregate parameters each Duck function reads in place (never written).
     inplace: Vec<Vec<bool>>,
+    /// Compile the hot runtime calls inline (`intrin.rs`; every level but O0).
+    pub inline_rt: bool,
+    /// The element size of the `duck_arr_at` call being compiled, when its caller knows it.
+    elem_hint: Option<u32>,
     /// Debug info (`duck build -g`), and the current function's subprogram.
     debug: Option<Debug>,
     sp: Option<LLVMMetadataRef>,
@@ -201,6 +208,8 @@ impl<'p, 'a> Gen<'p, 'a> {
                 cstrs: HashMap::new(),
                 live,
                 inplace: Vec::new(),
+                inline_rt: false,
+                elem_hint: None,
                 debug: Debug::new(cx, m, prog),
                 sp: None,
                 f: None,
@@ -958,7 +967,16 @@ impl<'p, 'a> Gen<'p, 'a> {
         match &e.k {
             K::Var(v) => self.vars[*v as usize],
             K::Global(g) => self.globals[*g as usize],
-            K::Deref(p) => self.val(p),
+            K::Deref(p) => {
+                // `*(T *)duck_arr_at(xs, i, loc)`: the element size is T's
+                let inner = if let K::Cast(x) = &p.k { &**x } else { &**p };
+                if matches!(&inner.k, K::Call(Callee::Rt(s), _) if s == "duck_arr_at") {
+                    self.elem_hint = Some(self.lay.lay(&e.ty).size);
+                }
+                let v = self.val(p);
+                self.elem_hint = None;
+                v
+            }
             K::Field(b, s) => {
                 let base = self.mem_of(b);
                 let off = self.lay.offset(&b.ty, *s);
@@ -1264,6 +1282,9 @@ impl<'p, 'a> Gen<'p, 'a> {
                 self.duck_result(call, out, ret)
             }
             Callee::Rt(sym) => {
+                if let Some(v) = self.rt_inline(sym, args, ret) {
+                    return v;
+                }
                 let ps: Vec<MTy> = args.iter().map(|a| a.ty.clone()).collect();
                 let (sig, pp, rp) = self.c_sig(&ps, ret);
                 let (mut vals, out) = self.c_args(&pp, &ps, args, &rp, ret);

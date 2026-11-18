@@ -141,6 +141,13 @@ pub unsafe extern "C" fn duck_release(p: *mut c_void) {
     }
 }
 
+/// The slow end of `duck_release` inlined by the LLVM back end: generated code has already
+/// dropped the last reference (its decrement returned 1) and issued the acquire fence.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn duck__free_last(p: *mut c_void) {
+    unsafe { free_now(p) }
+}
+
 /// Free an object whose last reference is gone (or whose heap is being swept): release what it
 /// holds and free its memory, by kind.
 pub unsafe fn free_now(p: *mut c_void) {

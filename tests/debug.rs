@@ -602,12 +602,15 @@ fn have(tool: &str) -> bool {
 
 #[test]
 fn native_line_tables() {
-    let f = prog_file("native", PROG);
+    // PROG with inputs the optimizer can't fold away (the loop bound comes from the arguments)
+    // and every computed value used, on the same lines
+    let prog = PROG.replace("fn main() {", "fn main(args: [str]) {").replace("for i in 0..3 {", "for i in 0..args.len() + 2 {").replace(r#"print("{p.x} {x}")"#, r#"print("{p.x} {p.y} {x}")"#);
+    let f = prog_file("native", &prog);
     let dir = f.parent().unwrap();
     let out = dir.join("prog");
     let o = duck_cmd().arg("build").arg("-g").arg(&f).arg("-o").arg(&out).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    assert_eq!(String::from_utf8_lossy(&Command::new(&out).output().unwrap().stdout), "4 7\n");
+    assert_eq!(String::from_utf8_lossy(&Command::new(&out).output().unwrap().stdout), "4 5 7\n");
     if !cfg!(target_os = "macos") || !have("lldb") || !have("dwarfdump") {
         eprintln!("skipped: needs macOS with lldb and dwarfdump");
         return;
