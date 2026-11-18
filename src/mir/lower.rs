@@ -3016,8 +3016,12 @@ impl<'g, 'a> Lower<'g, 'a> {
         let has = Self::has_value(&ty);
         let r = if has { Some(self.zero_decl(&ty)) } else { None };
         let end = self.f.b.label();
-        for a in arms {
-            let test = self.pat_test(&a.pat, &s);
+        let lit_case = self.str_switch(arms, &s, &st);
+        for (ai, a) in arms.iter().enumerate() {
+            let test = match &lit_case {
+                Some((k, idx)) if idx[ai] >= 0 => Ex::bin(BOp::Eq, k.clone(), Ex::int(idx[ai])),
+                _ => self.pat_test(&a.pat, &s),
+            };
             self.open_if(test);
             self.push(ScopeKind::Block);
             let arm_depth = self.f.scopes.len() - 1;
@@ -3064,6 +3068,40 @@ impl<'g, 'a> Lower<'g, 'a> {
             None if ty == Ty::Never => Val::never(),
             None => Val::unit(),
         }
+    }
+
+    /// A `match` on a `str` with many string literal arms looks the scrutinee up once in a
+    /// sorted table of the literals (`auk_str_switch`: length, then bytes, by binary search)
+    /// instead of comparing it with each literal in turn. Returns the lookup's result and, per
+    /// arm, the table index its literal must equal (-1: the arm's own pattern test).
+    fn str_switch(&mut self, arms: &[crate::ast::Arm], s: &Ex, st: &Ty) -> Option<(Ex, Vec<i64>)> {
+        if *st != Ty::Str {
+            return None;
+        }
+        let lit = |a: &crate::ast::Arm| match &a.pat.kind {
+            PatKind::Lit { lit: Lit::Str(x), .. } => Some(x.clone()),
+            _ => None,
+        };
+        let mut keys: Vec<String> = arms.iter().filter_map(lit).collect();
+        if keys.len() < 6 {
+            return None;
+        }
+        keys.sort_by(|a, b| (a.len(), a.as_bytes()).cmp(&(b.len(), b.as_bytes())));
+        keys.dedup();
+        let idx = arms.iter().map(|a| lit(a).map_or(-1, |x| keys.iter().position(|k| *k == x).unwrap() as i64)).collect();
+        let n = keys.len();
+        let agg = self.g.agg(format!("DkStrCases{}", self.g.prog.aggs.len()), (0..n).flat_map(|_| [MTy::CStr, MTy::I64]).collect());
+        let mut members = Vec::new();
+        for (i, k) in keys.iter().enumerate() {
+            members.push((Sel::F(2 * i as u32), Ex::new(K::CStr(k.as_bytes().to_vec()), MTy::CStr)));
+            members.push((Sel::F(2 * i as u32 + 1), Ex::i64(k.len() as i64)));
+        }
+        let name = format!("dk_str_cases{}", self.g.prog.globals.len());
+        let gl = self.g.global(name, MTy::Agg(agg), Some(Ex::agg(MTy::Agg(agg), members)), true);
+        let table = Ex::new(K::GlobalAddr(gl), MTy::ptr(MTy::Agg(agg))).cast(MTy::void_ptr());
+        let call = Ex::rt("auk_str_switch", vec![s.clone(), table, Ex::i64(n as i64)], MTy::D(Ty::Int));
+        let k = self.decl(&Ty::Int, call);
+        Some((k, idx))
     }
 
     fn for_(&mut self, e: &Expr, index: Option<&Pat>, pat: &Pat, iter: &Expr, body: &Block) {

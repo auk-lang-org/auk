@@ -562,6 +562,13 @@ AUK_API AukStr *auk_str_slice(const AukStr *s, int64_t a, int64_t b, const char 
 AUK_API AukStr *auk_str_concat(const AukStr *a, const AukStr *b);
 AUK_API bool auk_str_eq(const AukStr *a, const AukStr *b);
 AUK_API bool auk_str_eq_lit(const AukStr *s, const char *lit);
+/* A `match` on `str` with many literal arms: the literals sorted by (length, bytes). */
+typedef struct AukStrCase {
+    const char *s;
+    int64_t len;
+} AukStrCase;
+/* The index of `s` in `cases` (n entries, sorted by length then bytes), or -1. */
+AUK_API int64_t auk_str_switch(const AukStr *s, const AukStrCase *cases, int64_t n);
 AUK_API int auk_str_cmp(const AukStr *a, const AukStr *b);
 AUK_API uint64_t auk_str_hash(const AukStr *s);
 void auk__str_free(AukStr *s);

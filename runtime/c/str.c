@@ -539,6 +539,26 @@ AUK_API bool auk_str_eq_lit(const AukStr *s, const char *lit) {
     return bytes_eq(sdata(s), slen(s), (const uint8_t *)l, (int64_t)strlen(l));
 }
 
+AUK_API int64_t auk_str_switch(const AukStr *s, const AukStrCase *cases, int64_t n) {
+    const uint8_t *d = sdata(s);
+    int64_t len = slen(s);
+    int64_t lo = 0, hi = n;
+    while (lo < hi) {
+        int64_t mid = lo + (hi - lo) / 2;
+        const AukStrCase *c = &cases[mid];
+        int r = c->len < len ? -1 : c->len > len ? 1 : len == 0 ? 0 : memcmp(c->s, d, (size_t)len);
+        if (r == 0) {
+            return mid;
+        }
+        if (r < 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return -1;
+}
+
 /* memcmp on the common prefix, then length: exactly lexicographic byte order. */
 AUK_API int auk_str_cmp(const AukStr *a, const AukStr *b) {
     int64_t na = slen(a);

@@ -426,6 +426,26 @@ static void str_builder(void) {
     CHECK_STR(auk_sb_finish(&e), "");
 }
 
+static void str_switch_lookup(void) {
+    /* sorted by (length, bytes): the 3-byte "h\xc3\xa9" sorts before "let" */
+    static const AukStrCase sorted[] = {{"", 0}, {"fn", 2}, {"if", 2}, {"h\xc3\xa9", 3}, {"let", 3}, {"else", 4}};
+    const char *keys[] = {"", "fn", "if", "h\xc3\xa9", "let", "else"};
+    for (int i = 0; i < 6; i++) {
+        AukStr *k = s(keys[i]);
+        CHECK_INT(auk_str_switch(k, sorted, 6), i);
+        rel(k);
+    }
+    const char *misses[] = {"f", "fx", "lets", "els", "zz", "else!"};
+    for (int i = 0; i < 6; i++) {
+        AukStr *k = s(misses[i]);
+        CHECK_INT(auk_str_switch(k, sorted, 6), -1);
+        rel(k);
+    }
+    AukStr *k = s("fn");
+    CHECK_INT(auk_str_switch(k, sorted, 0), -1);
+    rel(k);
+}
+
 static void str_char_helpers(void) {
     CHECK(auk_char_is_digit('7') && !auk_char_is_digit('a'));
     CHECK(auk_char_is_alpha('Q') && !auk_char_is_alpha('1'));
@@ -453,5 +473,6 @@ const TestCase str_tests[] = {
     {"str_bad_spec_panics", str_bad_spec_panics},
     {"str_builder", str_builder},
     {"str_char_helpers", str_char_helpers},
+    {"str_switch_lookup", str_switch_lookup},
     {NULL, NULL},
 };

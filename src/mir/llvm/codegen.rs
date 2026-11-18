@@ -418,6 +418,10 @@ impl<'p, 'a> Gen<'p, 'a> {
                         K::SizeOf(t) => bytes[off..off + 8].copy_from_slice(&(self.lay.lay(t).size as u64).to_le_bytes()),
                         K::Zero => {}
                         K::FnAddr(FRef::Fn(f)) => ptrs.push((off, self.funcs[*f as usize].0)),
+                        K::CStr(b) => {
+                            let p = self.cstr_addr(b);
+                            ptrs.push((off, p));
+                        }
                         _ => return Err(format!("global {}: unsupported initializer member", g.name)),
                     }
                 }

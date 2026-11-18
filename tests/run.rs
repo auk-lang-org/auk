@@ -510,6 +510,49 @@ fn main() {
     );
 }
 
+/// A `match` on a `str` with many literal arms is one table lookup (`auk_str_switch`); arm
+/// order, guards, a non-literal arm between literals and non-ASCII literals behave as before.
+#[test]
+fn match_on_str_with_many_literals() {
+    expect_out(
+        "str_switch",
+        r#"fn kw(s: str): int = match s {
+  "fn" => 1
+  "let" => 2
+  "var" => 3
+  "if" => 4
+  "else" => 5
+  "" => 6
+  "héllo" => 7
+  "match" when s.len() > 100 => 98
+  "match" => 8
+  "matcha" => 9
+  _ => 0
+}
+
+fn guarded(s: str, n: int): str = match s {
+  "a" when n > 1 => "a big"
+  "a" => "a small"
+  "b" => "b"
+  "c" => "c"
+  "d" => "d"
+  "e" => "e"
+  x when x.starts_with("z") => "z-ish {x}"
+  "f" => "f"
+  _ => "other"
+}
+
+fn main() {
+  for w in ["fn", "let", "var", "if", "else", "", "héllo", "match", "matcha", "matc", "x", "fnn", "f"] {
+    print("{w}: {kw(w)}")
+  }
+  print([guarded("a", 2), guarded("a", 0), guarded("e", 0), guarded("zed", 0), guarded("f", 0), guarded("g", 0)])
+}
+"#,
+        "fn: 1\nlet: 2\nvar: 3\nif: 4\nelse: 5\n: 6\nhéllo: 7\nmatch: 8\nmatcha: 9\nmatc: 0\nx: 0\nfnn: 0\nf: 0\n[\"a big\", \"a small\", \"e\", \"z-ish zed\", \"f\", \"other\"]\n",
+    );
+}
+
 #[test]
 fn closures_capture_values() {
     expect_out(

@@ -1,5 +1,5 @@
 /// Micro-benchmarks for the performance cliffs in docs/pilot-report.md (in-place mutation,
-/// moving out of a container, string building, slicing). Build with `auk build` and run with
+/// moving out of a container, string building, `match` on `str`, slicing). Build with `auk build` and run with
 /// an iteration count: `auk build compiler/bench/cliffs.auk -o /tmp/cliffs && /tmp/cliffs 80000`.
 
 struct Holder { xs: [int], n: int }
@@ -7,6 +7,30 @@ struct Holder { xs: [int], n: int }
 fn push_via_var(h: var Holder, x: int) { h.xs.push(x) }
 
 fn bench(name: str, t0: int) uses time { print("{name}: {time.now() - t0} ms") }
+
+fn keyword(s: str): int = match s {
+  "fn" => 1
+  "let" => 2
+  "var" => 3
+  "if" => 4
+  "else" => 5
+  "match" => 6
+  "loop" => 7
+  "while" => 8
+  "for" => 9
+  "in" => 10
+  "return" => 11
+  "break" => 12
+  "continue" => 13
+  "struct" => 14
+  "enum" => 15
+  "shape" => 16
+  "pub" => 17
+  "use" => 18
+  "test" => 19
+  "true" => 20
+  _ => 0
+}
 
 fn main(args: [str]) uses time {
   let n = int.parse(args.get(1) else "100000") else 100000
@@ -59,7 +83,14 @@ fn main(args: [str]) uses time {
   let s2 = str(cs)
   bench("str([char]) ({s2.len()})", t)
 
-  // 8. slicing a non-ASCII string by char index
+  // 8. match on str: 20 keyword arms
+  t = time.now()
+  let words = ["while", "x", "continue", "fn", "parse_expr", "true", "shape", "a"]
+  var hits = 0
+  for i in 0..n * 10 { hits += keyword(words[i % 8]) }
+  bench("match on str, 20 arms, {n * 10} lookups ({hits})", t)
+
+  // 9. slicing a non-ASCII string by char index
   t = time.now()
   let text = "é" + "a".repeat(n)
   var total = 0
