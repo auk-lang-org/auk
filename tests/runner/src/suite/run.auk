@@ -1079,6 +1079,12 @@ fn async_tasks_and_any_shapes() uses env, fs, ffi, time {
         time.sleep(5)
         n * 2
       }
+      // a plain function that returns a task runs in place (only an `async fn` call starts one)
+      fn start(log: var [int], n: int): Task<int> uses time {
+        log.push(n)
+        slow(n)
+      }
+      fn first<T>(xs: [T]): T = xs[0]
       fn main() uses time {
         let shapes: [any Area] = [Sq { s: 2.0 }, Circ { r: 1.0 }]
         print(shapes.map(s => s.area()))
@@ -1088,6 +1094,10 @@ fn async_tasks_and_any_shapes() uses env, fs, ffi, time {
         print(await t)
         print(await [1, 2, 3].map(n => slow(n)))
         print(await slow(7))
+        var log: [int] = []
+        let s = start(&log, 4)
+        print("{log} {await s}")
+        print(await first([slow(5), slow(6)]))
       }
       """, r"""
       [4.0, 3.0]
@@ -1095,6 +1105,8 @@ fn async_tasks_and_any_shapes() uses env, fs, ffi, time {
       20
       [2, 4, 6]
       14
+      [4] 8
+      10
       """)
 }
 

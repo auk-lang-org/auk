@@ -1794,9 +1794,13 @@ fn call(lw: var Lower, e: ast.Expr, first0: Val?, tail: bool): Val {
     }
   }
   let lc = lw.loc(e.span)
-  // an un-awaited async call: spawn a task
+  // an un-awaited `async fn` call: spawn a task (by the callee, not the type: a plain function
+  // that returns a `Task` is called in place)
   match (target, ret) {
-    (Instance(i), Task(_)) => return lw.spawn(i, args, ret)
+    (Instance(i), Task(_)) => match lw.tp.instances[i].body {
+      Fn(f) => if lw.tp.fns[f].is_async { return lw.spawn(i, args, ret) }
+      _ => {}
+    }
     _ => {}
   }
   lw.call_target(target, func, args, ret, lc, callee_val)
