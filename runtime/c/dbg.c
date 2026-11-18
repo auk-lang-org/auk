@@ -35,6 +35,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -264,6 +265,8 @@ static _Atomic int64_t dbg_next_thread = 1;
 static _Thread_local AukDbgFrame *dbg_top;
 static _Thread_local int64_t dbg_depth;
 static _Thread_local int64_t dbg_tid;
+/* Set while this thread changes its frame chain (dbg_top, a frame's parent): see frame_op. */
+static _Thread_local _Atomic int dbg_in_op;
 
 enum { STEP_NONE, STEP_IN, STEP_OVER, STEP_OUT };
 
@@ -292,6 +295,8 @@ typedef struct Bp {
 typedef struct ThreadRef {
     int64_t id;
     AukDbgFrame **top;
+    /* the thread's frame_op flag (below) */
+    _Atomic int *in_op;
 } ThreadRef;
 
 /* A command for the stopped focus thread. */
@@ -305,10 +310,19 @@ static pthread_mutex_t st_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t st_cv = PTHREAD_COND_INITIALIZER;
 static bool st_running;
 static bool st_stopped;
+/* st_stopped for readers without the lock (frame_op); written with it */
+static _Atomic bool st_halt;
 static int64_t st_focus;
 /* bumped at every stop (steps lapse) and every resume (parked threads wake) */
 static uint64_t st_epoch;
 static bool st_pause_req;
+/* A `pause` that came while stopped, behind this many commands not yet served (queued, or the
+ * one the focus thread is serving): commands run in order, so if one of those resumes, the
+ * pause applies after it (a "continue" then "pause" must stop again); if none does, the program
+ * was stopped all along and the pause is a no-op. */
+static int64_t st_pause_after;
+/* the focus thread is serving a command it took off the queue */
+static bool st_serving;
 static bool st_stepping;
 static int st_catch_mode = CATCH_UNCAUGHT;
 static Bp *st_bps;
@@ -379,9 +393,60 @@ static int64_t tid(void) {
     }
     st_threads[st_nthreads].id = id;
     st_threads[st_nthreads].top = &dbg_top;
+    st_threads[st_nthreads].in_op = &dbg_in_op;
     st_nthreads++;
     pthread_mutex_unlock(&st_lock);
     return id;
+}
+
+/* A thread's frame chain is read by the stopped focus thread (`stack`, `vars`, `threads`) while
+ * the other threads are parked in the hook. But a thread that was blocked in a call when the
+ * world stopped is still running: when the call returns it pushes and pops frames until its
+ * next statement parks it, and a popped frame is dead stack memory. So a thread changes its
+ * chain only inside frame_op_begin/end: it raises its in_op flag, and while the world is stopped
+ * it lowers it and parks instead. The focus thread sets st_halt and then waits for a thread's
+ * flag to be down (settle) before reading its chain. Both sides store, then load the other's
+ * flag, sequentially consistent (Dekker): either the thread sees st_halt and parks, or the
+ * reader sees the flag up and waits for the change to finish. A thread the debugger never
+ * registered (dbg_tid 0) is never read, and the busy thread (serving commands, evaluating) must
+ * not park on itself.
+ *
+ * Not covered: the site and locals a thread returning from a blocking call writes before its
+ * next statement parks it. The site is one aligned 8-byte store, read relaxed (frame_site); a
+ * local shown at that moment may be half-updated. */
+static void frame_op_begin(void) {
+    if (dbg_tid == 0) {
+        return;
+    }
+    for (;;) {
+        atomic_store(&dbg_in_op, 1);
+        if (!atomic_load(&st_halt) || auk__dbg_busy()) {
+            return;
+        }
+        atomic_store(&dbg_in_op, 0);
+        pthread_mutex_lock(&st_lock);
+        wait_not_stopped();
+        pthread_mutex_unlock(&st_lock);
+    }
+}
+
+static void frame_op_end(void) {
+    if (dbg_tid != 0) {
+        atomic_store_explicit(&dbg_in_op, 0, memory_order_release);
+    }
+}
+
+/* Wait until thread r is not changing its frame chain (st_halt set: it won't start again). */
+static void settle(const ThreadRef *r) {
+    while (atomic_load(r->in_op) != 0) {
+        sched_yield();
+    }
+}
+
+/* A frame's current site: generated code stores it (one aligned 8-byte store) at each
+ * statement, and the thread may be running (see frame_op), so it is read in one load. */
+static int64_t frame_site(AukDbgFrame *f) {
+    return __atomic_load_n(&f->site, __ATOMIC_RELAXED);
 }
 
 /* ---- the connection ---------------------------------------------------------------------- */
@@ -395,7 +460,10 @@ static void dbg_emit(const char *line) {
         b[n] = '\n';
         size_t off = 0;
         while (off < n + 1) {
-            ssize_t w = write(dbg_out_fd, b + off, n + 1 - off);
+            /* send, not write: a front end that hung up must not kill the program with
+             * SIGPIPE (auk__send_flags, or SO_NOSIGPIPE set at connect); the reader sees the
+             * hang-up and lets it run on */
+            ssize_t w = send(dbg_out_fd, b + off, n + 1 - off, auk__send_flags);
             if (w < 0 && errno == EINTR) {
                 continue;
             }
@@ -558,7 +626,7 @@ static bool frame_json(DText *t, AukDbgFrame *f) {
     }
     Info *info = dbg_info;
     int64_t func = f->func;
-    int64_t site = f->site;
+    int64_t site = frame_site(f);
     dt_str(t, "{\"fn\":");
     dt_jsonc(t, func >= 0 && func < info->nfns ? info->fns[func].name : "?");
     if (site >= 0 && site < info->nsites) {
@@ -779,11 +847,12 @@ typedef struct LocalRef {
 static LocalRef *locals_of(AukDbgFrame *f, int64_t *n) {
     *n = 0;
     Info *info = dbg_info;
-    if (info == NULL || f->func < 0 || f->func >= info->nfns || f->site < 0 || f->site >= info->nsites) {
+    int64_t site = frame_site(f);
+    if (info == NULL || f->func < 0 || f->func >= info->nfns || site < 0 || site >= info->nsites) {
         return NULL;
     }
     FnInfo *fi = &info->fns[f->func];
-    Site *s = &info->sites[f->site];
+    Site *s = &info->sites[site];
     LocalRef *out = auk__xmalloc((size_t)(s->nvis + 1) * sizeof(LocalRef));
     int64_t k = 0;
     for (int64_t i = s->nvis - 1; i >= 0; i--) {
@@ -859,6 +928,7 @@ static bool thread_top(int64_t t, int64_t me, AukDbgFrame **out) {
     bool found = false;
     for (int64_t i = 0; i < st_nthreads; i++) {
         if (st_threads[i].id == t) {
+            settle(&st_threads[i]);
             *out = *st_threads[i].top;
             found = true;
             break;
@@ -1072,6 +1142,7 @@ static bool serve(const Cmd *cmd, int64_t me, int *kind) {
         memcpy(ts, st_threads, (size_t)nt * sizeof(ThreadRef));
         AukDbgFrame **tops = auk__xmalloc((size_t)(nt + 1) * sizeof(AukDbgFrame *));
         for (int64_t i = 0; i < nt; i++) {
+            settle(&ts[i]);
             tops[i] = *ts[i].top;
         }
         pthread_mutex_unlock(&st_lock);
@@ -1110,6 +1181,7 @@ static bool serve(const Cmd *cmd, int64_t me, int *kind) {
  * commands until a resume. extra: more fields for the event (or NULL). */
 static void stop(int64_t me, const char *reason, const char *extra) {
     st_stopped = true;
+    atomic_store(&st_halt, true);
     st_stepping = false;
     st_focus = me;
     st_epoch++;
@@ -1162,12 +1234,21 @@ static void stop(int64_t me, const char *reason, const char *extra) {
         Cmd cmd = st_queue[st_qhead];
         st_qhead = (st_qhead + 1) % st_qcap;
         st_qlen--;
+        st_serving = true;
         pthread_mutex_unlock(&st_lock);
         bool was = auk__dbg_set_busy(true);
         int kind = STEP_NONE;
         bool resume = serve(&cmd, me, &kind);
         auk__dbg_set_busy(was);
         pthread_mutex_lock(&st_lock);
+        st_serving = false;
+        if (st_pause_after > 0) {
+            st_pause_after--;
+            if (resume) {
+                st_pause_req = true;
+                st_pause_after = 0;
+            }
+        }
         if (resume) {
             if (kind != STEP_NONE) {
                 int64_t site = dbg_top == NULL ? -1 : dbg_top->site;
@@ -1180,6 +1261,7 @@ static void stop(int64_t me, const char *reason, const char *extra) {
                 dbg_step.site = site;
             }
             st_stopped = false;
+            atomic_store(&st_halt, false);
             st_epoch++;
             rearm();
             pthread_cond_broadcast(&st_cv);
@@ -1198,13 +1280,17 @@ AUK_API void auk_dbg_enter(AukDbgFrame *f) {
     if (dbg_tid == 0 && atomic_load_explicit(&dbg_attached, memory_order_relaxed)) {
         tid();
     }
+    frame_op_begin();
     f->parent = dbg_top;
     dbg_top = f;
+    frame_op_end();
     dbg_depth++;
 }
 
 AUK_API void auk_dbg_leave(AukDbgFrame *f) {
+    frame_op_begin();
     dbg_top = f->parent;
+    frame_op_end();
     dbg_depth--;
 }
 
@@ -1333,7 +1419,9 @@ void auk__dbg_save(void **top, int64_t *depth) {
 }
 
 void auk__dbg_restore(void *top, int64_t depth) {
+    frame_op_begin();
     dbg_top = top;
+    frame_op_end();
     dbg_depth = depth;
 }
 
@@ -1608,6 +1696,8 @@ static void handle_line(const char *line) {
         if (!st_stopped) {
             st_pause_req = true;
             rearm();
+        } else if (st_qlen > 0 || st_serving) {
+            st_pause_after = st_qlen + (st_serving ? 1 : 0);
         }
         pthread_mutex_unlock(&st_lock);
         reply(&c, "ok", "");
@@ -1663,7 +1753,9 @@ static void *dbg_reader(void *arg) {
     pthread_mutex_lock(&st_lock);
     st_running = true;
     st_stopped = false;
+    atomic_store(&st_halt, false);
     st_pause_req = false;
+    st_pause_after = 0;
     st_stepping = false;
     st_epoch++;
     atomic_store(&auk_dbg_armed, 0);
@@ -1810,6 +1902,7 @@ AUK_API void auk_dbg_init(const char *text, const AukShowFn *shows, const void *
         }
         return;
     }
+    auk__wire_no_sigpipe(fd);
     /* under a debugger, output shows up as it is written (it goes to a pipe) */
     setvbuf(stdout, NULL, _IOLBF, 0);
     dbg_info = parse_info(text, shows, kids);
