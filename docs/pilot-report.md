@@ -272,10 +272,80 @@ Deferred, with a recommendation:
 - **11–13: performance** (string `+=`, moving out of containers, RC on reads, double boxing) are
   codegen/runtime work tracked in 2d, not language changes.
 
+## Phase 3
+
+### 3a: types and module loading
+
+| Rust (non-test lines) | Auk (`compiler/src/`) |
+|---|---|
+| `types.rs` (535) | `types.auk` (479, with the two unit tests as `test` blocks) |
+| `resolve.rs` (498) | `resolve.auk` (532, with the manifest test) |
+| `std::path`/`fs` bits, `cfg!(target_os)` | `paths.auk` (~170) |
+| `check.rs` `visit_item_exprs`/`visit_expr`, `check/expr.rs` `as_path` | `visit.auk` (161) |
+| `units.rs` `Units` ops (~60) | `units.auk` (+48) |
+| `dump.rs` resolve mode (+260) | `dump.auk` (+250), `main.auk` |
+
+The oracle is `auk dump resolve` (self-host-plan.md, Phase 3). `scripts/diff_resolve.sh`:
+**254 files, 0 differ**, load diagnostics included (E0100, E0101 and parse errors in
+submodules, from the corpus and `compiler/tests/resolve/`). It was at zero on the first full run;
+the only bug during the port was the shadowing pitfall below. `auk test compiler` runs the
+ported unit tests (4 pass). `diff_tokens`/`diff_ast` stay at 0 (254 files).
+
+**Timing** (`scripts/pilot_time.sh 5 20`, now with a `resolve` row; best of 5; the machine was
+shared with other agents' builds, so the absolute numbers are higher than the 2e table, the
+ratios match it):
+
+| measure | Rust | Auk | Auk / Rust |
+|---|---|---|---|
+| lex, in-process (per pass) | 19.1 ms | 52.8 ms | 2.76x |
+| lex + parse, in-process | 52.2 ms | 114.5 ms | 2.19x |
+| resolve (load each file's program), in-process | 839 ms | 1741 ms | **2.07x** |
+| resolve + dump, whole process | 970 ms | 1909 ms | 1.97x |
+
+A resolve pass loads 119 programs, each re-parsing the prelude (core is 134 items) and the
+file's whole project and dependencies, so it is parsing: a `sample` of the Auk binary shows
+`load_source` -> `add_module` -> `parse` and the lexer under nearly every stack, and nothing of the
+loader's own (path handling, `realpath`, directory listing, map updates) above a few percent.
+The ratio is the parser's.
+
+### Gaps found
+
+1. **No file embedding** (the 2c gap) now matters for the front end: Rust compiles the prelude
+   in (`include_str!`); the Auk port reads `src/prelude/*.auk` at start-up from
+   `$AUK_PRELUDE_DIR` or the checkout above the binary. Fine for diffing; an installed Auk
+   compiler needs embedding (or a generated module of string constants).
+2. **No `canonicalize`, current directory or OS name in the library.** The loader needs
+   `Path::canonicalize` (project lookup, `same_file`), the current directory (the dump's relative
+   paths) and `cfg!(target_os)` (`[link] macos`/`linux`). `paths.auk` binds C `realpath` and
+   `uname` through FFI, so `compiler/` declares `effects = ["ffi"]` and every loading function
+   `uses ffi`. Small core additions would remove that: `fs.canonical(path): str?`,
+   `env.cwd(): str`, `env.os(): str`.
+3. **`Err` has no error code.** Diagnostics quote Rust's `io::Error` (`No such file or directory
+   (os error 2)`); the runtime keeps `errno` in `AukErr.code` but Auk can only `show` an `Err`,
+   so `paths.io_error` maps the `strerror` text back to the number for the usual read errors.
+4. **Pitfall: a module function silently takes over a core method of the same signature.**
+   `paths.auk` had `pub fn starts_with(p: str, base: str): bool` (Rust's `Path::starts_with`);
+   inside that module every `s.starts_with("/")` then called it instead of core's, recursing
+   until `panic: stack overflow`. This is the spec's rule (a module's own names shadow core's),
+   so not a bug, but nothing warns. The port renamed them (`is_under`, `strip_base`). A warning
+   when a module function shadows a core function with the same parameter types would catch it.
+5. **Collecting visitors.** Rust's visitors take an `FnMut` that pushes into a captured `Vec`;
+   an Auk closure can't update a captured variable, so `visit_expr` pushes every expression onto
+   a `var [ast.Expr]` (one retain per node), and the caller walks the list. `(var S, Expr) => ()`
+   callbacks would also work; the list is simpler and was fast enough here.
+6. Smaller: Rust's `BTreeMap`s are Auk maps (insertion order) iterated through
+   `sorted_keys(m)`; Rust's `read_file(f).ok()` can't be `read_file(f) else none` (the
+   fallback must be a `T`: E0201), so it is a `match`; `Ty::units()` is
+   `units_of` so that it doesn't read like the `units` module.
+
+No compiler or runtime bug blocked the port; no compiler or runtime change was needed.
+
 ## Reproduce
 
 ```
-scripts/diff_tokens.sh        # tokens: 221 files, 0 differ
-scripts/diff_ast.sh           # ast: 221 files, 0 differ
-scripts/pilot_time.sh 7 20    # the table above
+scripts/diff_tokens.sh        # tokens: 254 files, 0 differ
+scripts/diff_ast.sh           # ast: 254 files, 0 differ
+scripts/diff_resolve.sh       # resolve: 254 files, 0 differ
+scripts/pilot_time.sh 7 20    # the tables above
+auk test compiler             # the ported unit tests
 ```

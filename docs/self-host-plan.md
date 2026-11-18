@@ -240,8 +240,42 @@ Gaps for Phase 4, found doing 2c:
 Auk compiler lives in `compiler/`, built by the Rust `auk` (stage 0). Pipeline order, each
 step diffed against the golden corpus before the next starts:
 
-- [ ] Shared: `diag.rs` (385) diagnostics + fix-its, `json.rs` (434), `types.rs` (554)
-- [ ] `resolve.rs` (578)
+- [ ] Shared: `diag.rs` (385) diagnostics + fix-its, `json.rs` (434), `types.rs` (554).
+      `types.rs` done (3a): `compiler/src/types.auk`. `diag.rs` so far only `Span`/`Diag`/`Fix`
+      and `FileDiag`; rendering (`render`, the code table) and `json.rs` come with the checker's
+      diagnostics gate.
+- [x] `resolve.rs` (578): `compiler/src/resolve.auk` (3a). Oracle `auk dump resolve <file>`
+      (`src/dump.rs`, unit test `dump::tests::resolve_dump`): load as `auk check` does
+      (`load_in_package`), print packages (deps, effects, links), modules in load order with
+      their children, each non-core module's items with full paths, and every module path a
+      module mentions (`Program::first_segment`, then `child`) with the module it reaches; or the
+      load diagnostics. `scripts/diff_resolve.sh`: **254 files, 0 differ** (E0100 missing
+      dependencies, E0101 collisions and parse errors in submodules included;
+      `compiler/tests/resolve/` adds two projects with installed `.raft/` deps, folder modules,
+      a file and a folder of the same name, and `[link]` per OS). Timing: see pilot-report.md,
+      "Phase 3".
+
+  **What the checker port (3b) builds on** (all in `compiler/src/`, same names as Rust):
+  - `types.auk`: `Ty` (a recursive enum; ids are `int`s: `Named(d, args)`, `Param(p)`, `Any(s)`,
+    `Var(v)`; a unit is its canonical `[(str, int)]`), `TypeDef`/`TypeDefKind`/`FieldDef`/
+    `VariantDef`/`ShapeDef`/`ShapeMethod`/`Builtin`/`TypeParam`, `Defs { types, shapes, params }`
+    with `fields`, `variants`, `is_enum`, `subst_of`, `show`, `is_err`; `Infer { vars, trail }`
+    with `fresh`/`snapshot`/`rollback`/`shallow`/`resolve`/`unify`/`try_unify`/`can_unify`, all
+    taking `var Infer`. Rust's `walk(|t| yes |= ..)` is `any_ty(t, pred)`; `Ty::units()` is
+    `units_of` (a fn named like the `units` module would read as a path).
+  - `units.auk`: `combine`, `pow`, `root`, `exponent_hint`, `text` (Display) next to `parse`.
+  - `resolve.auk`: `Program { pkgs, mods, root, focus, core_pkg, core_root }`, `Module { pkg,
+    path, file, src, ast, children }`, `Package`, `first_segment`/`child`/`name`/`is_core`,
+    `load`/`load_source`/`load_in_package`/`source_of`, `parse_manifest`. Everything that reads
+    files takes a `Sources` (prelude texts, `with_sources` overrides, the OS): the prelude is read
+    from `src/prelude/` at start-up (`$AUK_PRELUDE_DIR`, or found upward from the binary) because
+    Auk can't embed files; see the gap below. Rust's `BTreeMap` iteration is `sorted_keys(m)`.
+  - `visit.auk`: `visit_item_exprs`/`visit_expr` (check.rs) push every expression, pre-order,
+    onto a `var [ast.Expr]`; `as_path` (check/expr.rs).
+  - `paths.auk`: `std::path` on `str` (`join`, `parent`, `file_stem`, `extension`, component
+    order, `is_under`/`strip_base`), `canonicalize`/`cwd` (C `realpath`) and `os` (C `uname`), so
+    `compiler/` declares `effects = ["ffi"]`.
+  - `diag.auk`: `FileDiag`, and `FileFails { Many([FileDiag]) }` as the program-level error.
 - [ ] `check.rs` (1943), `check/expr.rs` (3657), `check/pat.rs` (425), `check/shapes.rs` (629),
       `patterns.rs` (901) exhaustiveness
 - [ ] `effects.rs` (647), `units.rs` (267), `holes.rs` (690)
@@ -250,7 +284,9 @@ step diffed against the golden corpus before the next starts:
       `lower/pat.rs` (342), `progen.rs` (2167), `print.rs` (581)
 - [ ] Diff gates: tokens → AST → diagnostics (codes, messages, spans, fix-its) for every file,
       including `tests/errors/` and `docs/errors/` examples → MIR text.
-- [ ] Prelude (`src/prelude/*.auk`) is embedded the same way.
+- [ ] Prelude (`src/prelude/*.auk`) is embedded the same way. For now `resolve.auk` reads it
+      from disk (`resolve.sources(dir)`); needs the embedding gap of 2c (or a generated module of
+      string constants) before the Auk compiler can be installed on its own.
 
 **Language freeze** from here to the end of Phase 4: no language changes (or each one is made in
 both compilers and both golden outputs). Bug fixes allowed, made in both.
