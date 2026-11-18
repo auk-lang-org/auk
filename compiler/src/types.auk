@@ -107,8 +107,19 @@ pub fn has_error(t: Ty): bool = any_ty(t, x => x is Ty.Error)
 /// Is `pred` true of this type or any type inside it? (Rust's `walk` with a flag.)
 pub fn any_ty(t: Ty, pred: (Ty) => bool): bool {
   if pred(t) { return true }
-  for c in children(t) {
-    if any_ty(c, pred) { return true }
+  // `children(t)` without building the list (the checker asks this of every type it records)
+  match t {
+    List(x) | Opt(x) | Task(x) | Measured(x, _) | Mut(x) => any_ty(x, pred)
+    Map(a, b) | Res(a, b) => any_ty(a, pred) || any_ty(b, pred)
+    Tuple(ts) | Named(_, ts) => any_all(ts, pred)
+    Fn(ps, r) => any_all(ps, pred) || any_ty(r, pred)
+    _ => false
+  }
+}
+
+fn any_all(ts: [Ty], pred: (Ty) => bool): bool {
+  for x in ts {
+    if any_ty(x, pred) { return true }
   }
   false
 }
@@ -375,13 +386,17 @@ pub fn shallow(inf: Infer, t: Ty): Ty {
 }
 
 /// Substitute every bound variable, deeply.
-pub fn resolve(inf: Infer, t: Ty): Ty = map_ty(t, x => match x {
-  Var(v) => match inf.vars[v] {
-    some(b) => resolve(inf, b)
-    none => Ty.Var(v)
-  }
-  x => x
-})
+pub fn resolve(inf: Infer, t: Ty): Ty {
+  // most types have no variable: keep them as they are instead of rebuilding them
+  if !has_vars(t) { return t }
+  map_ty(t, x => match x {
+    Var(v) => match inf.vars[v] {
+      some(b) => resolve(inf, b)
+      none => Ty.Var(v)
+    }
+    x => x
+  })
+}
 
 fn bind(inf: var Infer, v: int, t: Ty) {
   inf.vars[v] = t

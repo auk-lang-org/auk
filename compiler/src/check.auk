@@ -164,6 +164,8 @@ pub struct Checker {
   /// `var`, or (for a parameter) where to insert `var `. Keyed by (module, local).
   let_fixes: {(int, int): diag.Span},
   param_fixes: {(int, int): diag.Span},
+  /// Each module's source split into lines (Rust's `src.lines()`, computed once).
+  src_lines: [[str]],
 }
 
 /// The call, show and `any`-conversion nodes of one body (with the module they live in).
@@ -235,9 +237,8 @@ pub fn can_unify(c: var Checker, a: types.Ty, b: types.Ty): bool = types.can_uni
 
 /// Source text of a span in the current module.
 pub fn text(c: Checker, span: diag.Span): str {
-  let src = c.prog.mods[c.cur_module()].src
   var out: [str] = []
-  for i, line in lines(src) {
+  for i, line in c.src_lines[c.cur_module()] {
     let ln = i + 1
     if ln < span.line || ln > span.end_line { continue }
     let chars = line.chars()
@@ -444,6 +445,7 @@ fn new_checker(prog: resolve.Program): Checker {
     tables.push(typed.new_tables())
   }
   let root = prog.root
+  let src_lines = prog.mods.map(md => lines(md.src))
   Checker {
     prog,
     defs: types.new_defs(),
@@ -471,6 +473,7 @@ fn new_checker(prog: resolve.Program): Checker {
     vtables: [],
     let_fixes: {},
     param_fixes: {},
+    src_lines,
   }
 }
 
@@ -666,7 +669,7 @@ fn ffi_allowed(c: var Checker, m: int, at: diag.Span): bool {
 
 /// The span of the string literal that ends an item spanning `end` (its C prototype or C type).
 fn ffi_str_span(c: Checker, m: int, end: diag.Span): diag.Span {
-  let ls = lines(c.prog.mods[m].src)
+  let ls = c.src_lines[m]
   if end.end_line < 1 || end.end_line > ls.len() { return end }
   let cs = ls[end.end_line - 1].chars()
   let stop = min(max(end.end_col - 1, 0), cs.len())
@@ -1857,7 +1860,7 @@ fn span_of(t: ast.Type?): diag.Span? = match t {
 
 /// The empty span just after the `)` that closes a clause's parameter list.
 fn params_close(c: Checker, m: int, cl: ast.FnClause): diag.Span? {
-  let ls = lines(c.prog.mods[m].src)
+  let ls = c.src_lines[m]
   let ln = cl.name.span.line
   if ln < 1 || ln > ls.len() { return none }
   let chars = ls[ln - 1].chars()
@@ -2054,13 +2057,15 @@ fn finish_body(c: var Checker) {
       }
     }
   }
-  let cx = c.pop_cx()
+  // `cx` is the only owner of the body's tables: update them in place
+  var cx = c.pop_cx()
   let m = cx.module
   let inf = cx.inf
-  var t = cx.t
   var unresolved: [int] = []
-  for n in t.types.keys() {
-    var ty = types.resolve(inf, t.types[n])
+  for n in cx.t.types.keys() {
+    let ty0 = cx.t.types[n]
+    if !ty0.has_vars() { continue }
+    var ty = types.resolve(inf, ty0)
     if ty.has_vars() {
       ty = types.map_ty(ty, x => match x {
         Var(_) => types.Ty.Error
@@ -2068,53 +2073,57 @@ fn finish_body(c: var Checker) {
       })
       unresolved.push(n)
     }
-    t.types[n] = ty
+    cx.t.types[n] = ty
   }
-  for n in t.calls.keys() {
-    let call = t.calls[n]
-    t.calls[n] = typed.Call { callee: fix_callee(inf, call.callee), ..call }
+  for n in cx.t.calls.keys() {
+    let call = cx.t.calls[n]
+    cx.t.calls[n] = typed.Call { callee: fix_callee(inf, call.callee), ..call }
   }
-  for n in t.shows.keys() {
-    match t.shows[n] {
-      Shape(s, i, st) => t.shows[n] = typed.Callee.Shape(s, i, fix_ty(inf, st))
+  for n in cx.t.shows.keys() {
+    match cx.t.shows[n] {
+      Shape(s, i, st) => cx.t.shows[n] = typed.Callee.Shape(s, i, fix_ty(inf, st))
       _ => {}
     }
   }
-  for n in t.variants.keys() {
-    let v = t.variants[n]
-    t.variants[n] = typed.VariantRef { args: fix_all(inf, v.args), ..v }
+  for n in cx.t.variants.keys() {
+    let v = cx.t.variants[n]
+    cx.t.variants[n] = typed.VariantRef { args: fix_all(inf, v.args), ..v }
   }
-  for n in t.names.keys() {
-    match t.names[n] {
-      Fn(f, targs) => t.names[n] = typed.NameRef.Fn(f, fix_all(inf, targs))
-      Variant(v) => t.names[n] = typed.NameRef.Variant(typed.VariantRef { args: fix_all(inf, v.args), ..v })
+  for n in cx.t.names.keys() {
+    match cx.t.names[n] {
+      Fn(f, targs) => cx.t.names[n] = typed.NameRef.Fn(f, fix_all(inf, targs))
+      Variant(v) => cx.t.names[n] = typed.NameRef.Variant(typed.VariantRef { args: fix_all(inf, v.args), ..v })
       _ => {}
     }
   }
-  for n in t.struct_lits.keys() {
-    let s = t.struct_lits[n]
-    t.struct_lits[n] = typed.StructLit { args: fix_all(inf, s.args), ..s }
+  for n in cx.t.struct_lits.keys() {
+    let s = cx.t.struct_lits[n]
+    cx.t.struct_lits[n] = typed.StructLit { args: fix_all(inf, s.args), ..s }
   }
-  for n in t.closures.keys() {
-    let cl = t.closures[n]
-    t.closures[n] = typed.ClosureInfo { params: fix_all(inf, cl.params), ret: fix_ty(inf, cl.ret), ..cl }
+  for n in cx.t.closures.keys() {
+    let cl = cx.t.closures[n]
+    cx.t.closures[n] = typed.ClosureInfo { params: fix_all(inf, cl.params), ret: fix_ty(inf, cl.ret), ..cl }
   }
-  for n in t.fails.keys() {
-    match t.fails[n] {
-      TypedToErr(x) => t.fails[n] = typed.FailKind.TypedToErr(fix_ty(inf, x))
+  for n in cx.t.fails.keys() {
+    match cx.t.fails[n] {
+      TypedToErr(x) => cx.t.fails[n] = typed.FailKind.TypedToErr(fix_ty(inf, x))
       _ => {}
     }
   }
-  for n in t.tries.keys() {
-    let tr = t.tries[n]
+  for n in cx.t.tries.keys() {
+    let tr = cx.t.tries[n]
     match tr.conv {
-      ToErr(from) => t.tries[n] = typed.TryInfo { kind: tr.kind, conv: typed.ErrConv.ToErr(fix_ty(inf, from)) }
+      ToErr(from) => cx.t.tries[n] = typed.TryInfo { kind: tr.kind, conv: typed.ErrConv.ToErr(fix_ty(inf, from)) }
       _ => {}
     }
   }
-  for n in t.err_payload_pats.keys() { t.err_payload_pats[n] = fix_ty(inf, t.err_payload_pats[n]) }
+  for n in cx.t.err_payload_pats.keys() { cx.t.err_payload_pats[n] = fix_ty(inf, cx.t.err_payload_pats[n]) }
   for l in cx.local_start..c.tables[m].locals.len() {
-    c.tables[m].locals[l].ty = fix_ty(inf, c.tables[m].locals[l].ty)
+    let ty = c.tables[m].locals[l].ty
+    if ty.has_vars() {
+      let fixed = fix_ty(inf, ty)
+      c.tables[m].locals[l].ty = fixed
+    }
   }
   if unresolved.len() > 0 && c.errs.len() == 0 {
     // report at the first (in source order) expression whose type is unknown
@@ -2124,7 +2133,7 @@ fn finish_body(c: var Checker) {
       diag.new("E0360", span, "can't infer the type of this expression").note("add a type annotation, e.g. `let xs: [int] = []`"),
     )
   }
-  merge_tables(&c.tables[m], t)
+  merge_tables(&c.tables[m], cx.t)
 }
 
 /// `tm.x.extend(t.x)` for every side table but `locals` (Rust's tail of `finish_body`).

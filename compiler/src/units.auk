@@ -150,45 +150,46 @@ pub fn erase(tp: var typed.TypedProgram) {
   }
   for k in 0..tp.consts.len() { tp.consts[k].ty = e(tp.consts[k].ty) }
   for m in 0..tp.tables.len() {
-    var t = tp.tables[m]
-    for n in t.types.keys() { t.types[n] = e(t.types[n]) }
-    t.locals = t.locals.map(l => typed.LocalInfo { ty: e(l.ty), ..l })
-    for n in t.variants.keys() { t.variants[n] = vref(t.variants[n]) }
-    for n in t.calls.keys() {
-      let cl = t.calls[n]
-      t.calls[n] = typed.Call { callee: callee(cl.callee), args: cl.args }
+    // in place: a copy of the module's tables would copy every map
+    for n in tp.tables[m].types.keys() {
+      if tp.tables[m].types[n].has_units() { tp.tables[m].types[n] = types.erase_units(tp.tables[m].types[n]) }
     }
-    for n in t.shows.keys() { t.shows[n] = callee(t.shows[n]) }
-    for n in t.names.keys() {
-      match t.names[n] {
-        Fn(func, type_args) => t.names[n] = typed.NameRef.Fn(func, all(type_args))
-        Variant(v) => t.names[n] = typed.NameRef.Variant(vref(v))
+    tp.tables[m].locals = tp.tables[m].locals.map(l => typed.LocalInfo { ty: e(l.ty), ..l })
+    for n in tp.tables[m].variants.keys() { tp.tables[m].variants[n] = vref(tp.tables[m].variants[n]) }
+    for n in tp.tables[m].calls.keys() {
+      let cl = tp.tables[m].calls[n]
+      tp.tables[m].calls[n] = typed.Call { callee: callee(cl.callee), args: cl.args }
+    }
+    for n in tp.tables[m].shows.keys() { tp.tables[m].shows[n] = callee(tp.tables[m].shows[n]) }
+    for n in tp.tables[m].names.keys() {
+      match tp.tables[m].names[n] {
+        Fn(func, type_args) => tp.tables[m].names[n] = typed.NameRef.Fn(func, all(type_args))
+        Variant(v) => tp.tables[m].names[n] = typed.NameRef.Variant(vref(v))
         _ => {}
       }
     }
-    for n in t.struct_lits.keys() {
-      let s = t.struct_lits[n]
-      t.struct_lits[n] = typed.StructLit { args: all(s.args), ..s }
+    for n in tp.tables[m].struct_lits.keys() {
+      let s = tp.tables[m].struct_lits[n]
+      tp.tables[m].struct_lits[n] = typed.StructLit { args: all(s.args), ..s }
     }
-    for n in t.closures.keys() {
-      let c = t.closures[n]
-      t.closures[n] = typed.ClosureInfo { params: all(c.params), ret: e(c.ret), ..c }
+    for n in tp.tables[m].closures.keys() {
+      let c = tp.tables[m].closures[n]
+      tp.tables[m].closures[n] = typed.ClosureInfo { params: all(c.params), ret: e(c.ret), ..c }
     }
-    for n in t.fails.keys() {
-      match t.fails[n] {
-        TypedToErr(x) => t.fails[n] = typed.FailKind.TypedToErr(e(x))
+    for n in tp.tables[m].fails.keys() {
+      match tp.tables[m].fails[n] {
+        TypedToErr(x) => tp.tables[m].fails[n] = typed.FailKind.TypedToErr(e(x))
         _ => {}
       }
     }
-    for n in t.tries.keys() {
-      let tr = t.tries[n]
+    for n in tp.tables[m].tries.keys() {
+      let tr = tp.tables[m].tries[n]
       match tr.conv {
-        ToErr(from) => t.tries[n] = typed.TryInfo { kind: tr.kind, conv: typed.ErrConv.ToErr(e(from)) }
+        ToErr(from) => tp.tables[m].tries[n] = typed.TryInfo { kind: tr.kind, conv: typed.ErrConv.ToErr(e(from)) }
         _ => {}
       }
     }
-    for n in t.err_payload_pats.keys() { t.err_payload_pats[n] = e(t.err_payload_pats[n]) }
-    tp.tables[m] = t
+    for n in tp.tables[m].err_payload_pats.keys() { tp.tables[m].err_payload_pats[n] = e(tp.tables[m].err_payload_pats[n]) }
   }
   for i in 0..tp.instances.len() {
     var inst = tp.instances[i]

@@ -2,8 +2,10 @@
 # Time the Rust front end against its Auk port (compiler/) on the golden corpus: lexing alone,
 # then lexing + parsing, each in-process (`--time`, file reading excluded, `--repeat` passes
 # per run) and as whole-process wall time with the dump written to /dev/null; then loading every
-# file's program (`resolve`: the prelude, the project, its dependencies), REPEAT/10 passes per
-# run. Best of RUNS.
+# file's program (`resolve`: the prelude, the project, its dependencies), and loading +
+# type-checking it (`check`: check.rs, without patterns/effects), REPEAT/10 passes per run; the
+# checker alone is the difference. Best of RUNS. tests/checker/ (small error cases) is left out
+# so the numbers stay comparable with the earlier tables.
 # Usage: scripts/pilot_time.sh [RUNS] [REPEAT]
 
 source "$(dirname "$0")/pilot_common.sh"
@@ -11,7 +13,7 @@ RUNS="${1:-5}"
 REPEAT="${2:-20}"
 build_both
 FILES=()
-while read -r f; do FILES+=("$f"); done < <(find tests examples packages src/prelude -name '*.auk' -not -path '*/.raft/*' | LC_ALL=C sort)
+while read -r f; do FILES+=("$f"); done < <(find tests examples packages src/prelude -name '*.auk' -not -path '*/.raft/*' -not -path 'tests/checker/*' | LC_ALL=C sort)
 BYTES=$(cat "${FILES[@]}" | wc -c | tr -d ' ')
 echo "corpus: ${#FILES[@]} files, $BYTES bytes; best of $RUNS runs"
 
@@ -32,16 +34,19 @@ ratio() { awk -v a="$1" -v b="$2" 'BEGIN { if (b > 0) printf "%.2fx", a / b; els
 
 # Rust and Auk runs alternate, so a busy machine slows both alike; each keeps its best.
 printf '%-34s %12s %12s %8s\n' "measure" "Rust" "Auk" "Auk/Rust"
-for mode in tokens ast resolve; do
+for mode in tokens ast resolve check; do
   r="" a="" n="$REPEAT"
-  if [ "$mode" = resolve ]; then n=$(((REPEAT + 9) / 10)); fi
+  if [ "$mode" = resolve ] || [ "$mode" = check ]; then n=$(((REPEAT + 9) / 10)); fi
   for _ in $(seq "$RUNS"); do
     r=$(min "$r" "$(one_us "$AUK" dump "$mode" --quiet --time --repeat "$n" "${FILES[@]}")")
     a=$(min "$a" "$(one_us "$PORT" "$mode" --quiet --time --repeat "$n" "${FILES[@]}")")
   done
   printf '%-34s %10s us %10s us %8s\n' "$mode, in-process (per pass)" "$r" "$a" "$(ratio "$a" "$r")"
+  eval "R_$mode=$r A_$mode=$a"
 done
-for mode in tokens ast resolve; do
+r=$((R_check - R_resolve)) a=$((A_check - A_resolve))
+printf '%-34s %10s us %10s us %8s\n' "check alone (difference)" "$r" "$a" "$(ratio "$a" "$r")"
+for mode in tokens ast resolve typed; do
   r="" a=""
   for _ in $(seq "$RUNS"); do
     r=$(min "$r" "$(one_ms "$AUK" dump "$mode" "${FILES[@]}")")
