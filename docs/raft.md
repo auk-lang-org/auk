@@ -29,6 +29,7 @@
 | `log` | leveled logfmt / JSON-lines logging to stderr through a `Logger` value (depends on `json`) | none |
 | `xml` | XML 1.0 `parse` into an `Element` tree, queries (`child`, `all`, `descendants`, `text`), `str`/`pretty` writers | none |
 | `audio` | decode/encode WAV, AIFF/AIFC, AU, FLAC; `probe`; resample, remix, filters, dynamics, time stretch, EBU R128 loudness, spectra; ffmpeg-style `apply("highpass=f=80,loudnorm")` | none |
+| `llvm` | LLVM 23's C API generated from a list (`gen/bind.txt`): IR, builder, debug info, target machines and object files, bitcode, linker, passes, ORC LLJIT; `llvm.kit` helpers | `ffi` |
 
 ## Project layout
 ```

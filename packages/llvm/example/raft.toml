@@ -1,0 +1,7 @@
+[package]
+name = "llvm_add"
+version = "0.1.0"
+effects = ["ffi", "fs", "proc"]
+
+[deps]
+llvm = { path = ".." }
