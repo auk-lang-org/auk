@@ -73,6 +73,8 @@ pub struct Generated {
 /// The program as MIR. In `Mode::Test` the entry point runs the root package's tests.
 pub fn generate(tp: &TypedProgram, mode: Mode, trace: Trace) -> Result<Generated, String> {
     let imprints = eval_imprints(tp)?;
+    // AUK_TIME_LOWER=1: the time of lowering (imprints excluded), as the port's `ir --time`
+    let t0 = std::time::Instant::now();
     let mut g = Gen::new(tp, mode);
     g.imprints = imprints;
     g.trace = Trace { debug: false, lines: false, ..trace };
@@ -167,6 +169,9 @@ pub fn generate(tp: &TypedProgram, mode: Mode, trace: Trace) -> Result<Generated
     g.prog.entry = Some(entry);
     let holes = g.holes.clone();
     let dbg = std::mem::take(&mut g.dbg_info);
+    if env::var_os("AUK_TIME_LOWER").is_some() {
+        eprintln!("time: {} us", t0.elapsed().as_micros());
+    }
     Ok(Generated { prog: g.prog, dbg, holes, tests: ntests })
 }
 
