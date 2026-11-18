@@ -71,13 +71,17 @@ pub fn is_whitespace(c: char): bool {
 }
 
 /// Rust's `char::is_alphabetic`, exact for ASCII; outside ASCII an approximation (letters are
-/// assumed, except whitespace, Latin-1 punctuation and the general punctuation block).
+/// assumed, except whitespace, Latin-1 punctuation, the general punctuation block and the
+/// Specials, with U+FFFD, the replacement character of undecodable bytes).
 pub fn is_alphabetic(c: char): bool {
   let n = int(c)
   if n < 0x80 { return (n >= 0x61 && n <= 0x7a) || (n >= 0x41 && n <= 0x5a) }
   if n < 0xc0 { return n == 0xaa || n == 0xb5 || n == 0xba }
   if n == 0xd7 || n == 0xf7 { return false }
-  !is_whitespace(c) && !(n >= 0x2000 && n <= 0x2bff) && !(n >= 0x3000 && n <= 0x303f)
+  !is_whitespace(c) &&
+    !(n >= 0x2000 && n <= 0x2bff) &&
+    !(n >= 0x3000 && n <= 0x303f) &&
+    !(n >= 0xfff0 && n <= 0xffff)
 }
 
 pub fn is_ascii_digit(c: char): bool = c >= '0' && c <= '9'
