@@ -69,3 +69,20 @@ run_cmd() {
   { cat "$o.stdout"; echo "-- stderr"; cat "$o.stderr"; echo "-- exit $rc"; } > "$o"
   rm -f "$o.stdout" "$o.stderr"
 }
+# The back end's corpus (Phase 4): every program `auk ir` takes (golden.sh's `ir` mode: it checks
+# clean and has a `main`), plus compiler/tests/backend/ (small programs for each MIR construct).
+backend_corpus() {
+  { find tests examples packages src/prelude compiler -name '*.auk' -not -path '*/.raft/*' \
+      -not -path 'compiler/tests/backend/*' 2>/dev/null \
+      | while read -r f; do
+          if grep -Eq '^(pub )?(async )?fn main\(' "$f" \
+              && "$AUK" check "$f" --json 2>/dev/null | head -1 | grep -q '"ok":true'; then
+            echo "$f"
+          fi
+        done
+    find compiler/tests/backend -name '*.auk' 2>/dev/null; } | LC_ALL=C sort
+}
+
+# The `auk dump mir` options each back-end program is diffed under: the MIR `auk run`/`ir`
+# compiles, `auk build`'s (release), `auk build -g`'s, a traced run's and a debugger run's.
+BACKEND_VARIANTS=("" "--release" "--release -g" "--trace=json" "--debug")

@@ -6,7 +6,7 @@
 //! The format is a stream of whitespace-separated tokens in prefix form (each node is a tag and
 //! then its children; lists are counted). Strings and byte strings are one token: `'` and the
 //! bytes, with `\` and anything outside `!`..`~` written as `\` and two hex digits. Floats are
-//! their IEEE bits in hex. Records start on their own lines (for reading only). Deterministic:
+//! their IEEE bits (as a signed decimal). Records start on their own lines (for reading only). Deterministic:
 //! maps are written sorted.
 //!
 //! ```text
@@ -219,7 +219,7 @@ fn ex(out: &mut String, e: &Ex) {
         }
         K::Float(x) => {
             w(out, "flt");
-            w(out, format!("{:x}", x.to_bits()));
+            w(out, x.to_bits() as i64);
         }
         K::CStr(b) => {
             w(out, "cs");
@@ -569,7 +569,7 @@ mod tests {
         assert_eq!(d, d2);
         assert!(d.starts_with("auk-mir 1\ntypes "), "{d}");
         // the float literal by its bits; a string with a space and a backslash as one token
-        assert!(d.contains(&format!(" flt {:x} D float", 2.5f64.to_bits())), "{d}");
+        assert!(d.contains(&format!(" flt {} D float", 2.5f64.to_bits() as i64)), "{d}");
         assert!(d.contains("'a\\20b\\5c"), "{d}");
         assert!(d.contains("_twice A D float 1 0 "), "{d}");
         assert!(d.contains("\nentry "), "{d}");

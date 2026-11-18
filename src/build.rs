@@ -839,6 +839,22 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
     // trace flags: anywhere for `test`, before the file for `run`/`ir` (not for `build`, which
     // takes `-g`: debug info)
     let mut debuginfo = false;
+    // `auk ir`'s own options (`--llvm[=LEVEL]`: the LLVM IR instead of the MIR; `--dump`: the
+    // MIR as `auk dump mir` writes it), mixed with the trace flags before the file
+    let mut ir_opts = IrOpts::default();
+    let ir_args;
+    let args = if cmd == "ir" {
+        ir_args = match ir_opts.parse(args) {
+            Ok(rest) => rest,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return 2;
+            }
+        };
+        &ir_args[..]
+    } else {
+        args
+    };
     let (trace, args) = if cmd == "build" {
         debuginfo = args.iter().any(|a| a == "-g");
         (TraceOpts::default(), args.iter().filter(|a| *a != "-g").cloned().collect())
@@ -888,20 +904,6 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
             }
         }
         "run" | "build" | "ir" => {
-            // `auk ir --llvm[=LEVEL]`: the LLVM IR instead of the MIR; `--dump`: the MIR as
-            // `auk dump mir` writes it
-            let mut ir_opts = IrOpts::default();
-            let args = if cmd == "ir" {
-                match ir_opts.parse(&args) {
-                    Ok(rest) => rest,
-                    Err(e) => {
-                        eprintln!("error: {e}");
-                        return 2;
-                    }
-                }
-            } else {
-                args
-            };
             let args = &args[..];
             let [file, rest @ ..] = args else {
                 let flags = match cmd {
