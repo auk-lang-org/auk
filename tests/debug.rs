@@ -15,8 +15,10 @@ use std::time::Duration;
 
 use json::Json;
 
+mod auk_bin;
+
 fn auk_cmd() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_auk"));
+    let mut c = Command::new(auk_bin::auk_bin());
     for v in ["AUK_LEAK_CHECK", "AUK_TRACE", "AUK_DEBUG"] {
         c.env_remove(v);
     }

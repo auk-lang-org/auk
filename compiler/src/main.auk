@@ -66,9 +66,6 @@ environment:
 
 fn usage(): str = USAGE_TEXT.strip_suffix("\n") else USAGE_TEXT
 
-/// The commands of the Rust `auk` that the port doesn't have yet (Phase 5).
-let NOT_PORTED = ["debug", "dap"]
-
 /// The port's dump modes (`compiler <mode>`, or `auk dump <mode>`).
 let MODES = ["tokens", "ast", "resolve", "check", "typed"]
 
@@ -88,6 +85,8 @@ fn main(args: [str]): int! uses fs, env, time, ffi, proc {
     "fmt" => return fmt.run(rest)
     "hatch" => return hatch.run(args[0], cx, rest)
     "dive" => return dive.run(cx, rest)
+    "debug" => return debug.run(args[0], rest)
+    "dap" => return dap.run(args[0])
     "holes" => {
       if rest.len() == 1 { return holes.run(cx, rest[0], false) }
       if rest.len() == 2 && rest[1] == "--json" { return holes.run(cx, rest[0], true) }
@@ -123,10 +122,6 @@ fn main(args: [str]): int! uses fs, env, time, ffi, proc {
     _ => {}
   }
   if MODES.contains(cmd) && rest.len() > 0 { return dev(cx, cmd, rest) }
-  if NOT_PORTED.contains(cmd) {
-    eprint("error: `auk {cmd}` is not in the self-hosted compiler yet (use the Rust `auk`)")
-    return 2
-  }
   eprint(usage())
   2
 }

@@ -21,8 +21,7 @@
 /// stdin, stdout and stderr in files of a private temporary directory instead of pipes, so no
 /// reader threads are needed (Rust waits up to 2 s for pipes a grandchild keeps open; files
 /// don't wait); invalid UTF-8 in the output becomes U+FFFD as in Rust, but a NUL byte ends it.
-/// Protocol and tool errors are `Fail.Msg(text)` (`T!E` needs an enum). The port's driver has
-/// no `debug` yet, so `auk_debug` reports its error.
+/// Protocol and tool errors are `Fail.Msg(text)` (`T!E` needs an enum).
 
 /// Protocol revisions we speak, newest first.
 pub let PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
@@ -627,7 +626,7 @@ extern fn call_get_env(f: ffi.Ptr): ffi.Ptr = "void *(*)(void)"
 
 /// Rust's `env::current_exe()`: this binary's path (macOS `_NSGetExecutablePath`, Linux
 /// `/proc/self/exe`), else `arg0` as given.
-fn current_exe(arg0: str): str uses ffi {
+pub fn current_exe(arg0: str): str uses ffi {
   match ffi.symbol("_NSGetExecutablePath") {
     some(f) => {
       let buf = ffi.alloc(4096)
@@ -644,7 +643,7 @@ fn current_exe(arg0: str): str uses ffi {
 }
 
 /// The C environment (`environ`; macOS `*_NSGetEnviron()`).
-fn environ(): ffi.Ptr uses ffi {
+pub fn environ(): ffi.Ptr uses ffi {
   match ffi.symbol("_NSGetEnviron") {
     some(f) => ffi.read_ptr(call_get_env(f), 0)
     none => match ffi.symbol("environ") {
