@@ -309,6 +309,30 @@ fn missing_libraries_and_symbols_are_named() {
     assert!(!o.status.success(), "linking a missing library succeeded");
 }
 
+/// `ffi.symbol` finds the runtime in this process, as a compiler written in Auk does for the
+/// code it JIT-compiles: in `auk run` (the compiler's process) and in an executable from
+/// `auk build` (which exports the runtime's symbols); runtime functions called by address.
+const SYMBOLS: &str = r#"
+extern fn make_str(f: ffi.Ptr, s: str, n: int): ffi.Ptr = "void *(*)(const char *, int64_t)"
+extern fn str_len(f: ffi.Ptr, s: ffi.Ptr): int = "int64_t (*)(void *)"
+extern fn release(f: ffi.Ptr, p: ffi.Ptr) = "void (*)(void *)"
+
+fn main() uses ffi {
+  let s = make_str(ffi.symbol("auk_str_from_bytes")!, "héllo", 6)
+  print(str_len(ffi.symbol("auk_str_len")!, s))
+  release(ffi.symbol("auk_release")!, s)
+  print("{ffi.symbol("strlen") != none} {ffi.symbol("auk_no_such_symbol") == none}")
+}
+"#;
+
+#[test]
+fn runtime_symbols_by_name() {
+    let main = project("symbols", "\"ffi\"", &[], SYMBOLS);
+    let out = run_ok(&main);
+    assert_eq!(out, "5\ntrue true\n");
+    assert_eq!(build_ok(&main), out);
+}
+
 /// `"(T)"` casts between `ffi.Ptr` and an `extern type`, both ways (no call), in the JIT and built.
 const CASTS: &str = r#"
 extern type Buf = "struct buf *"

@@ -39,6 +39,14 @@ pub extern fn write_i64(p: Ptr, off: int, v: int) uses ffi = "auk_ffi_write_i64 
 pub extern fn write_f64(p: Ptr, off: int, v: float) uses ffi = "auk_ffi_write_f64 +loc"
 pub extern fn write_ptr(p: Ptr, off: int, v: Ptr) uses ffi = "auk_ffi_write_ptr +loc"
 
+extern fn symbol_at(name: str): Ptr uses ffi = "auk_ffi_symbol"
+/// The address of the C symbol `name` in this process (`dlsym(RTLD_DEFAULT, name)`): libc, loaded
+/// libraries, and the Auk runtime (`auk_str_len`, ...), which `auk build` exports. `none` if absent.
+pub fn symbol(name: str): Ptr? uses ffi {
+  let p = symbol_at(name)
+  if is_null(p) { none } else { some(p) }
+}
+
 /// The NUL-terminated C string at `p`, copied (invalid UTF-8 becomes U+FFFD).
 pub extern fn cstr(p: Ptr): str uses ffi = "auk_ffi_cstr +loc"
 /// The `n` bytes at `p`, copied, as ints 0..255.

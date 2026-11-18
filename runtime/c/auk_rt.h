@@ -939,6 +939,7 @@ AUK_API void *auk_ffi_ptr(int64_t addr);
 AUK_API int64_t auk_ffi_addr(const void *p);
 AUK_API AukStr *auk_ffi_ptr_show(const void *p);
 AUK_API void *auk_ffi_alloc(int64_t n, const char *loc);
+AUK_API void *auk_ffi_symbol(const AukStr *name);
 AUK_API void auk_ffi_free(void *p);
 AUK_API int64_t auk_ffi_read_u8(const uint8_t *p, int64_t off, const char *loc);
 AUK_API int64_t auk_ffi_read_i32(const uint8_t *p, int64_t off, const char *loc);

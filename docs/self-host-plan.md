@@ -180,10 +180,12 @@ Gaps for Phase 4, found doing 2c:
       `extern fn value_ptr(v: Value): ffi.Ptr = "(void *)"`, `extern fn value_at(p: ffi.Ptr):
       Value = "(LLVMValueRef)"` (`T?` ↔ NULL too). `llvm.kit.define` uses one instead of a second
       binding of `LLVMOrcLLJITMangleAndIntern` returning `void *`.
-- [ ] `rt_symbols()`: the JIT defines the runtime's addresses as absolute symbols. The Auk
-      compiler needs those addresses in its own process: either export the runtime's symbols from
-      the compiler binary (`-export_dynamic` / `-rdynamic`, then the process generator finds them)
-      or a `dlsym` binding (`RTLD_DEFAULT` is `(void *)-2` on macOS, `0` on Linux).
+- [x] `rt_symbols()`: the JIT defines the runtime's addresses as absolute symbols. The Auk
+      compiler needs those addresses in its own process. Done both ways: `auk build` links with
+      `-export_dynamic` (macOS) / `-rdynamic` (Linux), so ORC's process generator finds the
+      runtime, and `ffi.symbol(name): ffi.Ptr?` is `dlsym(RTLD_DEFAULT, name)` for an explicit
+      table (`llvm.kit.define`). Tested by an `auk build` program calling `auk_str_from_bytes`,
+      `auk_str_len` and `auk_release` by address (`tests/ffi.rs`).
 - [ ] Embedding files in the binary: `rtlink.rs` and `build.rs` `include_bytes!` `auk_rt.bc` and
       `libauk_rt.a`. Auk has no equivalent (`imprint` is pure, so it can't read files).
 - [ ] `[link] libs` can't ask `llvm-config`. (Per-platform libraries are done: `[link] macos`
@@ -305,7 +307,8 @@ both compilers and both golden outputs). Bug fixes allowed, made in both.
       (226, linking `auk_rt.bc`), `mod.rs` (252), `backend.rs` (52), `exec.rs` (138)
 - [ ] Object emission + linking (`build.rs`, 880): still via `cc` for now (Phase 7 removes it).
 - [ ] ORC JIT (`jit.rs`, 76): runtime symbols resolve from the compiler's own process (it links
-      the C runtime), so no generated symbol table.
+      the C runtime, and `auk build` exports its symbols), so no generated symbol table: the
+      process search generator (`llvm.kit.jit`) finds them, or `ffi.symbol` + `llvm.kit.define`.
 - [ ] Driver: `main.rs` (214) — `run`, `build`, `check`, `test`, `ir`; same flags and exit codes.
 - [ ] Diff gate: program output identical for the whole corpus; `auk ir` identical; `bench/perf`
       generated code within ±5% (same MIR → same IR should make this free).

@@ -9,7 +9,7 @@ parameters are out-parameters, `T?` of a pointer is NULL-able, `+free(fn)` frees
 first, as an `ffi.Ptr`: JIT-compiled code, `dlsym` results), and a `"(T)"` prototype casts between `ffi.Ptr` and an `extern type` (no call). Differences from the text below: a `str` argument passes its own bytes (Auk
 strings are already NUL-terminated, so no copy; an embedded NUL ends the C string), and the
 helpers live in `runtime/c/ffi.c`. `ffi.null` is a constant; `null`, `is_null`, `addr`, `ptr`,
-`offset` are pure, the memory helpers `uses ffi`. Phase 3 (the `sqlite` package) and the LSP
+`offset` are pure, the memory helpers `uses ffi`. `ffi.symbol(name): Ptr?` is `dlsym(RTLD_DEFAULT, name)`; `auk build` links executables with `-export_dynamic`/`-rdynamic` (and the `auk` binary on Linux with `-rdynamic`) so the runtime's `auk_*` symbols are found. Phase 3 (the `sqlite` package) and the LSP
 part of phase 4 remain.
 
 Unblocks `sqlite` (docs/packages-next.md #2) and later `crypto`. Decision (2026-11-17): a general

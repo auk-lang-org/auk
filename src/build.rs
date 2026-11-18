@@ -34,6 +34,11 @@ pub const LINK_LIBS: &[&str] = if cfg!(target_os = "macos") {
     &["-ldl", "-lpthread"]
 };
 
+/// Export the executable's symbols (the runtime's `auk_*` among them) to `dlsym`, so
+/// `ffi.symbol("auk_str_len")` finds them: a compiler written in Auk hands them to the code it
+/// JIT-compiles.
+pub const EXPORT_DYNAMIC: &str = if cfg!(target_os = "macos") { "-Wl,-export_dynamic" } else { "-rdynamic" };
+
 /// Linker arguments for the C libraries of `[link] libs`: `-l<name>` (a name with a `/` is a
 /// path to the library), plus Homebrew's library directories on macOS.
 fn user_libs(links: &[String]) -> Vec<String> {
@@ -519,6 +524,7 @@ pub fn build_native(path: &Path, out: &Path, debuginfo: bool) -> Result<(), Stri
             .args(user_libs(&g.prog.links))
             .args(LINK_LIBS)
             .args(["-lm", "-lpthread"])
+            .arg(EXPORT_DYNAMIC)
             .arg("-o")
             .arg(out)
             .output()

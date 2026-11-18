@@ -88,6 +88,11 @@ fn main() {
     assert!(status.success(), "llvm-link of the runtime bitcode failed");
 
     symbols(&cdir.join("auk_rt.h"), &out.join("rt_symbols.rs"));
+    // the runtime's symbols visible to dlsym (`ffi.symbol`) in `auk run`, as `auk build` makes
+    // them in executables (macOS executables export their globals already)
+    if !apple {
+        println!("cargo:rustc-link-arg-bins=-rdynamic");
+    }
 }
 
 /// Link the AddressSanitizer runtime (with UBSan's handlers) of the clang that compiled the

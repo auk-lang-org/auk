@@ -2,6 +2,7 @@
  * helpers generated code calls to marshal values to and from C: C strings and C arrays of list
  * elements. An `ffi.Ptr` (and every `extern type` of user code) is a plain machine address: not
  * reference counted, never freed automatically. */
+#include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +35,13 @@ AUK_API void *auk_ffi_alloc(int64_t n, const char *loc) {
         auk_panic_str(loc, "ffi.alloc: out of memory");
     }
     return p;
+}
+
+/* ffi.symbol: the address of C symbol `name` in this process (the executable, the runtime,
+ * every loaded library), or NULL. `auk build` exports the runtime's symbols from executables,
+ * so a compiler written in Auk finds them for the code it JIT-compiles. */
+AUK_API void *auk_ffi_symbol(const AukStr *name) {
+    return dlsym(RTLD_DEFAULT, auk_str_cstr(name));
 }
 
 AUK_API void auk_ffi_free(void *p) {
