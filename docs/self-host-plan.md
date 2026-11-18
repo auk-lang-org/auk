@@ -28,14 +28,23 @@ What there is to move today:
 
 ## Phase 0 — Groundwork
 
-- [ ] **Perf baseline:** record `bench/perf` numbers and compile times (whole corpus: `auk check`,
+- [x] **Perf baseline:** record `bench/perf` numbers and compile times (whole corpus: `auk check`,
       `auk build`, `auk run` startup) on the current Rust build. Every later phase compares to these.
-- [ ] **Golden corpus:** a script that runs the Rust `auk` over every `.auk` in `tests/`,
+      `scripts/baseline.sh` → [perf-baseline.md](perf-baseline.md).
+- [x] **Golden corpus:** a script that runs the Rust `auk` over every `.auk` in `tests/`,
       `examples/`, `packages/`, `src/prelude/` and saves: token dump, diagnostics (JSON),
       `auk ir` MIR text, `auk fmt` output, program stdout/stderr/exit code. Phases 3–5 diff against it.
+      `scripts/golden.sh` (docs/compiler.md, Testing): 239 files (with `compiler/`) × tokens, ast,
+      check, fmt; MIR of the 21 programs that check clean; 46 runs (`auk run` of 19 programs and
+      argument/stdin cases, `auk test` of every package and the examples, from
+      `scripts/golden_runs.txt`). `--compare <auk>` diffs another build per mode and file.
+      The Rust `auk` against itself: 0 differences after one fix (a "did you mean" picked in
+      `HashMap` order). MIR is 94 MB of the 113 MB: every program's MIR includes the whole prelude
+      and, in a project, every dependency.
 - [x] Add the dump modes the golden corpus needs if missing (`auk tokens`, stable AST dump):
       `auk dump tokens|ast` (hidden, `src/dump.rs`; added by the 2e pilot).
-- [ ] CI job (or `make check`) that runs: cargo tests, `tests/*.rs`, runtime tests, bench smoke.
+- [x] CI job (or `make check`) that runs: cargo tests, `tests/*.rs`, runtime tests, bench smoke.
+      `scripts/check.sh`: those plus the pilot diffs and golden self-consistency.
 - [ ] Decide versioning for the transition: the Rust `auk` is "stage 0" and is tagged
       (`v0-rust-final`) at the end of Phase 4 so it can always rebuild the seed.
 
