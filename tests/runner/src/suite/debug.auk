@@ -780,15 +780,16 @@ fn native_line_tables() uses env, fs, ffi, time {
     none => t.bail("no breakpoint 1 in:\n{tx}")
   }
   t.check(bp1.contains("prog`prog.add") || bp1.contains("[inlined] prog.add"), bp1)
-  for want in [
-    "at prog.auk:5:5",
-    "Breakpoint 2: where = prog`prog.fact",
-    "frame #0: 0x",
-    "prog`prog.add at prog.auk:5:5",
-    "prog`prog.main at prog.auk:21:5",
-    "prog`prog.fact at prog.auk:10:5",
-  ] {
+  for want in ["at prog.auk:5:5", "Breakpoint 2: where = prog`prog.fact", "frame #0: 0x"] {
     t.check(tx.contains(want), "missing {want.show()} in:\n{tx}\nlldb's stderr:\n{o.stderr}")
+  }
+  // the backtrace's frames, by function and line; an inlined one shows as `prog`prog.add at ..`
+  // or, in older lldb (Xcode 16), `prog`<caller> [inlined] prog.add at ..`
+  for (f, at) in [("prog.add", "prog.auk:5:5"), ("prog.main", "prog.auk:21:5"), ("prog.fact", "prog.auk:10:5")] {
+    t.check(
+      tx.contains("prog`{f} at {at}") || tx.contains("[inlined] {f} at {at}"),
+      "missing the frame {f} at {at} in:\n{tx}\nlldb's stderr:\n{o.stderr}",
+    )
   }
   // without -g: no debug info
   let o = auk_cmd().args(["build", f, "-o", paths.join(dir, "plain")]).output()
