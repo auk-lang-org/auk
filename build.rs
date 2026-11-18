@@ -46,7 +46,7 @@ fn main() {
         .filter(|p| p.extension().is_some_and(|e| e == "bc") && p.file_name().unwrap().to_string_lossy().starts_with("auk_rt-"))
         .max_by_key(|p| p.metadata().and_then(|m| m.modified()).unwrap())
         .unwrap_or_else(|| panic!("no auk_rt bitcode in {}", deps.display()));
-    c_bitcode(&manifest.join("runtime/c"), &bc, &out);
+    c_bitcode(&manifest.join("runtime/c"), &bc, &out, &target);
     symbols(&manifest.join("runtime/src"), &manifest.join("runtime/c/auk_rt.h"), &out.join("rt_symbols.rs"));
 }
 
@@ -103,30 +103,41 @@ fn symbols(src: &std::path::Path, header: &std::path::Path, out: &std::path::Pat
 
 /// Compile the C runtime to bitcode with the back end's clang and link it with the Rust part's
 /// (`rust_bc`) into `OUT_DIR/auk_rt.bc`.
-fn c_bitcode(cdir: &std::path::Path, rust_bc: &std::path::Path, out: &std::path::Path) {
+fn c_bitcode(cdir: &std::path::Path, rust_bc: &std::path::Path, out: &std::path::Path, target: &str) {
     println!("cargo:rerun-if-env-changed=LLVM_SYS_231_PREFIX");
     let prefix = PathBuf::from(env::var("LLVM_SYS_231_PREFIX").expect("LLVM_SYS_231_PREFIX (see .cargo/config.toml)"));
     let mut files: Vec<PathBuf> =
         std::fs::read_dir(cdir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "c")).collect();
     files.sort();
-    // one translation unit, as runtime/build.rs compiles it
+    // one translation unit (and the files marked to stand alone), as runtime/build.rs compiles them
     let mut unity = String::new();
+    let mut units = Vec::new();
     for f in &files {
-        unity += &format!("#include \"{}\"\n", f.display());
+        if std::fs::read_to_string(f).unwrap().contains("auk: own translation unit") {
+            units.push(f.clone());
+        } else {
+            unity += &format!("#include \"{}\"\n", f.display());
+        }
     }
     let all = out.join("c_all.c");
     std::fs::write(&all, unity).unwrap();
-    let o = out.join("c_all.bc");
-    let status = Command::new(prefix.join("bin/clang"))
-        .args(["-c", "-emit-llvm", "-O2", "-std=c11", "-fno-strict-aliasing", "-fno-stack-protector", "-I"])
-        .arg(cdir)
-        .arg(&all)
-        .arg("-o")
-        .arg(&o)
-        .status()
-        .expect("could not run clang");
-    assert!(status.success(), "compiling the C runtime to bitcode failed");
-    let bcs = [rust_bc.to_path_buf(), o];
+    units.push(all);
+    let mut bcs = vec![rust_bc.to_path_buf()];
+    for (i, u) in units.iter().enumerate() {
+        let o = out.join(format!("c_{i}.bc"));
+        let status = Command::new(prefix.join("bin/clang"))
+            .args(["-c", "-emit-llvm", "-O2", "-std=c11", "-fno-strict-aliasing", "-fno-stack-protector"])
+            .args(if target.contains("apple") { &["-fblocks"][..] } else { &[] })
+            .arg("-I")
+            .arg(cdir)
+            .arg(u)
+            .arg("-o")
+            .arg(&o)
+            .status()
+            .expect("could not run clang");
+        assert!(status.success(), "compiling the C runtime to bitcode failed: {}", u.display());
+        bcs.push(o);
+    }
     let status = Command::new(prefix.join("bin/llvm-link")).args(&bcs).arg("-o").arg(out.join("auk_rt.bc")).status().expect("could not run llvm-link");
     assert!(status.success(), "llvm-link of the runtime bitcode failed");
 }

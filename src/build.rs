@@ -29,7 +29,7 @@ pub const RUNTIME_LIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libauk_
 
 /// Libraries the runtime needs besides libc and libm (what Rust's std links on each platform).
 pub const LINK_LIBS: &[&str] = if cfg!(target_os = "macos") {
-    &["-framework", "CoreFoundation", "-framework", "Security", "-liconv"]
+    &["-framework", "CoreFoundation", "-framework", "Security", "-framework", "Network", "-liconv"]
 } else {
     &["-ldl", "-lpthread", "-lrt", "-lgcc_s"]
 };

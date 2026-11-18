@@ -16,9 +16,17 @@ fn main() {
     // files inline, as they did when the runtime was one Rust crate.
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let dir = std::fs::canonicalize("c").unwrap();
+    // Files marked `auk: own translation unit` (they include system framework headers, whose
+    // names would clash with the runtime's) are compiled on their own.
     let mut unity = String::new();
+    let mut own = Vec::new();
     for f in &files {
-        unity += &format!("#include \"{}\"\n", dir.join(f.file_name().unwrap()).display());
+        let path = dir.join(f.file_name().unwrap());
+        if std::fs::read_to_string(&path).unwrap().contains("auk: own translation unit") {
+            own.push(path);
+        } else {
+            unity += &format!("#include \"{}\"\n", path.display());
+        }
     }
     let all = out.join("auk_rt_all.c");
     std::fs::write(&all, unity).unwrap();
@@ -26,7 +34,7 @@ fn main() {
     if let Ok(prefix) = std::env::var("LLVM_SYS_231_PREFIX") {
         b.compiler(PathBuf::from(prefix).join("bin/clang"));
     }
-    b.file(&all)
+    b.file(&all).files(&own)
         .include("c")
         .std("c11")
         .opt_level(2)
@@ -34,6 +42,13 @@ fn main() {
         .flag("-fno-stack-protector")
         .flag("-Wall")
         .flag("-Wextra")
-        .flag("-Wno-unused-parameter")
-        .compile("auk_rt_c");
+        .flag("-Wno-unused-parameter");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        // blocks: Network.framework's callbacks (tls.c)
+        b.flag("-fblocks");
+        for fw in ["Network", "Security", "CoreFoundation"] {
+            println!("cargo:rustc-link-lib=framework={fw}");
+        }
+    }
+    b.compile("auk_rt_c");
 }

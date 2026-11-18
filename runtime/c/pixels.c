@@ -75,15 +75,15 @@ static int64_t sat_add(int64_t a, int64_t b) {
 }
 
 /* A rectangle clipped to a frame: [x0, x1) × [y0, y1). */
-typedef struct Rect {
+typedef struct PxRect {
     int64_t x0;
     int64_t y0;
     int64_t x1;
     int64_t y1;
-} Rect;
+} PxRect;
 
 /* Clip (x, y, w, h) to an fw×fh frame; false if nothing is left. */
-static bool clip(int64_t x, int64_t y, int64_t w, int64_t h, int64_t fw, int64_t fh, Rect *r) {
+static bool clip(int64_t x, int64_t y, int64_t w, int64_t h, int64_t fw, int64_t fh, PxRect *r) {
     r->x0 = x > 0 ? x : 0;
     r->y0 = y > 0 ? y : 0;
     int64_t xe = sat_add(x, w);
@@ -245,7 +245,7 @@ AUK_API void auk_frame_set(AukFrame **pf, int64_t x, int64_t y, int64_t c, const
 
 /* Set a rectangle to c (transparency included). */
 AUK_API void auk_frame_fill(AukFrame **pf, int64_t x, int64_t y, int64_t w, int64_t h, int64_t c, const char *loc) {
-    Rect r;
+    PxRect r;
     if (!clip(x, y, w, h, (*pf)->w, (*pf)->hgt, &r)) {
         return;
     }
@@ -276,7 +276,7 @@ AUK_API void auk_frame_blend(AukFrame **pf, int64_t x, int64_t y, int64_t w, int
     if (c >> 24 == 255) {
         return;
     }
-    Rect r;
+    PxRect r;
     if (!clip(x, y, w, h, (*pf)->w, (*pf)->hgt, &r)) {
         return;
     }
@@ -316,13 +316,13 @@ AUK_API void auk_frame_blend(AukFrame **pf, int64_t x, int64_t y, int64_t w, int
 static void copy_rect(AukFrame **pf, int64_t x, int64_t y, const AukFrame *src, int64_t sx, int64_t sy, int64_t w, int64_t h,
                       bool blend, const char *loc) {
     /* clipped to the source, then the destination */
-    Rect s;
+    PxRect s;
     if (!clip(sx, sy, w, h, src->w, src->hgt, &s)) {
         return;
     }
     int64_t dx = x + (s.x0 - sx);
     int64_t dy = y + (s.y0 - sy);
-    Rect d;
+    PxRect d;
     if (!clip(dx, dy, s.x1 - s.x0, s.y1 - s.y0, (*pf)->w, (*pf)->hgt, &d)) {
         return;
     }
@@ -388,7 +388,7 @@ AUK_API void auk_frame_blit_mask(AukFrame **pf, int64_t x, int64_t y, const AukA
     }
     const int64_t *m = (const int64_t *)mask->data;
     int64_t mh = mn / mw;
-    Rect r;
+    PxRect r;
     if (!clip(x, y, mw, mh, (*pf)->w, (*pf)->hgt, &r)) {
         return;
     }

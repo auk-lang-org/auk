@@ -800,13 +800,16 @@ AUK_API void auk_frame_blit(AukFrame **pf, int64_t x, int64_t y, const AukFrame 
 AUK_API void auk_frame_composite(AukFrame **pf, int64_t x, int64_t y, const AukFrame *src, int64_t sx, int64_t sy, int64_t w, int64_t h, const char *loc);
 AUK_API void auk_frame_blit_mask(AukFrame **pf, int64_t x, int64_t y, const AukArr *mask, int64_t mw, int64_t c, const char *loc);
 
-/* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
+/* ---- tls.c: TLS sessions (Network.framework on macOS, OpenSSL elsewhere) --------------- */
 
-
-/* TLS sessions (tls.rs). */
+AUK_API AukRes_conn auk_net_tls(const AukStr *host, int64_t port);
 AukRes_arr auk__tls_read(void *tls, int64_t max);
 AukRes_unit auk__tls_write(void *tls, const uint8_t *buf, int64_t n);
 void auk__tls_free(void *tls);
+
+/* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
+
+
 
 
 /* The window process's entry (gui_host.rs). */
