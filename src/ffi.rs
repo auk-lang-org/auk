@@ -89,6 +89,9 @@ pub struct CSig {
     /// A C cast (`"(LLVMValueRef)"`, `"(void *)"`): the one argument, an opaque pointer, becomes
     /// the result's pointer type (`ret`); nothing is called. `params[0]` is `void *`.
     pub cast: bool,
+    /// `"#embed path"` (C23's directive): no C function; the result is the file's contents, read
+    /// at compile time. The checker resolves the path (relative to the source file).
+    pub embed: Option<String>,
 }
 
 // ---- parsing ------------------------------------------------------------------------------
@@ -314,6 +317,13 @@ pub fn parse_type(s: &str) -> Result<CTy, String> {
 
 /// Parse `"<C prototype>"`, with an optional ` +free(fn)` suffix.
 pub fn parse_proto(src: &str) -> Result<CSig, String> {
+    if let Some(path) = src.trim().strip_prefix("#embed") {
+        let path = path.trim().trim_matches(|c| c == '"' || c == '<' || c == '>');
+        if path.is_empty() {
+            return Err("`#embed` needs the file's path: \"#embed data/font.ttf\"".into());
+        }
+        return Ok(CSig { name: "#embed".into(), ret: CTy::Void, params: Vec::new(), free: None, indirect: false, cast: false, embed: Some(path.to_string()) });
+    }
     let (proto, free) = match src.find("+free") {
         Some(i) => {
             let rest = src[i + "+free".len()..].trim();
@@ -340,7 +350,7 @@ pub fn parse_proto(src: &str) -> Result<CSig, String> {
             return Err(format!("a cast converts between pointer types; `{}` isn't one", ret.show()));
         }
         let params = vec![CTy::Ptr { to: Box::new(CTy::Void), konst: false }];
-        return Ok(CSig { name: "(cast)".into(), ret, params, free: None, indirect: false, cast: true });
+        return Ok(CSig { name: "(cast)".into(), ret, params, free: None, indirect: false, cast: true, embed: None });
     }
     let mut p = P { toks, pos: 0 };
     let (ret, name) = p.decl("the result type", true)?;
@@ -389,7 +399,7 @@ pub fn parse_proto(src: &str) -> Result<CSig, String> {
     if p.pos < p.toks.len() {
         return Err("unexpected text after the prototype".into());
     }
-    Ok(CSig { name, ret, params, free, indirect, cast: false })
+    Ok(CSig { name, ret, params, free, indirect, cast: false, embed: None })
 }
 
 // ---- matching Auk types to C types ----------------------------------------------------------
@@ -606,6 +616,9 @@ mod tests {
         assert!(parse_proto("( void * )").unwrap().cast);
         assert!(parse_proto("(int)").unwrap_err().contains("pointer"));
         assert!(parse_proto("(void *) +free(f)").is_err());
+        assert_eq!(parse_proto("#embed data/a b.bin").unwrap().embed.as_deref(), Some("data/a b.bin"));
+        assert_eq!(parse_proto(" #embed \"x.bc\"").unwrap().embed.as_deref(), Some("x.bc"));
+        assert!(parse_proto("#embed").is_err());
         assert!(parse_type("struct sqlite3 *").unwrap().same(&parse_type("sqlite3*").unwrap()));
     }
 }

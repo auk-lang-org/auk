@@ -333,6 +333,69 @@ fn runtime_symbols_by_name() {
     assert_eq!(build_ok(&main), out);
 }
 
+/// `"#embed path"`: a file read at compile time, as `[int]`, `ffi.Ptr` + `int` and `str`; the
+/// built executable still has it after the file is gone, and writes the bytes back unchanged.
+const EMBED: &str = r##"
+extern fn blob(): [int] = "#embed data/all.bin"
+extern fn blob_at(): ffi.Ptr = "#embed data/all.bin"
+extern fn blob_len(): int = "#embed data/all.bin"
+extern fn note(): str = "#embed data/note.txt"
+
+fn main(args: [str]): ()! uses ffi, fs {
+  let b = blob()
+  print("{b.len()} {blob_len()} {b[0]} {b[255]} {b == ffi.bytes(blob_at(), blob_len())}")
+  print("{ffi.read_u8(blob_at(), 10)} {note().trim()} {note().byte_len()}")
+  fs.write_bytes(args[1], b)?
+}
+"##;
+
+#[test]
+fn embedded_files() {
+    let main = project("embed", "\"ffi\", \"fs\"", &[], EMBED);
+    let dir = main.parent().unwrap().join("data");
+    fs::create_dir_all(&dir).unwrap();
+    let all: Vec<u8> = (0..=255u8).collect();
+    fs::write(dir.join("all.bin"), &all).unwrap();
+    fs::write(dir.join("note.txt"), "héllo ✓\n").unwrap();
+    let want = "256 256 0 255 true\n10 héllo ✓ 11\n";
+    let out = main.parent().unwrap().join("out.bin");
+    let o = run(&main, &[out.to_str().unwrap()], true);
+    assert!(o.status.success(), "{}", text(&o).1);
+    assert_eq!(text(&o).0, want);
+    assert_eq!(fs::read(&out).unwrap(), all);
+    let exe = main.parent().unwrap().join("prog");
+    let o = auk(&["build", main.to_str().unwrap(), "-o", exe.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", text(&o).1);
+    fs::remove_dir_all(&dir).unwrap();
+    fs::remove_file(&out).unwrap();
+    let o = Command::new(&exe).arg(&out).output().unwrap();
+    assert_eq!(text(&o).0, want, "{}", text(&o).1);
+    assert_eq!(fs::read(&out).unwrap(), all);
+
+    // errors: a missing file, a type that isn't a form of a file, parameters, non-UTF-8 text
+    let bad = r##"extern fn a(): [int] = "#embed nope.bin"
+extern fn b(): float = "#embed bad.txt"
+extern fn c(x: int): int = "#embed bad.txt"
+extern fn d(): str = "#embed bad.txt"
+fn main() {}
+"##;
+    let d = scratch("embed_bad");
+    fs::write(d.join("raft.toml"), "[package]\nname = \"embed_bad\"\nversion = \"0.1.0\"\neffects = [\"ffi\"]\n").unwrap();
+    fs::write(d.join("src/main.auk"), bad).unwrap();
+    fs::write(d.join("src/bad.txt"), [0x66, 0xff, 0x0a]).unwrap();
+    let o = auk(&["check", d.join("src/main.auk").to_str().unwrap()]);
+    let err = text(&o).1;
+    assert!(!o.status.success());
+    for want in [
+        "`a`: cannot read the file to embed",
+        "`b` returns `float`, which isn't a form of an embedded file",
+        "`c` embeds a file, so it takes no parameters",
+        "`d` embeds `bad.txt` as a `str`, but it isn't UTF-8 (at byte 1)",
+    ] {
+        assert!(err.contains(want), "missing {want:?} in:\n{err}");
+    }
+}
+
 /// `"(T)"` casts between `ffi.Ptr` and an `extern type`, both ways (no call), in the JIT and built.
 const CASTS: &str = r#"
 extern type Buf = "struct buf *"

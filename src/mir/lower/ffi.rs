@@ -52,6 +52,9 @@ impl Lower<'_, '_> {
         let tp = self.tp;
         let FnKind::Ffi { sig, convs, .. } = &tp.fns[f].kind else { panic!("ffi_call of a non-C function") };
         let sig: &CSig = sig;
+        if let Some(path) = &sig.embed {
+            return self.embedded(path, ret, loc);
+        }
         if !sig.indirect && !sig.cast && !self.g.prog.c_syms.contains(&sig.name) {
             self.g.prog.c_syms.push(sig.name.clone());
         }
@@ -139,6 +142,21 @@ impl Lower<'_, '_> {
             None => Val::unit(),
             Some(v) => v,
         }
+    }
+
+    /// `"#embed path"`: the file (checked readable) as constant data in the program, as its
+    /// address, its length, or a new `[int]`/`str` of its bytes.
+    fn embedded(&mut self, path: &str, ret: &Ty, loc: Ex) -> Val {
+        let bytes = std::fs::read(path).unwrap_or_default();
+        let n = Ex::int(bytes.len() as i64);
+        let data = Ex::new(K::CStr(bytes), MTy::CStr);
+        let e = match ret {
+            Ty::Int => n,
+            Ty::Str => Ex::rt("auk_str_from_bytes", vec![data, n], MTy::D(Ty::Str)),
+            Ty::List(_) => Ex::rt("auk_ffi_bytes", vec![data.cast(MTy::void_ptr()), n, loc], d(ret)),
+            _ => data.cast(d(ret)),
+        };
+        self.tmp(ret, e)
     }
 
     /// An Auk value as its C argument.

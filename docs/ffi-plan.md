@@ -6,7 +6,7 @@ Beyond this plan, for the LLVM binding (self-host-plan 2b): `extern type` in use
 distinct opaque C pointer types, lists cross as C arrays (`var [T]` copies back), `var`
 parameters are out-parameters, `T?` of a pointer is NULL-able, `+free(fn)` frees owned
 `char *` results, and a `"T (*)(params)"` prototype calls a C function by its address (passed
-first, as an `ffi.Ptr`: JIT-compiled code, `dlsym` results), and a `"(T)"` prototype casts between `ffi.Ptr` and an `extern type` (no call). Differences from the text below: a `str` argument passes its own bytes (Auk
+first, as an `ffi.Ptr`: JIT-compiled code, `dlsym` results), and a `"(T)"` prototype casts between `ffi.Ptr` and an `extern type` (no call), and `"#embed path"` embeds a file read at compile time (`[int]`, `str`, `ffi.Ptr` or its length `int`). Differences from the text below: a `str` argument passes its own bytes (Auk
 strings are already NUL-terminated, so no copy; an embedded NUL ends the C string), and the
 helpers live in `runtime/c/ffi.c`. `ffi.null` is a constant; `null`, `is_null`, `addr`, `ptr`,
 `offset` are pure, the memory helpers `uses ffi`. `ffi.symbol(name): Ptr?` is `dlsym(RTLD_DEFAULT, name)`; `auk build` links executables with `-export_dynamic`/`-rdynamic` (and the `auk` binary on Linux with `-rdynamic`) so the runtime's `auk_*` symbols are found. Phase 3 (the `sqlite` package) and the LSP

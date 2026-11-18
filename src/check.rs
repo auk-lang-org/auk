@@ -552,6 +552,56 @@ impl Checker {
         }
     }
 
+    /// Check an `extern fn f(): T = "#embed path"`: no parameters, the file (relative to the
+    /// source file) is readable, and `T` is a form of its contents: `[int]`, `str` (valid
+    /// UTF-8), `ffi.Ptr` or `int` (the length). The path in the result is the resolved one.
+    fn ffi_embed(&mut self, m: ModId, c: &FnClause, mut sig: crate::ffi::CSig, params: &[ParamInfo], ret: &Ty, at: Span) -> Option<(crate::ffi::CSig, Vec<crate::ffi::Conv>)> {
+        let name = &c.name.name;
+        let e40 = |span: Span, msg: String| Diag::new("E0040", span, msg);
+        let rel = sig.embed.clone().unwrap_or_default();
+        let path = std::path::Path::new(&self.prog.mods[m].file).parent().unwrap_or(std::path::Path::new("")).join(&rel);
+        let mut errs = Vec::new();
+        if !params.is_empty() {
+            errs.push(e40(at, format!("`{name}` embeds a file, so it takes no parameters")));
+        }
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => Some(b),
+            Err(e) => {
+                errs.push(e40(at, format!("`{name}`: cannot read the file to embed, `{}`: {e}", path.display())).note("the path is relative to this source file"));
+                None
+            }
+        };
+        let is_ptr = matches!(ret, Ty::Named(d, _) if self.defs.types[*d].name == "Ptr" && self.prog.is_core(self.defs.types[*d].module));
+        let fits = match ret {
+            Ty::Int => true,
+            Ty::List(e) => **e == Ty::Int,
+            Ty::Str => {
+                if let Some(b) = &bytes
+                    && let Err(e) = std::str::from_utf8(b)
+                {
+                    errs.push(e40(at, format!("`{name}` embeds `{rel}` as a `str`, but it isn't UTF-8 (at byte {})", e.valid_up_to())).note("embed binary files as `[int]` or `ffi.Ptr`"));
+                }
+                true
+            }
+            _ => is_ptr || ret.has_error(),
+        };
+        if !fits {
+            let span = c.ret.as_ref().map(|t| t.span).unwrap_or(c.name.span);
+            errs.push(
+                e40(span, format!("`{name}` returns `{}`, which isn't a form of an embedded file", self.defs.show(ret)))
+                    .note("an embedded file is `[int]` (its bytes), `str` (UTF-8 text), `ffi.Ptr` (the address of its bytes, read-only) or `int` (its length)"),
+            );
+        }
+        if !errs.is_empty() {
+            for d in errs {
+                self.err_in(m, d);
+            }
+            return None;
+        }
+        sig.embed = Some(path.to_string_lossy().into_owned());
+        Some((sig, vec![crate::ffi::Conv::Unit]))
+    }
+
     /// Check a user `extern fn`: the package allows it, the prototype parses, and every Auk
     /// parameter and the result fit their C types (E0040).
     #[allow(clippy::too_many_arguments)]
@@ -578,6 +628,9 @@ impl Checker {
                 return None;
             }
         };
+        if sig.embed.is_some() {
+            return self.ffi_embed(m, c, sig, params, ret, at);
+        }
         if sig.params.len() != params.len() {
             self.err_in(
                 m,

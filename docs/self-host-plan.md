@@ -186,8 +186,13 @@ Gaps for Phase 4, found doing 2c:
       runtime, and `ffi.symbol(name): ffi.Ptr?` is `dlsym(RTLD_DEFAULT, name)` for an explicit
       table (`llvm.kit.define`). Tested by an `auk build` program calling `auk_str_from_bytes`,
       `auk_str_len` and `auk_release` by address (`tests/ffi.rs`).
-- [ ] Embedding files in the binary: `rtlink.rs` and `build.rs` `include_bytes!` `auk_rt.bc` and
-      `libauk_rt.a`. Auk has no equivalent (`imprint` is pure, so it can't read files).
+- [x] Embedding files in the binary: `rtlink.rs` and `build.rs` `include_bytes!` `auk_rt.bc` and
+      `libauk_rt.a`. Done as an FFI prototype (C23's `#embed`; `imprint` is pure, so it can't
+      read files): `extern fn rt_bc(): ffi.Ptr = "#embed auk_rt.bc"` and
+      `extern fn rt_bc_len(): int = "#embed auk_rt.bc"` (no copy; hand them to
+      `LLVMCreateMemoryBufferWithMemoryRange`), or `: [int]` / `: str` (the prelude's sources)
+      for a copy. The path is relative to the source file, so the build that makes the compiler
+      must put `auk_rt.bc` and `libauk_rt.a` where `compiler/` expects them first.
 - [x] `[link] libs` can't ask `llvm-config`. Done: `[link]` entries expand `${VAR}`,
       `${VAR:-default}` and `$(tool args)` when a program runs or is built; packages/llvm has
       `macos = ["$(${LLVM_CONFIG:-/opt/homebrew/opt/llvm@23/bin/llvm-config} --libdir)/libLLVM.dylib"]`
@@ -296,9 +301,8 @@ step diffed against the golden corpus before the next starts:
       `lower/pat.rs` (342), `progen.rs` (2167), `print.rs` (581)
 - [ ] Diff gates: tokens → AST → diagnostics (codes, messages, spans, fix-its) for every file,
       including `tests/errors/` and `docs/errors/` examples → MIR text.
-- [ ] Prelude (`src/prelude/*.auk`) is embedded the same way. For now `resolve.auk` reads it
-      from disk (`resolve.sources(dir)`); needs the embedding gap of 2c (or a generated module of
-      string constants) before the Auk compiler can be installed on its own.
+- [ ] Prelude (`src/prelude/*.auk`) is embedded the same way: one `extern fn ..: str = "#embed .."`
+      per file. For now `resolve.auk` reads it from disk (`resolve.sources(dir)`).
 
 **Language freeze** from here to the end of Phase 4: no language changes (or each one is made in
 both compilers and both golden outputs). Bug fixes allowed, made in both.
@@ -308,6 +312,9 @@ both compilers and both golden outputs). Bug fixes allowed, made in both.
 - [ ] `mir/llvm/codegen.rs` (1436), `intrin.rs` (336), `debug.rs` (150, DWARF), `rtlink.rs`
       (226, linking `auk_rt.bc`), `mod.rs` (252), `backend.rs` (52), `exec.rs` (138)
 - [ ] Object emission + linking (`build.rs`, 880): still via `cc` for now (Phase 7 removes it).
+      FFI pieces are in place (2c gaps): `libauk_rt.a` and `auk_rt.bc` via `#embed`, the link
+      line's `-export_dynamic`/`-rdynamic` so built programs (the compiler too) export the
+      runtime, `[link]` entries from `llvm-config`, handles in C memory via `"(T)"` casts.
 - [ ] ORC JIT (`jit.rs`, 76): runtime symbols resolve from the compiler's own process (it links
       the C runtime, and `auk build` exports its symbols), so no generated symbol table: the
       process search generator (`llvm.kit.jit`) finds them, or `ffi.symbol` + `llvm.kit.define`.
