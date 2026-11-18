@@ -13,6 +13,7 @@ mod dap;
 mod dbg_eval;
 mod debug;
 mod diag;
+mod dump;
 mod effects;
 mod ffi;
 mod explain;
@@ -126,6 +127,7 @@ fn main() {
         },
         // hidden debug commands, used by the tests
         "parse" => parse_file(rest),
+        "dump" => dump::run(rest),
         "typed" => typed_file(rest),
         "help" | "-h" | "--help" => {
             println!("{USAGE}");
