@@ -9,19 +9,22 @@
 #   4. golden self-consistency     scripts/golden.sh --compare with the Rust auk itself: 0 diffs
 #                                  (catches nondeterministic output)
 #   5. bench smoke                 bench/perf programs, small inputs, `auk build` = `auk run`
+#   6. runner                      the Auk integration test runner (tests/runner/, the port of
+#                                  tests/*.rs) against the Rust auk and the self-hosted port, and
+#                                  every Rust integration test has an Auk counterpart
 #   (bootstrap, not by default: stage 1 → 2 → 3 of compiler/, bit-identical, and bench/perf
 #    built by stage 2 = by Rust, ~2 min)
 #   (backend, not by default: the self-hosted back end's checks, scripts/diff_mir.sh and
 #    run_backend.sh, ~8 min; scripts/diff_llvm.sh, ~15 min, is separate)
-# Usage: scripts/check.sh [step...]   (steps: cargo runtime pilot golden bench backend bootstrap; default
-# all but backend)
+# Usage: scripts/check.sh [step...]   (steps: cargo runtime pilot golden bench runner backend bootstrap;
+# default all but backend and bootstrap)
 # Runs every selected step, then lists the failed ones; exits non-zero if any failed.
 # Needs the packages' .raft/ dependencies installed (`raft install`), like the suite.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 AUK="$ROOT/target/release/auk"
-STEPS="${*:-cargo runtime pilot golden bench}"
+STEPS="${*:-cargo runtime pilot golden bench runner}"
 
 step_cargo() { cargo test --release --no-fail-fast; }
 # real-host TLS tests reach badssl.com, which times out now and then: off unless asked for
@@ -30,6 +33,7 @@ step_pilot() { scripts/gen_error_pages.sh --check && scripts/diff_tokens.sh && s
 step_backend() { scripts/diff_mir.sh && scripts/run_backend.sh; }
 step_bootstrap() { scripts/bootstrap.sh --no-build --perf; }
 step_golden() { scripts/golden.sh --no-build --compare "$AUK"; }
+step_runner() { scripts/test_runner.sh; }
 
 # fib 25, sieve 100k, ...: every bench program built and JIT-run on a small input, same output.
 step_bench() {
