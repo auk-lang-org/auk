@@ -584,7 +584,14 @@ Port onto the Auk compiler, each with its existing tests passing:
       (Rust auk and port alike), and `auk fmt` changes compiler/src/json.auk (not fmt-clean).
       Gaps: none; still to come when the commands are ported: the 27 skips. `tests/*.rs` stay
       until Phase 6 deletes them (the coverage check keeps the two in step).
-- [ ] VS Code extension (`editors/vscode`) still works against the new `lsp`/`dap`.
+- [x] VS Code extension (`editors/vscode`) still works against the new `lsp`/`dap`:
+      `scripts/vscode_e2e.sh [<auk>...]` (check.sh step `vscode`, not by default: it opens a VS Code
+      window) runs `editors/vscode/test/e2e/index.js` in a real VS Code (1.146, extension host,
+      throwaway user-data and extensions directories) with `auk.path` set to each binary: document
+      symbols, hover, go to definition, diagnostics (E0200), formatting, then the extension's
+      `auk.debug` command to a breakpoint, stackTrace, variables, evaluate (`add(x, 1) * 2`),
+      continue and the program's output. Rust `auk` and the port: 9/9 checks each; a binary that
+      does nothing fails.
 
 ## Phase 6 — Retire Rust
 
