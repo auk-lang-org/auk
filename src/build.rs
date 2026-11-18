@@ -502,6 +502,17 @@ pub fn jit_cli(args: &[String]) -> i32 {
         _ => (false, rest),
     };
     let Some((file, args)) = rest.split_first() else { return 2 };
+    // AUK_SOURCES=<file>: file texts to build instead of the files on disk (the self-hosted
+    // `auk hatch`'s candidates, until the back end is ported; see resolve::parse_sources)
+    if let Some(p) = env::var_os("AUK_SOURCES") {
+        match fs::read(&p).ok().and_then(|d| super::resolve::parse_sources(&d)) {
+            Some(m) => super::resolve::set_sources(m),
+            None => {
+                eprintln!("error: cannot read the sources in {}", Path::new(&p).display());
+                return JIT_BUILD_FAILED;
+            }
+        }
+    }
     let on = env::var_os("AUK_TRACE").is_some();
     let debug = env::var_os("AUK_DEBUG").is_some();
     match jit_run(Path::new(file), args, mode, Trace { on, core, debug, lines: false }, false) {

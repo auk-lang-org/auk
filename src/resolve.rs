@@ -67,6 +67,32 @@ pub fn with_sources<R>(srcs: &HashMap<String, String>, f: impl FnOnce() -> R) ->
     r
 }
 
+/// Install `srcs` as this thread's file texts for good (`auk __jit` with `AUK_SOURCES`: the
+/// self-hosted `auk hatch` builds its candidates' tests with this back end).
+pub fn set_sources(srcs: HashMap<String, String>) {
+    OVERRIDES.with(|o| *o.borrow_mut() = srcs);
+}
+
+/// Parse an `AUK_SOURCES` file: records of `<file name>\n<byte length>\n<text>`.
+pub fn parse_sources(data: &[u8]) -> Option<HashMap<String, String>> {
+    let line = |i: &mut usize| -> Option<String> {
+        let n = data[*i..].iter().position(|&b| b == b'\n')?;
+        let l = String::from_utf8(data[*i..*i + n].to_vec()).ok()?;
+        *i += n + 1;
+        Some(l)
+    };
+    let mut m = HashMap::new();
+    let mut i = 0;
+    while i < data.len() {
+        let name = line(&mut i)?;
+        let len: usize = line(&mut i)?.parse().ok()?;
+        let text = String::from_utf8(data.get(i..i + len)?.to_vec()).ok()?;
+        i += len;
+        m.insert(name, text);
+    }
+    Some(m)
+}
+
 /// Read a module's file, honoring `with_sources`.
 fn read_file(path: &Path) -> std::io::Result<String> {
     if let Some(s) = OVERRIDES.with(|o| o.borrow().get(&path.display().to_string()).cloned()) {
@@ -566,6 +592,14 @@ mod tests {
         let mut links = m.links.clone();
         links.sort();
         assert_eq!(links, os);
+    }
+
+    #[test]
+    fn sources_file() {
+        let m = parse_sources("a.auk\n5\né\nb\nb.auk\n0\n".as_bytes()).unwrap();
+        assert_eq!(m["a.auk"], "é\nb\n");
+        assert_eq!(m["b.auk"], "");
+        assert!(parse_sources(b"a.auk\n9\nshort").is_none());
     }
 
     #[test]
