@@ -301,12 +301,14 @@ pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
     d[a.len()][b.len()]
 }
 
-/// The closest candidate to `name`, if it is close enough to be a likely typo.
+/// The closest candidate to `name`, if it is close enough to be a likely typo. Ties go to the
+/// first name in byte order, so the answer doesn't depend on the order of `cands` (often a
+/// `HashMap`'s keys, whose order changes from run to run).
 pub(crate) fn similar<'a>(name: &str, cands: impl IntoIterator<Item = &'a String>) -> Option<String> {
     let mut best: Option<(usize, &String)> = None;
     for c in cands {
         let d = edit_distance(name, c);
-        if d <= (name.len().max(2) / 3).max(1) && c != name && best.is_none_or(|(bd, _)| d < bd) {
+        if d <= (name.len().max(2) / 3).max(1) && c != name && best.is_none_or(|(bd, bc)| (d, c) < (bd, bc)) {
             best = Some((d, c));
         }
     }
@@ -2107,6 +2109,10 @@ mod tests {
         assert_eq!(edit_distance("nmae", "name"), 1);
         assert_eq!(similar("lenght", &["length".to_string(), "len".to_string()]), Some("length".into()));
         assert_eq!(similar("zzz", &["length".to_string()]), None);
+        // a tie is broken by name, not by the candidates' order
+        let (f, g) = ("f".to_string(), "g".to_string());
+        assert_eq!(similar("x", [&f, &g]), Some("f".into()));
+        assert_eq!(similar("x", [&g, &f]), Some("f".into()));
     }
 
     #[test]
