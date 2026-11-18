@@ -43,13 +43,15 @@ pub fn run(args: &[String]) -> i32 {
     let (what, rest) = match args.split_first() {
         Some((w, rest)) if ["tokens", "ast", "resolve", "check", "typed"].contains(&w.as_str()) => (w.as_str(), rest),
         _ => {
-            eprintln!("usage: auk dump tokens|ast|resolve|check|typed [--quiet] [--time] [--repeat N] [--core] <file>...");
+            eprintln!("usage: auk dump tokens|ast|resolve|check|typed [--quiet] [--time] [--repeat N] [--core] [--all] <file>...");
             return 2;
         }
     };
     let quiet = rest.iter().any(|a| a == "--quiet");
     let time = rest.iter().any(|a| a == "--time");
     let core = rest.iter().any(|a| a == "--core");
+    // `check --quiet --all`: time `check::check_all` (patterns and effects too)
+    let all = rest.iter().any(|a| a == "--all");
     let repeat: u32 = match rest.iter().position(|a| a == "--repeat") {
         Some(i) => rest.get(i + 1).and_then(|n| n.parse().ok()).unwrap_or(1),
         None => 1,
@@ -75,7 +77,11 @@ pub fn run(args: &[String]) -> i32 {
         if what == "check" || what == "typed" {
             let r = resolve::load_in_package(Path::new(f.as_str()), src.clone());
             if quiet {
-                std::hint::black_box(r.map(check::check_types)).ok();
+                if all {
+                    std::hint::black_box(r.map(check::check_all)).ok();
+                } else {
+                    std::hint::black_box(r.map(check::check_types)).ok();
+                }
             } else if what == "check" {
                 out.push_str(&checked(f, r));
             } else {

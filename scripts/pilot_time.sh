@@ -4,8 +4,9 @@
 # per run) and as whole-process wall time with the dump written to /dev/null; then loading every
 # file's program (`resolve`: the prelude, the project, its dependencies), and loading +
 # type-checking it (`check`: check.rs, without patterns/effects), REPEAT/10 passes per run; the
-# checker alone is the difference. Best of RUNS. tests/checker/ (small error cases) is left out
-# so the numbers stay comparable with the earlier tables.
+# checker alone is the difference; then all of `auk check` (`--all`: patterns.rs and effects.rs
+# too), in-process and as `auk check --json` run once per file. Best of RUNS. tests/checker/
+# (small error cases) is left out so the numbers stay comparable with the earlier tables.
 # Usage: scripts/pilot_time.sh [RUNS] [REPEAT]
 
 source "$(dirname "$0")/pilot_common.sh"
@@ -46,6 +47,23 @@ for mode in tokens ast resolve check; do
 done
 r=$((R_check - R_resolve)) a=$((A_check - A_resolve))
 printf '%-34s %10s us %10s us %8s\n' "check alone (difference)" "$r" "$a" "$(ratio "$a" "$r")"
+# all of `auk check` (check_all: the type checker, then patterns.rs and effects.rs)
+r="" a="" n=$(((REPEAT + 9) / 10))
+for _ in $(seq "$RUNS"); do
+  r=$(min "$r" "$(one_us "$AUK" dump check --all --quiet --time --repeat "$n" "${FILES[@]}")")
+  a=$(min "$a" "$(one_us "$PORT" check --all --quiet --time --repeat "$n" "${FILES[@]}")")
+done
+printf '%-34s %10s us %10s us %8s\n' "check_all, in-process (per pass)" "$r" "$a" "$(ratio "$a" "$r")"
+r=$((r - R_check)) a=$((a - A_check))
+printf '%-34s %10s us %10s us %8s\n' "patterns + effects (difference)" "$r" "$a" "$(ratio "$a" "$r")"
+# `auk check --json <file>`, one process per file (prelude read and parsed each time)
+check_each() { for f in "${FILES[@]}"; do "$1" check "$f" --json; done; }
+r="" a=""
+for _ in $(seq "$RUNS"); do
+  r=$(min "$r" "$(one_ms check_each "$AUK")")
+  a=$(min "$a" "$(one_ms check_each "$PORT")")
+done
+printf '%-34s %10s ms %10s ms %8s\n' "check --json, a process per file" "$r" "$a" "$(ratio "$a" "$r")"
 for mode in tokens ast resolve typed; do
   r="" a=""
   for _ in $(seq "$RUNS"); do
