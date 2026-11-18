@@ -654,16 +654,25 @@ ASan-instrumented runtime (Rust's `AUK_RT_SANITIZE`; the C tests still run under
 
 ## Phase 7 — Runtime to Auk (Auk only)
 
-### 7a. Low-level Auk (gated: only `runtime/`, like `extern fn` in the prelude)
-- [ ] Raw pointers: `ptr[T]`, load/store, offset, cast, null; `sizeof`/`alignof`.
-- [ ] `#[repr(C)]` structs and unions, fixed-width ints (`u8 … i64`, `usize`), bit ops.
-- [ ] **No-RC mode:** functions/types the compiler never refcounts or copies — needed because
-      the allocator and RC machinery are written in it and can't call into themselves.
-- [ ] Atomics (load/store/CAS/fetch-add with orderings), thread-locals, fences.
-- [ ] `export fn` with the C ABI and a fixed symbol name; calling conventions for callbacks
-      (CoreAudio render callback, pthread start routine, qsort-style comparators).
-- [ ] Inline hints / `always_inline` so small runtime functions still inline into programs.
-- [ ] Compile-time layout checks (equivalent of `_Static_assert`).
+### 7a. Low-level Auk (gated: only the runtime package)
+
+The dialect is specified in [lowlevel.md](lowlevel.md). Decided 2026-11-18: gated by an
+effect, `raw`, only the runtime package may declare; `catch` stays a runtime call, on LLVM's
+sjlj intrinsics; the port goes module by module.
+- [ ] The gate: the `raw` effect (E0418 outside `runtime/`), the declarations allowed only there.
+- [ ] Types: fixed-width ints (wrapping), `raw.Ptr<T>`, `raw struct`/`raw union` (C layout,
+      flexible array member), `[T; N]`, `raw.Fn<…>`; refcounted types rejected in `uses raw`
+      code (the no-RC mode is the type rule).
+- [ ] Memory intrinsics (load/store, fields and elements through pointers, casts, sizes and
+      offsets, copy/fill/compare, alloc), atomics with orderings, fences.
+- [ ] `raw var` / `raw thread var` / `raw let` / `raw assert`; `export fn`, `export var`,
+      `inline export fn` (inlinehint), `raw.fn_of`.
+- [ ] FFI prototypes over raw types (any `T *`, fixed ints, raw structs by value, `raw.Fn`).
+- [ ] `raw.setjmp`/`raw.longjmp` (`llvm.eh.sjlj.*`).
+- [ ] `auk build --lib`: an object or bitcode with the exported symbols, no `main`; `build.sh`
+      links C and Auk runtime objects into one `libauk_rt.a` / `auk_rt.bc`.
+- [ ] Pilot: one small module ported (`value.c`: unions, structs by value, calls into C),
+      checked by the whole suite and perf.
 
 ### 7b. Things that were C-only
 - [ ] `catch` without setjmp in C: either an LLVM setjmp/longjmp intrinsic, or (better) move
