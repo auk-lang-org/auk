@@ -2094,7 +2094,9 @@ mod tests {
         assert_eq!((f.fill, f.align, f.zero, f.width, f.precision), (None, None, true, Some(8), Some(2)));
         let f = parse_format(">5").unwrap();
         assert_eq!((f.align, f.width), (Some('>'), Some(5)));
-        assert!(parse_format("x").is_err());
+        assert_eq!(parse_format("08x").unwrap().radix, Some('x'));
+        assert!(parse_format("e").is_err());
+        assert!(parse_format("xb").is_err());
         assert!(parse_format("5.").is_err());
         assert!(parse_format("").is_err());
     }

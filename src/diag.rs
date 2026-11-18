@@ -157,6 +157,7 @@ pub const CODES: &[(&str, &str)] = &[
     ("E0280", "format precision on a type without one"),
     ("E0281", "zero-padding format on a non-number"),
     ("E0282", "malformed format spec"),
+    ("E0283", "a hex, octal or binary format on a non-int"),
     ("E0290", "mismatched units in an operator"),
     ("E0291", "mismatched units of measure"),
     ("E0292", "the unit of a power or root can't be computed"),

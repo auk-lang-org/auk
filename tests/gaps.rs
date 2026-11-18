@@ -387,3 +387,66 @@ fn stack_overflow_fails_one_test() {
     assert!(out.contains("FAIL deep\n    panic: stack overflow\n"), "{out}");
     assert!(out.contains("ok fine\n1 passed, 1 failed"), "{out}");
 }
+
+// ---- 5. small helpers: strings, radix, hex format, tuple assignment ----
+
+#[test]
+fn string_trimming_and_stripping() {
+    let p = file(
+        r#"fn main() {
+  let s = "  hi there \n"
+  print("[{s.trim_start()}] [{s.trim_end()}] [{s.trim()}]")
+  print("{"--flag".strip_prefix("--")} {"x".strip_prefix("--")} {"main.auk".strip_suffix(".auk")} {"héllo".strip_prefix("hé")}")
+  let name = "file.txt".strip_suffix(".txt") else "?"
+  print(name)
+  print("{min(3, 1)} {max(3, 1)} {min("b", "a")} {max(2.5, -1.0)}")
+}
+"#,
+    );
+    assert_eq!(
+        run_leak_free(&p),
+        "[hi there \n] [  hi there] [hi there]\nsome(\"flag\") none some(\"main\") some(\"llo\")\nfile\n1 3 a 2.5\n"
+    );
+}
+
+#[test]
+fn radix_parsing() {
+    let p = file(
+        r#"fn main() {
+  print(int.parse("ff", 16))
+  print(int.parse("-FF", 16))
+  print(int.parse("1010_1010", 2))
+  print(int.parse("zz", 36))
+  print(int.parse("7fffffffffffffff", 16))
+  print(int.parse("-8000000000000000", 16))
+  print(int.parse("8000000000000000", 16))
+  print(int.parse("12", 2))
+  print(int.parse("", 16))
+  print(int.parse("1", 37) else e => -1)
+  print("{'f'.is_digit(16)} {'g'.is_digit(16)} {'7'.is_digit(8)} {'8'.is_digit(8)} {'Z'.is_digit(36)}")
+}
+"#,
+    );
+    assert_eq!(
+        run_leak_free(&p),
+        "ok(255)\nok(-255)\nok(170)\nok(1295)\nok(9223372036854775807)\nok(-9223372036854775808)\nerr(int.parse: \"8000000000000000\" is out of range)\nerr(int.parse: invalid base-2 int \"12\")\nerr(int.parse: invalid base-16 int \"\")\n-1\ntrue false true false true\n"
+    );
+}
+
+#[test]
+fn hex_octal_binary_formats() {
+    let p = file(
+        r#"fn main() {
+  let n = 255
+  print("{n:x} {n:X} {n:o} {n:b} {n:08x} {n:>6x}| {n:<6b}| {0:x} {-1:x}")
+  print("{1.5.bits():016x}")
+}
+"#,
+    );
+    assert_eq!(run_leak_free(&p), "ff FF 377 11111111 000000ff     ff| 11111111| 0 ffffffffffffffff\n3ff8000000000000\n");
+    let err = check_err(&file("fn f(x: float): str = \"{x:x}\"\n"));
+    assert!(err.contains("error[E0283]: the format spec `x` shows an `int` in hex, but this is `float`"), "{err}");
+    let err = check_err(&file("fn f(n: int): str = \"{n:xx}\"\n"));
+    assert!(err.contains("error[E0282]: malformed format spec `xx`: unexpected `x`"), "{err}");
+}
+

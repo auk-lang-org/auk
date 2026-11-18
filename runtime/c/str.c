@@ -1176,6 +1176,7 @@ typedef struct Spec {
     bool zero;
     int64_t width; /* -1: none */
     int64_t prec;  /* -1: none */
+    uint8_t radix; /* 0: decimal, or the type char 'x' 'X' 'o' 'b' (ints only) */
 } Spec;
 
 /* Panic over spec: `bad format spec "<spec>"`, or with too_large `format spec "<spec>" is too
@@ -1191,7 +1192,7 @@ static _Noreturn void bad_spec(const char *spec, bool too_large) {
 }
 
 static Spec parse_spec(const char *spec) {
-    Spec sp = {' ', 0, false, -1, -1};
+    Spec sp = {' ', 0, false, -1, -1, 0};
     if (spec == NULL) {
         return sp;
     }
@@ -1232,6 +1233,10 @@ static Spec parse_spec(const char *spec) {
             sp.prec = (int64_t)((uint64_t)sp.prec * 10 + (uint64_t)(s[p] - '0'));
             p++;
         }
+    }
+    if (s[p] == 'x' || s[p] == 'X' || s[p] == 'o' || s[p] == 'b') {
+        sp.radix = s[p];
+        p++;
     }
     if (s[p] != 0) {
         bad_spec(spec, false);
@@ -1277,9 +1282,25 @@ static AukStr *pad(AukStr *body, Spec sp, bool numeric) {
     return auk_sb_finish(&b);
 }
 
+/* The bits of v in base 16, 8 or 2 (a negative v as its 64-bit two's complement). */
+static AukStr *int_in_radix(int64_t v, uint8_t type) {
+    unsigned shift = type == 'b' ? 1 : (type == 'o' ? 3 : 4);
+    const char *digits = type == 'X' ? "0123456789ABCDEF" : "0123456789abcdef";
+    uint64_t u = (uint64_t)v;
+    uint64_t mask = ((uint64_t)1 << shift) - 1;
+    char buf[64];
+    int n = 0;
+    do {
+        buf[63 - n] = digits[u & mask];
+        n++;
+        u >>= shift;
+    } while (u != 0);
+    return auk__str_raw(buf + 64 - n, n, n, true);
+}
+
 AUK_API AukStr *auk_fmt_int(int64_t v, const char *spec) {
     Spec sp = parse_spec(spec);
-    return pad(auk_str_from_int(v), sp, true);
+    return pad(sp.radix != 0 ? int_in_radix(v, sp.radix) : auk_str_from_int(v), sp, true);
 }
 
 AUK_API AukStr *auk_fmt_float(double v, const char *spec) {

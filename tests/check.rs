@@ -957,7 +957,7 @@ fn format_zero_pad_on_str() {
 
 #[test]
 fn format_malformed() {
-    one("fn f(n: int): str = \"{n:x}\"\n", "E0282", "malformed format spec `x`: unexpected `x`");
+    one("fn f(n: int): str = \"{n:e}\"\n", "E0282", "malformed format spec `e`: unexpected `e`");
 }
 
 #[test]

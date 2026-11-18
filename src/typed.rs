@@ -564,7 +564,8 @@ pub enum ForKind {
     Chan,
 }
 
-/// A parsed `{x:spec}`: `[fill? align] ['0'] [width] ['.' precision]` (runtime `auk_fmt_*`).
+/// A parsed `{x:spec}`: `[fill? align] ['0'] [width] ['.' precision] [x X o b]` (runtime
+/// `auk_fmt_*`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FormatSpec {
     pub text: String,
@@ -573,6 +574,8 @@ pub struct FormatSpec {
     pub zero: bool,
     pub width: Option<usize>,
     pub precision: Option<usize>,
+    /// `x`, `X`, `o` or `b`: an int in hex, octal or binary.
+    pub radix: Option<char>,
 }
 
 impl TypedProgram {

@@ -210,8 +210,10 @@ Gaps for Phase 4, found doing 2c:
   - [ ] `match` on `str` dispatches on length/first byte instead of a chain of `auk_str_eq`.
   - [x] Stack: deep recursion (Auk parser: 359 nested parens vs Rust's 925; now over 10000 on a
         256 MB main stack) and a "stack overflow" panic instead of a bare SIGSEGV.
-  - [ ] Smaller: raw identifiers or keyword field names, `T!E` with a struct `E`, unsigned/narrow
-        ints, `T??`, Unicode char classes, `trim_end`/`strip_prefix`/radix parsing, `{n:x}`.
+  - [x] Smaller: `trim_start`/`trim_end`, `strip_prefix`/`strip_suffix`, `int.parse(s, radix)`,
+        `c.is_digit(radix)`, `min(a, b)`/`max(a, b)`, `{n:x}`/`X`/`o`/`b`, tuple assignment.
+  - [ ] Deferred (see pilot-report.md, "Gaps"): raw identifiers or keyword field names, `T!E` with
+        a struct `E`, unsigned/narrow ints, `T??`, Unicode char classes (1b).
 - [ ] Process/fs/args/env APIs the driver needs (`auk build` writes temp files, runs the linker,
       `dsymutil`).
 

@@ -2601,7 +2601,7 @@ impl Checker {
             Err(why) => {
                 self.err(
                     Diag::new("E0282", x.span, format!("malformed format spec `{spec}`: {why}"))
-                        .note("a spec is `[fill][<^>][0][width][.precision]`, e.g. `{x:>5}`, `{x:.2}`, `{x:08.3}`, `{s:-^20}`"),
+                        .note("a spec is `[fill][<^>][0][width][.precision][x|X|o|b]`, e.g. `{x:>5}`, `{x:.2}`, `{x:08.3}`, `{s:-^20}`, `{n:04x}`"),
                 );
             }
             Ok(f) => {
@@ -2615,6 +2615,19 @@ impl Checker {
                             format!("the format spec `{spec}` has a precision, which applies to `float` and `str`, not `{ts}`"),
                         )
                         .note("`.N` is decimal places for a float and a maximum length for a str; remove it, or convert with `float(x)`"),
+                    );
+                }
+                if let Some(c) = f.radix
+                    && !matches!(r.base(), Ty::Int | Ty::Error)
+                {
+                    let base = match c {
+                        'b' => "binary",
+                        'o' => "octal",
+                        _ => "hex",
+                    };
+                    self.err(
+                        Diag::new("E0283", x.span, format!("the format spec `{spec}` shows an `int` in {base}, but this is `{ts}`"))
+                            .note("`x`, `X`, `o` and `b` apply to `int` only; convert first (`int(x)`), or remove it"),
                     );
                 }
                 if f.zero && !num && !matches!(r, Ty::Error) {
@@ -3757,7 +3770,7 @@ pub(crate) enum PlaceUse<'a> {
     Receiver(&'a str),
 }
 
-/// Parse `[fill? align] ['0'] [width] ['.' precision]`.
+/// Parse `[fill? align] ['0'] [width] ['.' precision] [x X o b]`.
 pub(crate) fn parse_format(spec: &str) -> Result<FormatSpec, String> {
     let cs: Vec<char> = spec.chars().collect();
     let mut i = 0;
@@ -3792,11 +3805,16 @@ pub(crate) fn parse_format(spec: &str) -> Result<FormatSpec, String> {
             return Err("`.` must be followed by the number of digits".into());
         }
     }
+    let mut radix = None;
+    if i < cs.len() && matches!(cs[i], 'x' | 'X' | 'o' | 'b') {
+        radix = Some(cs[i]);
+        i += 1;
+    }
     if i != cs.len() {
         return Err(format!("unexpected `{}`", cs[i..].iter().collect::<String>()));
     }
     if spec.is_empty() {
         return Err("empty spec (remove the `:`)".into());
     }
-    Ok(FormatSpec { text: spec.to_string(), fill, align, zero, width, precision })
+    Ok(FormatSpec { text: spec.to_string(), fill, align, zero, width, precision, radix })
 }

@@ -85,10 +85,18 @@ pub extern fn split(s: str): [str] = "auk_str_split_ws"
 /// Split on every `sep`: `"a,,b".split(",")` is `["a", "", "b"]`.
 pub extern fn split(s: str, sep: str): [str] = "auk_str_split"
 pub extern fn trim(s: str): str = "auk_str_trim"
+/// Without the leading whitespace.
+pub extern fn trim_start(s: str): str = "auk_str_trim_start"
+/// Without the trailing whitespace.
+pub extern fn trim_end(s: str): str = "auk_str_trim_end"
 /// Split on line breaks (a trailing `\r` is dropped; no final empty line).
 pub extern fn lines(s: str): [str] = "auk_str_lines"
 pub extern fn starts_with(s: str, prefix: str): bool = "auk_str_starts_with"
 pub extern fn ends_with(s: str, suffix: str): bool = "auk_str_ends_with"
+/// The rest of `s` after `prefix`, or none if `s` doesn't start with it.
+pub fn strip_prefix(s: str, prefix: str): str? = if s.starts_with(prefix) { s[prefix.len()..s.len()] } else { none }
+/// `s` without `suffix` at its end, or none if it doesn't end with it.
+pub fn strip_suffix(s: str, suffix: str): str? = if s.ends_with(suffix) { s[0..s.len() - suffix.len()] } else { none }
 pub extern fn replace(s: str, from: str, to: str): str = "auk_str_replace"
 /// The char index of the first occurrence of `sub`.
 pub extern fn find(s: str, sub: str): int? = "auk_str_find"
@@ -108,6 +116,19 @@ fn needle(s: str): str = s
 fn needle(c: char): str = str(c)
 
 pub extern fn is_digit(c: char): bool = "auk_char_is_digit"
+/// Is `c` a digit in base `radix` (2 to 36; letters in either case past 9)?
+pub fn is_digit(c: char, radix: int): bool {
+  let d = if c >= '0' && c <= '9' {
+    int(c) - int('0')
+  } else if c >= 'a' && c <= 'z' {
+    int(c) - int('a') + 10
+  } else if c >= 'A' && c <= 'Z' {
+    int(c) - int('A') + 10
+  } else {
+    return false
+  }
+  d < radix
+}
 pub extern fn is_alpha(c: char): bool = "auk_char_is_alpha"
 pub extern fn is_space(c: char): bool = "auk_char_is_space"
 pub extern fn upper(c: char): char = "auk_char_upper"
@@ -291,6 +312,11 @@ pub fn max<T: Ord>(xs: [T]): T? {
   }
   best
 }
+
+/// The smaller of two values (`a` when they are equal).
+pub fn min<T: Ord>(a: T, b: T): T = if b < a { b } else { a }
+/// The larger of two values (`a` when they are equal).
+pub fn max<T: Ord>(a: T, b: T): T = if b > a { b } else { a }
 
 /// A sorted copy (stable).
 pub extern fn sort<T: Ord>(xs: [T]): [T] = "auk_arr_sorted"
