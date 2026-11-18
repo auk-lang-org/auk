@@ -118,7 +118,7 @@ fn c_bitcode(cdir: &std::path::Path, rust_bc: &std::path::Path, out: &std::path:
     std::fs::write(&all, unity).unwrap();
     let o = out.join("c_all.bc");
     let status = Command::new(prefix.join("bin/clang"))
-        .args(["-c", "-emit-llvm", "-O2", "-std=c11", "-fno-strict-aliasing", "-I"])
+        .args(["-c", "-emit-llvm", "-O2", "-std=c11", "-fno-strict-aliasing", "-fno-stack-protector", "-I"])
         .arg(cdir)
         .arg(&all)
         .arg("-o")

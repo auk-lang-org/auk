@@ -31,6 +31,7 @@ fn main() {
         .std("c11")
         .opt_level(2)
         .flag("-fno-strict-aliasing")
+        .flag("-fno-stack-protector")
         .flag("-Wall")
         .flag("-Wextra")
         .flag("-Wno-unused-parameter")

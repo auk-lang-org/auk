@@ -162,26 +162,29 @@ static int64_t utf8_seq_len(const uint8_t *s, int64_t n, int64_t i) {
     return 0;
 }
 
+/* Byte k of s past i, or 0 past the end. */
+static uint32_t byte_at(const uint8_t *s, int64_t n, int64_t i) {
+    return i < n ? s[i] : 0;
+}
+
 /* Decode one char at s[i..n) (valid input); *len gets its length. Bytes past n read as 0. */
 static uint32_t utf8_decode(const uint8_t *s, int64_t n, int64_t i, int64_t *len) {
     uint32_t b0 = s[i];
-    uint32_t b1 = i + 1 < n ? s[i + 1] : 0;
-    uint32_t b2 = i + 2 < n ? s[i + 2] : 0;
-    uint32_t b3 = i + 3 < n ? s[i + 3] : 0;
     if (b0 < 0x80) {
         *len = 1;
         return b0;
     }
     if (b0 < 0xE0) {
         *len = 2;
-        return ((b0 & 0x1F) << 6) | (b1 & 0x3F);
+        return ((b0 & 0x1F) << 6) | (byte_at(s, n, i + 1) & 0x3F);
     }
     if (b0 < 0xF0) {
         *len = 3;
-        return ((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
+        return ((b0 & 0x0F) << 12) | ((byte_at(s, n, i + 1) & 0x3F) << 6) | (byte_at(s, n, i + 2) & 0x3F);
     }
     *len = 4;
-    return ((b0 & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F);
+    return ((b0 & 0x07) << 18) | ((byte_at(s, n, i + 1) & 0x3F) << 12) | ((byte_at(s, n, i + 2) & 0x3F) << 6) |
+           (byte_at(s, n, i + 3) & 0x3F);
 }
 
 /* Encode c (surrogates and out-of-range become U+FFFD) into b; returns the length. */
@@ -810,6 +813,13 @@ AUK_API AukArr *auk_str_chars(const AukStr *s) {
     uint32_t *d = auk_arr_make_unique(&out);
     const uint8_t *p = sdata(s);
     int64_t bn = slen(s);
+    if (is_ascii(s)) {
+        for (int64_t i = 0; i < bn; i++) {
+            d[i] = p[i];
+        }
+        out->len = bn;
+        return out;
+    }
     int64_t i = 0;
     int64_t k = 0;
     while (i < bn) {

@@ -510,17 +510,44 @@ AUK_API AukStr *auk_fmt_str(const AukStr *s, const char *spec);
 AUK_API AukStr *auk_fmt_char(uint32_t c, const char *spec);
 AUK_API AukStr *auk_fmt_bool(bool v, const char *spec);
 
-/* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
+/* ---- arr.c: arrays ------------------------------------------------------------------------ */
 
+AUK_API int64_t auk_arr_len(const AukArr *a);
+AUK_API const void *auk_arr_data(const AukArr *a);
 AUK_API AukArr *auk_arr_new(const AukElemOps *ops, int64_t cap);
+AUK_API AukArr *auk_arr_from(const AukElemOps *ops, const void *elems, int64_t n);
+void auk__arr_free(AukArr *a);
 AUK_API void *auk_arr_at(const AukArr *a, int64_t i, const char *loc);
-AUK_API void auk_arr_push(AukArr **pa, const void *elem);
+AUK_API bool auk_arr_get_opt(const AukArr *a, int64_t i, void *out);
 AUK_API void *auk_arr_make_unique(AukArr **pa);
+AUK_API void auk_arr_set(AukArr **pa, int64_t i, const void *e, const char *loc);
+AUK_API void auk_arr_push(AukArr **pa, const void *e);
+AUK_API bool auk_arr_pop(AukArr **pa, void *out);
+AUK_API void auk_arr_insert(AukArr **pa, int64_t i, const void *e, const char *loc);
+AUK_API void auk_arr_remove(AukArr **pa, int64_t i, void *out, const char *loc);
+AUK_API void auk_arr_clear(AukArr **pa);
+AUK_API AukArr *auk_arr_slice(AukArr *a, int64_t lo, int64_t hi, const char *loc);
+AUK_API AukArr *auk_arr_take(AukArr *a, int64_t n);
+AUK_API AukArr *auk_arr_skip(AukArr *a, int64_t n);
+AUK_API AukArr *auk_arr_copy(const AukArr *a);
+AUK_API AukArr *auk_arr_concat(const AukArr *a, const AukArr *b);
+AUK_API void auk_arr_extend(AukArr **pa, const AukArr *b);
+AUK_API AukArr *auk_arr_reversed(const AukArr *a);
+AUK_API void auk_arr_reverse(AukArr **pa);
+AUK_API void auk_arr_sort_with(AukArr **pa, int (*cmp)(const void *a, const void *b, void *ctx), void *ctx);
+AUK_API void auk_arr_sort(AukArr **pa);
+AUK_API AukArr *auk_arr_sorted(const AukArr *a);
+AUK_API AukOpt_int auk_arr_index_of(const AukArr *a, const void *e);
+AUK_API bool auk_arr_contains(const AukArr *a, const void *e);
 AUK_API bool auk_arr_eq(const AukArr *a, const AukArr *b);
 AUK_API int auk_arr_cmp(const AukArr *a, const AukArr *b);
 AUK_API uint64_t auk_arr_hash(const AukArr *a);
 AUK_API AukStr *auk_arr_show(const AukArr *a);
-void auk__arr_free(AukArr *a);
+AUK_API AukStr *auk_arr_join(const AukArr *a, const AukStr *sep);
+AUK_API int64_t auk_arr_sum_int(const AukArr *a, const char *loc);
+AUK_API double auk_arr_sum_float(const AukArr *a);
+
+/* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
 
 AUK_API AukMap *auk_map_new(const AukElemOps *kops, const AukElemOps *vops);
 AUK_API void auk_map_set(AukMap **pm, const void *k, const void *v);
