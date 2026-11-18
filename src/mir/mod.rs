@@ -5,7 +5,7 @@
 //! machine type (`MTy`), aggregates are values (copied by value), and control flow is `If`,
 //! `Loop` (with a latch run by `Continue`), `Break`, labels and forward `Goto`s, and `Ret`.
 //! Reference counting is explicit (calls to `duck_retain`/`duck_release` and generated helpers),
-//! so a back end only translates: `c.rs` prints C, `clif.rs` emits Cranelift IR.
+//! so the back end (`llvm/`) only translates.
 //!
 //! Duck values have type `MTy::D(ty)`; their representation (and the members `Sel` names) is
 //! described in `types.rs`. Calls to the runtime name its C symbol (`Callee::Rt`); calls between
@@ -13,12 +13,10 @@
 //! functions use the back end's own convention; runtime calls follow the C ABI.
 
 pub mod print;
-pub mod clif;
 pub mod layout;
 pub mod exec;
 pub mod backend;
 pub mod llvm;
-pub mod dwarf;
 pub mod progen;
 pub mod lower;
 pub mod types;

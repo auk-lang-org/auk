@@ -112,7 +112,7 @@ show frames opaque.
 `duck_rt` only builds against Unix: pthreads, `libc::dlopen`, `nanosleep`, sockets, `mkdtemp`.
 Supporting Windows in v1 means first porting the runtime and `duck build` linking to Windows
 (threads, condvars, dlopen → `LoadLibraryW`, Winsock, file APIs, the panic/`catch.c` path,
-Cranelift's Windows calling convention, and the x64 COFF object + linker step). That is a
+the Windows calling convention in the C-ABI classifier, and the x64 COFF object + linker step). That is a
 separate project in its own right, so it is milestone **MW**, run alongside the GUI work. The GUI
 backend for Windows (`user32`/`gdi32`) is small once the runtime builds.
 
@@ -130,7 +130,7 @@ fn push_clip / pop_clip
 
 Colors are `pixels` colors (`0xTTRRGGBB`, the top byte transparency) with straight alpha, blended
 in sRGB at first. Gamma-correct blending
-is a later tweak. Hot loops are written so Cranelift can compile them tightly (int maths, no
+is a later tweak. Hot loops are written so the back end can compile them tightly (int maths, no
 closures per pixel). Measure early: a 1600×1000 full redraw is 1.6M pixels.
 
 ### 3.2 Text: `graphics.font` (done in M3) and layout in `ui`

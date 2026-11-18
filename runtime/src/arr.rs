@@ -51,7 +51,7 @@ impl Drop for Tmp {
     }
 }
 
-// Accessors (once `static inline` in C), exported for the Cranelift backend.
+// Accessors (once `static inline` in C), exported for the generated code.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn duck_arr_len(a: *const DuckArr) -> i64 {
     if a.is_null() { 0 } else { unsafe { (*a).len } }

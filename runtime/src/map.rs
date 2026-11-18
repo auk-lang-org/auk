@@ -44,7 +44,7 @@ impl Drop for Tmp {
     }
 }
 
-// An accessor (once `static inline` in C), exported for the Cranelift backend.
+// An accessor (once `static inline` in C), exported for the generated code.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn duck_map_len(m: *const DuckMap) -> i64 {
     if m.is_null() { 0 } else { unsafe { (*m).len } }

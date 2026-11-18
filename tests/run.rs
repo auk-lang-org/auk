@@ -351,16 +351,13 @@ fn package_tests_are_leak_free() {
     }
 }
 
-/// `duck ir` prints the MIR, `duck ir --llvm` the LLVM IR and `--clif` the Cranelift IR, for real
-/// programs.
+/// `duck ir` prints the MIR and `duck ir --llvm` the LLVM IR, for real programs.
 #[test]
-fn ir_prints_mir_and_cranelift() {
+fn ir_prints_mir_and_llvm() {
     setup();
     for f in ["examples/tour.duck", "examples/fetch.duck", "examples/grep.duck", "examples/life.duck"] {
         let mir = run_ok(&["ir", f]);
         assert!(mir.contains("dk_entry(") && mir.contains("duck_main_wrapper("), "{f}");
-        let clif = run_ok(&["ir", "--clif", f]);
-        assert!(clif.contains("; dk_entry\nfunction ") && clif.contains("call "), "{f}");
         let ll = run_ok(&["ir", "--llvm", f]);
         assert!(ll.contains("define ") && ll.contains(" @main(") && ll.contains("call "), "{f}");
     }

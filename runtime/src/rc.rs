@@ -249,7 +249,7 @@ pub unsafe extern "C" fn duck_unwrap_err(loc: *const c_char, e: *mut DuckErr) ->
 }
 
 // ---- arithmetic --------------------------------------------------------------------------
-// The checked-arithmetic helpers (the C runtime had them `static inline`) are exported here (the Cranelift backend calls
+// The checked-arithmetic helpers (the C runtime had them `static inline`) are exported here (the generated code calls
 // or inlines them; C code keeps using the header's inline copies).
 
 #[unsafe(no_mangle)]

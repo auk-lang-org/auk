@@ -12,7 +12,7 @@ FFI, option (a) in the packages-next log, rather than a core `sqlite` runtime mo
 - The JIT resolves only `rt_symbols()`. `duck build` links `libduck_rt.a` plus a fixed set of
   system libraries (`src/build.rs`).
 - The back end can already call C with `I32`/`U32`/`I64`/`Ptr`/`CStr` arguments (`MTy`,
-  `Callee::Rt` in `src/mir/clif.rs`), so new codegen is mostly marshalling.
+  `Callee::Rt` in `src/mir/llvm/codegen.rs`), so new codegen is mostly marshalling.
 
 ## 2. Surface
 

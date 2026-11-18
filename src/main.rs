@@ -1,5 +1,5 @@
 //! The `duck` command: the Duck compiler (lexer → parser → resolve → check → patterns/effects →
-//! MIR → Cranelift, JIT or object file + the embedded runtime), its formatter, REPL, language
+//! MIR → LLVM, JIT or object file + the embedded runtime), its formatter, REPL, language
 //! server and docs.
 
 mod ast;
@@ -79,7 +79,7 @@ commands:
   pond [--quiet]           the interactive REPL (--quiet: no banner or prompts)
   lsp                      run the language server (LSP over stdio)
   mcp                      run the MCP server for AI agents (tools over stdio)
-  ir [--llvm|--clif] <file>  print the program's MIR (--llvm: its LLVM IR; --clif: Cranelift IR)
+  ir [--llvm] <file>       print the program's MIR (--llvm: its LLVM IR)
   spec                     print the compact language reference
 
 packages are managed by `quack` (see docs/quack.md).

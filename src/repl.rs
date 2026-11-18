@@ -1,6 +1,6 @@
 //! `duck pond`: the interactive REPL.
 //!
-//! Every input is compiled (Cranelift JIT) and run as a whole program, so a session needs no
+//! Every input is compiled (LLVM JIT) and run as a whole program, so a session needs no
 //! interpreter state of its own:
 //!
 //! ```text
@@ -30,7 +30,7 @@
 //! An input that fails to check, panics or makes `main` return an error is not kept.
 //! Diagnostics and panic locations are mapped back to the input's own line numbers.
 //!
-//! Speed: checking takes a few ms; each input is compiled in memory (Cranelift) and runs in a
+//! Speed: checking takes a few ms; each input is compiled in memory (LLVM) and runs in a
 //! forked child process. Nothing runs for a definition.
 
 use std::fmt::Write as _;

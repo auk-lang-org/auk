@@ -1,4 +1,4 @@
-//! The back end driver: TypedProgram → MIR (`mir/`) → machine code with Cranelift; and the
+//! The back end driver: TypedProgram → MIR (`mir/`) → machine code with LLVM; and the
 //! `run`, `build`, `ir` and `test` commands.
 //!
 //! `run` and `test` compile in memory (the JIT) and run the program in this process (tests and
@@ -470,7 +470,7 @@ pub fn jit_cli(args: &[String]) -> i32 {
 }
 
 /// `duck build`: compile `path` (a release build: optimized, no `ensures`, no holes allowed)
-/// to an object file with Cranelift and link it with the runtime library into `out`. The
+/// to an object file with LLVM and link it with the runtime library into `out`. The
 /// linker is the system C compiler driver (`cc`; `DUCK_LINKER` overrides it).
 /// `duck build`: `debuginfo` (`-g`) adds DWARF line tables (on macOS, in `<out>.dSYM`).
 pub fn build_native(path: &Path, out: &Path, debuginfo: bool) -> Result<(), String> {
@@ -818,13 +818,13 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
             }
         }
         "run" | "build" | "ir" => {
-            // `duck ir --llvm` / `--clif`: the back end's IR instead of the MIR
-            let backend_ir = if cmd == "ir" { args.first().filter(|a| *a == "--llvm" || *a == "--clif").cloned() } else { None };
-            let args = if backend_ir.is_some() { &args[1..] } else { &args[..] };
+            // `duck ir --llvm`: the LLVM IR instead of the MIR
+            let llvm_ir = cmd == "ir" && args.first().is_some_and(|a| a == "--llvm");
+            let args = if llvm_ir { &args[1..] } else { &args[..] };
             let [file, rest @ ..] = args else {
                 let flags = match cmd {
                     "build" => "",
-                    "ir" => "[--llvm|--clif] [--trace=json|<file>] [--trace-core] ",
+                    "ir" => "[--llvm] [--trace=json|<file>] [--trace-core] ",
                     _ => "[--trace=json|<file>] [--trace-limit N] [--trace-core] ",
                 };
                 eprintln!("usage: duck {cmd} {flags}<file.duck>");
@@ -842,9 +842,8 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
                         Err(e) => return fail(e),
                     };
                     let info = TyInfo::new(&tp);
-                    if let Some(which) = &backend_ir {
-                        let ir = if which == "--llvm" { mir::backend::llvm_ir(&g.prog, &info) } else { mir::backend::clif_ir(&g.prog, &info) };
-                        match ir {
+                    if llvm_ir {
+                        match mir::backend::llvm_ir(&g.prog, &info) {
                             Ok(t) => print!("{t}"),
                             Err(e) => return fail(format!("error: {e}\n")),
                         }
