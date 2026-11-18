@@ -380,18 +380,53 @@ both compilers and both golden outputs). Bug fixes allowed, made in both.
 
 ## Phase 4 — Back end and bootstrap
 
-- [ ] `mir/llvm/codegen.rs` (1436), `intrin.rs` (336), `debug.rs` (150, DWARF), `rtlink.rs`
-      (226, linking `auk_rt.bc`), `mod.rs` (252), `backend.rs` (52), `exec.rs` (138)
-- [ ] Object emission + linking (`build.rs`, 880): still via `cc` for now (Phase 7 removes it).
-      FFI pieces are in place (2c gaps): `libauk_rt.a` and `auk_rt.bc` via `#embed`, the link
-      line's `-export_dynamic`/`-rdynamic` so built programs (the compiler too) export the
-      runtime, `[link]` entries from `llvm-config`, handles in C memory via `"(T)"` casts.
-- [ ] ORC JIT (`jit.rs`, 76): runtime symbols resolve from the compiler's own process (it links
-      the C runtime, and `auk build` exports its symbols), so no generated symbol table: the
-      process search generator (`llvm.kit.jit`) finds them, or `ffi.symbol` + `llvm.kit.define`.
+Started decoupled from Phase 3: the Rust compiler writes the MIR (`auk dump mir`), the Auk back
+end reads it and must produce the same LLVM IR, executables and program output. Status and
+numbers: [pilot-report.md](pilot-report.md), "Phase 4".
+
+- [x] MIR in Auk: `mir/mod.rs` (data model), `types.rs` (the layout facts of `TyInfo`),
+      `layout.rs`, `print.rs` → `compiler/src/mir.auk`, `mir/types.auk`, `mir/layout.auk`,
+      `mir/printer.auk`. `auk ir` is C-like and lossy (`int` and `int64_t` print alike), so the
+      Rust compiler got a machine-readable form: `auk dump mir [--release] [-g] [--test]
+      [--trace..] [--debug] <file>` (`src/mir/dump.rs`, unit test `mir::dump::tests::mir_dump`:
+      prefix tokens, every machine type and member, float bits, byte strings, plus the type
+      definitions the layouts need), read by `mir/reader.auk`. Round trip
+      (`scripts/diff_mir.sh`): the port reads each dump and prints the MIR text; **115 dumps (23
+      programs × run, release, release -g, traced, debugger), 0 differ**.
+- [x] `mir/llvm/codegen.rs` (1436), `intrin.rs` (336), `debug.rs` (150, DWARF), `rtlink.rs`
+      (226, linking `auk_rt.bc`), `mod.rs` (252), `backend.rs` (52) → `compiler/src/codegen.auk`,
+      `intrin.auk`, `dwarf.auk`, `rtlink.auk`, `backend.auk`, line by line over `packages/llvm`.
+      `exec.rs` (138): only running the entry in this process (`orcjit.run`); `run_forked`/
+      `spawn` and `jit_eval`/`jit_live` (debugger evaluation, live reload) wait for the driver.
+      Oracle: `auk ir --llvm=LEVEL` (`o0` is `auk ir --llvm`; `light`, `o2`, `o3`, `build` = O2
+      with the runtime's bitcode; `-raw`: before the pass pipeline). `scripts/diff_llvm.sh`
+      compares 13 IR texts per program (o0, o0-raw, light-raw, light, o2, o3; release build and
+      build-raw; build -g with DWARF; traced and debugger builds at o0 and light): **see the
+      report for the count, 0 differ**.
+- [x] Object emission + linking (`build.rs` `build_native`) → `compiler/src/native.auk`: object
+      file, `cc` with the embedded `libauk_rt.a`, `[link]` libraries (`${VAR}`/`$(tool)`
+      expanded), the platform's libraries, `-export_dynamic`/`-rdynamic`, `dsymutil` for `-g`.
+      `libauk_rt.a` and `auk_rt.bc` are `#embed`ded from `target/auk-rt/`, where build.rs now
+      copies them (the cargo build must run first; a sanitized runtime isn't copied).
+- [x] ORC JIT (`jit.rs`, 76) → `compiler/src/orcjit.auk`: the object linked by LLJIT; each runtime
+      symbol the module calls (the code generator's declarations) defined at its address in the
+      compiler's own process (`ffi.symbol`, `llvm.kit.define`), everything else (libc, user C
+      libraries `dlopen`ed `RTLD_GLOBAL` as `open_libs` does) through the process search
+      generator; the entry called by address (`"int (*)(int, void *)"`).
+      `scripts/run_backend.sh`: every `run` and project `test` entry of `golden_runs.txt` plus
+      `compiler/tests/backend/` (closures, tasks, channels, `catch`, shapes, contracts,
+      imprints, recursive enums, `Value`, inlined runtime calls, FFI by prototype, by address,
+      casts, `#embed`) compiled from the dump by the port and run in its own process (`auk run`'s
+      level; tests at O0), and every `run` program also built by both into executables: **48
+      programs, 0 differ** (stdout, stderr, exit code). The port compiling the Auk compiler's own
+      MIR (`pilot_tokens`/`pilot_ast`) is among them.
 - [ ] Driver: `main.rs` (214) — `run`, `build`, `check`, `test`, `ir`; same flags and exit codes.
+      For now `compiler mir|llvm|build|run <dump>` (`compiler/src/driver.auk`) on the Rust
+      compiler's MIR; the real commands need the checker and lowering (Phase 3).
 - [ ] Diff gate: program output identical for the whole corpus; `auk ir` identical; `bench/perf`
-      generated code within ±5% (same MIR → same IR should make this free).
+      generated code within ±5% (same MIR → same IR should make this free). Back half done for
+      the corpus above (IR identical at every level, so `bench/perf` code is identical too);
+      the whole gate needs the Auk front end's MIR.
 - [ ] **Bootstrap fixed point:** stage 1 (built by Rust) compiles `compiler/` → stage 2; stage 2
       compiles it → stage 3; stage 2 and stage 3 are bit-identical. Requires deterministic output
       (no hash-order iteration, no timestamps/paths in objects).

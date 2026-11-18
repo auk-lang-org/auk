@@ -73,15 +73,23 @@ pub fn main(args: [str]): int! uses fs, env, proc, time, ffi {
   }
   if rest.len() != 0 { return usage(what) }
   var out = ""
+  var t_read = 0
+  var t_work = 0
   for _ in 0..repeat {
+    let t1 = backend.micros()
     let (prog, info) = mir.reader.read(text)?
+    let t2 = backend.micros()
     out = if what == "mir" {
       mir.printer.print_program(prog, info)
     } else {
       backend.ir_text(prog, info, level)?
     }
+    t_read += t2 - t1
+    t_work += backend.micros() - t2
   }
-  if time_it { eprint("time: {(time.now() - t0) * 1000 / repeat} us") }
+  if time_it {
+    eprint("time: read {t_read / repeat} us, {what} {t_work / repeat} us (per repetition)")
+  }
   print_raw(out)
   0
 }
