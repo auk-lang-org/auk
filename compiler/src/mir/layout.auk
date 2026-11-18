@@ -44,8 +44,7 @@ pub fn new(info: mir.types.TyInfo, aggs: [mir.AggDef], arch: str): Layouts =
   Layouts { info, aggs, memo: {}, arch }
 
 /// The architecture of an LLVM target triple (`arm64-apple-darwin25`, `x86_64-pc-linux-gnu`).
-pub fn arch_of(triple: str): str =
-  if triple.starts_with("x86_64") { "x86_64" } else { "aarch64" }
+pub fn arch_of(triple: str): str = if triple.starts_with("x86_64") { "x86_64" } else { "aarch64" }
 
 /// The scalar type of `t`, or none for an aggregate (or `Void`).
 pub fn scalar(l: Layouts, t: mir.MTy): Sc? = match t {
@@ -110,10 +109,10 @@ pub fn members(l: Layouts, t: mir.MTy): [mir.MTy] {
 }
 
 pub fn is_enum_like(l: Layouts, t: mir.MTy): bool = match t {
-  D(d) => mir.types.is_value(l.info, d) || (d is types.Ty.Named(_, _)) && !mir.types.is_struct(
-    l.info,
-    d,
-  ) && !mir.types.is_opaque(l.info, d)
+  D(d) => mir.types.is_value(l.info, d) ||
+    (d is types.Ty.Named(_, _)) &&
+      !mir.types.is_struct(l.info, d) &&
+      !mir.types.is_opaque(l.info, d)
   _ => false
 }
 
@@ -247,17 +246,23 @@ pub fn c_pass(l: var Layouts, t: mir.MTy): CPass {
   leaves(&l, t, 0, &lv)
   // AArch64: a homogeneous floating-point aggregate (1-4 doubles, no other members) travels
   // in float registers, one per member, whatever its size
-  if l.arch == "aarch64" && lv.len() > 0 && lv.len() <= 4 && lv.all(p => p.1 == Sc.F64) && x.size == 8 * lv.len() {
+  if l.arch == "aarch64" &&
+    lv.len() > 0 &&
+    lv.len() <= 4 &&
+    lv.all(p => p.1 == Sc.F64) &&
+    x.size == 8 * lv.len() {
     return CPass.Words((0..lv.len()).map(_ => Sc.F64))
   }
   if x.size > 16 { return CPass.Sret }
   let n = (x.size + 7) / 8
   let x86 = l.arch == "x86_64"
-  CPass.Words((0..n).map(k => {
-    let (lo, hi) = (k * 8, k * 8 + 8)
-    let inside = lv.filter(p => p.0 < hi && p.0 + bytes(p.1) > lo)
-    if x86 && inside.len() > 0 && inside.all(p => p.1 == Sc.F64) { Sc.F64 } else { Sc.I64 }
-  }))
+  CPass.Words(
+    (0..n).map(k => {
+      let (lo, hi) = (k * 8, k * 8 + 8)
+      let inside = lv.filter(p => p.0 < hi && p.0 + bytes(p.1) > lo)
+      if x86 && inside.len() > 0 && inside.all(p => p.1 == Sc.F64) { Sc.F64 } else { Sc.I64 }
+    }),
+  )
 }
 
 /// How each parameter and the result of a C function cross the call boundary.

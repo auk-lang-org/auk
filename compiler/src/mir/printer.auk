@@ -69,9 +69,7 @@ pub fn print_program(p: mir.Program, info: mir.types.TyInfo): str {
   out.push("\n/* ---- functions ---- */\n")
   out.push(funcs.join(""))
   match p.entry {
-    some(e) => out.push(
-      "int main(int argc, char **argv) {{\n    return {p.funcs[e].name}(argc, argv);\n}}\n",
-    )
+    some(e) => out.push("int main(int argc, char **argv) {{\n    return {p.funcs[e].name}(argc, argv);\n}}\n")
     none => {}
   }
   out.join("")
@@ -241,13 +239,9 @@ fn define(pr: var Printer, t: types.Ty): str {
             un.push("        struct {{{st.join("")} }} v{vi};\n")
           }
           if un.len() == 0 {
-            pr.types.push(
-              "/* {show} */\ntypedef struct {name} {{\n    int32_t tag;\n}} {name};\n",
-            )
+            pr.types.push("/* {show} */\ntypedef struct {name} {{\n    int32_t tag;\n}} {name};\n")
           } else {
-            pr.types.push(
-              "/* {show} */\ntypedef struct {name} {{\n    int32_t tag;\n    union {{\n{un.join("")}    }} u;\n}} {name};\n",
-            )
+            pr.types.push("/* {show} */\ntypedef struct {name} {{\n    int32_t tag;\n    union {{\n{un.join("")}    }} u;\n}} {name};\n")
           }
           name
         }
@@ -256,9 +250,7 @@ fn define(pr: var Printer, t: types.Ty): str {
     }
     Any(_) => {
       let name = "DkAny{k}"
-      pr.types.push(
-        "typedef struct {name} {{\n    AukObj *f0;\n    const void *f1;\n}} {name};\n",
-      )
+      pr.types.push("typedef struct {name} {{\n    AukObj *f0;\n    const void *f1;\n}} {name};\n")
       name
     }
     _ => mir.bug("c: can't define {mir.types.show_ty(info, t)}")

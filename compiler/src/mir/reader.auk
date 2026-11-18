@@ -54,35 +54,31 @@ pub fn read(text: str): (mir.Program, mir.types.TyInfo)! {
       "O" => types.TypeDefKind.Opaque(string(&r)?)
       k => return bad(r, "a type definition kind, found `{k}`")
     }
-    defs.types.push(
-      types.TypeDef {
-        name,
-        module: 0,
-        public: true,
-        doc: none,
-        params,
-        kind,
-        span: diag.NONE,
-        node: 0,
-      },
-    )
+    defs.types.push(types.TypeDef {
+      name,
+      module: 0,
+      public: true,
+      doc: none,
+      params,
+      kind,
+      span: diag.NONE,
+      node: 0,
+    })
   }
   expect(&r, "shapes")?
   let ns = num(&r)?
   for _ in 0..ns {
     let name = string(&r)?
     let sp = num(&r)?
-    defs.shapes.push(
-      types.ShapeDef {
-        name,
-        module: 0,
-        public: true,
-        self_param: sp,
-        methods: [],
-        builtin: none,
-        span: diag.NONE,
-      },
-    )
+    defs.shapes.push(types.ShapeDef {
+      name,
+      module: 0,
+      public: true,
+      self_param: sp,
+      methods: [],
+      builtin: none,
+      span: diag.NONE,
+    })
   }
   expect(&r, "params")?
   let npar = num(&r)?

@@ -13,6 +13,7 @@
 
 let MODES = ["tokens", "ast", "resolve", "check", "typed", "holes"]
 
+    return driver.main(args)
 fn main(args: [str]): int! uses fs, env, time, ffi {
   if args.len() >= 2 && args[1] == "fmt" { return fmt.run(args.skip(2)) }
   if args.len() >= 2 && args[1] == "mir" { return driver.main(args) }

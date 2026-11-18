@@ -641,13 +641,15 @@ fn flat_test_files(dir: &Path) -> Vec<PathBuf> {
 
 /// `auk ir`'s own options (before the file): `--llvm[=LEVEL]` (LLVM IR at a level of
 /// `mir::backend::llvm_ir_at`, default `o0`), `--dump` (`auk dump mir`), `--release` (the MIR
-/// `auk build` compiles: no `ensures`) and `-g` (with source locations, as `auk build -g`).
+/// `auk build` compiles: no `ensures`), `-g` (with source locations, as `auk build -g`) and
+/// `--test` (the test runner `auk test` compiles; a directory is its project's root file).
 #[derive(Debug, Default)]
 struct IrOpts {
     llvm: Option<String>,
     dump: bool,
     release: bool,
     lines: bool,
+    test: bool,
 }
 
 impl IrOpts {
@@ -659,6 +661,7 @@ impl IrOpts {
                 "--dump" => self.dump = true,
                 "--release" => self.release = true,
                 "-g" => self.lines = true,
+                "--test" => self.test = true,
                 _ if a.starts_with("--llvm=") => self.llvm = Some(a["--llvm=".len()..].to_string()),
                 _ if !a.starts_with('-') => {
                     rest.extend(args[i..].iter().cloned());
@@ -935,11 +938,22 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
             let path = Path::new(file);
             match cmd {
                 "ir" => {
+                    // `--test`: a project directory's root, as `auk test <dir>` builds it
+                    let root;
+                    let path = if ir_opts.test && path.is_dir() {
+                        root = match project_root(path) {
+                            Ok(r) => r,
+                            Err(e) => return fail(e),
+                        };
+                        root.as_path()
+                    } else {
+                        path
+                    };
                     let tp = match check(path) {
                         Ok(t) => t,
                         Err(e) => return fail(e),
                     };
-                    let mode = if ir_opts.release { Mode::Release } else { Mode::Run };
+                    let mode = if ir_opts.release { Mode::Release } else if ir_opts.test { Mode::Test } else { Mode::Run };
                     let g = match generate(&tp, mode, Trace { lines: ir_opts.lines, ..trace.codegen() }) {
                         Ok(g) => g,
                         Err(e) => return fail(e),

@@ -79,12 +79,14 @@ pub fn enum_layout(info: TyInfo, t: types.Ty): [[(types.Ty, bool)]] {
   }
   let s = types.subst_of(info.defs, d, args)
   let value = some(d) == info.value_def
-  types.variants(info.defs, d).map(v => v.fields.map(f => {
-    let ft = types.subst(f.1, s)
-    var seen: {types.Ty: bool} = {}
-    let boxed = !value && reaches(info, ft, t, &seen)
-    (ft, boxed)
-  }))
+  types.variants(info.defs, d).map(
+    v => v.fields.map(f => {
+      let ft = types.subst(f.1, s)
+      var seen: {types.Ty: bool} = {}
+      let boxed = !value && reaches(info, ft, t, &seen)
+      (ft, boxed)
+    }),
+  )
 }
 
 /// Does `t` contain `target` by value (through tuples, optionals, results, structs, enums)?

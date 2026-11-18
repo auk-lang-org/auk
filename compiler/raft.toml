@@ -1,4 +1,7 @@
 [package]
 name = "compiler"
 version = "0.1.0"
-effects = ["fs", "env", "time", "ffi"]
+effects = ["fs", "env", "proc", "time", "ffi"]
+
+[deps]
+llvm = { path = "../packages/llvm" }

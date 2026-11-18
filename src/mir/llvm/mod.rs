@@ -131,6 +131,7 @@ fn build(prog: &Program, info: &TyInfo, ex: &Exports, live: Option<(usize, HashM
 fn build_at(prog: &Program, info: &TyInfo, ex: &Exports, live: Option<(usize, HashMap<u32, usize>)>, level: Level, link_runtime: bool, raw: bool) -> Result<Built, String> {
     let tm = target_machine(level)?;
     unsafe {
+        let t0 = std::time::Instant::now();
         let cx = LLVMContextCreate();
         let m = {
             let mut g = Gen::new(cx, "auk", prog, info, live);
@@ -138,6 +139,7 @@ fn build_at(prog: &Program, info: &TyInfo, ex: &Exports, live: Option<(usize, Ha
             g.program(ex)?;
             g.m
         };
+        let t_gen = t0.elapsed();
         let triple = LLVMGetTargetMachineTriple(tm);
         LLVMSetTarget(m, triple);
         LLVMDisposeMessage(triple);
@@ -173,6 +175,11 @@ fn build_at(prog: &Program, info: &TyInfo, ex: &Exports, live: Option<(usize, Ha
             let r = jit::check(LLVMRunPasses(m, p.as_ptr(), tm, opts));
             LLVMDisposePassBuilderOptions(opts);
             r.map_err(|e| format!("optimizing: {e}"))?;
+        }
+        // AUK_TIME_BACKEND=1: the time code generation (MIR → LLVM IR) and the rest (the runtime's
+        // bitcode, the passes) took, to stderr (comparing back ends)
+        if std::env::var_os("AUK_TIME_BACKEND").is_some() {
+            eprintln!("backend: codegen {} us, link+passes {} us", t_gen.as_micros(), (t0.elapsed() - t_gen).as_micros());
         }
         Ok(Built { cx, m, tm })
     }

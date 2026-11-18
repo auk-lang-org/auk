@@ -88,10 +88,32 @@ fn main() {
     assert!(status.success(), "llvm-link of the runtime bitcode failed");
 
     symbols(&cdir.join("auk_rt.h"), &out.join("rt_symbols.rs"));
+    publish_runtime(&out);
     // the runtime's symbols visible to dlsym (`ffi.symbol`) in `auk run`, as `auk build` makes
     // them in executables (macOS executables export their globals already)
     if !apple {
         println!("cargo:rustc-link-arg-bins=-rdynamic");
+    }
+}
+
+/// Copy the library and the bitcode to `<target dir>/auk-rt/`, where the self-hosted compiler
+/// (`compiler/`, docs/self-host-plan.md Phase 4) embeds them from (`#embed`, relative to its
+/// sources: the repository's `target/`). A sanitized runtime isn't published: programs built
+/// with it need the sanitizer's linker.
+fn publish_runtime(out: &Path) {
+    if env::var("AUK_RT_SANITIZE").is_ok_and(|s| !s.is_empty()) {
+        return;
+    }
+    // OUT_DIR is <target>/<profile>/build/<pkg>-<hash>/out
+    let Some(target) = out.ancestors().nth(4) else { return };
+    let dir = target.join("auk-rt");
+    let _ = std::fs::create_dir_all(&dir);
+    for f in ["libauk_rt.a", "auk_rt.bc"] {
+        // through a temporary file, so a reader never sees half of one
+        let tmp = dir.join(format!("{f}.tmp{}", std::process::id()));
+        if std::fs::copy(out.join(f), &tmp).is_ok() {
+            let _ = std::fs::rename(&tmp, dir.join(f));
+        }
     }
 }
 

@@ -9,6 +9,9 @@ PORT="$ROOT/target/pilot/compiler"
 
 build_both() {
   cargo build --release -q
+  # the port's dependency (packages/llvm, for the back end) and the runtime it embeds
+  # (target/auk-rt/, written by the cargo build)
+  [ -d compiler/.raft ] || (cd compiler && "$ROOT/target/release/raft" install >/dev/null)
   mkdir -p "$ROOT/target/pilot"
   "$AUK" build compiler/src/main.auk -o "$PORT"
 }
@@ -80,7 +83,7 @@ backend_corpus() {
             echo "$f"
           fi
         done
-    find compiler/tests/backend -name '*.auk' 2>/dev/null; } | LC_ALL=C sort
+    [ -d compiler/tests/backend ] && find compiler/tests/backend -name '*.auk'; true; } | LC_ALL=C sort
 }
 
 # The `auk dump mir` options each back-end program is diffed under: the MIR `auk run`/`ir`
