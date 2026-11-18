@@ -50,6 +50,8 @@ fn setup() {
         install("packages/http");
         install("packages/url");
         install("packages/log");
+        install("packages/splash");
+        install("packages/term");
     });
 }
 

@@ -203,8 +203,7 @@ fn find_root(): str? uses fs, ffi {
 }
 
 /// `raft install` in examples/ and in the packages with dependencies that tests/check.rs and
-/// tests/run.rs install (their `setup`): http, url, log. (The corpus also needs splash's and
-/// term's, installed by hand as for the Rust suite.)
+/// tests/run.rs install (their `setup`): http, url, log, splash, term (the corpus needs all of them).
 fn setup() uses env, fs, ffi, time {
-  for dir in ["examples", "packages/http", "packages/url", "packages/log"] { t.install(dir) }
+  for dir in ["examples", "packages/http", "packages/url", "packages/log", "packages/splash", "packages/term"] { t.install(dir) }
 }
