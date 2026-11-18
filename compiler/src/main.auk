@@ -24,7 +24,14 @@ fn main(args: [str]): int! uses fs, time {
         err(Bad(d)) => if !quiet { dump.diag_dump(&out, d) }
       }
     } else {
-      eprint("ast: not yet")
+      let parts = f.split("/")
+      let prelude = parts.len() >= 2 && parts[parts.len() - 2] == "prelude"
+      match parser.parse(src, prelude) {
+        ok(m) => if !quiet { dump.module(&out, m) }
+        err(Many(ds)) => if !quiet {
+          for d in ds { dump.diag_dump(&out, d) }
+        }
+      }
     }
   }
   if out.len() > 0 { print(out.join("\n")) }
