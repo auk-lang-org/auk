@@ -13,7 +13,11 @@ while read -r f; do
     n=$((n + 1))
     key="${f//\//_}${v// /}"
     # shellcheck disable=SC2086  # the variant's options are words
-    "$AUK" dump mir $v "$f" > "$out/$key.dump" 2>&1 || true
+    # a program whose MIR can't be built (an imprint that fails at compile time) has no dump
+    if ! "$AUK" dump mir $v "$f" > "$out/$key.dump" 2>&1; then
+      n=$((n - 1))
+      continue
+    fi
     # shellcheck disable=SC2086
     "$AUK" ir $v "$f" > "$out/$key.rust" 2>&1 || true
     "$PORT" mir "$out/$key.dump" > "$out/$key.auk" 2>&1 || true
