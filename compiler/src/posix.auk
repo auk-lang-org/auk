@@ -96,3 +96,28 @@ pub fn wait(pid: int): int?! uses ffi {
   // WIFEXITED: no signal bits; WEXITSTATUS: the second byte
   if (status & 127) == 0 { some((status >> 8) & 255) } else { none }
 }
+
+extern fn c_open(path: str, flags: int): int = "int open(const char *, int)"
+
+/// `run_forked` with stdout and stderr both going to the file `merged` (created), in order,
+/// and (`stdin_null`) stdin from `/dev/null`: src/mir/exec.rs's `Redirect { merged, stdin_null }`
+/// (`auk dive`'s inputs). The child exits at once (`_exit`).
+pub fn run_forked_merged(merged: str, stdin_null: bool, body: () => int): int?! uses ffi {
+  let both = open_for(some(merged))?
+  // O_RDONLY
+  let null = if stdin_null { c_open("/dev/null", 0) } else { -1 }
+  flush()
+  let pid = c_fork()
+  if pid < 0 { return fail("error: fork failed\n") }
+  if pid == 0 {
+    if null >= 0 { let _ = c_dup2(null, 0) }
+    let _ = c_dup2(both, 1)
+    let _ = c_dup2(both, 2)
+    let code = body()
+    flush()
+    c__exit(code)
+  }
+  let _ = c_close(both)
+  if null >= 0 { let _ = c_close(null) }
+  wait(pid)
+}
