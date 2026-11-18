@@ -234,6 +234,44 @@ Measured with `compiler/bench/cliffs.auk` (built with `auk build`; 20k and 80k i
 
 None blocked the port; no compiler or runtime change was needed.
 
+## Gaps closed (2d), and the rest
+
+Closed before the Phase 3 freeze (tests in `tests/gaps.rs`):
+
+- **1, 3: variants across modules.** The expected type picks a bare variant through `T?`, `T!`
+  and `T!E` (`fn f(): tok.Tok!Fail = Eof`). A bare `Int`/`Float`/`Str`/... is never core's
+  `Value` against another expected enum, nor when nothing is expected and an enum of the package
+  has that variant: E0117, with a fix-it to `tok.Float`.
+- **2: or-patterns** `A | B(x) =>` at the top of a match arm; every alternative binds the same
+  names with the same types (E0267); exhaustiveness and reachability per alternative.
+- **1: `var` parameters in function types**, `(var P) => T`; a closure's parameter is `var` when
+  the type says so (`list(&p, q => q.item())`), and a function with `var` parameters can be
+  passed for one. The Auk parser's type lists use it.
+- **14: stack overflow** is a panic (`panic: stack overflow` at the function, exit 101; an `Err`
+  under `catch` or in a task), and `main`, tests and tasks run on big stacks (256 MB / 32 MB): the
+  Auk parser now takes over 10000 nested parentheses.
+- **8, 10: small items**: tuple assignment `(a, b) = (b, a)`, `{n:x}`/`X`/`o`/`b` (E0283),
+  `trim_start`/`trim_end`, `strip_prefix`/`strip_suffix`, `int.parse(s, radix)`,
+  `c.is_digit(radix)`, `min(a, b)`/`max(a, b)`.
+
+Deferred, with a recommendation:
+
+- **4: keywords as field names / raw identifiers.** Don't add raw identifiers. If the self-hosted
+  compiler really wants `uses`/`var` fields, allow a keyword as a field name only where a field
+  name is expected (after `.`, in struct definitions, literals and patterns); otherwise keep the
+  renamed fields (`effects`, `var_`), which cost nothing.
+- **5: `T!E` with a struct `E`.** Worth doing after the freeze if wrappers keep appearing: it is a
+  checker change (E0112) plus the error payload's type id, no syntax. The one-variant enum
+  (`enum Fail { Bad(d: Diag) }`) is a fine workaround now.
+- **6: unsigned/narrow ints.** Don't add them to the language. `int` with wrapping operators,
+  `{n:x}` and radix parsing cover u64 bit patterns; compact spans are a layout optimization
+  (packed fields) for later, not new types.
+- **7: `T??`.** Don't add (`??` is the hole). Two functions or a small enum is clearer.
+- **8: impure guards** (`'.' if self.eat('.') =>`): keep guards pure; `if`/`else` chains read better.
+- **9: Unicode char classes**: library work, plan item 1b.
+- **11–13: performance** (string `+=`, moving out of containers, RC on reads, double boxing) are
+  codegen/runtime work tracked in 2d, not language changes.
+
 ## Reproduce
 
 ```
