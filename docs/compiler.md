@@ -44,7 +44,7 @@ source ─▶ lex ─▶ parse ─▶ resolve ─▶ check ─▶ lower ─▶ M
 | `src/mir/llvm/debug.rs` | DWARF for `auk build -g` through LLVM's DIBuilder |
 | `src/mir/llvm/rtlink.rs` | `auk build`: links the runtime's inlinable functions (its LLVM bitcode) into the program |
 | `src/mir/print.rs` | `auk ir`: MIR printed as C-like text |
-| `build.rs` | the cargo build script: builds `libauk_rt.a` and the runtime's bitcode (`auk_rt.bc`) for embedding, and the runtime symbol table for the JIT |
+| `build.rs` | the cargo build script: builds `libauk_rt.a` and the runtime's bitcode (`auk_rt.bc`) for embedding, and the runtime symbol table for the JIT; copies the library and the bitcode to `<target>/auk-rt/`, where the self-hosted back end (`compiler/`) embeds them from |
 | `src/build.rs` | whole-program generation (entry points), imprints, and `run`/`build`/`ir`/`test` |
 | `src/diag.rs` | diagnostics with **stable codes** (`E0001`…), spans, notes and fix-it edits; renders human text or JSON |
 | `src/dbg_eval.rs` | evaluating Auk expressions at a debugger stop (`eval`, conditional breakpoints): checks a copy of the program with the expression written in, compiles just it |

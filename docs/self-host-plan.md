@@ -200,11 +200,12 @@ Gaps for Phase 4, found doing 2c:
 - [x] A string's byte length costs a copy (`s.bytes().len()`); every generated wrapper for a
       `const char *` + length pays it. Done: `s.byte_len()` (the runtime's stored length), used
       by the generated wrappers.
-- [ ] Each call that takes a list (`build_call2`, `build_gep2`, `function_type`) mallocs and frees
-      a C array; fine for the pilot, measure in Phase 4.
+- [x] Each call that takes a list (`build_call2`, `build_gep2`, `function_type`) mallocs and frees
+      a C array. Measured in Phase 4: the ported code generator is within 2x of Rust's with it.
 - [ ] Which `LLVM*Ref` parameters accept NULL and which results may be NULL is a hand list in
       `gen.py` (`NULLABLE_ARG`, `NULLABLE_RET`); porting the rest of the back end will add to it,
-      and to `bind.txt` for new functions and enum values.
+      and to `bind.txt` for new functions and enum values. The back end needed no new function;
+      `LLVMGetOperand` may return NULL (the port binds it again as `Value?` in `rtlink.auk`).
 - [ ] One `extern fn` per JIT entry signature (`"int64_t (*)(int64_t, int64_t)"`); `exec.rs`'s
       few fixed entry points (`dk_entry`, `dk_init`) fit that.
 
@@ -391,7 +392,7 @@ numbers: [pilot-report.md](pilot-report.md), "Phase 4".
       [--trace..] [--debug] <file>` (`src/mir/dump.rs`, unit test `mir::dump::tests::mir_dump`:
       prefix tokens, every machine type and member, float bits, byte strings, plus the type
       definitions the layouts need), read by `mir/reader.auk`. Round trip
-      (`scripts/diff_mir.sh`): the port reads each dump and prints the MIR text; **115 dumps (23
+      (`scripts/diff_mir.sh`): the port reads each dump and prints the MIR text; **130 dumps (26
       programs × run, release, release -g, traced, debugger), 0 differ**.
 - [x] `mir/llvm/codegen.rs` (1436), `intrin.rs` (336), `debug.rs` (150, DWARF), `rtlink.rs`
       (226, linking `auk_rt.bc`), `mod.rs` (252), `backend.rs` (52) → `compiler/src/codegen.auk`,
@@ -401,8 +402,8 @@ numbers: [pilot-report.md](pilot-report.md), "Phase 4".
       Oracle: `auk ir --llvm=LEVEL` (`o0` is `auk ir --llvm`; `light`, `o2`, `o3`, `build` = O2
       with the runtime's bitcode; `-raw`: before the pass pipeline). `scripts/diff_llvm.sh`
       compares 13 IR texts per program (o0, o0-raw, light-raw, light, o2, o3; release build and
-      build-raw; build -g with DWARF; traced and debugger builds at o0 and light): **see the
-      report for the count, 0 differ**.
+      build-raw; build -g with DWARF; traced and debugger builds at o0 and light): **26 programs,
+      338 IR texts, 0 differ**.
 - [x] Object emission + linking (`build.rs` `build_native`) → `compiler/src/native.auk`: object
       file, `cc` with the embedded `libauk_rt.a`, `[link]` libraries (`${VAR}`/`$(tool)`
       expanded), the platform's libraries, `-export_dynamic`/`-rdynamic`, `dsymutil` for `-g`.

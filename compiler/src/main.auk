@@ -13,17 +13,18 @@
 
 let MODES = ["tokens", "ast", "resolve", "check", "typed", "holes"]
 
-    return driver.main(args)
 fn main(args: [str]): int! uses fs, env, time, ffi {
   if args.len() >= 2 && args[1] == "fmt" { return fmt.run(args.skip(2)) }
-  if args.len() >= 2 && args[1] == "mir" { return driver.main(args) }
   if args.len() >= 2 && args[1] == "explain" { return explain.run(args.skip(2)) }
   if args.len() >= 2 && args[1] == "lsp" { return lsp.start(prelude_dir(args[0])) }
   if args.len() >= 2 && args[1] == "mcp" { return mcp.run(args[0]) }
   if args.len() >= 2 && args[1] == "spec" { return mcp.spec_main() }
   if args.len() >= 2 && args[1] == "ir" { return mir.build.cli(args, prelude_dir(args[0])) }
+  if args.len() >= 2 && ["mir", "llvm", "build", "run"].contains(args[1]) {
+    return driver.main(args)
+  }
   if args.len() < 3 || !MODES.contains(args[1]) {
-    eprint("usage: compiler tokens|ast|resolve|check|typed [--quiet] [--time] [--repeat N] [--core] <file>... | fmt [--check] <path>...")
+    eprint("usage: compiler tokens|ast|resolve|check|typed [--quiet] [--time] [--repeat N] [--core] <file>... | fmt [--check] <path>... | mir|llvm|build|run <mir dump>")
     return 2
   }
   let what = args[1]

@@ -854,6 +854,109 @@ Rust. Not profiled yet; an editor sends one request per cursor move, so it isn't
    with Cargo.toml until the port has its own version.
 
 No compiler or runtime bug was hit; no compiler or runtime change was needed.
+## Phase 4: the back end
+
+Ported decoupled from the front end: the Rust compiler writes the MIR (`auk dump mir`, a new
+machine-readable form, `src/mir/dump.rs`; `auk ir`'s C-like text is lossy), the Auk back end
+reads it and compiles it. `compiler mir|llvm|build|run <dump>` (`compiler/src/driver.auk`).
+
+| Rust (lines) | Auk (`compiler/src/`) |
+|---|---|
+| `mir/mod.rs` (525; the data model, not the `Body` builder) | `mir.auk` (249) |
+| `mir/types.rs` (240; the layout facts) | `mir/types.auk` (166) |
+| `mir/layout.rs` (283) | `mir/layout.auk` (275) |
+| `mir/print.rs` (592) | `mir/printer.auk` (610) |
+| `mir/dump.rs` (578, new, with its test) | `mir/reader.auk` (476) |
+| `mir/llvm/codegen.rs` (1456) | `codegen.auk` (1475) |
+| `mir/llvm/intrin.rs` (358) | `intrin.auk` (413) |
+| `mir/llvm/debug.rs` (150) | `dwarf.auk` (176) |
+| `mir/llvm/rtlink.rs` (226) | `rtlink.auk` (227) |
+| `mir/llvm/mod.rs` (269) + `backend.rs` (66) | `backend.auk` (215) |
+| `mir/llvm/jit.rs` (132) + `exec.rs` `run` | `orcjit.auk` (204) |
+| `build.rs` `build_native` + link helpers (~90) | `native.auk` (108) |
+| — | `driver.auk` (122) |
+
+About 4 300 lines of Rust to 4 700 of Auk (the reader is new; the rest is line for line).
+
+**Results.** The port's own mistakes (a `{` in a string, a `match` head with `else`, discarded
+results) were caught by the checker; after that, the MIR printer matched on its first program
+and the code generator produced identical IR for `hello` at every level on its first run. The
+only differences the oracles ever showed came from the scripts (`auk ir` read `--dump` and the
+trace flags in the wrong order; a source edited during a run).
+
+- `scripts/diff_mir.sh`: the port reads each dump and prints it as `auk ir` does: 26 programs
+  (golden.sh's `ir` corpus plus `compiler/tests/backend/`) × 5 variants (run, `--release`,
+  `--release -g`, `--trace=json`, `--debug`), **0 differ**.
+- `scripts/diff_llvm.sh`: LLVM IR text against `auk ir --llvm=LEVEL` (a new option of the Rust
+  compiler): o0, o0-raw, light-raw, light, o2, o3 (the MIR `auk run` compiles), build and
+  build-raw (O2 with the runtime's bitcode linked by `rtlink`), build of the `-g` MIR (DWARF),
+  o0 and light of the traced and debugger MIR: **26 programs, 338 IR texts, 0 differ**.
+  Identical IR at every level means identical machine code from the same LLVM.
+- `scripts/run_backend.sh`: every `run` and project `test` entry of `golden_runs.txt` plus
+  `compiler/tests/backend/` (closures, tasks and channels, `catch`, shapes and `any`, contracts,
+  imprints, recursive enums, `Value`, the inlined runtime calls, FFI by prototype, by address,
+  casts and `#embed`), compiled from the dump by the port and run in its process (ORC), and each
+  `run` program also built into an executable by both: **48 programs, 0 differ** (stdout,
+  stderr, exit code). Among them the Auk compiler itself (`pilot_tokens`, `pilot_ast`) and
+  the `llvm` package's tests (LLVM driven from a program JIT-compiled by LLVM driven from Auk).
+
+**Timing** (`scripts/backend_time.sh 7`: MIR → LLVM IR with no passes, `AUK_TIME_BACKEND=1` in
+both back ends, best of 7; a loaded machine, load average ~18–35 from other agents' suites):
+
+| program | Rust | Auk | Auk / Rust | port reading the dump | IR lines |
+|---|---|---|---|---|---|
+| `examples/hello.auk` | 53.9 ms | 100.4 ms | 1.86x | 146.7 ms | 262 803 |
+| `examples/tour.auk` | 52.9 ms | 101.7 ms | 1.92x | 150.9 ms | 267 289 |
+| `compiler/tests/backend/data.auk` | 1.6 ms | 2.8 ms | 1.72x | 2.4 ms | 8 775 |
+| `compiler/src/main.auk` | 237.6 ms | 119.7 ms | **0.50x** | 92.8 ms | 264 097 |
+
+The Auk code generator is within 2x of Rust's, and faster on the compiler's own MIR: Rust's
+`Layouts::lay`/`offset` clone the memoized offset vectors (`Vec<u32>`, `Vec<Vec<u32>>` per enum)
+on every call, which the compiler's big AST enums make expensive; Auk's copy is a reference
+count. (Not changed in Rust: it isn't a correctness issue.) Each list argument of a binding
+(`build_call2`, `build_gep2`, `function_type`) still mallocs a C array (the 2c item); at these
+numbers it doesn't matter. Reading the dump (6 MB of tokens for `hello`: core's whole library
+is in every program) costs more than generating code; the self-hosted pipeline won't have it.
+The passes dominate everything else (O2 over a program with core: 10–15 s in both), so
+`auk build` time is the same either way.
+
+### Gaps found
+
+1. **No `panic`/`unreachable!`.** The back end has "can't happen" arms that must produce a
+   value of any type. `mir.bug<T>(msg): T` prints the message and unwraps a `none` (`let x: T? =
+   none; x!`). A core `unreachable(msg): never` (or `panic`) would say it directly.
+2. **Bytes that aren't text.** MIR's C strings are bytes (an `#embed`ded file can be anything),
+   and `str` is UTF-8, so the port keeps `[int]` and binds `LLVMConstStringInContext2` a second
+   time with a `void *` parameter, copying through `ffi.from_bytes` (one malloc per string).
+3. **Nullability of generated bindings.** `LLVMGetOperand` returns NULL for a missing operand;
+   the generated binding says `Value`, so `rtlink.auk` binds it again as `Value?`. It belongs in
+   `gen.py`'s `NULLABLE_RET`.
+4. **LLVM handles as map keys**: Rust keys `rtlink`'s maps by pointer; the port casts a handle
+   to `ffi.Ptr` (`"(void *)"`) and keys by `ffi.addr`.
+5. **Milliseconds only**: `time.now()`; the timing binds `clock_gettime` (`backend.micros`).
+6. **`proc.run` doesn't capture stderr** (nor set the environment): the linker's and
+   `dsymutil`'s complaints go straight to stderr instead of into the error message, as Rust's
+   `Command::output` does.
+7. **`#embed` paths are fixed and relative to the source**: the compiler embeds
+   `target/auk-rt/{libauk_rt.a,auk_rt.bc}`, which build.rs now writes; checking or building
+   `compiler/` needs a cargo build first (and `raft install` in `compiler/`, for `packages/llvm`).
+8. Smaller: `uses` can't be a variable name (Rust's `uses` vector is `used`); a `match` head
+   with `else` needs parentheses; no `[T].repeat(n)`; Rust's `Option<&Func>` and null handles
+   became indices and a placeholder value.
+
+No compiler or runtime bug was found; no language or library change was needed. The Rust
+compiler gained `auk dump mir`, `auk ir --llvm=LEVEL`/`--release`/`-g`/`--test`/`--dump`,
+`AUK_TIME_BACKEND`, and build.rs's copy of the runtime to `target/auk-rt/`.
+
+### What remains (Phase 4)
+
+- The driver (`main.rs`: `run`, `build`, `check`, `test`, `ir`, flags, exit codes) on the Auk
+  front end's MIR, once Phase 3 has lowering; then the corpus-wide gates on that MIR.
+- `exec.rs`'s forked runs (`run_forked`, `spawn`), `jit_eval` (the debugger's evaluations) and
+  `jit_live` (`auk run --live`): they need the front end to be useful.
+- The bootstrap fixed point and self-compile time.
+- Linux: the oracles were run on macOS (AArch64); the port selects the C ABI by the target
+  triple and the `dlopen` flags and clock by OS, but its diff scripts haven't run on Linux yet.
 
 ## Reproduce
 
@@ -876,6 +979,10 @@ scripts/diff_fmt.sh           # fmt: 258 files, 0 differ, 0 not idempotent
 scripts/diff_raft.sh          # raft: 91 commands, 0 differ; tests/raft.rs against the port
 scripts/diff_tools.sh         # explain (every code), lsp (981 files), mcp, tests/{lsp,mcp,explain}.rs on the port
 scripts/lsp_time.py <auk> <port> <file>...   # the lsp timing table
+scripts/diff_mir.sh           # MIR round trip: 130 dumps, 0 differ
+scripts/diff_llvm.sh          # LLVM IR: 26 programs, 338 IR texts, 0 differ
+scripts/run_backend.sh        # JIT runs and executables: 48 programs, 0 differ
+scripts/backend_time.sh 7     # code generation, Rust vs Auk
 scripts/pilot_time.sh 7 20    # the tables above
 auk test compiler             # the ported unit tests
 auk build compiler/bench/cliffs.auk -o /tmp/cliffs && /tmp/cliffs 80000

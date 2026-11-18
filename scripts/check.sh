@@ -8,7 +8,10 @@
 #   4. golden self-consistency     scripts/golden.sh --compare with the Rust auk itself: 0 diffs
 #                                  (catches nondeterministic output)
 #   5. bench smoke                 bench/perf programs, small inputs, `auk build` = `auk run`
-# Usage: scripts/check.sh [step...]   (steps: cargo runtime pilot golden bench; default all)
+#   (backend, not by default: the self-hosted back end's checks, scripts/diff_mir.sh and
+#    run_backend.sh, ~8 min; scripts/diff_llvm.sh, ~15 min, is separate)
+# Usage: scripts/check.sh [step...]   (steps: cargo runtime pilot golden bench backend; default
+# all but backend)
 # Runs every selected step, then lists the failed ones; exits non-zero if any failed.
 # Needs the packages' .raft/ dependencies installed (`raft install`), like the suite.
 set -uo pipefail
@@ -21,6 +24,7 @@ step_cargo() { cargo test --release --no-fail-fast; }
 # real-host TLS tests reach badssl.com, which times out now and then: off unless asked for
 step_runtime() { AUK_NET_TESTS="${AUK_NET_TESTS:-0}" sh runtime/c/test/run.sh; }
 step_pilot() { scripts/gen_error_pages.sh --check && scripts/diff_tokens.sh && scripts/diff_ast.sh && scripts/diff_resolve.sh && scripts/diff_check.sh && scripts/diff_check_text.sh && scripts/diff_holes.sh && scripts/diff_typed.sh && scripts/diff_fmt.sh && scripts/diff_ir.sh && scripts/diff_raft.sh; }
+step_backend() { scripts/diff_mir.sh && scripts/run_backend.sh; }
 step_golden() { scripts/golden.sh --no-build --compare "$AUK"; }
 
 # fib 25, sieve 100k, ...: every bench program built and JIT-run on a small input, same output.
