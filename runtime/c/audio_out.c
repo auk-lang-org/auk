@@ -25,7 +25,8 @@ static float to_f32(double x) {
     return (float)x;
 }
 
-static void audio_sleep_ms(int64_t ms) {
+/* (used by the macOS output only) */
+static __attribute__((unused)) void audio_sleep_ms(int64_t ms) {
     struct timespec ts = {0, (long)(ms * 1000000)};
     nanosleep(&ts, NULL);
 }

@@ -33,6 +33,9 @@ fn main() {
     let prefix = PathBuf::from(env::var("LLVM_SYS_231_PREFIX").expect("LLVM_SYS_231_PREFIX (see .cargo/config.toml)"));
     let cdir = manifest.join("runtime/c");
     let units = units(&cdir, &out);
+    // blocks on Apple: Network.framework's callbacks (tls.c); glibc hides POSIX/BSD declarations
+    // (unsetenv, ...) under plain -std=c11 unless asked for them
+    let platform_flags: &[&str] = if apple { &["-fblocks"] } else { &["-D_GNU_SOURCE"] };
 
     // the static library (cc also links it into this crate's binaries)
     let mut b = cc::Build::new();
@@ -46,9 +49,10 @@ fn main() {
         .flag("-Wall")
         .flag("-Wextra")
         .flag("-Wno-unused-parameter");
+    for f in platform_flags {
+        b.flag(f);
+    }
     if apple {
-        // blocks: Network.framework's callbacks (tls.c)
-        b.flag("-fblocks");
         for fw in ["Network", "Security", "CoreFoundation"] {
             println!("cargo:rustc-link-lib=framework={fw}");
         }
@@ -69,7 +73,7 @@ fn main() {
         let o = out.join(format!("rt_{i}.bc"));
         let status = Command::new(prefix.join("bin/clang"))
             .args(["-c", "-emit-llvm", "-O2", "-std=c11", "-fno-strict-aliasing", "-fno-stack-protector"])
-            .args(if apple { &["-fblocks"][..] } else { &[] })
+            .args(platform_flags)
             .arg("-I")
             .arg(&cdir)
             .arg(u)

@@ -273,7 +273,8 @@ static void closed_add(int64_t id) {
     closed_ids[nclosed++] = id;
 }
 
-static void closed_remove(int64_t id) {
+/* (gui_reader, closed_remove, bufs_find: macOS only; gui.open fails elsewhere) */
+static __attribute__((unused)) void closed_remove(int64_t id) {
     int64_t k = 0;
     for (int64_t i = 0; i < nclosed; i++) {
         if (closed_ids[i] != id) {
@@ -426,7 +427,7 @@ static char *rest_str(AukWireReader *r) {
 
 /* The connection's reader: replies go to the waiting request, events to their window's
  * queue. */
-static void *gui_reader(void *arg) {
+static __attribute__((unused)) void *gui_reader(void *arg) {
     int fd = (int)(intptr_t)arg;
     for (;;) {
         AukWireMsg m;
@@ -877,7 +878,7 @@ static void bufs_free(Bufs *b) {
     shm_free(&b->b[1]);
 }
 
-static Bufs *bufs_find(int64_t win) {
+static __attribute__((unused)) Bufs *bufs_find(int64_t win) {
     for (int64_t i = 0; i < nshms; i++) {
         if (shms[i].win == win) {
             return &shms[i];
