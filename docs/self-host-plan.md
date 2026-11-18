@@ -341,6 +341,36 @@ step diffed against the golden corpus before the next starts:
       including `tests/errors/` and `docs/errors/` examples → MIR text. Done through the type
       checker's diagnostics (all of `auk check`, JSON and text) and typed program, and
       `auk holes` (`scripts/check.sh` pilot step runs every diff); MIR text remains.
+- [ ] `patterns.rs` (901) exhaustiveness, `effects.rs` (647), `holes.rs` (690): then `check_all`
+      (sorted, deduplicated diagnostics after the type check) and the oracle becomes
+      `auk check --json` itself (`compiler check --json` prints `check_types`' report today).
+- [x] MIR: `mir/mod.rs` (511), `types.rs` (234), `layout.rs` (278), `lower.rs` (3577),
+      `lower/pat.rs` (342), `progen.rs` (2167), `print.rs` (581) (3c). The data model, layouts
+      and printer came with the back-end port (`mir.auk`, `mir/types.auk`, `mir/layout.auk`,
+      `mir/printer.auk`); the lowering is `mir/progen.auk`, `mir/lower.auk`,
+      `mir/lower/pat.auk`, `mir/lower/ffi.auk` and `mir/build.auk` (build.rs's `generate`, the
+      debugger tables, the imprint helper and its records). `compiler ir [--release] [-g]
+      [--trace=..] [--debug] <file>` prints what `auk ir` prints. Imprints run a helper program,
+      which needs the back end: until the port runs it itself, `AUK_IMPRINT_RECORDS=<f> auk ir`
+      leaves the helper's records (and `<f>.status`: exit code, stderr) for `compiler ir
+      --imprints <f>`, and `AUK_IMPRINT_EVAL_IR=<f>` the helper's MIR, diffed against `compiler
+      ir --imprint-eval`. `scripts/diff_ir.sh`: **209 programs x 5 variants (run, --release,
+      --release -g, --trace=json, --debug) and 26 imprint helpers, 0 differ** (the back end's
+      corpus plus `compiler/tests/ir/`; E0115/E0420 imprint failures included). The compiler
+      itself (`compiler/src/main.auk`, 7.9 MB of MIR) lowers identically. Not ported:
+      `lower::emit_eval` (the debugger's expression evaluation, `auk run --debug` only). Lowering
+      alone is 1.54x Rust as ported (`scripts/ir_time.sh`; pilot-report.md, "3c").
+
+  **What Phase 4 builds on**: `mir.build.generate(tp, mode, trace, imprints, embeds):
+  Generated!` (`prog`, `info`, `dbg`, `holes`, `tests`, `live_keys`) is the program the back
+  end compiles, with `mir.build.embeds(tp)` (the `#embed` files, read up front so lowering needs
+  no `fs`) and `mir.build.imprint_program(tp, embeds)` (the helper to JIT-run; then
+  `imprint_results(tp, records, code, stderr)`). `Program::live_keys` is `Generated.live_keys`
+  (the reader's `mir.Program` has no field for it).
+- [ ] Diff gates: tokens → AST → diagnostics (codes, messages, spans, fix-its) for every file,
+      including `tests/errors/` and `docs/errors/` examples → MIR text. Done through the type
+      checker's diagnostics, typed program and MIR text (`scripts/check.sh` pilot step runs
+      every diff, `diff_ir.sh` included); patterns/effects diagnostics remain.
 - [ ] Prelude (`src/prelude/*.auk`) is embedded the same way: one `extern fn ..: str = "#embed .."`
       per file. For now `resolve.auk` reads it from disk (`resolve.sources(dir)`).
 

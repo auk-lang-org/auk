@@ -572,6 +572,76 @@ faster than Rust: the Rust binary loads LLVM at start-up, which is most of a sma
    text); Rust's `{:?}` of a test name is `check_expr.debug_str` (now `pub`).
 
 No compiler or runtime bug blocked the port; no compiler or runtime change was needed.
+### 3c: MIR lowering
+
+| Rust (lines) | Auk (`compiler/src/`) |
+|---|---|
+| `mir/progen.rs` (2204) | `mir/progen.auk` (2415) |
+| `mir/lower.rs` (4116) | `mir/lower.auk` (4238) |
+| `mir/lower/pat.rs` (395), `lower/ffi.rs` (215) | `mir/lower/pat.auk` (410), `mir/lower/ffi.auk` (237) |
+| `build.rs` `generate`, `dbg_tables`, imprints (~330) | `mir/build.auk` (~560, with `compiler ir`) |
+| `mir/mod.rs` `impl Ex`, `Body`, `retype` (~200) | `mir.auk` (+185) |
+| `mir/types.rs` `TyInfo::new`, `needs_rc`, ... (~80) | `mir/types.auk` (+95) |
+
+The MIR data model, layouts, reader and printer are the back-end port's (`mir.auk`,
+`mir/types.auk`, `mir/layout.auk`, `mir/printer.auk`, cherry-picked from its branch with the
+Rust names); the lowering adds to them rather than defining its own. `compiler ir` lowers and
+prints with that printer.
+
+**Oracle.** `scripts/diff_ir.sh`: the back end's corpus (every program `auk ir` takes) plus
+`compiler/tests/ir/` (closures with `var` function parameters and unpacked tuples; or-patterns,
+tuple assignment, `str` match tables, `+=`, `str(cs[a..b])`, take/put-back, the fused map
+update, tail calls; tasks, `await` of tuples/lists/`any`, cancel, `catch`, channels, typed
+errors; `any S`, derived and user Ord/Eq/hash/`to_value`/`from_value`, boxed recursive fields,
+contracts with `old`/`result`, `peek`, imprints; an FFI project with sqlite out-parameters and
+lists, casts, `#embed` and a C function pointer), each as `auk ir`, `--release`, `--release -g`,
+`--trace=json` and `--debug`: **1045 outputs (209 programs), 26 imprint helper programs, 0
+differ**. It was at zero on the first full run except for the 4 programs whose imprints fail
+at compile time (E0115, E0420), which needed the helper's exit code and stderr in the records
+hook. The compiler's own MIR (`compiler/src/main.auk`, 7.9 MB) is identical too.
+
+**Imprints.** `imprint X = e` runs a helper program at compile time (JIT, forked). The port
+builds the same helper (`imprint_program`, diffed) and interprets its records
+(`imprint_results`), but can't run it until it has a back end: the diff takes the records from
+the Rust run (`AUK_IMPRINT_RECORDS`). Phase 4 replaces that with the port's own JIT.
+
+**Timing** (`scripts/ir_time.sh 3`: the 209 programs, best of 3 each, summed; Rust lowering is
+`AUK_TIME_LOWER=1 auk ir`, from the imprints' values to the finished program; the port's is
+`compiler ir --time --quiet`, the same span; the machine was shared with other agents):
+
+| measure | Rust | Auk (as ported) | Auk / Rust |
+|---|---|---|---|
+| lower, in-process (sum of 209) | 9933 ms | 15279 ms | **1.54x** |
+| `ir`, whole process (load, check, lower, print) | 30384 ms | 36031 ms | 1.19x |
+
+(The whole-process Rust number includes JIT-running the imprint helpers, which the port reads
+from the records instead, and the port's checker is 1.28x; so the 1.19x flatters it a little.)
+Not profiled or tuned yet: the port is a line-by-line translation, and the obvious suspects
+are the ones of 3b (RC traffic on `Ex`/`Ty` trees, map lookups keyed by `Ty`, `struct_layout`/
+`enum_layout` rebuilt per call as in Rust, where they are cheaper).
+
+### Gaps found (3c)
+
+1. **`lw.g.f(..)` and ownership.** Rust's `Lower` borrows `&mut Gen`; an Auk struct holding the
+   `Gen` by value shares its lists with the caller's, so the first write would copy the whole
+   program per instance. `emit_instance` moves the state in with `progen.take(&g)` (copy, then
+   overwrite the caller's with empties) and back out at the end. Every `Gen`/`Lower` function
+   takes `var` (a pointer), even read-only ones, so no call copies the ~25-field state.
+2. **Closures can't change what they capture**, and Rust's `helper(kind, t, .., |g, f| ..)`
+   closures and `both`/`obj`/`field`/`kid`/`check` helpers mutate a `Body` and the `Gen`:
+   `helper` takes a `(var Gen, int) => Body` (fine), the others became module functions with
+   the captured values as parameters (`derive_fromv`'s eight closures share a `FromV` struct).
+3. **Effects are transitive**: reading an `#embed` file in `lower/ffi.rs` would make the whole
+   lowering `uses fs`; the port reads every `#embed` file up front (`build.embeds`).
+4. **`TyInfo`'s `RefCell` memo** (`needs_rc`) lives in `Gen.rc`, passed `var`.
+5. Smaller: `ensures`/`requires` are keywords (`ensures_`, `requires_`); `Ex::int`/`bool`/
+   `float`/`var` are `int_`/`bool_`/`float_`/`var_`; the `.0`-index of `x?.0`
+   (`Ident::tuple_index`) is a digit check; a hex `u64` (`D` records) is decoded by hand
+   (`int.parse(s, 16)` overflows past 2^63); `Program::live_keys` is a `Gen` field (the
+   reader's `Program` has none).
+
+No compiler or runtime bug blocked the port; the Rust side gained only the diff hooks
+(`AUK_IMPRINT_RECORDS`, `AUK_IMPRINT_EVAL_IR`, `AUK_TIME_LOWER`).
 
 ## Phase 5
 
@@ -644,6 +714,13 @@ scripts/diff_check.sh         # check (auk check --json): 959 files, 0 differ
 scripts/diff_check_text.sh    # check_text (auk check): 959 files, 0 differ
 scripts/diff_holes.sh         # holes, holes_json: 959 files, 0 differ each
 scripts/diff_typed.sh         # typed: 959 files, 0 differ, and typed --core
+scripts/diff_tokens.sh        # tokens: 924 files, 0 differ
+scripts/diff_ast.sh           # ast: 924 files, 0 differ
+scripts/diff_resolve.sh       # resolve: 924 files, 0 differ (254 before tests/checker/)
+scripts/diff_check.sh         # check: 924 files, 0 differ
+scripts/diff_typed.sh         # typed: 924 files, 0 differ, and typed --core
+scripts/diff_ir.sh            # ir: 1045 outputs (209 programs x 5 variants), 26 helpers, 0 differ
+scripts/ir_time.sh 3          # the 3c timing table
 scripts/diff_fmt.sh           # fmt: 258 files, 0 differ, 0 not idempotent
 scripts/pilot_time.sh 7 20    # the tables above
 auk test compiler             # the ported unit tests
