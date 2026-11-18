@@ -5,7 +5,8 @@
 //! spaces, strings escaped by `esc`, floats as their IEEE bits, chars as code points.
 //!
 //! A file under a `prelude/` directory is parsed as a core prelude file (`extern` allowed).
-//! `--quiet` lexes or parses without printing (for timing).
+//! For timing: `--quiet` lexes or parses without printing, `--repeat N` does the whole job N
+//! times, and `--time` prints the time per repetition (file reading excluded) to stderr.
 
 use std::fmt::Write;
 use std::time::Instant;
@@ -21,13 +22,18 @@ pub fn run(args: &[String]) -> i32 {
     let (what, rest) = match args.split_first() {
         Some((w, rest)) if w == "tokens" || w == "ast" => (w.as_str(), rest),
         _ => {
-            eprintln!("usage: auk dump tokens|ast [--quiet] [--time] <file>...");
+            eprintln!("usage: auk dump tokens|ast [--quiet] [--time] [--repeat N] <file>...");
             return 2;
         }
     };
     let quiet = rest.iter().any(|a| a == "--quiet");
     let time = rest.iter().any(|a| a == "--time");
-    let files: Vec<&String> = rest.iter().filter(|a| !a.starts_with("--")).collect();
+    let repeat: u32 = match rest.iter().position(|a| a == "--repeat") {
+        Some(i) => rest.get(i + 1).and_then(|n| n.parse().ok()).unwrap_or(1),
+        None => 1,
+    };
+    let files: Vec<&String> =
+        rest.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || rest[i - 1] != "--repeat")).map(|(_, a)| a).collect();
     let mut srcs = Vec::new();
     for f in &files {
         match fs::read_to_string(f) {
@@ -40,31 +46,39 @@ pub fn run(args: &[String]) -> i32 {
     }
     let start = Instant::now();
     let mut out = String::new();
-    for (f, src) in files.iter().zip(&srcs) {
+    for (f, src) in (0..repeat).flat_map(|_| files.iter().zip(&srcs)) {
         if files.len() > 1 && !quiet {
             let _ = writeln!(out, "== {f}");
         }
         if what == "tokens" {
             match lex(src) {
                 Ok(lx) if !quiet => tokens(&mut out, lx.module_doc.as_deref(), &lx.toks),
-                Ok(_) => {}
-                Err(d) if !quiet => diag(&mut out, &d),
-                Err(_) => {}
+                r => {
+                    if let Err(d) = std::hint::black_box(r)
+                        && !quiet
+                    {
+                        diag(&mut out, &d)
+                    }
+                }
             }
         } else {
             let prelude = Path::new(f).parent().and_then(|p| p.file_name()).is_some_and(|n| n == "prelude");
             let r = if prelude { parser::parse_prelude(src) } else { parser::parse(src) };
             match r {
                 Ok(m) if !quiet => module(&mut out, &m),
-                Ok(_) => {}
-                Err(ds) if !quiet => ds.iter().for_each(|d| diag(&mut out, d)),
-                Err(_) => {}
+                r => {
+                    if let Err(ds) = std::hint::black_box(r)
+                        && !quiet
+                    {
+                        ds.iter().for_each(|d| diag(&mut out, d))
+                    }
+                }
             }
         }
     }
     print!("{out}");
     if time {
-        eprintln!("time: {} us", start.elapsed().as_micros());
+        eprintln!("time: {} us", start.elapsed().as_micros() / u128::from(repeat.max(1)));
     }
     0
 }
