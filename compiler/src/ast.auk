@@ -160,6 +160,8 @@ pub enum PatKind {
   None,
   Ok(p: Pat),
   Err(p: Pat),
+  /// `A | B(x)`: a match arm's alternatives (only at the top of an arm).
+  Or(ps: [Pat]),
 }
 
 /// The `..` of a list pattern, with an optional binding: `..t`, `.._`.

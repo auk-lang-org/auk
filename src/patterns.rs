@@ -401,12 +401,33 @@ impl<'a> Cx<'a> {
         if ty.has_error() {
             return;
         }
-        let rows: Vec<Row> = arms.iter().map(|a| Row { pats: vec![self.lower(&a.pat)], guarded: a.guard.is_some() }).collect();
-        let tys = [ty.clone()];
-        // reachability
+        // one row per alternative of an or-pattern (`A | B`), each remembering its arm
+        let mut rows: Vec<Row> = Vec::new();
+        let mut row_arm: Vec<(usize, &Pat)> = Vec::new();
         for (i, a) in arms.iter().enumerate() {
-            if let Some(j) = self.unreachable(&rows, i, &tys) {
-                let what = match j {
+            let alts: Vec<&Pat> = match &a.pat.kind {
+                PatKind::Or(ps) => ps.iter().collect(),
+                _ => vec![&a.pat],
+            };
+            for q in alts {
+                rows.push(Row { pats: vec![self.lower(q)], guarded: a.guard.is_some() });
+                row_arm.push((i, q));
+            }
+        }
+        let tys = [ty.clone()];
+        // reachability: an arm is unreachable when every alternative is; a single alternative
+        // that can't match is reported on its own
+        let mut k = 0;
+        for (i, a) in arms.iter().enumerate() {
+            let n = row_arm[k..].iter().take_while(|(ai, _)| *ai == i).count();
+            let dead: Vec<Option<Option<usize>>> = (k..k + n).map(|r| self.unreachable(&rows, r, &tys)).collect();
+            if dead.iter().all(|d| d.is_some()) {
+                // an earlier unguarded arm that covers every alternative alone
+                let single = (0..i).find(|&j| {
+                    let theirs: Vec<Vec<P>> = (0..k).filter(|&r| row_arm[r].0 == j && !rows[r].guarded).map(|r| rows[r].pats.clone()).collect();
+                    !theirs.is_empty() && (k..k + n).all(|r| self.wit(&theirs, &rows[r].pats, &tys, 1).is_empty())
+                });
+                let what = match single {
                     Some(j) => format!(
                         "the arm `{}` at line {} already matches every value this one matches",
                         self.text(arms[j].pat.span),
@@ -420,7 +441,28 @@ impl<'a> Cx<'a> {
                         .note(what)
                         .fix(Span { line: prev.end_line, col: prev.end_col, end_line: a.span.end_line, end_col: a.span.end_col }, ""),
                 );
+            } else {
+                for (r, d) in (k..k + n).zip(&dead) {
+                    if d.is_none() {
+                        continue;
+                    }
+                    let q = row_arm[r].1;
+                    // remove ` | q` (or `q | ` for the first alternative)
+                    let fix = if r > k {
+                        let p = row_arm[r - 1].1.span;
+                        Span { line: p.end_line, col: p.end_col, end_line: q.span.end_line, end_col: q.span.end_col }
+                    } else {
+                        let nx = row_arm[r + 1].1.span;
+                        Span { line: q.span.line, col: q.span.col, end_line: nx.line, end_col: nx.col }
+                    };
+                    self.err(
+                        Diag::new("E0401", q.span, "this alternative is unreachable")
+                            .note("the arms and alternatives before it already match every value it matches")
+                            .fix(fix, ""),
+                    );
+                }
             }
+            k += n;
         }
         // exhaustiveness
         let full: Vec<Vec<P>> = rows.iter().filter(|r| !r.guarded).map(|r| r.pats.clone()).collect();
@@ -558,6 +600,9 @@ impl<'a> Cx<'a> {
         let t = self.t();
         match &p.kind {
             PatKind::Wild => P::Wild,
+            // or-patterns only appear at the top of a match arm, which `match_expr` splits into
+            // one row per alternative
+            PatKind::Or(ps) => self.lower(&ps[0]),
             PatKind::Bind(_) => match t.variants.get(&p.id) {
                 Some(v) => P::C(Ctor::Idx(v.index), Vec::new()),
                 None => P::Wild,

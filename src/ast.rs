@@ -266,6 +266,9 @@ pub enum PatKind {
     None,
     Ok(Box<Pat>),
     Err(Box<Pat>),
+    /// `A | B(x)`: a match arm's alternatives (only at the top of an arm); each binds the same
+    /// names with the same types.
+    Or(Vec<Pat>),
 }
 
 /// The `..` of a list pattern, with an optional binding: `..t`, `.._`.
@@ -684,6 +687,7 @@ pub fn pat_dump(p: &Pat) -> String {
         PatKind::None => "none".into(),
         PatKind::Ok(p) => format!("(ok {})", pat_dump(p)),
         PatKind::Err(p) => format!("(err {})", pat_dump(p)),
+        PatKind::Or(ps) => format!("(or {})", join(ps, pat_dump)),
     }
 }
 

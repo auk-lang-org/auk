@@ -725,6 +725,7 @@ impl<'a> Finder<'a> {
             PatKind::Map(es) => es.iter().for_each(|(_, x)| self.pat(x)),
             PatKind::StrPrefix { rest, .. } => self.pat(rest),
             PatKind::Some(x) | PatKind::Ok(x) | PatKind::Err(x) => self.pat(x),
+            PatKind::Or(ps) => ps.iter().for_each(|x| self.pat(x)),
         }
     }
 

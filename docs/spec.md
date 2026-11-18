@@ -89,7 +89,7 @@ for k, v in map { }
 while c { }
 let v = loop { if done() { break 42 } }
 ```
-Match arms are separated by newlines or commas. A struct literal or `else` inside an `if`/`while`/`for`/`match` head needs parentheses.
+Match arms are separated by newlines or commas. `A | B(x) => ...` matches either; every alternative binds the same names with the same types. A struct literal or `else` inside an `if`/`while`/`for`/`match` head needs parentheses.
 
 ## Errors and optionals
 ```

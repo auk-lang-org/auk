@@ -20,6 +20,64 @@ impl Checker {
         self.pat(p, ty, false, &mut seen, false);
     }
 
+    /// The local a pattern binds `n` to: a new one in the current scope, or, in a later
+    /// alternative of an or-pattern, the one the first alternative bound (same type).
+    fn bind_name(&mut self, n: &str, ty: &Ty, mutable: bool, span: Span) -> LocalId {
+        if let Some(first) = &self.or_binds {
+            match first.get(n).copied() {
+                Some(l) => {
+                    let lt = self.local_ty(l);
+                    if !self.unify(&lt, ty) {
+                        let (a, b) = (self.show(ty), self.show(&lt));
+                        self.err(
+                            Diag::new("E0267", span, format!("`{n}` is a `{b}` in the first alternative but a `{a}` here"))
+                                .note("every alternative of an or-pattern must bind the same names with the same types"),
+                        );
+                    }
+                    return l;
+                }
+                None => {
+                    self.err(
+                        Diag::new("E0267", span, format!("`{n}` is bound here but not in the first alternative"))
+                            .note("every alternative of an or-pattern must bind the same names with the same types; use `_` here or split the arm"),
+                    );
+                    return self.new_local(n, ty.clone(), mutable, span);
+                }
+            }
+        }
+        let l = self.new_local(n, ty.clone(), mutable, span);
+        self.scope_insert(n, l);
+        l
+    }
+
+    /// `A | B`: the first alternative binds the names, the others must bind the same ones.
+    fn or_pat(&mut self, alts: &[Pat], ty: &Ty, mutable: bool, seen: &mut HashMap<String, Span>, bind: bool) {
+        let before: Vec<String> = seen.keys().cloned().collect();
+        self.pat(&alts[0], ty, mutable, seen, bind);
+        let scope = self.cx().scopes.last().cloned().unwrap_or_default();
+        let first: HashMap<String, LocalId> =
+            seen.keys().filter(|k| !before.contains(k)).filter_map(|k| scope.get(k).map(|&l| (k.clone(), l))).collect();
+        let outer = self.or_binds.take();
+        for alt in &alts[1..] {
+            let mut s2: HashMap<String, Span> = seen.iter().filter(|(k, _)| before.contains(k)).map(|(k, v)| (k.clone(), *v)).collect();
+            self.or_binds = Some(first.clone());
+            let n0 = self.errs.len();
+            self.pat(alt, ty, mutable, &mut s2, bind);
+            self.or_binds = None;
+            // a name bound here but not in the first alternative was already reported
+            let reported = self.errs[n0..].iter().any(|d| d.diag.code == "E0267");
+            let mut missing: Vec<String> = first.keys().filter(|k| !s2.contains_key(*k)).map(|k| format!("`{k}`")).collect();
+            if !missing.is_empty() && !reported {
+                missing.sort();
+                self.err(
+                    Diag::new("E0267", alt.span, format!("this alternative doesn't bind {}, which the first one binds", missing.join(", ")))
+                        .note("every alternative of an or-pattern must bind the same names with the same types"),
+                );
+            }
+        }
+        self.or_binds = outer;
+    }
+
     fn pat_mismatch(&mut self, p: &Pat, what: &str, ty: &Ty) {
         let r = self.resolve(ty);
         if r.has_error() {
@@ -76,9 +134,8 @@ impl Checker {
                     return;
                 }
                 seen.insert(n.clone(), p.span);
-                let l = self.new_local(n, ty.clone(), mutable, p.span);
+                let l = self.bind_name(n, ty, mutable, p.span);
                 self.cx().t.binds.insert(p.id, l);
-                self.scope_insert(n, l);
             }
             PatKind::Lit { lit, neg } => {
                 let lt = match lit {
@@ -241,8 +298,7 @@ impl Checker {
                                 out.push((i, None));
                                 continue;
                             }
-                            let l = self.new_local(&f.name.name, ft, mutable, f.name.span);
-                            self.scope_insert(&f.name.name, l);
+                            let l = self.bind_name(&f.name.name, &ft, mutable, f.name.span);
                             seen.insert(f.name.name.clone(), f.name.span);
                             out.push((i, Some(l)));
                         }
@@ -361,6 +417,7 @@ impl Checker {
                 }
                 self.pat(q, &er, mutable, seen, bind);
             }
+            PatKind::Or(alts) => self.or_pat(alts, ty, mutable, seen, bind),
         }
     }
 

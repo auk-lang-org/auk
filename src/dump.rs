@@ -453,6 +453,10 @@ fn pat(out: &mut String, d: usize, p: &Pat) {
             line(out, d, &format!("{head} err"));
             pat(out, d + 1, p);
         }
+        PatKind::Or(ps) => {
+            line(out, d, &format!("{head} or"));
+            ps.iter().for_each(|p| pat(out, d + 1, p));
+        }
     }
 }
 

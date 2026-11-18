@@ -400,6 +400,8 @@ impl Walk<'_> {
             PatKind::Map(kvs) => kvs.iter().for_each(|(_, p)| self.pat(p)),
             PatKind::StrPrefix { rest, .. } => self.pat(rest),
             PatKind::Some(p) | PatKind::Ok(p) | PatKind::Err(p) => self.pat(p),
+            // every alternative binds the same locals
+            PatKind::Or(ps) => self.pat(&ps[0]),
             _ => {}
         }
     }

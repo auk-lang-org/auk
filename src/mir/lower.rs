@@ -115,6 +115,9 @@ struct FnState {
     olds: HashMap<u32, Ex>,
     var_params: HashSet<LocalId>,
     dbg: Option<FnDbg>,
+    /// While binding an alternative of an or-pattern: the variable each of its locals goes in
+    /// (declared before the alternatives; see `bind_pat`).
+    or_into: HashMap<LocalId, Ex>,
 }
 
 impl FnState {
@@ -129,6 +132,7 @@ impl FnState {
             olds: HashMap::new(),
             var_params: HashSet::new(),
             dbg: None,
+            or_into: HashMap::new(),
         }
     }
 }
@@ -521,6 +525,12 @@ impl<'g, 'a> Lower<'g, 'a> {
 
     /// Bind a local name; in an instrumented function, also record its address in the frame.
     fn bind_name(&mut self, l: LocalId, s: Slot) {
+        // an or-pattern's alternative: move the owned value into the variable declared for it
+        if let Some(var) = self.f.or_into.get(&l).cloned() {
+            self.unregister(&s.c);
+            self.set(var, s.c);
+            return;
+        }
         if self.f.dbg.is_some() {
             let place = if s.c.is_place() { s.c.clone() } else { self.decl(&s.ty, s.c.clone()) };
             let d = self.f.dbg.as_mut().expect("dbg");

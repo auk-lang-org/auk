@@ -31,6 +31,11 @@ impl Lower<'_, '_> {
     fn test_into(&mut self, p: &Pat, v: &Ex, ty: &Ty, conds: &mut Vec<Ex>) {
         match &p.kind {
             PatKind::Wild => {}
+            PatKind::Or(ps) => {
+                // a || b || c, as !(!a && !b && !c)
+                let alts: Vec<Ex> = ps.iter().map(|q| self.pat_test(q, v).not()).collect();
+                conds.push(Ex::and(alts).not());
+            }
             PatKind::Bind(_) => {
                 if let Some(vr) = self.t.variants.get(&p.id).cloned() {
                     conds.push(self.g.variant_tag(ty, vr.index, v));
@@ -207,6 +212,7 @@ impl Lower<'_, '_> {
         let ty = self.ty(p.id);
         match &p.kind {
             PatKind::Wild | PatKind::Lit { .. } | PatKind::None => {}
+            PatKind::Or(ps) => self.bind_or(ps, v),
             PatKind::Bind(_) => {
                 if self.t.variants.contains_key(&p.id) {
                     return;
@@ -323,6 +329,53 @@ impl Lower<'_, '_> {
                 }
             }
         }
+    }
+
+    /// Bind an or-pattern that matched `v`: every alternative binds the same locals (the
+    /// checker gives them the same ids), so declare a variable per local first, then bind
+    /// the alternative that matches into those variables.
+    fn bind_or(&mut self, ps: &[Pat], v: &Ex) {
+        let mut ls: Vec<usize> = Vec::new();
+        self.pat_locals(&ps[0], &mut ls);
+        if ls.is_empty() {
+            return;
+        }
+        let mut into = std::collections::HashMap::new();
+        for &l in &ls {
+            let lt = self.local_ty(l);
+            let var = self.zero_decl(&lt);
+            self.register_local(&var, &lt);
+            self.bind_name(l, Slot { c: var.clone(), ty: lt });
+            into.insert(l, var);
+        }
+        let saved = std::mem::replace(&mut self.f.or_into, into);
+        let last = ps.len() - 1;
+        for (i, q) in ps.iter().enumerate() {
+            if i < last {
+                let t = self.pat_test(q, v);
+                self.open_if(t);
+            }
+            self.bind_sub(q, v);
+            if i < last {
+                self.else_();
+            }
+        }
+        for _ in 0..last {
+            self.close();
+        }
+        self.f.or_into = saved;
+    }
+
+    /// The locals pattern `p` binds.
+    fn pat_locals(&self, p: &Pat, out: &mut Vec<usize>) {
+        crate::check::shapes::visit_pat(p, &mut |q| {
+            if let Some(&l) = self.t.binds.get(&q.id) {
+                out.push(l);
+            }
+            if let Some(sp) = self.t.struct_pats.get(&q.id) {
+                out.extend(sp.fields.iter().filter_map(|(_, l)| *l));
+            }
+        });
     }
 
     fn bind_sub(&mut self, q: &Pat, v: &Ex) {

@@ -627,6 +627,7 @@ pub(crate) fn visit_pat(p: &ast::Pat, f: &mut impl FnMut(&ast::Pat)) {
         PatKind::Map(es) => es.iter().for_each(|(_, q)| visit_pat(q, f)),
         PatKind::StrPrefix { rest, .. } => visit_pat(rest, f),
         PatKind::Some(q) | PatKind::Ok(q) | PatKind::Err(q) => visit_pat(q, f),
+        PatKind::Or(ps) => ps.iter().for_each(|q| visit_pat(q, f)),
         _ => {}
     }
 }

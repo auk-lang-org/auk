@@ -152,6 +152,7 @@ pub const CODES: &[(&str, &str)] = &[
     ("E0264", "wrong number of fields in a variant pattern"),
     ("E0265", "name bound twice in a pattern"),
     ("E0266", "struct pattern doesn't mention every field"),
+    ("E0267", "the alternatives of an or-pattern bind different names or types"),
     ("E0270", "not indexable"),
     ("E0280", "format precision on a type without one"),
     ("E0281", "zero-padding format on a non-number"),

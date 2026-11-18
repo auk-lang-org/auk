@@ -814,6 +814,7 @@ impl Fmt {
             PatKind::None => "none".into(),
             PatKind::Ok(p) => format!("ok({})", self.pat(p, false)),
             PatKind::Err(p) => format!("err({})", self.pat(p, false)),
+            PatKind::Or(ps) => ps.iter().map(|q| self.pat(q, head)).collect::<Vec<_>>().join(" | "),
         }
     }
 

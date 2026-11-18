@@ -1422,7 +1422,14 @@ impl Parser {
                 return Ok(arms);
             }
             let start = self.span();
-            let pat = self.pattern()?;
+            let mut pat = self.pattern()?;
+            if self.at(&Tok::Pipe) {
+                let mut alts = vec![pat];
+                while self.eat(&Tok::Pipe) {
+                    alts.push(self.pattern()?);
+                }
+                pat = Pat { id: self.id(), span: start.to(self.prev), kind: PatKind::Or(alts) };
+            }
             let guard = if self.eat(&Tok::When) {
                 let saved = self.no_closure;
                 self.no_closure = true;

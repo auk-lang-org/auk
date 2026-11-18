@@ -23,7 +23,7 @@
 
 mod expr;
 mod pat;
-mod shapes;
+pub(crate) mod shapes;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -228,6 +228,9 @@ pub(crate) struct Checker {
     /// The names `let` statements are binding while their values are checked (innermost last), so
     /// a closure that calls its own `let` name gets a clear E0102.
     pub binding: Vec<String>,
+    /// While checking the second and later alternatives of an or-pattern: the locals the first
+    /// one bound, by name (each alternative binds the same ones).
+    pub or_binds: Option<HashMap<String, LocalId>>,
     /// Per body: the nodes whose targets monomorphization resolves.
     pub body_nodes: HashMap<BodyRef, BodyNodes>,
     pub main: Option<MainInfo>,
@@ -326,6 +329,7 @@ impl Checker {
             const_state: Vec::new(),
             cxs: Vec::new(),
             binding: Vec::new(),
+            or_binds: None,
             body_nodes: HashMap::new(),
             main: None,
             instances: Vec::new(),
@@ -1085,6 +1089,7 @@ impl Checker {
             PatKind::Some(p) => Ty::opt(self.pattern_type(m, p, inf).unwrap_or_else(|| inf.fresh())),
             PatKind::None => Ty::opt(inf.fresh()),
             PatKind::Ok(_) | PatKind::Err(_) => Ty::res(inf.fresh(), inf.fresh()),
+            PatKind::Or(ps) => return self.pattern_type(m, &ps[0], inf),
         })
     }
 

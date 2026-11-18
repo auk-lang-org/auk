@@ -377,6 +377,10 @@ fn pat(out: var [str], d: int, p: ast.Pat) {
       line(&out, d, "{head} err")
       pat(&out, d + 1, x)
     }
+    Or(ps) => {
+      line(&out, d, "{head} or")
+      for x in ps { pat(&out, d + 1, x) }
+    }
   }
 }
 

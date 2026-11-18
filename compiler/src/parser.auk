@@ -1838,7 +1838,12 @@ fn arms(p: var Parser): [ast.Arm]!diag.Fail {
     p.skip_newlines()
     if p.eat(token.RBrace) { return arms }
     let start = p.span()
-    let pat = pattern(&p)?
+    var pat = pattern(&p)?
+    if p.at(token.Pipe) {
+      var alts = [pat]
+      while p.eat(token.Pipe) { alts.push(pattern(&p)?) }
+      pat = ast.Pat { id: p.id(), span: start.to(p.prev), kind: ast.PatKind.Or(alts) }
+    }
     var guard: ast.Expr? = none
     if p.eat(token.When) {
       let saved = p.no_closure
