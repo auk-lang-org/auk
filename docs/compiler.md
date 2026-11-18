@@ -118,4 +118,14 @@ source ─▶ lex ─▶ parse ─▶ resolve ─▶ check ─▶ lower ─▶ M
 - `tests/units.rs`: units of measure (inference, every unit error, the `3<x` lexing rule, fmt, interpolation, and erasure: the generated program is the same as without units).
 - `tests/fmt.rs`, `lsp.rs`, `explain.rs`, `dive.rs`: the formatter (the corpus is fmt-clean), the language server, `auk explain` and the REPL.
 - `tests/raft.rs`: the package manager against the registry in `tests/fixtures/registry/`.
-- `sh runtime/c/test/run.sh` (`ASAN=1` for AddressSanitizer and UBSan): the runtime's own unit tests (`runtime/c/test/`).
+- `sh runtime/c/test/run.sh [filter]`: the runtime's own unit tests (`runtime/c/test/`), built without cargo. `ASAN=1` builds them with AddressSanitizer and UBSan (LeakSanitizer on), `TSAN=1` with ThreadSanitizer; `test_conc.c` is the concurrency stress set it is for (`TSAN=1 sh runtime/c/test/run.sh conc`: tasks spawned, awaited, cancelled and linked; heaps swept on other threads; channels with several senders and receivers; handle refcounts on many threads; the trace's and the debugger's locks). A sanitizer report in a forked child fails its test. `AUK_NET_TESTS=1` makes the tls tests reach real hosts.
+
+**The whole suite with a sanitized runtime.** `AUK_RT_SANITIZE=address` (read by build.rs) builds `libauk_rt.a` with ASan + UBSan and links the ASan runtime into `auk` and `raft`, so everything JIT-run (`auk run`, `auk test`, imprints, the debugger) uses the instrumented runtime. `auk build` programs link the instrumented library too, so they need a linker that adds the sanitizer runtime: `AUK_LINKER=runtime/c/test/asan-cc.sh`. The bitcode inlined into `auk build` programs stays uninstrumented (`AUK_NO_RT_INLINE=1` keeps every runtime call in the library). Leak checking is off: the compiler keeps its JIT modules for good. Use a separate target directory so the normal build isn't replaced:
+```
+export AUK_RT_SANITIZE=address CARGO_TARGET_DIR=target/asan
+export ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+export AUK_LINKER=$PWD/runtime/c/test/asan-cc.sh
+cargo test --release --no-fail-fast
+for p in packages/*/ examples; do target/asan/release/auk test $p; done
+```
+(A worktree needs the packages' `.raft/` dependencies installed first, as the normal suite does. `examples/hatch.auk`'s three tests fail by design: its holes are for `auk hatch`.)

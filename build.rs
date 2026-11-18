@@ -11,6 +11,13 @@
 //! The C compiles as one translation unit (a file that includes every source), so calls between
 //! the runtime's files inline. Files marked `auk: own translation unit` (they include system
 //! framework headers, whose names would clash with the runtime's) are compiled on their own.
+//!
+//! `AUK_RT_SANITIZE=address` builds the library with AddressSanitizer and UBSan and links the
+//! sanitizer runtime into the compiler, so JIT-run programs (`auk run`, `auk test`) use the
+//! instrumented runtime; `auk build` programs link it too when the linker adds the sanitizer
+//! runtime (`AUK_LINKER=runtime/c/test/asan-cc.sh`). The bitcode stays uninstrumented (copies
+//! of small functions inlined into `auk build` programs are not checked; `AUK_NO_RT_INLINE=1`
+//! keeps every call in the library). See docs/compiler.md, Testing.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -22,6 +29,7 @@ fn main() {
     let apple = env::var("CARGO_CFG_TARGET_VENDOR").as_deref() == Ok("apple");
     println!("cargo:rerun-if-changed=runtime/c");
     println!("cargo:rerun-if-env-changed=LLVM_SYS_231_PREFIX");
+    println!("cargo:rerun-if-env-changed=AUK_RT_SANITIZE");
     let prefix = PathBuf::from(env::var("LLVM_SYS_231_PREFIX").expect("LLVM_SYS_231_PREFIX (see .cargo/config.toml)"));
     let cdir = manifest.join("runtime/c");
     let units = units(&cdir, &out);
@@ -44,6 +52,14 @@ fn main() {
         for fw in ["Network", "Security", "CoreFoundation"] {
             println!("cargo:rustc-link-lib=framework={fw}");
         }
+    }
+    match env::var("AUK_RT_SANITIZE").as_deref() {
+        Err(_) | Ok("") => {}
+        Ok("address") => {
+            b.flag("-fsanitize=address,undefined").flag("-fno-omit-frame-pointer");
+            sanitizer_runtime(&prefix, apple);
+        }
+        Ok(other) => panic!("AUK_RT_SANITIZE={other}: only `address` (AddressSanitizer + UBSan) is supported"),
     }
     b.compile("auk_rt");
 
@@ -68,6 +84,22 @@ fn main() {
     assert!(status.success(), "llvm-link of the runtime bitcode failed");
 
     symbols(&cdir.join("auk_rt.h"), &out.join("rt_symbols.rs"));
+}
+
+/// Link the AddressSanitizer runtime (with UBSan's handlers) of the clang that compiled the
+/// library into the compiler's binaries: on macOS its dylib, found through an rpath; elsewhere
+/// through the C compiler driver that links.
+fn sanitizer_runtime(prefix: &Path, apple: bool) {
+    if !apple {
+        println!("cargo:rustc-link-arg=-fsanitize=address,undefined");
+        return;
+    }
+    let out = Command::new(prefix.join("bin/clang")).arg("--print-runtime-dir").output().expect("could not run clang");
+    let dir = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    assert!(Path::new(&dir).join("libclang_rt.asan_osx_dynamic.dylib").exists(), "no AddressSanitizer runtime in {dir}");
+    println!("cargo:rustc-link-search=native={dir}");
+    println!("cargo:rustc-link-lib=dylib=clang_rt.asan_osx_dynamic");
+    println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
 }
 
 /// The translation units: the files marked to stand alone, then one that includes the rest.

@@ -96,11 +96,23 @@ runtime calls `objc_msgSend` from C).
 - [x] Port `runtime/tests/*.rs` (62 tests) to C in `runtime/c/test/`: `sh runtime/c/test/run.sh
       [filter]`, `ASAN=1` for AddressSanitizer + UBSan (clean; LeakSanitizer stays on, with
       suppressions only for one-time allocations inside macOS frameworks).
-- [ ] TLS on Network.framework: badssl.com sometimes answers with a connection reset instead
-      of the certificate error (about 1 in 12–1 in 3 attempts; rustls saw none in 12). Find out
-      whether a reset before the verify block should be retried or reported differently.
-- [x] ASan + UBSan build of the runtime tests (above). Still to do: the whole suite under
-      ASan, and a TSan run for `task`/`chan`/`heap`.
+- [x] TLS on Network.framework: badssl.com reset about half the connections before sending a
+      certificate. Cause: Network.framework's 1.5 KB TLS 1.3 hello with an X25519MLKEM768 key
+      share (two TCP segments); OpenSSL offering that group gets the same resets, X25519 alone
+      none, so it is the server side. A reset before the certificate is now retried once as a
+      TLS 1.2 hello with TLS_FALLBACK_SCSV (no downgrade of a TLS 1.3 server); 30/30 certificate
+      errors since.
+- [x] ASan + UBSan build of the runtime tests (above).
+- [x] TSan: `TSAN=1 sh runtime/c/test/run.sh`, with concurrency stress tests
+      (`runtime/c/test/test_conc.c`: tasks, cancel and links, heaps swept on other threads,
+      channels, shared handle refcounts, the trace and debugger locks). Clean, no
+      suppressions. Found and fixed: a use after free in `heap` sweep (a container freed after
+      the objects it held), and in `dbg` a race between the all-stop inspector and threads
+      returning from blocking calls (frame chains changed under it), a `pause` lost behind a
+      queued `continue`, SIGPIPE when the front end hung up, and a stop at a breakpoint
+      deleted while the thread waited.
+- [x] The whole suite under ASan: `AUK_RT_SANITIZE=address` (docs/compiler.md, Testing).
+      `cargo test --release` and `auk test` over packages/ and examples: no reports.
 - [ ] Linux build and test (pthreads/`-ldl -lrt`, OpenSSL path).
 
 **Done when:** `runtime/` has no `.rs`; rustls/ring/webpki-roots/`cc`-for-catch gone; all tests
