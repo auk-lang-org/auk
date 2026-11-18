@@ -384,14 +384,34 @@ fn install(dir: &Path) -> Res<()> {
             }
         }
     }
+    // A `duck` (a run, the language server) may be reading .quack/ meanwhile: a package that is
+    // already installed as it should be is left alone, and a changed one is copied next to the
+    // old one and then renamed into place, so nobody sees a half-copied package.
     for p in &pkgs {
-        let dest = store.join(&p.m.name);
-        if dest.exists() {
-            fs::remove_dir_all(&dest).map_err(io)?;
+        let name = &p.m.name;
+        let dest = store.join(name);
+        let want = locked.iter().find(|l| l.name == *name).map(|l| l.checksum.clone());
+        if dest.join("quack.toml").is_file() && want.is_some() && checksum(&dest).ok() == want {
+            continue;
+        }
+        let fresh = store.join(format!(".{name}.new"));
+        if fresh.exists() {
+            fs::remove_dir_all(&fresh).map_err(io)?;
         }
         for (rel, src) in package_files(&p.dir)? {
-            let to = dest.join(&rel);
+            let to = fresh.join(&rel);
             fs::create_dir_all(to.parent().unwrap()).and_then(|()| fs::copy(&src, &to)).map_err(io)?;
+        }
+        if dest.exists() {
+            let stale = store.join(format!(".{name}.old"));
+            if stale.exists() {
+                fs::remove_dir_all(&stale).map_err(io)?;
+            }
+            fs::rename(&dest, &stale).map_err(io)?;
+            fs::rename(&fresh, &dest).map_err(io)?;
+            fs::remove_dir_all(&stale).map_err(io)?;
+        } else {
+            fs::rename(&fresh, &dest).map_err(io)?;
         }
     }
     fs::write(&lock_path, write_lock(&locked))

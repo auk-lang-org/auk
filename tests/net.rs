@@ -131,6 +131,8 @@ fn duck_echo_server_and_client_tasks() {
 
 #[test]
 fn echo_example_serves_one_connection() {
+    // examples/echo.duck is compiled against examples/.quack: wait for the other tests' install
+    setup();
     let mut child = Kill(
         duck_cmd()
             .args(["run", "examples/echo.duck"])
@@ -141,11 +143,17 @@ fn echo_example_serves_one_connection() {
     );
     // the server announces its port on stderr
     let mut lines = BufReader::new(child.0.stderr.take().unwrap()).lines();
+    let mut seen = Vec::new();
     let port: u16 = loop {
-        let line = lines.next().expect("echo exited before listening").unwrap();
+        let Some(line) = lines.next() else {
+            let status = child.0.wait().unwrap();
+            panic!("echo exited ({status}) before listening; its stderr:\n{}", seen.join("\n"));
+        };
+        let line = line.unwrap();
         if let Some(rest) = line.strip_prefix("echo: listening on 127.0.0.1:") {
             break rest.trim().parse().unwrap();
         }
+        seen.push(line);
     };
     let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
