@@ -734,18 +734,19 @@ static bool eval_at(AukDbgFrame *f, const char *expr, char **value, char **ty, c
     uint32_t func = (uint32_t)f->func;
     uint32_t site = (uint32_t)f->site;
     char *key = trimmed(expr);
-    Eval *found = NULL;
+    /* copied under the lock: another thread's append may move the table */
+    Eval e;
+    bool found = false;
     pthread_mutex_lock(&evals_lock);
     for (int64_t i = 0; i < nevals; i++) {
         if (evals[i].site == site && strcmp(evals[i].expr, key) == 0) {
-            found = &evals[i];
+            e = evals[i];
+            found = true;
             break;
         }
     }
     pthread_mutex_unlock(&evals_lock);
-    Eval e;
-    if (found != NULL) {
-        e = *found;
+    if (found) {
         free(key);
     } else {
         memset(&e, 0, sizeof e);
