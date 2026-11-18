@@ -392,7 +392,7 @@ numbers: [pilot-report.md](pilot-report.md), "Phase 4".
       [--trace..] [--debug] <file>` (`src/mir/dump.rs`, unit test `mir::dump::tests::mir_dump`:
       prefix tokens, every machine type and member, float bits, byte strings, plus the type
       definitions the layouts need), read by `mir/reader.auk`. Round trip
-      (`scripts/diff_mir.sh`): the port reads each dump and prints the MIR text; **130 dumps (26
+      (`scripts/diff_mir.sh`): the port reads each dump and prints the MIR text; **1035 dumps (207
       programs × run, release, release -g, traced, debugger), 0 differ**.
 - [x] `mir/llvm/codegen.rs` (1436), `intrin.rs` (336), `debug.rs` (150, DWARF), `rtlink.rs`
       (226, linking `auk_rt.bc`), `mod.rs` (252), `backend.rs` (52) → `compiler/src/codegen.auk`,

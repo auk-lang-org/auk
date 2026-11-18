@@ -884,13 +884,16 @@ and the code generator produced identical IR for `hello` at every level on its f
 only differences the oracles ever showed came from the scripts (`auk ir` read `--dump` and the
 trace flags in the wrong order; a source edited during a run).
 
-- `scripts/diff_mir.sh`: the port reads each dump and prints it as `auk ir` does: 26 programs
+- `scripts/diff_mir.sh`: the port reads each dump and prints it as `auk ir` does: 207 programs
   (golden.sh's `ir` corpus plus `compiler/tests/backend/`) × 5 variants (run, `--release`,
-  `--release -g`, `--trace=json`, `--debug`), **0 differ**.
+  `--release -g`, `--trace=json`, `--debug`): **1035 dumps, 0 differ** (a program the front end
+  rejects, such as a failing imprint, compares the Rust compiler's error with itself).
 - `scripts/diff_llvm.sh`: LLVM IR text against `auk ir --llvm=LEVEL` (a new option of the Rust
   compiler): o0, o0-raw, light-raw, light, o2, o3 (the MIR `auk run` compiles), build and
   build-raw (O2 with the runtime's bitcode linked by `rtlink`), build of the `-g` MIR (DWARF),
-  o0 and light of the traced and debugger MIR: **26 programs, 338 IR texts, 0 differ**.
+  o0 and light of the traced and debugger MIR: **26 programs, 338 IR texts, 0 differ**. On the
+  corpus grown by the checker port (207 programs, 2691 IR texts, about 2.5 hours) the only
+  differences were the 4 programs the front end rejects (52 texts), now compared as errors.
   Identical IR at every level means identical machine code from the same LLVM.
 - `scripts/run_backend.sh`: every `run` and project `test` entry of `golden_runs.txt` plus
   `compiler/tests/backend/` (closures, tasks and channels, `catch`, shapes and `any`, contracts,
@@ -982,7 +985,7 @@ scripts/diff_fmt.sh           # fmt: 258 files, 0 differ, 0 not idempotent
 scripts/diff_raft.sh          # raft: 91 commands, 0 differ; tests/raft.rs against the port
 scripts/diff_tools.sh         # explain (every code), lsp (981 files), mcp, tests/{lsp,mcp,explain}.rs on the port
 scripts/lsp_time.py <auk> <port> <file>...   # the lsp timing table
-scripts/diff_mir.sh           # MIR round trip: 130 dumps, 0 differ
+scripts/diff_mir.sh           # MIR round trip: 1035 dumps, 0 differ
 scripts/diff_llvm.sh          # LLVM IR: 26 programs, 338 IR texts, 0 differ
 scripts/run_backend.sh        # JIT runs and executables: 48 programs, 0 differ
 scripts/backend_time.sh 7     # code generation, Rust vs Auk
