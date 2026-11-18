@@ -107,7 +107,9 @@ pub fn open_libs(links: &[String], syms: &[String]) -> Result<(), String> {
             !h.is_null()
         });
         if !found {
-            let hint = if cfg!(target_os = "macos") { format!("brew install {l}") } else { format!("install the {l} development package (e.g. lib{l}-dev)") };
+            let hint = if l.contains('/') {
+                format!("no library at {l}; for a path that differs by OS, name it under [link] macos = [..] or linux = [..]")
+            } else if cfg!(target_os = "macos") { format!("brew install {l}") } else { format!("install the {l} development package (e.g. lib{l}-dev)") };
             return Err(format!("error: cannot load the C library `{l}` (raft.toml [link] libs; tried {}): {last}\n  help: {hint}\n", names.join(", ")));
         }
     }

@@ -3,5 +3,8 @@ name = "llvm"
 version = "0.1.0"
 effects = ["ffi"]
 
+# LLVM 23's shared library: Homebrew's llvm@23 (not on the default search path) on macOS;
+# apt.llvm.org's llvm-23-dev on Linux (libLLVM-23.so in the system library directory)
 [link]
-libs = ["/opt/homebrew/opt/llvm@23/lib/libLLVM.dylib"]
+macos = ["/opt/homebrew/opt/llvm@23/lib/libLLVM.dylib"]
+linux = ["LLVM-23"]

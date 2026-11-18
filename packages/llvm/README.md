@@ -4,8 +4,10 @@ Bindings to LLVM's C API (LLVM 23), for the Auk compiler's back end: build IR, v
 print it, optimize it, emit object files and bitcode, link modules, add debug info, and run code
 in memory with ORC LLJIT. They are generated from a list, not written by hand.
 
-**Effects:** `ffi`. **Links:** `/opt/homebrew/opt/llvm@23/lib/libLLVM.dylib` (`brew install
-llvm@23`; `auk run`/`test` `dlopen` it, `auk build` links it).
+**Effects:** `ffi`. **Links:** LLVM 23's shared library (`auk run`/`test` `dlopen` it, `auk build`
+links it): on macOS `/opt/homebrew/opt/llvm@23/lib/libLLVM.dylib` (`brew install llvm@23`), on
+Linux `-lLLVM-23` (apt.llvm.org's `llvm-23-dev`). raft.toml names each under `[link] macos` /
+`linux`.
 
 ```auk
 let c = llvm.ir.context_create()

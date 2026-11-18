@@ -164,11 +164,11 @@ pub struct Manifest {
     pub name: String,
     pub deps: Vec<String>,
     pub effects: Vec<String>,
-    /// `[link] libs`.
+    /// `[link] libs`, then `[link] macos` or `linux` (this OS's).
     pub links: Vec<String>,
 }
 
-/// Read the `[package]` name and effects, the `[deps]` names and `[link] libs`. (raft validates manifests
+/// Read the `[package]` name and effects, the `[deps]` names and `[link]` libraries. (raft validates manifests
 /// fully; the compiler only needs these keys.)
 pub fn parse_manifest(text: &str) -> Manifest {
     let mut m = Manifest::default();
@@ -187,7 +187,9 @@ pub fn parse_manifest(text: &str) -> Manifest {
         match (section.as_str(), key) {
             ("package", "name") => m.name = val.trim_matches('"').to_string(),
             ("package", "effects") => m.effects = str_list(val),
-            ("link", "libs") => m.links = str_list(val),
+            ("link", "libs") => m.links.extend(str_list(val)),
+            ("link", "macos") if cfg!(target_os = "macos") => m.links.extend(str_list(val)),
+            ("link", "linux") if cfg!(target_os = "linux") => m.links.extend(str_list(val)),
             ("deps", _) => m.deps.push(key.to_string()),
             _ => {}
         }
@@ -506,6 +508,12 @@ mod tests {
         assert_eq!(m.name, "web");
         assert_eq!(m.effects, ["net", "fs"]);
         assert_eq!(m.deps, ["http", "geo"]);
+        // [link] libs, then this OS's
+        let m = parse_manifest("[link]\nmacos = [\"m\"]\nlibs = [\"a\"]\nlinux = [\"l\"]\n");
+        let os = if cfg!(target_os = "macos") { &["a", "m"][..] } else if cfg!(target_os = "linux") { &["a", "l"][..] } else { &["a"][..] };
+        let mut links = m.links.clone();
+        links.sort();
+        assert_eq!(links, os);
     }
 
     /// Every prelude extern that touches the outside world declares its effect: the externs of
