@@ -120,7 +120,8 @@ test "json report" {
 pub fn render(d: Diag, path: str, src: str): str {
   let s = d.span
   let ls = src.lines()
-  let text = if s.line >= 1 && s.line <= ls.len() { ls[s.line - 1] } else { "" }
+  // Rust: `src.lines().nth(line.saturating_sub(1))`, so line 0 shows the first line
+  let text = if s.line <= ls.len() && ls.len() > 0 { ls[max(s.line - 1, 0)] } else { "" }
   let last = text.len() + 1
   let end = if s.end_line == s.line { min(s.end_col, max(last, s.col + 1)) } else { last }
   let carets = "^".repeat(max(end - s.col, 1))
@@ -153,6 +154,9 @@ test "render underlines the span" {
     .fix(Span { line: 2, col: 5, end_line: 2, end_col: 5 }, ")")
   assert d.render("a.auk", "fn f() {{\n  f(let)\n}}\n") ==
     "a.auk:2:5: error[E0020]: expected `)`, found `let`\n  |\n2 |   f(let)\n  |     ^^^\n  = note: a note\n  = fix: insert `)` at 2:5\n  = help: run `auk explain E0020` for details\n"
+  // a diagnostic at 0:0 (no position) quotes the first line, as Rust's does
+  assert new("E0360", NONE, "x").render("a.auk", "fn f() {{}}\n") ==
+    "a.auk:0:0: error[E0360]: x\n  |\n0 | fn f() {{}}\n  | ^\n  = help: run `auk explain E0360` for details\n"
   let w = new("E0411", Span { line: 1, col: 15, end_line: 1, end_col: 17 }, "unused")
   assert w.render("a.auk", "fn f(): int uses fs = 1\n").starts_with("a.auk:1:15: warning[E0411]: ")
 }
