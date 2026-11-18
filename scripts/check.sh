@@ -20,7 +20,7 @@ STEPS="${*:-cargo runtime pilot golden bench}"
 step_cargo() { cargo test --release --no-fail-fast; }
 # real-host TLS tests reach badssl.com, which times out now and then: off unless asked for
 step_runtime() { AUK_NET_TESTS="${AUK_NET_TESTS:-0}" sh runtime/c/test/run.sh; }
-step_pilot() { scripts/diff_tokens.sh && scripts/diff_ast.sh && scripts/diff_resolve.sh && scripts/diff_check.sh && scripts/diff_check_text.sh && scripts/diff_holes.sh && scripts/diff_typed.sh && scripts/diff_fmt.sh && scripts/diff_ir.sh && scripts/diff_raft.sh; }
+step_pilot() { scripts/gen_error_pages.sh --check && scripts/diff_tokens.sh && scripts/diff_ast.sh && scripts/diff_resolve.sh && scripts/diff_check.sh && scripts/diff_check_text.sh && scripts/diff_holes.sh && scripts/diff_typed.sh && scripts/diff_fmt.sh && scripts/diff_ir.sh && scripts/diff_raft.sh; }
 step_golden() { scripts/golden.sh --no-build --compare "$AUK"; }
 
 # fib 25, sieve 100k, ...: every bench program built and JIT-run on a small input, same output.

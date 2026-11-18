@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod auk_bin;
+use auk_bin::lacks;
+
 /// Codes whose wrong example can't produce them from user code (the page explains why).
 /// E0114: only an `extern` in the core prelude can name an intrinsic (a user `extern fn`'s
 /// string is a C prototype).
@@ -22,7 +25,7 @@ const CHECKED: &[&str] = &["E0036", "E0040"];
 const BUILD_TIME: &[&str] = &["E0420"];
 
 fn auk(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_auk")).args(args).output().unwrap()
+    Command::new(auk_bin::auk_bin()).args(args).output().unwrap()
 }
 
 fn text(b: &[u8]) -> String {
@@ -159,6 +162,8 @@ fn every_code_has_a_page() {
 #[test]
 fn examples_trigger_their_code_and_fixes_check_clean() {
     let codes = codes();
+    let no_parse = lacks("parse", "the wrong examples of lexing and parsing codes");
+    let no_ir = lacks("ir", "building the examples of build-time codes");
     let mut bad = Vec::new();
     for (code, _) in &codes {
         let secs = sections(&page(code));
@@ -172,9 +177,15 @@ fn examples_trigger_their_code_and_fixes_check_clean() {
         }
         assert!(wrong.iter().any(|(p, _)| p.is_empty()), "{code}: the wrong example has no main block");
 
-        let (got, out) = diagnose(&wrong, code.as_str() < "E0100" && !CHECKED.contains(&code.as_str()));
+        let parse = code.as_str() < "E0100" && !CHECKED.contains(&code.as_str());
+        // without `parse`, a lexing or parsing code is taken as produced (not checked)
+        let (got, out) = if parse && no_parse { (vec![code.clone()], String::new()) } else { diagnose(&wrong, parse) };
         let want = vec![code.clone()];
-        if BUILD_TIME.contains(&code.as_str()) {
+        if BUILD_TIME.contains(&code.as_str()) && no_ir {
+            if !got.is_empty() {
+                bad.push(format!("{code}: `auk check` on the wrong example gives {got:?}, want none:\n{out}"));
+            }
+        } else if BUILD_TIME.contains(&code.as_str()) {
             if !got.is_empty() {
                 bad.push(format!("{code}: `auk check` on the wrong example gives {got:?}, want none:\n{out}"));
             }
@@ -256,9 +267,11 @@ fn diagnostics_point_to_explain() {
     assert!(err.ends_with("  = help: run `auk explain E0200` for details\n"), "{err}");
     let json = text(&auk(&["check", p, "--json"]).stdout);
     assert!(json.contains(r#""explain":"auk explain E0200"}"#), "{json}");
-    fs::write(&path, "fn main() {\n  let x = 1;\n}\n").unwrap();
-    let err = text(&auk(&["parse", p]).stderr);
-    assert!(err.ends_with("  = help: run `auk explain E0011` for details\n"), "{err}");
+    if !lacks("parse", "a parse error's pointer to `auk explain`") {
+        fs::write(&path, "fn main() {\n  let x = 1;\n}\n").unwrap();
+        let err = text(&auk(&["parse", p]).stderr);
+        assert!(err.ends_with("  = help: run `auk explain E0011` for details\n"), "{err}");
+    }
     let _ = fs::remove_dir_all(&dir);
     assert!(Path::new("docs/errors/E0200.md").is_file());
 }
