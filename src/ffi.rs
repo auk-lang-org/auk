@@ -48,7 +48,9 @@ impl CTy {
             CTy::Void => "void".into(),
             CTy::Bool => "bool".into(),
             CTy::Int { bytes, signed, chr } => match (bytes, signed, chr) {
-                (1, true, true) => "char".into(),
+                // plain `char` is this target's signedness (unsigned on Linux arm64)
+                (1, s, true) if *s == char_signed() => "char".into(),
+                (1, true, true) => "signed char".into(),
                 (1, false, true) => "unsigned char".into(),
                 (1, true, _) => "int8_t".into(),
                 (1, false, _) => "uint8_t".into(),
