@@ -50,21 +50,21 @@ pub fn di_builder_create_compile_unit(
   lang,
   file_ref,
   producer,
-  producer.bytes().len(),
+  producer.byte_len(),
   is_optimized,
   flags,
-  flags.bytes().len(),
+  flags.byte_len(),
   runtime_ver,
   split_name,
-  split_name.bytes().len(),
+  split_name.byte_len(),
   kind,
   dwo_id,
   split_debug_inlining,
   debug_info_for_profiling,
   sys_root,
-  sys_root.bytes().len(),
+  sys_root.byte_len(),
   sdk,
-  sdk.bytes().len(),
+  sdk.byte_len(),
 )
 
 pub extern fn di_builder_create_debug_location(
@@ -87,13 +87,8 @@ pub fn di_builder_create_file(
   builder: llvm.DIBuilder,
   filename: str,
   directory: str,
-): llvm.Metadata uses ffi = c_di_builder_create_file(
-  builder,
-  filename,
-  filename.bytes().len(),
-  directory,
-  directory.bytes().len(),
-)
+): llvm.Metadata uses ffi =
+  c_di_builder_create_file(builder, filename, filename.byte_len(), directory, directory.byte_len())
 
 extern fn c_di_builder_create_function(
   builder: llvm.DIBuilder,
@@ -129,9 +124,9 @@ pub fn di_builder_create_function(
   builder,
   scope,
   name,
-  name.bytes().len(),
+  name.byte_len(),
   linkage_name,
-  linkage_name.bytes().len(),
+  linkage_name.byte_len(),
   file,
   line_no,
   ty,

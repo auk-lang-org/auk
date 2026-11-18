@@ -72,7 +72,7 @@ pub fn const_string_in_context2(
   c: llvm.Context,
   s: str,
   dont_null_terminate: int,
-): llvm.Value uses ffi = c_const_string_in_context2(c, s, s.bytes().len(), dont_null_terminate)
+): llvm.Value uses ffi = c_const_string_in_context2(c, s, s.byte_len(), dont_null_terminate)
 
 extern fn c_const_struct_in_context(
   c: llvm.Context,
@@ -226,8 +226,7 @@ extern fn c_lookup_intrinsic_id(
   name_len: int,
 ): int = "unsigned LLVMLookupIntrinsicID(const char *Name, size_t NameLen)"
 
-pub fn lookup_intrinsic_id(name: str): int uses ffi =
-  c_lookup_intrinsic_id(name, name.bytes().len())
+pub fn lookup_intrinsic_id(name: str): int uses ffi = c_lookup_intrinsic_id(name, name.byte_len())
 
 pub extern fn print_value_to_string(
   val: llvm.Value,
@@ -270,7 +269,7 @@ extern fn c_set_value_name2(
 ) = "void LLVMSetValueName2(LLVMValueRef Val, const char *Name, size_t NameLen)"
 
 pub fn set_value_name2(val: llvm.Value, name: str) uses ffi =
-  c_set_value_name2(val, name, name.bytes().len())
+  c_set_value_name2(val, name, name.byte_len())
 
 pub extern fn type_of(val: llvm.Value): llvm.Type = "LLVMTypeRef LLVMTypeOf(LLVMValueRef Val)"
 

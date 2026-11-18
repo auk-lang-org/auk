@@ -400,12 +400,13 @@ fn string_trimming_and_stripping() {
   let name = "file.txt".strip_suffix(".txt") else "?"
   print(name)
   print("{min(3, 1)} {max(3, 1)} {min("b", "a")} {max(2.5, -1.0)}")
+  print("{"héllo ✓".byte_len()} {"".byte_len()} {"héllo".len()}")
 }
 "#,
     );
     assert_eq!(
         run_leak_free(&p),
-        "[hi there \n] [  hi there] [hi there]\nsome(\"flag\") none some(\"main\") some(\"llo\")\nfile\n1 3 a 2.5\n"
+        "[hi there \n] [  hi there] [hi there]\nsome(\"flag\") none some(\"main\") some(\"llo\")\nfile\n1 3 a 2.5\n10 0 5\n"
     );
 }
 

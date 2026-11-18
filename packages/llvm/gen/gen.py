@@ -380,7 +380,7 @@ class Binder:
                 while j > 0 and ps[j - 1]["kind"] == "list" and p["kind"] == "list":
                     j -= 1
                 src = ps[j]
-                drop[i + 1] = f"{src['name']}.bytes().len()" if src["kind"] == "str" else f"{src['name']}.len()"
+                drop[i + 1] = f"{src['name']}.byte_len()" if src["kind"] == "str" else f"{src['name']}.len()"
         aname = snake(name)
         rsig = f": {rt}" if rt else ""
         sig = ", ".join(f"{p['name']}: {p['auk']}" for p in ps)

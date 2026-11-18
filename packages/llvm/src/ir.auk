@@ -17,7 +17,7 @@ extern fn c_add_module_flag(
 ) = "void LLVMAddModuleFlag(LLVMModuleRef M, int Behavior, const char *Key, size_t KeyLen, LLVMMetadataRef Val)"
 
 pub fn add_module_flag(m: llvm.Module, behavior: int, key: str, val: llvm.Metadata) uses ffi =
-  c_add_module_flag(m, behavior, key, key.bytes().len(), val)
+  c_add_module_flag(m, behavior, key, key.byte_len(), val)
 
 pub extern fn array_type2(
   element_type: llvm.Type,
@@ -46,7 +46,7 @@ extern fn c_create_string_attribute(
 ): llvm.Attribute = "LLVMAttributeRef LLVMCreateStringAttribute(LLVMContextRef C, const char *K, unsigned KLength, const char *V, unsigned VLength)"
 
 pub fn create_string_attribute(c: llvm.Context, k: str, v: str): llvm.Attribute uses ffi =
-  c_create_string_attribute(c, k, k.bytes().len(), v, v.bytes().len())
+  c_create_string_attribute(c, k, k.byte_len(), v, v.byte_len())
 
 pub extern fn create_type_attribute(
   c: llvm.Context,
@@ -88,7 +88,7 @@ extern fn c_get_enum_attribute_kind_for_name(
 ): int = "unsigned LLVMGetEnumAttributeKindForName(const char *Name, size_t SLen)"
 
 pub fn get_enum_attribute_kind_for_name(name: str): int uses ffi =
-  c_get_enum_attribute_kind_for_name(name, name.bytes().len())
+  c_get_enum_attribute_kind_for_name(name, name.byte_len())
 
 pub extern fn get_first_function(
   m: llvm.Module,

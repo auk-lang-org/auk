@@ -108,6 +108,8 @@ pub extern fn lower(s: str): str = "auk_str_lower"
 pub extern fn chars(s: str): [char] = "auk_str_chars"
 /// The UTF-8 bytes, as ints 0..255.
 pub extern fn bytes(s: str): [int] = "auk_str_bytes"
+/// The number of UTF-8 bytes (`s.bytes().len()` without the copy).
+pub extern fn byte_len(s: str): int = "auk_str_byte_len"
 pub extern fn repeat(s: str, n: int): str = "auk_str_repeat +loc"
 
 /// What `contains` on a `str` looks for.

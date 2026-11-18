@@ -191,8 +191,9 @@ Gaps for Phase 4, found doing 2c:
 - [ ] `[link] libs` can't ask `llvm-config`. (Per-platform libraries are done: `[link] macos`
       names Homebrew's `libLLVM.dylib` path, `[link] linux` `-lLLVM-23`; another prefix still
       means editing the manifest.)
-- [ ] A string's byte length costs a copy (`s.bytes().len()`); every generated wrapper for a
-      `const char *` + length pays it. A `byte_len` would make names free.
+- [x] A string's byte length costs a copy (`s.bytes().len()`); every generated wrapper for a
+      `const char *` + length pays it. Done: `s.byte_len()` (the runtime's stored length), used
+      by the generated wrappers.
 - [ ] Each call that takes a list (`build_call2`, `build_gep2`, `function_type`) mallocs and frees
       a C array; fine for the pilot, measure in Phase 4.
 - [ ] Which `LLVM*Ref` parameters accept NULL and which results may be NULL is a hand list in
