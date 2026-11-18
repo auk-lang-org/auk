@@ -1,0 +1,4 @@
+[package]
+name = "runner"
+version = "0.1.0"
+effects = ["fs", "env", "proc", "time", "net", "ffi"]
