@@ -19,8 +19,7 @@
 ///
 /// Differences from Rust: `Lower` owns the `Gen` while it works (`emit_instance` moves it in
 /// and back out, so the program's lists stay unique); methods take `lw: var Lower`. Rust's
-/// `Option<&FnDbg>` updates take the value out of `f.dbg` and put it back. `emit_eval` (the
-/// debugger's expression evaluation) is not ported.
+/// `Option<&FnDbg>` updates take the value out of `f.dbg` and put it back.
 
 pub struct Val { c: mir.Ex, ty: types.Ty, owned: bool }
 
@@ -146,6 +145,48 @@ pub fn emit_instance(g: var mir.progen.Gen, i: int) {
     _ => { let _: int = mir.bug("codegen: instance {i} has an unexpected body") }
   }
   g = lw.g
+}
+
+/// The debugger's evaluation function for `value`, an expression inserted into the body of
+/// instance `i` (`dbg_eval.auk`): `AukStr *f(void **slots)` reads each local of `binds` from
+/// the address in the same position of `slots` and returns the value shown (debug `Show`).
+pub fn emit_eval(g: var mir.progen.Gen, i: int, value: ast.Expr, binds: [int]): int {
+  let tp = g.tp
+  let (m, _) = g.body_item(tp.instances[i].body)
+  let f = g.declare("dk_dbg_eval", [mir.void_ptr()], ty_str(), mir.Abi.C)
+  var lw = Lower {
+    g: mir.progen.take(&g),
+    tp,
+    m,
+    t: tp.tables[m],
+    inst: i,
+    subst: typed.inst_subst(tp.instances[i], tp.fns),
+    file: tp.program.mods[m].file,
+    f: new_fs(types.unit()),
+    saved: [],
+  }
+  let ps = lw.begin_fn(f, types.Ty.Str)
+  lw.push(ScopeKind.Block)
+  for k, l in binds {
+    let ty = lw.local_ty(l)
+    // slots[k]: the local's address in the stopped frame
+    let at = mir.bin(mir.BOp.Add, ps[0].cast(mir.MTy.I64), mir.int_as(8 * k, mir.MTy.I64)).cast(mir.ptr(mir.void_ptr()))
+    let place = at.deref(mir.void_ptr()).cast(mir.ptr(d(ty))).deref(d(ty))
+    lw.f.locals[l] = Slot { c: place, ty }
+  }
+  let v = lw.expr(value)
+  let shown = if v.is_never() || types.is_unit(v.ty) {
+    mir.rt("auk_str_from_bytes", [mir.cstr("()"), mir.int_(2)], ty_str())
+  } else {
+    lw.trace_show(v.ty, v.c)
+  }
+  let r = lw.bdecl(shown)
+  lw.cleanup_from(0)
+  lw.emit(mir.Stmt.Ret(r))
+  lw.f.scopes = []
+  lw.end(f)
+  g = lw.g
+  f
 }
 
 /// `ss` with `leave` (popping the debugger frame) before every return; a returned value is

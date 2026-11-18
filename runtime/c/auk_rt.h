@@ -811,6 +811,17 @@ typedef bool (*AukDbgEvalHook)(uint32_t func, uint32_t site, const char *expr, A
 
 AUK_API extern _Atomic int64_t auk_dbg_armed;
 void auk_dbg_set_eval_hook(AukDbgEvalHook h);
+/* The hook as a mailbox served by a thread of the compiler (dbg.c; compiler/src/dbg_eval.auk). */
+void auk_dbg_eval_mailbox(void);
+int64_t auk_dbg_eval_next(void);
+int64_t auk_dbg_eval_func(void);
+int64_t auk_dbg_eval_site(void);
+const char *auk_dbg_eval_expr(void);
+void auk_dbg_eval_ok(void *run, void *init, const int64_t *slots, int64_t nslots, const char *ty);
+void auk_dbg_eval_err(const char *msg);
+void auk_dbg_eval_close(void);
+void auk_dbg_catch_sigint(void);
+bool auk_dbg_sigint_taken(void);
 AUK_API void auk_dbg_enter(AukDbgFrame *f);
 AUK_API void auk_dbg_leave(AukDbgFrame *f);
 AUK_API void auk_dbg_hook(AukDbgFrame *f);

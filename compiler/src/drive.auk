@@ -290,6 +290,13 @@ pub fn jit_run(
   }
   let code = backend.jit(g.prog, g.info, level)?
   let entry = orcjit.lookup(code, "dk_entry")?
+  if trace.debug {
+    // a debugger may evaluate expressions at its stops
+    let server = dbg_eval.install(cx, path, tp, g.dbg)
+    let r = orcjit.run(entry, [path] + args)
+    dbg_eval.uninstall(server)
+    return r
+  }
   orcjit.run(entry, [path] + args)
 }
 

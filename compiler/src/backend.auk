@@ -213,6 +213,19 @@ pub fn jit_live(
   LiveCode { code, entry, entries, init, addrs }
 }
 
+/// The debugger's evaluation module, compiled in memory for good (never closed): the
+/// addresses of its entry and of `dk_init`.
+pub fn jit_eval(prog: mir.Program, info: mir.types.TyInfo): (ffi.Ptr, ffi.Ptr)! uses fs, env, proc, ffi {
+  let ex = codegen.Exports { entry: "dk_entry", names: ["dk_init"], all: false }
+  orcjit.open_libs(prog.links, prog.c_syms)?
+  let b = build(prog, info, ex, none, Level.O0, false, false)?
+  let syms = b.rt_syms
+  let code = orcjit.load(emit(b)?, syms)?
+  let entry = orcjit.lookup(code, "dk_entry")?
+  let init = orcjit.lookup(code, "dk_init")?
+  (entry, init)
+}
+
 /// Compile a program to an object file whose `main` is the entry point; `opt`: optimize (O2,
 /// with the runtime's inlinable functions).
 pub fn object(prog: mir.Program, info: mir.types.TyInfo, opt: bool): [int]! uses fs, env, ffi {

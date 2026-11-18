@@ -36,6 +36,7 @@
 #include <limits.h>
 #include <pthread.h>
 #include <sched.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -549,6 +550,158 @@ static int64_t capevals;
 
 void auk_dbg_set_eval_hook(AukDbgEvalHook h) {
     eval_hook = h;
+}
+
+/* The hook as a mailbox, for a compiler written in Auk (compiler/src/dbg_eval.auk), which C
+ * can't call: the stopped thread posts its request and waits; the compiler's server thread
+ * takes it (auk_dbg_eval_next), compiles it and answers (auk_dbg_eval_ok / auk_dbg_eval_err).
+ * One request at a time. The answer's initializer (the expression's string literals and
+ * constants) runs on the requesting thread, before its first call. */
+static pthread_mutex_t mb_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t mb_cv = PTHREAD_COND_INITIALIZER;
+/* 0: free, 1: a request waits, 2: being compiled, 3: answered */
+static int mb_state;
+static bool mb_closed;
+static uint32_t mb_func;
+static uint32_t mb_site;
+static char *mb_expr;
+static bool mb_ok;
+static AukDbgCompiled mb_out;
+static char *mb_err;
+static void (*mb_init)(void);
+
+static bool mailbox_hook(uint32_t func, uint32_t site, const char *expr, AukDbgCompiled *out, char **err) {
+    pthread_mutex_lock(&mb_lock);
+    while (mb_state != 0 && !mb_closed) {
+        pthread_cond_wait(&mb_cv, &mb_lock);
+    }
+    if (mb_closed) {
+        pthread_mutex_unlock(&mb_lock);
+        *err = dup_s("this program can't evaluate expressions");
+        return false;
+    }
+    mb_func = func;
+    mb_site = site;
+    mb_expr = dup_s(expr);
+    mb_state = 1;
+    pthread_cond_broadcast(&mb_cv);
+    while (mb_state != 3 && !mb_closed) {
+        pthread_cond_wait(&mb_cv, &mb_lock);
+    }
+    bool ok = false;
+    void (*init)(void) = NULL;
+    if (mb_state == 3) {
+        ok = mb_ok;
+        if (ok) {
+            *out = mb_out;
+            init = mb_init;
+        } else {
+            *err = mb_err;
+        }
+    } else {
+        *err = dup_s("this program can't evaluate expressions");
+    }
+    free(mb_expr);
+    mb_expr = NULL;
+    mb_err = NULL;
+    mb_state = 0;
+    pthread_cond_broadcast(&mb_cv);
+    pthread_mutex_unlock(&mb_lock);
+    if (init != NULL) {
+        init();
+    }
+    return ok;
+}
+
+/* Serve evaluations through the mailbox. */
+void auk_dbg_eval_mailbox(void) {
+    pthread_mutex_lock(&mb_lock);
+    mb_closed = false;
+    pthread_mutex_unlock(&mb_lock);
+    eval_hook = mailbox_hook;
+}
+
+/* Wait for a request: 1 (then auk_dbg_eval_func/site/expr say what), or 0 once closed. */
+int64_t auk_dbg_eval_next(void) {
+    pthread_mutex_lock(&mb_lock);
+    while (mb_state != 1 && !mb_closed) {
+        pthread_cond_wait(&mb_cv, &mb_lock);
+    }
+    int64_t r = mb_closed ? 0 : 1;
+    if (r == 1) {
+        mb_state = 2;
+    }
+    pthread_mutex_unlock(&mb_lock);
+    return r;
+}
+
+int64_t auk_dbg_eval_func(void) {
+    return mb_func;
+}
+
+int64_t auk_dbg_eval_site(void) {
+    return mb_site;
+}
+
+const char *auk_dbg_eval_expr(void) {
+    return mb_expr == NULL ? "" : mb_expr;
+}
+
+static void mb_answer(void) {
+    pthread_mutex_lock(&mb_lock);
+    mb_state = 3;
+    pthread_cond_broadcast(&mb_cv);
+    pthread_mutex_unlock(&mb_lock);
+}
+
+/* The request compiled: run(slots) at the code address run, the locals' slots, the type shown;
+ * init: the code's initializer. */
+void auk_dbg_eval_ok(void *run, void *init, const int64_t *slots, int64_t nslots, const char *ty) {
+    mb_ok = true;
+    mb_out.run = (AukStr * (*)(void *const *)) run;
+    mb_out.slots = auk__xmalloc((size_t)(nslots + 1) * sizeof(uint32_t));
+    for (int64_t i = 0; i < nslots; i++) {
+        mb_out.slots[i] = (uint32_t)slots[i];
+    }
+    mb_out.nslots = nslots;
+    mb_out.ty = dup_s(ty);
+    mb_init = (void (*)(void))init;
+    mb_answer();
+}
+
+/* The request failed to compile: why. */
+void auk_dbg_eval_err(const char *msg) {
+    mb_ok = false;
+    mb_err = dup_s(msg);
+    mb_answer();
+}
+
+/* No more requests: auk_dbg_eval_next returns 0, and waiting requests fail. */
+void auk_dbg_eval_close(void) {
+    pthread_mutex_lock(&mb_lock);
+    mb_closed = true;
+    pthread_cond_broadcast(&mb_cv);
+    pthread_mutex_unlock(&mb_lock);
+}
+
+/* Ctrl-C for a front end written in Auk (compiler/src/debug.auk), which can't install a signal
+ * handler: this one sets a flag, which the front end polls. */
+static volatile sig_atomic_t sigint_seen;
+
+static void on_sigint(int sig) {
+    (void)sig;
+    sigint_seen = 1;
+}
+
+void auk_dbg_catch_sigint(void) {
+    signal(SIGINT, on_sigint);
+}
+
+/* Was Ctrl-C pressed since the last call? */
+bool auk_dbg_sigint_taken(void) {
+    bool r = sigint_seen != 0;
+    sigint_seen = 0;
+    return r;
 }
 
 typedef struct EvalEnv {
