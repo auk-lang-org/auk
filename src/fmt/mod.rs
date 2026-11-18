@@ -1,4 +1,4 @@
-//! `duck fmt`: the canonical, zero-config formatter.
+//! `auk fmt`: the canonical, zero-config formatter.
 //!
 //! The formatter parses the file, then prints the AST through a Prettier-style document printer
 //! (`doc.rs`) with a 100-column limit. Things the AST does not keep come from the source:
@@ -30,7 +30,7 @@ use doc::{Doc, Fit, broken, concat, group, if_break, indent, nil, text};
 /// The maximum line width.
 pub const WIDTH: usize = 100;
 
-/// Format a Duck source file. Fails with the parse diagnostics if it does not parse.
+/// Format an Auk source file. Fails with the parse diagnostics if it does not parse.
 pub fn format(src: &str) -> Result<String, Vec<Diag>> {
     let module = parse(src)?;
     let toks = lex(src).map_err(|d| vec![d])?.toks;
@@ -92,12 +92,12 @@ pub fn ast_shape(m: &Module) -> String {
 
 // ---- command line ----
 
-/// `duck fmt [--check] <file|dir|->...`. Returns the exit code.
+/// `auk fmt [--check] <file|dir|->...`. Returns the exit code.
 pub fn run(args: &[String]) -> i32 {
     let check = args.iter().any(|a| a == "--check");
     let paths: Vec<&String> = args.iter().filter(|a| *a != "--check").collect();
     if paths.is_empty() {
-        eprintln!("usage: duck fmt [--check] <file|dir|->...");
+        eprintln!("usage: auk fmt [--check] <file|dir|->...");
         return 2;
     }
     let mut code = 0;
@@ -171,12 +171,12 @@ fn file(path: &Path, check: bool) -> i32 {
 fn report(name: &str, src: &str, e: Error) -> i32 {
     match e {
         Error::Parse(ds) => ds.iter().for_each(|d| eprint!("{}", d.render(name, src))),
-        Error::Internal(msg) => eprintln!("error: {name}: {msg} (this is a duck fmt bug; the file was left unchanged)"),
+        Error::Internal(msg) => eprintln!("error: {name}: {msg} (this is an auk fmt bug; the file was left unchanged)"),
     }
     1
 }
 
-/// A file as given, or every `.duck` file under a directory (skipping hidden directories and
+/// A file as given, or every `.auk` file under a directory (skipping hidden directories and
 /// `target`), sorted.
 fn collect(p: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
     if !p.is_dir() {
@@ -192,7 +192,7 @@ fn collect(p: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
             if !name.starts_with('.') && name != "target" {
                 collect(&e, out)?;
             }
-        } else if e.extension().is_some_and(|x| x == "duck") {
+        } else if e.extension().is_some_and(|x| x == "auk") {
             out.push(e);
         }
     }

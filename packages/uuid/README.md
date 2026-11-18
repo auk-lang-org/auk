@@ -4,7 +4,7 @@ UUIDs as specified by RFC 9562. The package generates random (v4) and time-order
 
 **Effects:** `rand`, and only the generators need it (`v4`, `v7`, `v7_after`). Random bits come from core's cryptographic `rand.bytes`, so `rand.seed` has no effect on them. Parsing, formatting and comparison are pure. `v7` takes the clock as an argument, so the package never needs `time`.
 
-```duck
+```auk
 fn main(): int! uses rand, time {
   let id = uuid.v4()
   print("{id}")                                   // e.g. 3f1c2a9e-5b7d-4e0f-9a21-6c8d4b2e7f10

@@ -1,15 +1,15 @@
-//! `duck hatch <file> [--hole N] [--tries 3] [--dry-run]`: fill `??` holes with an AI model.
+//! `auk hatch <file> [--hole N] [--tries 3] [--dry-run]`: fill `??` holes with an AI model.
 //!
 //! For each hole (see holes.rs for discovery and numbering), in order:
-//! 1. build a prompt: the language reference (`duck spec`), the file the hole is in, the hole's
-//!    brief (`duck holes`), and the instruction to reply with only the code that replaces `??`
+//! 1. build a prompt: the language reference (`auk spec`), the file the hole is in, the hole's
+//!    brief (`auk holes`), and the instruction to reply with only the code that replaces `??`
 //!    in a fenced block;
-//! 2. run the model command, `DUCK_HATCH_CMD` (default `claude -p`, run by `sh -c`), with the
-//!    prompt on stdin, and take the code from the first ```` ```duck ```` (or plain ```` ``` ````)
+//! 2. run the model command, `AUK_HATCH_CMD` (default `claude -p`, run by `sh -c`), with the
+//!    prompt on stdin, and take the code from the first ```` ```auk ```` (or plain ```` ``` ````)
 //!    fence of its stdout, or the whole reply;
 //! 3. splice it in place of the hole (a `{ ?? }` block becomes a multi-line block) and type-check
 //!    the program in memory (`resolve::with_sources`); on errors, ask again with the answer and the
-//!    diagnostics as `duck check --json` JSON;
+//!    diagnostics as `auk check --json` JSON;
 //! 4. when it checks, build the test binary (contracts on: `ensures` is checked in test builds;
 //!    execution tracing on) and run the tests that call the function; on failures, ask again with
 //!    their output and the last `TRACE_TAIL` events of each failing test's execution trace (the
@@ -17,7 +17,7 @@
 //! 5. up to `--tries` answers per hole. A filled hole stays filled while the next holes are found
 //!    again (positions shift); a hole that couldn't be filled is left as it was.
 //!
-//! At the end every changed file is formatted (`duck fmt`) and written, or with `--dry-run`
+//! At the end every changed file is formatted (`auk fmt`) and written, or with `--dry-run`
 //! printed as a unified diff. A summary line per hole says whether it was filled.
 
 use std::collections::{BTreeMap, HashMap};
@@ -32,7 +32,7 @@ use super::diag::FileDiag;
 use super::holes::{self, Hole};
 use super::resolve::with_sources;
 
-/// The model command when `DUCK_HATCH_CMD` is unset.
+/// The model command when `AUK_HATCH_CMD` is unset.
 const DEFAULT_CMD: &str = "claude -p";
 
 /// How long one test run may take before it is killed (an answer may loop forever).
@@ -69,12 +69,12 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
     Ok(o)
 }
 
-/// `duck hatch`. Returns the exit code: 0 when every hole it worked on was filled.
+/// `auk hatch`. Returns the exit code: 0 when every hole it worked on was filled.
 pub fn run(args: &[String]) -> i32 {
     let o = match parse_args(args) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("error: {e}\nusage: duck hatch <file> [--hole N] [--tries 3] [--dry-run]");
+            eprintln!("error: {e}\nusage: auk hatch <file> [--hole N] [--tries 3] [--dry-run]");
             return 2;
         }
     };
@@ -92,12 +92,12 @@ pub fn run(args: &[String]) -> i32 {
     if let Some(n) = o.hole
         && n > holes.len()
     {
-        eprintln!("error: there is no hole {n} ({} has {} hole(s); see `duck holes {}`)", o.file, holes.len(), o.file);
+        eprintln!("error: there is no hole {n} ({} has {} hole(s); see `auk holes {}`)", o.file, holes.len(), o.file);
         return 2;
     }
     let originals: BTreeMap<String, String> =
         holes.iter().map(|h| h.file.clone()).map(|f| (f.clone(), fs::read_to_string(&f).unwrap_or_default())).collect();
-    let cmd = env::var("DUCK_HATCH_CMD").ok().filter(|c| !c.trim().is_empty()).unwrap_or_else(|| DEFAULT_CMD.to_string());
+    let cmd = env::var("AUK_HATCH_CMD").ok().filter(|c| !c.trim().is_empty()).unwrap_or_else(|| DEFAULT_CMD.to_string());
     let total = holes.len();
     // the original numbers of the holes still to do; unfilled holes stay in the list, so the
     // next one to do is at index `skip` after a fresh discovery
@@ -182,7 +182,7 @@ fn fill(root: &Path, h: &Hole, srcs: &mut HashMap<String, String>, cmd: &str, tr
         let code = extract_code(&reply);
         if code.trim().is_empty() {
             last = "the model's answer had no code".into();
-            feedback = retry_note(&code, "was empty. Reply with the Duck code that replaces `??`.");
+            feedback = retry_note(&code, "was empty. Reply with the Auk code that replaces `??`.");
             continue;
         }
         let new_src = splice(&current, h, &code);
@@ -202,7 +202,7 @@ fn fill(root: &Path, h: &Hole, srcs: &mut HashMap<String, String>, cmd: &str, tr
             feedback = retry_note(
                 &code,
                 &format!(
-                    "did not type-check. Fix these errors (`duck check --json` diagnostics; positions are in the file with your answer spliced in):\n{json}"
+                    "did not type-check. Fix these errors (`auk check --json` diagnostics; positions are in the file with your answer spliced in):\n{json}"
                 ),
             );
             continue;
@@ -236,7 +236,7 @@ fn fill(root: &Path, h: &Hole, srcs: &mut HashMap<String, String>, cmd: &str, tr
 }
 
 fn retry_note(code: &str, what: &str) -> String {
-    format!("\n\n## Your previous answer\n```duck\n{code}\n```\nIt {what}\n\nReply again with ONLY the corrected Duck code that replaces `??`, in one ```duck fenced block.\n")
+    format!("\n\n## Your previous answer\n```auk\n{code}\n```\nIt {what}\n\nReply again with ONLY the corrected Auk code that replaces `??`, in one ```auk fenced block.\n")
 }
 
 /// The prompt for one hole (feedback from earlier tries is appended to it).
@@ -247,15 +247,15 @@ pub fn prompt(h: &Hole, file_src: &str) -> String {
         "a single expression"
     };
     format!(
-        "You are filling a hole (`??`) in a program written in Duck, a statically typed language compiled to native code.\n\n\
-         # The Duck language reference\n\n{spec}\n\n\
-         # The file `{file}`\n\n```duck\n{file_src}```\n\n\
+        "You are filling a hole (`??`) in a program written in Auk, a statically typed language compiled to native code.\n\n\
+         # The Auk language reference\n\n{spec}\n\n\
+         # The file `{file}`\n\n```auk\n{file_src}```\n\n\
          # The hole to fill\n\n{brief}\n\
          # Your task\n\n\
-         Write the Duck code that replaces the `??` at {file}:{line}:{col} ({context}): {what}, of type `{ty}`. \
+         Write the Auk code that replaces the `??` at {file}:{line}:{col} ({context}): {what}, of type `{ty}`. \
          It must type-check, satisfy the function's contracts and make the tests above pass. \
          Use only what the reference and the file provide. Do not repeat the signature, do not change other code, and do not leave any `??`.\n\n\
-         Reply with ONLY the code, in one fenced block:\n```duck\n<code that replaces ??>\n```\n",
+         Reply with ONLY the code, in one fenced block:\n```auk\n<code that replaces ??>\n```\n",
         spec = super::SPEC.trim_end(),
         file = h.file,
         brief = holes::brief_text(h),
@@ -291,11 +291,11 @@ fn ask(cmd: &str, prompt: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// The code in the first ```duck (or plain ```) fence of a reply, or the whole reply.
+/// The code in the first ```auk (or plain ```) fence of a reply, or the whole reply.
 pub fn extract_code(reply: &str) -> String {
     let lines: Vec<&str> = reply.lines().collect();
     let fence_at = |pred: &dyn Fn(&str) -> bool| lines.iter().position(|l| pred(l.trim()));
-    let open = fence_at(&|l| l.starts_with("```duck")).or_else(|| fence_at(&|l| l.starts_with("```")));
+    let open = fence_at(&|l| l.starts_with("```auk")).or_else(|| fence_at(&|l| l.starts_with("```")));
     let body: Vec<&str> = match open {
         Some(i) => {
             let rest = &lines[i + 1..];
@@ -346,17 +346,17 @@ fn run_tests(root: &Path, names: &[&str]) -> Result<(), String> {
     let info = super::mir::types::TyInfo::new(&tp);
     let j = super::mir::backend::jit(&g.prog, &info, crate::mir::backend::Opt::None)?;
     let n = RUN_N.fetch_add(1, Ordering::Relaxed);
-    let file = env::temp_dir().join(format!("duck-hatch-{}-{n}.out", std::process::id()));
+    let file = env::temp_dir().join(format!("auk-hatch-{}-{n}.out", std::process::id()));
     // SAFETY: hatch is single-threaded here
     unsafe {
-        env::set_var("DUCK_TRACE", "-");
-        env::set_var("DUCK_TRACE_TAIL", TRACE_TAIL);
+        env::set_var("AUK_TRACE", "-");
+        env::set_var("AUK_TRACE_TAIL", TRACE_TAIL);
     }
     let r = super::mir::backend::Redirect { merged: Some(&file), stdin_null: true, ..Default::default() };
     let w = j.spawn(&[root.display().to_string()], r, true).and_then(|pid| super::mir::backend::wait_child(pid, Some(TEST_TIMEOUT)));
     unsafe {
-        env::remove_var("DUCK_TRACE");
-        env::remove_var("DUCK_TRACE_TAIL");
+        env::remove_var("AUK_TRACE");
+        env::remove_var("AUK_TRACE_TAIL");
     }
     let out = fs::read(&file).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
     let _ = fs::remove_file(&file);
@@ -470,15 +470,15 @@ mod tests {
 
     #[test]
     fn extracts_fenced_code() {
-        assert_eq!(extract_code("Here:\n```duck\n  let a = 1\n  a + 1\n```\nbye"), "let a = 1\na + 1");
+        assert_eq!(extract_code("Here:\n```auk\n  let a = 1\n  a + 1\n```\nbye"), "let a = 1\na + 1");
         assert_eq!(extract_code("```\nxs.len()\n```"), "xs.len()");
         assert_eq!(extract_code("  xs.len()  \n"), "xs.len()");
     }
 
     #[test]
     fn diffs_lines() {
-        let d = diff("f.duck", "a\nb\nc\n", "a\nB\nc\n");
-        assert_eq!(d, "--- a/f.duck\n+++ b/f.duck\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n");
+        let d = diff("f.auk", "a\nb\nc\n", "a\nB\nc\n");
+        assert_eq!(d, "--- a/f.auk\n+++ b/f.auk\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n");
         assert_eq!(diff("f", "x\n", "x\n"), "");
     }
 }

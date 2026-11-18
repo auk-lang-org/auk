@@ -4,7 +4,7 @@ Exact decimal arithmetic for money, prices, quantities and anything else that ha
 
 **Effects:** none.
 
-```duck
+```auk
 fn main(): int! {
   let price = num.dec("19.99")?
   let qty = num.from_int(3)
@@ -59,6 +59,6 @@ Integers:
 
 ## Notes
 - `==` is numeric, but the hash used by maps and `unique` still sees the scale. Normalize values before you use them as keys: `m[num.normalize(price)] = …`.
-- Unary minus can't be overloaded in Duck, so write `x.neg()` or `num.ZERO - x`.
+- Unary minus can't be overloaded in Auk, so write `x.neg()` or `num.ZERO - x`.
 - `to_value`/`from_value` (and so `json.encode`/`decode`) use the derived struct form `{"neg", "mag", "scale"}`. For a readable JSON field, store `"{d}"` as a `str` and `num.dec` it back.
 - `Big` integers (planned) would reuse the same limb arithmetic. They aren't in 0.1.

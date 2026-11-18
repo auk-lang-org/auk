@@ -1,4 +1,4 @@
-//! The typed program: everything codegen needs to lower Duck to C without redoing analysis.
+//! The typed program: everything codegen needs to lower Auk to C without redoing analysis.
 //!
 //! # How to read it (for the codegen author)
 //!
@@ -9,24 +9,24 @@
 //! - `program`: the module tree and the ASTs (resolve.rs). Module 0.. are the core prelude.
 //! - `defs`: struct, enum, opaque and shape definitions, and type parameters (types.rs).
 //! - `fns`: every function, one per *clause group after overload splitting* (`FnInfo`): its
-//!   signature, where its clauses are in the AST, and whether it is Duck code, an `extern` C
+//!   signature, where its clauses are in the AST, and whether it is Auk code, an `extern` C
 //!   function or a compiler intrinsic.
 //! - `consts`, `tests`: top-level `let` / `imprint` constants and `test` blocks.
-//! - `instances`: the **monomorphized bodies to emit** (`Instance`): every non-generic Duck
+//! - `instances`: the **monomorphized bodies to emit** (`Instance`): every non-generic Auk
 //!   function, every test and constant initializer, and every generic function at each concrete
 //!   type-argument list reachable from those. An instance's `resolved` maps every call and
 //!   operator node (and function-valued name) in its body to a concrete `Target`, `shows` does
 //!   the same for interpolation parts and `peek` operands, and `vtables` gives the vtable of each
 //!   conversion to `any S`. Codegen emits exactly the instances in this list (tests of
-//!   dependencies included; filter by module for `duck test` without `--deps`).
+//!   dependencies included; filter by module for `auk test` without `--deps`).
 //! - `types_used`: every concrete type that appears in an emitted instance (after substitution),
 //!   closed under components, so codegen can declare its C representation up front.
 //! - `shape_impls`: for every (built-in shape, concrete type) pair that something needs, how it
 //!   is implemented: a user function instance (including a private one in the type's own
 //!   module, like `fn cmp(a: Item, b: Item)` next to `struct Item`, even when the need comes from
 //!   generic code elsewhere) or a compiler-derived instance. This is what
-//!   `DuckElemOps.eq/cmp/show` of a container element and derived `to_value`/`from_value` use.
-//!   Primitives (`int float bool char str`) aren't listed: use the runtime's `duck_ops_*`.
+//!   `AukElemOps.eq/cmp/show` of a container element and derived `to_value`/`from_value` use.
+//!   Primitives (`int float bool char str`) aren't listed: use the runtime's `auk_ops_*`.
 //!   Derived `Show` prints `Point { x: 1.0, y: 2.0 }` / `Circle(2.0)`; inside a container,
 //!   strings and chars are shown quoted (runtime "debug form"), at top level a `str` shows as
 //!   itself.
@@ -48,11 +48,11 @@
 //! `for` (see `fors`); list, map and tuple literals (an empty map literal `{}` whose type is `()`
 //! is an empty block, as in `_ => {}`); ranges (in `for` heads and slices, or as a
 //! materialized `[int]` elsewhere); `x is pat`; `peek e` (prints `[file:line] <src> = <show>`,
-//! see `shows` for the show); holes (`duck_hole`, with `tables.types[hole.id]` as the expected
+//! see `shows` for the show); holes (`auk_hole`, with `tables.types[hole.id]` as the expected
 //! type); `assert`. Runtime representations follow the runtime (runtime/src, see
-//! `mir/types.rs`): `T?` is `DuckOpt_*`, `T!`/`T!E` is
-//! `DuckRes_*` (a typed error enum value travels as a `DuckErr` payload), `Ty::Task` is a
-//! `DuckTask *`, closures are `DuckClosure`, `Err` / `net.Conn` are their `extern type` C types.
+//! `mir/types.rs`): `T?` is `AukOpt_*`, `T!`/`T!E` is
+//! `AukRes_*` (a typed error enum value travels as a `AukErr` payload), `Ty::Task` is a
+//! `AukTask *`, closures are `AukClosure`, `Err` / `net.Conn` are their `extern type` C types.
 //!
 //! ## Names
 //! `tables.names[expr.id]` for every `Name` expression, and for a `Field`/path expression that
@@ -86,7 +86,7 @@
 //! - `tries[node]` for postfix `?`: on `T!`/`T!E`, on `T?`, or on a list of them (`[T!]?` gives
 //!   `[T]` or the first error), with the error conversion to apply when the error passes up
 //!   (`ErrConv::ToErr` wraps a typed error enum into an `Err` with a typed payload so
-//!   `err(BadUrl(w))` still matches; see `DuckErrPayload`).
+//!   `err(BadUrl(w))` still matches; see `AukErrPayload`).
 //! - `fails[call.id]`: what `fail(e)` returns (message -> `Err`, `Err`, typed error, or typed
 //!   error converted to `Err`).
 //! - `elses[node]` for `e else x` / `e else err => x`, and for `let pat = e else ...`
@@ -98,7 +98,7 @@
 //! - `fors[node]`: range, list or map iteration.
 //! - `formats[part_expr.id]`: a parsed `{x:spec}` format spec for interpolation (the part's value
 //!   is shown with `shows[part_expr.id]` when it is not a primitive, then padded per the spec;
-//!   primitives use `duck_fmt_int/float/str/char/bool`).
+//!   primitives use `auk_fmt_int/float/str/char/bool`).
 //! - `value_map_pats` / `err_payload_pats`: map patterns that match a `Value.Map`, and `err(..)`
 //!   patterns that match the typed payload of a plain `Err`.
 //! - Contracts: `FnInfo::olds` lists the `old(e)` expressions to capture at entry; `result` in
@@ -184,10 +184,10 @@ pub struct ParamInfo {
 
 #[derive(Debug, Clone)]
 pub enum FnKind {
-    /// Duck code: the AST group is `program.mods[module].ast.items[item]` (an `Item::Fn`), and
+    /// Auk code: the AST group is `program.mods[module].ast.items[item]` (an `Item::Fn`), and
     /// this function is the clauses at `clauses` (indices into `FnGroup::clauses`), tried top to
     /// bottom. `header` says whether the group's header line belongs to this function.
-    Duck { item: usize, clauses: Vec<usize>, header: bool },
+    Auk { item: usize, clauses: Vec<usize>, header: bool },
     /// A C function of the runtime. `loc` = append the call site's "file:line:col".
     Extern { symbol: String, loc: bool, item: usize },
     /// Implemented by the compiler.
@@ -422,7 +422,7 @@ pub struct Arg {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Callee {
-    /// A function (Duck, extern or intrinsic) with type arguments for its `generics`.
+    /// A function (Auk, extern or intrinsic) with type arguments for its `generics`.
     Fn { func: FnId, type_args: Vec<Ty> },
     /// An enum variant constructor.
     Variant(VariantRef),
@@ -559,7 +559,7 @@ pub enum ForKind {
     Chan,
 }
 
-/// A parsed `{x:spec}`: `[fill? align] ['0'] [width] ['.' precision]` (runtime `duck_fmt_*`).
+/// A parsed `{x:spec}`: `[fill? align] ['0'] [width] ['.' precision]` (runtime `auk_fmt_*`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FormatSpec {
     pub text: String,
@@ -609,7 +609,7 @@ impl TypedProgram {
         out
     }
 
-    /// A readable summary for debugging (`duck typed <file>`): every non-core function with its
+    /// A readable summary for debugging (`auk typed <file>`): every non-core function with its
     /// signature, then the instances to emit.
     pub fn dump(&self) -> String {
         let mut s = String::new();
@@ -624,7 +624,7 @@ impl TypedProgram {
                 continue;
             }
             let kind = match &f.kind {
-                FnKind::Duck { clauses, .. } => format!("{} clause(s)", clauses.len()),
+                FnKind::Auk { clauses, .. } => format!("{} clause(s)", clauses.len()),
                 FnKind::Extern { symbol, .. } => format!("extern {symbol}"),
                 FnKind::Intrinsic { which, .. } => format!("intrinsic {which:?}"),
             };

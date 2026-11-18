@@ -4,7 +4,7 @@ Parses XML 1.0 text into an element tree and writes it back out, compact or inde
 
 **Effects:** none. **Dependencies:** none.
 
-```duck
+```auk
 let feed = xml.parse(fs.read("feed.xml")?)?
 for item in feed.descendants("item") {
   let title = item.child("title")?.text() else "(untitled)"

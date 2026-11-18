@@ -1,23 +1,23 @@
 //! Units of measure (`3.0<m/s>`, `float<kg*m/s^2>`): inference through arithmetic, core
 //! functions and generics; every error (E0037, E0290-E0292); the `3<x` vs `3 < x` lexing rule;
-//! `duck fmt`; interpolation and `to_value`; and erasure (the generated program doesn't change).
+//! `auk fmt`; interpolation and `to_value`; and erasure (the generated program doesn't change).
 
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-fn duck(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_duck")).args(args).output().unwrap()
+fn auk(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_auk")).args(args).output().unwrap()
 }
 
-/// A fresh directory with `t.duck` holding `src`.
+/// A fresh directory with `t.auk` holding `src`.
 fn file(src: &str) -> PathBuf {
     static N: AtomicUsize = AtomicUsize::new(0);
-    let dir = std::env::temp_dir().join(format!("duck-units-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+    let dir = std::env::temp_dir().join(format!("auk-units-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("t.duck");
+    let path = dir.join("t.auk");
     fs::write(&path, src).unwrap();
     path
 }
@@ -26,10 +26,10 @@ fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).to_string()
 }
 
-/// `duck check --json`: (code, message, notes) of every diagnostic.
+/// `auk check --json`: (code, message, notes) of every diagnostic.
 fn diags(src: &str) -> Vec<(String, String, Vec<String>)> {
     let path = file(src);
-    let out = duck(&["check", path.to_str().unwrap(), "--json"]);
+    let out = auk(&["check", path.to_str().unwrap(), "--json"]);
     let json = text(&out.stdout);
     let field = |s: &str, key: &str| -> String {
         let start = s.find(&format!("\"{key}\":\"")).map(|i| i + key.len() + 4).unwrap_or(0);
@@ -75,7 +75,7 @@ fn type_of(lets: &str, expr: &str) -> String {
 
 fn run(src: &str) -> String {
     let path = file(src);
-    let out = duck(&["run", path.to_str().unwrap()]);
+    let out = auk(&["run", path.to_str().unwrap()]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     text(&out.stdout)
 }
@@ -207,7 +207,7 @@ fn a_unit_needs_an_attached_closed_bracket() {
     // anything else is a comparison, so no program that compiled before changes meaning
     let ast = |src: &str| {
         let path = file(src);
-        let out = duck(&["parse", "--ast", path.to_str().unwrap()]);
+        let out = auk(&["parse", "--ast", path.to_str().unwrap()]);
         assert!(out.status.success(), "{}", text(&out.stderr));
         text(&out.stdout)
     };
@@ -225,14 +225,14 @@ fn a_unit_needs_an_attached_closed_bracket() {
 fn fmt_round_trips_units() {
     let src = "fn h(d: float< m >, t: float<s>): float<m/s/s> = d / t / t\n\nfn main() {\n  let x = 3.0<kg*m / s^2> + 0.0<m*kg/s/s>\n  let n = 5<px>\n}\n";
     let path = file(src);
-    let out = duck(&["fmt", path.to_str().unwrap()]);
+    let out = auk(&["fmt", path.to_str().unwrap()]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     let formatted = fs::read_to_string(&path).unwrap();
     assert_eq!(
         formatted,
         "fn h(d: float<m>, t: float<s>): float<m/s^2> = d / t / t\n\nfn main() {\n  let x = 3.0<kg*m/s^2> + 0.0<kg*m/s^2>\n  let n = 5<px>\n}\n"
     );
-    let again = duck(&["fmt", "--check", path.to_str().unwrap()]);
+    let again = auk(&["fmt", "--check", path.to_str().unwrap()]);
     assert!(again.status.success(), "formatting is idempotent");
     assert!(codes(&formatted).is_empty());
 }
@@ -287,7 +287,7 @@ fn main() {
     let path = file("");
     let ir = |src: &str| {
         fs::write(&path, src).unwrap();
-        let out = duck(&["ir", path.to_str().unwrap()]);
+        let out = auk(&["ir", path.to_str().unwrap()]);
         assert!(out.status.success(), "{}", text(&out.stderr));
         text(&out.stdout)
     };
@@ -300,7 +300,7 @@ fn main() {
 #[test]
 fn the_physics_example_type_checks_its_formulas() {
     // swapping a `/` for `*` in a formula is caught by the units
-    let src = fs::read_to_string("examples/physics.duck").unwrap();
+    let src = fs::read_to_string("examples/physics.auk").unwrap();
     assert!(codes(&src).is_empty());
     let broken = src.replace("sqrt(2.0 * h / g)", "sqrt(2.0 * h * g)");
     assert_ne!(broken, src);

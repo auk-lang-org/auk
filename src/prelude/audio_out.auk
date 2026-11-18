@@ -1,0 +1,39 @@
+/// Sound output (`uses audio_out`): play samples on the default output device. Samples are
+/// floats nominally in -1.0..1.0 (clipped outside it), the layout the `audio` package decodes to,
+/// so `audio_out.play(a.chans, a.rate)` plays a decoded file.
+
+/// Play interleaved samples (`channels` per frame) at `rate` Hz, returning once they have been
+/// heard. An Err for invalid arguments, or if no output device can be opened.
+pub extern fn play_interleaved(samples: [float], channels: int, rate: int): ()! uses audio_out = "auk_audio_out_play +loc"
+
+/// Play planar channels (`chans[c][i]` is frame `i` of channel `c`) at `rate` Hz, returning once
+/// they have been heard. An Err if the channels differ in length, for invalid arguments, or if no
+/// output device can be opened.
+pub fn play(chans: [[float]], rate: int): ()! uses audio_out {
+  let n = chans.len()
+  if n == 0 { return play_interleaved([], 1, rate) }
+  let frames = chans[0].len()
+  for c in chans {
+    if c.len() != frames { fail("audio_out.play: channels have different lengths") }
+  }
+  var out: [float] = []
+  for i in 0..frames {
+    for c in chans { out.push(c[i]) }
+  }
+  play_interleaved(out, n, rate)
+}
+
+/// Play a sine tone of `hz` Hz for `ms` milliseconds (at 44100 Hz, amplitude 0.3, with 5 ms fades
+/// so it doesn't click).
+pub fn beep(hz: float, ms: int): ()! uses audio_out {
+  let rate = 44100
+  let n = rate * ms / 1000
+  let fade = rate / 200
+  var out: [float] = []
+  for i in 0..n {
+    let edge = if i < n - i { i } else { n - i }
+    let env = if edge < fade { float(edge) / float(fade) } else { 1.0 }
+    out.push(0.3 * env * sin(2.0 * float.pi * hz * float(i) / float(rate)))
+  }
+  play_interleaved(out, 1, rate)
+}

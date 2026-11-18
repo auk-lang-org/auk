@@ -184,7 +184,7 @@ impl Checker {
         let mut index: HashMap<(BodyRef, Vec<Ty>), InstId> = HashMap::new();
         let mut work: Vec<InstId> = Vec::new();
         for f in 0..self.fns.len() {
-            if matches!(self.fns[f].kind, FnKind::Duck { .. }) && self.fns[f].generics.is_empty() {
+            if matches!(self.fns[f].kind, FnKind::Auk { .. }) && self.fns[f].generics.is_empty() {
                 self.instance_of(BodyRef::Fn(f), Vec::new(), &mut index, &mut work);
             }
         }
@@ -315,7 +315,7 @@ impl Checker {
     fn fn_target(&mut self, f: FnId, args: Vec<Ty>, m: ModId, index: &mut HashMap<(BodyRef, Vec<Ty>), InstId>, work: &mut Vec<InstId>) -> Target {
         let args: Vec<Ty> = args.iter().map(Ty::erase_units).collect();
         match self.fns[f].kind.clone() {
-            FnKind::Duck { .. } => Target::Instance(self.instance_of(BodyRef::Fn(f), args, index, work)),
+            FnKind::Auk { .. } => Target::Instance(self.instance_of(BodyRef::Fn(f), args, index, work)),
             FnKind::Extern { symbol, loc, .. } => Target::Extern { symbol, loc },
             FnKind::Intrinsic { which, .. } => {
                 let ty = args.first().cloned().unwrap_or_else(Ty::unit);
@@ -549,7 +549,7 @@ impl Checker {
     fn body_types(&self, body: BodyRef, out: &mut Vec<Ty>) {
         let (m, item, clauses): (ModId, usize, Option<Vec<usize>>) = match body {
             BodyRef::Fn(f) => match &self.fns[f].kind {
-                FnKind::Duck { item, clauses, .. } => (self.fns[f].module, *item, Some(clauses.clone())),
+                FnKind::Auk { item, clauses, .. } => (self.fns[f].module, *item, Some(clauses.clone())),
                 _ => return,
             },
             BodyRef::Test(t) => (self.tests[t].module, self.tests[t].item, None),

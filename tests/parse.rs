@@ -1,4 +1,4 @@
-//! The front end via the hidden `duck parse` command: the whole corpus parses, and small
+//! The front end via the hidden `auk parse` command: the whole corpus parses, and small
 //! programs dump to the expected AST.
 
 use std::fs;
@@ -6,41 +6,41 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-fn duck(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_duck")).args(args).output().unwrap()
+fn auk(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_auk")).args(args).output().unwrap()
 }
 
-fn duck_files(dir: &Path) -> Vec<PathBuf> {
+fn auk_files(dir: &Path) -> Vec<PathBuf> {
     let mut paths: Vec<_> = fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|e| e == "duck"))
+        .filter(|p| p.extension().is_some_and(|e| e == "auk"))
         .collect();
     paths.sort();
     paths
 }
 
-/// `examples/*.duck` plus `packages/*/src/*.duck`.
+/// `examples/*.auk` plus `packages/*/src/*.auk`.
 fn corpus() -> Vec<PathBuf> {
-    let mut files = duck_files(Path::new("examples"));
+    let mut files = auk_files(Path::new("examples"));
     let mut pkgs: Vec<_> = fs::read_dir("packages").unwrap().map(|e| e.unwrap().path().join("src")).filter(|p| p.is_dir()).collect();
     pkgs.sort();
     for p in pkgs {
-        files.extend(duck_files(&p));
+        files.extend(auk_files(&p));
     }
     files
 }
 
-/// Write `src` to a scratch file and run `duck parse <args> <file>`.
+/// Write `src` to a scratch file and run `auk parse <args> <file>`.
 fn parse_src(args: &[&str], src: &str) -> Output {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::SeqCst);
-    let path = std::env::temp_dir().join(format!("duck-parse-{}-{n}.duck", std::process::id()));
+    let path = std::env::temp_dir().join(format!("auk-parse-{}-{n}.auk", std::process::id()));
     fs::write(&path, src).unwrap();
     let mut all = vec!["parse"];
     all.extend(args);
     all.push(path.to_str().unwrap());
-    let out = duck(&all);
+    let out = auk(&all);
     let _ = fs::remove_file(&path);
     out
 }
@@ -57,7 +57,7 @@ fn corpus_parses() {
     assert!(files.len() >= 17, "corpus too small: {files:?}");
     let mut failed = Vec::new();
     for f in &files {
-        let out = duck(&["parse", f.to_str().unwrap()]);
+        let out = auk(&["parse", f.to_str().unwrap()]);
         if !out.status.success() || out.stdout != b"ok\n" {
             failed.push(format!("{}:\n{}", f.display(), String::from_utf8_lossy(&out.stderr)));
         }
@@ -104,7 +104,7 @@ fn errors_render_with_codes() {
     let out = parse_src(&[], "fn main() {\n  let x = 1;\n}\n");
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains(":2:12: error[E0011]: Duck does not use semicolons\n"), "{err}");
+    assert!(err.contains(":2:12: error[E0011]: Auk does not use semicolons\n"), "{err}");
     assert!(err.contains("2 |   let x = 1;\n  |",), "{err}");
     assert!(err.contains("           ^\n"), "{err}");
 

@@ -1,4 +1,4 @@
-# Duck
+# Auk
 
 Statically typed and compiled to native code. Braces delimit blocks; no semicolons. A newline ends a statement unless the line ends with an operator, `=`, `=>`, `,` or an open bracket, or the next line starts with `.`, `|>`, `requires`, `ensures` or `{`. Comments: `//`, `/* */`, `///` doc.
 
@@ -130,7 +130,7 @@ An `async fn` call must be awaited, stored or returned; outside an `async fn`, `
 fn isqrt(n: int): int
   requires n >= 0                  // checked in every build
   ensures result * result <= n     // checked in debug and test builds; old(x) = x on entry
-{ ?? }                             // a hole: type-checks, panics if reached, blocks `duck build`
+{ ?? }                             // a hole: type-checks, panics if reached, blocks `auk build`
 
 test "isqrt" { assert isqrt(17) == 4 }   // tests may use ? and fail(); an error fails the test
 peek x * 2         // prints [file:line] x * 2 = 84, returns the value
@@ -139,7 +139,7 @@ imprint T = table()   // computed at compile time (pure fns only)
 `assert (a, b) == (1, 2)` checks the whole comparison.
 
 ## Modules, packages, program entry
-A file is a module, a folder a package. Refer to anything by path; there are no imports: `geo.area(s)`, `json.parse(t)`. `m.` is a path when `m` names a module or dependency. Local names shadow core ones (`core.str` still works). `regex(p)` means `regex.regex(p)`. Inside a package its own name is its root (`http.Resp`). Dependencies go in `quack.toml`: `quack add http`.
+A file is a module, a folder a package. Refer to anything by path; there are no imports: `geo.area(s)`, `json.parse(t)`. `m.` is a path when `m` names a module or dependency. Local names shadow core ones (`core.str` still works). `regex(p)` means `regex.regex(p)`. Inside a package its own name is its root (`http.Resp`). Dependencies go in `raft.toml`: `raft add http`.
 ```
 fn main(args: [str]): int! uses fs {    // the parameters and return type are optional
   run(args[1])?                          // an Err prints and exits with 1
@@ -152,4 +152,4 @@ fn main(args: [str]): int! uses fs {    // the parameters and return type are op
 `enum Value { Null, Bool(b), Int(i), Float(f), Str(s), List(xs), Map(m) }`: structs and enums get `to_value(x)` and `from_value(v): T!`.
 Collections: `len push pop(): T? insert remove contains get first last min max: T? map filter flat_map reduce(init, f) find(pred): T? find_index: int? take skip take_while any all sum reverse chunks(n) windows(n) counts(): {T: int} group_by(key): {K: [T]} unique zip enum join(sep)` · `sort sort_by(key)`: stable sorted copies; tuples and lists compare element by element: `sort_by(p => (-p.n, p.name))` · maps: `remove(k): V? keys values entries`.
 Strings: `len split(sep = whitespace) trim lines starts_with ends_with replace find(sub): int? (char index) contains upper lower repeat(n) chars bytes` · chars: `is_digit is_alpha is_space upper lower` (ASCII) · `int.parse float.parse str.from_utf8`. Floats: `sqrt abs floor ceil round`.
-Prefer these to hand-written loops. Packages (quack): `json csv regex cli http`.
+Prefer these to hand-written loops. Packages (raft): `json csv regex cli http`.

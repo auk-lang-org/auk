@@ -1,8 +1,8 @@
 # http
 
-An HTTP/1.1 client and server built on core `net`. The client uses `net.tcp` for `http://` and `net.tls` for `https://`. It makes one request per connection, follows up to 5 redirects, and reads `Content-Length`, chunked and read-until-close bodies. The server (`http.server`) runs on `net.listen`: it serves one connection at a time, handles one request per connection, and routes with Duck's clause patterns.
+An HTTP/1.1 client and server built on core `net`. The client uses `net.tcp` for `http://` and `net.tls` for `https://`. It makes one request per connection, follows up to 5 redirects, and reads `Content-Length`, chunked and read-until-close bodies. The server (`http.server`) runs on `net.listen`: it serves one connection at a time, handles one request per connection, and routes with Auk's clause patterns.
 
-**Effects:** `net`. **Dependencies:** `json` and `url` (which brings in `encoding`); none of them use effects. To call `json.*` yourself, as below, add it as a direct dependency too: `quack add json`.
+**Effects:** `net`. **Dependencies:** `json` and `url` (which brings in `encoding`); none of them use effects. To call `json.*` yourself, as below, add it as a direct dependency too: `raft add json`.
 
 ## Client
 ```
@@ -27,7 +27,7 @@ fn main(): int! uses net {
 - `fn json(r: Resp): Value!`: parses the body (`r.json()`).
 - `fn header(r: Resp, name: str): str?`: looks up a header, ignoring case (`r.header("Content-Type")`).
 
-Every request sends `Host`, `User-Agent: duck-http/0.1` and `Connection: close`. It also sends `Content-Length` when there is a body or the method is POST, PUT or PATCH. You can override `Host` and `User-Agent`. Any framing headers you set are ignored. Header values containing CR or LF are rejected.
+Every request sends `Host`, `User-Agent: auk-http/0.1` and `Connection: close`. It also sends `Content-Length` when there is a body or the method is POST, PUT or PATCH. You can override `Host` and `User-Agent`. Any framing headers you set are ignored. Header values containing CR or LF are rejected.
 
 ### URLs are strict RFC 3986 (via `url`)
 URL parsing and redirect resolution use the `url` package: `http.uri.parse` is `url.parse` plus an http/https check, and redirects resolve with `url.resolve`. Build query strings with `url.build_query` or `url.with_params`. The rules:
@@ -41,7 +41,7 @@ URL parsing and redirect resolution use the `url` package: `http.uri.parse` is `
 ```
 struct Todo { title: str, done: bool }
 
-fn route("GET", "/", _: http.server.Req): http.Resp = http.server.text(200, "hello from duck\n")
+fn route("GET", "/", _: http.server.Req): http.Resp = http.server.text(200, "hello from auk\n")
 fn route("GET", "/hello/" + name, r: http.server.Req): http.Resp {
   let greeting = r.param("greeting") else "hi"
   http.server.text(200, "{greeting}, {name}!\n")
@@ -59,7 +59,7 @@ fn main(args: [str]): ()! uses net {
   await http.server.serve(s, http.server.router(route))?
 }
 ```
-To try it, run `quack new demo`, set `effects = ["net"]`, run `quack add http`, put the code above in `src/main.duck`, and start it with `duck run src/main.duck`. Then:
+To try it, run `raft new demo`, set `effects = ["net"]`, run `raft add http`, put the code above in `src/main.auk`, and start it with `auk run src/main.auk`. Then:
 ```
 $ curl "localhost:8080/hello/ann?greeting=hey+there"
 hey there, ann!

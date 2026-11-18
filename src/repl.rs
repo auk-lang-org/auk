@@ -1,4 +1,4 @@
-//! `duck pond`: the interactive REPL.
+//! `auk dive`: the interactive REPL.
 //!
 //! Every input is compiled (LLVM JIT) and run as a whole program, so a session needs no
 //! interpreter state of its own:
@@ -7,7 +7,7 @@
 //! <every definition of the session>
 //! fn main(): ()! uses fs, net, time, rand, env, proc, audio_out, gui {
 //!   <every earlier statement, replayed>
-//!   print("\u{1}pond-start")        // the marker: only output after it is shown
+//!   print("\u{1}dive-start")        // the marker: only output after it is shown
 //!   <the new input>
 //! }
 //! ```
@@ -51,8 +51,8 @@ use super::{check, explain, fmt, parser, resolve};
 
 const PROMPT: &str = "🦆> ";
 const CONT: &str = ".. ";
-const MARK: &str = "\u{1}pond-start\n";
-const VALUE_MARK: &str = "\u{1}pond-value\n";
+const MARK: &str = "\u{1}dive-start\n";
+const VALUE_MARK: &str = "\u{1}dive-value\n";
 /// The effects `main` declares, so any input may use them.
 const EFFECTS: &[&str] = &["fs", "net", "time", "rand", "env", "proc", "audio_out", "gui"];
 /// The name of the binding an expression's value is stored in.
@@ -70,7 +70,7 @@ Commands:
   :items             list the session's definitions
   :reset             forget every definition and statement
   :load <file>       add a file's definitions (its `main` is skipped)
-  :save <file>       write the session as a formatted .duck file
+  :save <file>       write the session as a formatted .auk file
   :explain <E0xxx>   explain an error code
   :quit              leave (Ctrl-D also works)
 
@@ -82,14 +82,14 @@ replayed statements run again (`rand`, `time` and files see the re-run). Inputs 
 check or panic are not kept.
 ";
 
-/// `duck pond [--quiet]`. Returns the exit code.
+/// `auk dive [--quiet]`. Returns the exit code.
 pub fn run(args: &[String]) -> i32 {
     let mut quiet = !std::io::stdin().is_terminal();
     for a in args {
         match a.as_str() {
             "--quiet" | "-q" => quiet = true,
             _ => {
-                eprintln!("usage: duck pond [--quiet]");
+                eprintln!("usage: auk dive [--quiet]");
                 return 2;
             }
         }
@@ -102,7 +102,7 @@ pub fn run(args: &[String]) -> i32 {
         }
     };
     if !quiet {
-        println!("Duck {} pond: :help for commands", env!("CARGO_PKG_VERSION"));
+        println!("Auk {} dive: :help for commands", env!("CARGO_PKG_VERSION"));
     }
     let stdin = std::io::stdin();
     let mut input = stdin.lock();
@@ -394,10 +394,10 @@ impl Drop for Session {
 
 impl Session {
     fn new() -> Result<Session, String> {
-        let dir = env::temp_dir().join(format!("duck-pond-{}", std::process::id()));
+        let dir = env::temp_dir().join(format!("auk-dive-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).map_err(|e| format!("error: cannot create {}: {e}\n", dir.display()))?;
-        let src_path = dir.join("pond.duck");
+        let src_path = dir.join("dive.auk");
         Ok(Session { defs: Vec::new(), history: Vec::new(), dir, src_path, builds: 0 })
     }
 
@@ -428,7 +428,7 @@ impl Session {
 
     /// Evaluate one complete input.
     fn eval(&mut self, src: &str) -> Outcome {
-        let origin = Rc::new(Origin { name: "pond".into(), text: src.to_string() });
+        let origin = Rc::new(Origin { name: "dive".into(), text: src.to_string() });
         match classify(src) {
             Err(ds) => {
                 print!("{}", ds.iter().map(|d| d.render(&origin.name, src)).collect::<String>());
@@ -494,7 +494,7 @@ impl Session {
                 }
                 None => {
                     all_in = false;
-                    out += &fd.diag.render("<pond>", &p.src);
+                    out += &fd.diag.render("<dive>", &p.src);
                 }
             }
         }
@@ -520,7 +520,7 @@ impl Session {
         };
         if new.iter().any(|d| matches!(&d.key, Key::Fn(n, _) if n == "main")) {
             if !loading {
-                println!("pond runs each input in its own `main`; define `main` in a file and use `duck run`");
+                println!("dive runs each input in its own `main`; define `main` in a file and use `auk run`");
                 return Outcome::Failed;
             }
             new.retain(|d| !matches!(&d.key, Key::Fn(n, _) if n == "main"));
@@ -618,7 +618,7 @@ impl Session {
 
     /// `:type <expr>`.
     fn type_of(&self, src: &str) {
-        let origin = Rc::new(Origin { name: "pond".into(), text: format!("{src}\n") });
+        let origin = Rc::new(Origin { name: "dive".into(), text: format!("{src}\n") });
         let part = Part::whole(&origin);
         let p = self.program(&self.defs, &[Piece::Scaffold(&format!("let {RESULT} =")), Piece::Part(&part)]);
         match self.check(&p) {
@@ -747,9 +747,9 @@ impl Session {
                         let _ = write!(res, "{}:{l}", o.name);
                         rest = &rest[1 + len..];
                     }
-                    None => res.push_str("<pond>"),
+                    None => res.push_str("<dive>"),
                 },
-                None => res.push_str("<pond>"),
+                None => res.push_str("<dive>"),
             }
         }
         res.push_str(rest);
@@ -861,7 +861,7 @@ mod tests {
     #[test]
     fn splitting_and_merging() {
         let src = "/// A point.\nstruct P { x: int }\nfn f(0): int = 0\nfn f(n: int): int {\n  n\n}\n";
-        let o = Rc::new(Origin { name: "pond".into(), text: src.into() });
+        let o = Rc::new(Origin { name: "dive".into(), text: src.into() });
         let m = parser::parse(src).unwrap();
         let defs = split_items(&o, &m).unwrap();
         assert_eq!(defs.len(), 2);

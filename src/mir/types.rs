@@ -1,17 +1,17 @@
-//! How Duck types are represented: which values hold references, which struct and variant
+//! How Auk types are represented: which values hold references, which struct and variant
 //! fields are boxed, and the members (`Sel`) of each aggregate. Shared by the MIR generator and
 //! the back ends.
 //!
 //! Representations (the C names are the runtime's `#[repr(C)]` types, runtime/src/lib.rs):
 //! - `int float bool char` → i64, f64, bool (1 byte), u32; `()` and `never` → a byte.
 //! - `str`, `[T]`, `{K: V}`, `Task<T>` and opaque runtime types → pointers to runtime objects.
-//! - tuple → members `F(i)`; struct → `F(i)` per field (a boxed field is a `DuckObj *` cell
+//! - tuple → members `F(i)`; struct → `F(i)` per field (a boxed field is a `AukObj *` cell
 //!   holding the value); enum (and core `Value`) → `Tag` (i32) plus a union of variants, field
 //!   `fi` of variant `vi` is `V(vi, fi)` (boxed like struct fields; never boxed in `Value`).
 //! - `T?` → `F(0)` some (bool), `F(1)` val; `T!` / `T!E` → `F(0)` ok (bool), `F(1)` val,
-//!   `F(2)` err (`DuckErr *`; a typed `E` travels as the error's payload).
-//! - closure → `F(0)` code pointer, `F(1)` environment (`DuckObj *` or NULL).
-//! - `any S` → `F(0)` the boxed value (`DuckObj *`), `F(1)` its vtable.
+//!   `F(2)` err (`AukErr *`; a typed `E` travels as the error's payload).
+//! - closure → `F(0)` code pointer, `F(1)` environment (`AukObj *` or NULL).
+//! - `any S` → `F(0)` the boxed value (`AukObj *`), `F(1)` its vtable.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -60,10 +60,10 @@ impl<'a> TyInfo<'a> {
     /// as lists and maps do, so the runtime can swap in the copy. Other opaque types are handles
     /// (`net.Conn`): a `var` one is passed by value.
     pub fn is_cow_opaque(&self, t: &Ty) -> bool {
-        self.opaque_c(t) == Some("DuckFrame *")
+        self.opaque_c(t) == Some("AukFrame *")
     }
 
-    /// The opaque type's runtime C spelling (`DuckErr *`, `DuckConn *`).
+    /// The opaque type's runtime C spelling (`AukErr *`, `AukConn *`).
     pub fn opaque_c(&self, t: &Ty) -> Option<&str> {
         match t {
             Ty::Named(d, _) => match &self.tp.defs.types[*d].kind {

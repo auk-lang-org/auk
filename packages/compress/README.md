@@ -1,10 +1,10 @@
 # compress
 
-DEFLATE (RFC 1951), its two common wrappers gzip (RFC 1952) and zlib (RFC 1950), and zip archives, in pure Duck. Also the CRC-32 and Adler-32 checksums those formats use. The decoder reads every block type: stored, fixed Huffman and dynamic Huffman. The encoder writes stored and fixed-Huffman blocks with LZ77 matching. Its output decodes with any standard tool (`gzip -d`, `zlib`, browsers), but it is **not zlib-level compression**: there are no dynamic Huffman blocks and no lazy matching. On text it typically comes out 15–25% larger than `gzip -9`. Errors are a typed `ZErr` with the byte offset of the problem.
+DEFLATE (RFC 1951), its two common wrappers gzip (RFC 1952) and zlib (RFC 1950), and zip archives, in pure Auk. Also the CRC-32 and Adler-32 checksums those formats use. The decoder reads every block type: stored, fixed Huffman and dynamic Huffman. The encoder writes stored and fixed-Huffman blocks with LZ77 matching. Its output decodes with any standard tool (`gzip -d`, `zlib`, browsers), but it is **not zlib-level compression**: there are no dynamic Huffman blocks and no lazy matching. On text it typically comes out 15–25% larger than `gzip -9`. Errors are a typed `ZErr` with the byte offset of the problem.
 
 **Effects:** none. **Dependencies:** none.
 
-```duck
+```auk
 let gz = compress.gzip(fs.read_bytes("log.txt")?)
 fs.write_bytes("log.txt.gz", gz)?
 let text = str.from_utf8(compress.gunzip(fs.read_bytes("log.txt.gz")?)?)?

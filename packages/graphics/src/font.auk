@@ -1,0 +1,611 @@
+/// TrueType fonts in pure Auk: parse `.ttf`/`.ttc` files, rasterize glyphs into anti-aliased
+/// masks, and draw and measure text in `pixels` frames (as `gui` shows them).
+///
+///   let f = graphics.font.system_sans()?            // or graphics.font.load(path)?, graphics.font.parse(bytes)?
+///   var face = graphics.font.face(f, 32.0)          // 32 pixels per em; it caches glyph masks
+///   face.draw(&frame, 20, 20, "Hello", 0x202020)
+///
+/// Glyphs are placed at quarter-pixel positions with pair kerning (`kern` table or GPOS). Not yet:
+/// hinting, CFF (`.otf`) outlines, complex shaping (Arabic, Indic) and color glyphs.
+
+/// A parsed graphics.font. `data` is the whole file; the rest are where its tables start.
+pub struct Font {
+  data: [int],
+  units: int,    // units per em
+  ascent: int,   // in units, y up: above the baseline
+  descent: int,  // below the baseline (negative)
+  line_gap: int,
+  glyphs: int,
+  loca: int,
+  long_loca: bool,
+  glyf: int,
+  glyf_len: int,
+  hmtx: int,
+  hmetrics: int,
+  cmap: int,
+  cmap_fmt: int,
+  kern: {int: int},
+  gpos: [int],
+}
+
+/// Parse the first font in `data` (a `.ttf`, or the first of a `.ttc` collection).
+pub fn parse(data: [int]): Font! = parse(data, 0)
+
+/// Parse font number `index` of a `.ttc` collection (or of a `.ttf`, where only 0 exists).
+pub fn parse(data: [int], index: int): Font! {
+  let d = data
+  if d.len() < 12 { fail("font: too short to be a font file") }
+  var base = 0
+  if graphics.font.ttf.tag(d, 0) == "ttcf" {
+    let n = graphics.font.ttf.u32(d, 8)
+    if index < 0 || index >= n { fail("font: the collection has {n} fonts, not font {index}") }
+    base = graphics.font.ttf.u32(d, 12 + 4 * index)
+  } else if index != 0 {
+    fail("font: not a collection, so there is no font {index}")
+  }
+  if base + 12 > d.len() { fail("font: truncated") }
+  let ver = graphics.font.ttf.tag(d, base)
+  if ver == "OTTO" { fail("font: CFF (PostScript) outlines aren't supported yet") }
+  if ver != "\0\u{1}\0\0" && ver != "true" { fail("font: not a TrueType font") }
+  var tables: {str: (int, int)} = {}
+  for i in 0..font.ttf.u16(d, base + 4) {
+    let r = base + 12 + 16 * i
+    if r + 16 > d.len() { fail("font: truncated table directory") }
+    let off = graphics.font.ttf.u32(d, r + 8)
+    let len = graphics.font.ttf.u32(d, r + 12)
+    if off + len > d.len() {
+      fail("font: table {graphics.font.ttf.tag(d, r)} runs past the end of the file")
+    }
+    tables[graphics.font.ttf.tag(d, r)] = (off, len)
+  }
+  for t in ["head", "hhea", "maxp", "cmap", "loca", "glyf", "hmtx"] {
+    if !tables.contains(t) { fail("font: no {t} table") }
+  }
+  let head = tables["head"].0
+  let hhea = tables["hhea"].0
+  let (cmap, cmap_fmt) = graphics.font.ttf.pick_cmap(d, tables["cmap"].0)
+  if cmap_fmt == 0 { fail("font: no Unicode character map") }
+  let units = graphics.font.ttf.u16(d, head + 18)
+  if units == 0 { fail("font: unitsPerEm is 0") }
+  let glyphs = graphics.font.ttf.u16(d, tables["maxp"].0 + 4)
+  let long_loca = graphics.font.ttf.i16(d, head + 50) == 1
+  if tables["loca"].1 < (glyphs + 1) * if long_loca { 4 } else { 2 } {
+    fail("font: loca table too short")
+  }
+  let hmetrics = graphics.font.ttf.u16(d, hhea + 34)
+  if hmetrics == 0 || tables["hmtx"].1 < 4 * hmetrics { fail("font: bad hmtx table") }
+  let kern = match tables.get("kern") {
+    some((off, len)) => graphics.font.ttf.kern_pairs(d, off, len)
+    none => {}
+  }
+  let gpos = match tables.get("GPOS") {
+    some((off, _)) => graphics.font.ttf.gpos_pairs(d, off)
+    none => []
+  }
+  Font {
+    data: d,
+    units,
+    ascent: graphics.font.ttf.i16(d, hhea + 4),
+    descent: graphics.font.ttf.i16(d, hhea + 6),
+    line_gap: graphics.font.ttf.i16(d, hhea + 8),
+    glyphs,
+    loca: tables["loca"].0,
+    long_loca,
+    glyf: tables["glyf"].0,
+    glyf_len: tables["glyf"].1,
+    hmtx: tables["hmtx"].0,
+    hmetrics,
+    cmap,
+    cmap_fmt,
+    kern,
+    gpos,
+  }
+}
+
+/// Read and parse a font file (the first font of a `.ttc`).
+pub fn load(path: str): Font! uses fs {
+  let bytes = fs.read_bytes(path)?
+  parse(bytes) else e => fail("{path}: {e}")
+}
+
+let SANS = [
+  "/System/Library/Fonts/Supplemental/Arial.ttf",
+  "/System/Library/Fonts/Geneva.ttf",
+  "/Library/Fonts/Arial.ttf",
+  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+  "/usr/share/fonts/TTF/DejaVuSans.ttf",
+  "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+  "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+  "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+  "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+  "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+  "C:\\Windows\\Fonts\\segoeui.ttf",
+  "C:\\Windows\\Fonts\\arial.ttf",
+]
+
+let MONO = [
+  "/System/Library/Fonts/Menlo.ttc",
+  "/System/Library/Fonts/Monaco.ttf",
+  "/System/Library/Fonts/Supplemental/Courier New.ttf",
+  "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+  "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+  "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+  "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+  "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
+  "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
+  "C:\\Windows\\Fonts\\consola.ttf",
+  "C:\\Windows\\Fonts\\cour.ttf",
+]
+
+fn first(paths: [str], what: str): Font! uses fs {
+  for p in paths {
+    if fs.exists(p) {
+      match load(p) {
+        ok(f) => return f
+        err(_) => {}
+      }
+    }
+  }
+  fail("font: found no {what} TrueType font among the usual system fonts")
+}
+
+/// A sans-serif font from the system (Arial on macOS; DejaVu Sans, Liberation Sans or Noto Sans
+/// on Linux; Segoe UI on Windows).
+pub fn system_sans(): Font! uses fs = first(SANS, "sans-serif")
+
+/// A monospaced font from the system (Menlo on macOS; DejaVu Sans Mono, Liberation Mono or Noto
+/// Sans Mono on Linux; Consolas on Windows).
+pub fn system_mono(): Font! uses fs = first(MONO, "monospaced")
+
+/// The glyph for character `c`; 0 (the font's missing-glyph box) if it has none.
+pub fn glyph_index(f: Font, c: char): int =
+  graphics.font.ttf.cmap(f.data, f.cmap, f.cmap_fmt, int(c))
+
+/// How far glyph `g` moves the pen, in font units.
+pub fn advance(f: Font, g: int): int {
+  let i = if g < f.hmetrics { g } else { f.hmetrics - 1 }
+  graphics.font.ttf.u16(f.data, f.hmtx + 4 * i)
+}
+
+/// The kerning between glyphs `a` and `b`, in font units (usually negative or 0).
+pub fn kern(f: Font, a: int, b: int): int {
+  match f.kern.get(a << 16 | b) {
+    some(k) => k
+    none => graphics.font.ttf.gpos_kern(f.data, f.gpos, a, b) else 0
+  }
+}
+
+// ---- faces: a font at a size ----
+
+/// A font at a size, with a cache of the glyph masks drawn so far. Pass it as `var` to `draw` so
+/// the cache is kept.
+pub struct Face {
+  font: Font,
+  size: float,   // pixels per em
+  scale: float,  // pixels per font unit
+  // the caches, filled as text is drawn; arrays rather than maps where they can be, as these
+  // are looked up for every character drawn
+  latin: [int],          // code point (below 256) → glyph, -1 until looked up
+  glyph_of: {int: int},  // other code points → glyph
+  slot: [int],           // (glyph << 2 | quarter-pixel offset) → index in masks, or -1
+  masks: [graphics.font.raster.Mask],
+  kerned: bool,       // whether the font has kerning at all
+  kerns: {int: int},  // (a << 16 | b) → kerning in units
+  lines: {str: Run},  // lines drawn so far, laid out (cleared when it gets big)
+}
+
+/// A line laid out at a whole-pixel x: for each glyph with ink, its mask (coverage, width) and
+/// where the mask's top-left goes from the line's start on the baseline; then the line's width.
+struct Run { a: [[int]], mw: [int], dx: [int], dy: [int], w: float }
+
+/// `f` at `size` pixels per em. On a Retina display, multiply a size in points by `gui.scale`.
+pub fn face(f: Font, size: float): Face {
+  Face {
+    font: f,
+    size,
+    scale: size / float(f.units),
+    latin: (0..256).map(_ => -1),
+    glyph_of: {},
+    slot: [],
+    masks: [],
+    kerned: f.kern.len() > 0 || f.gpos.len() > 0,
+    kerns: {},
+    lines: {},
+  }
+}
+
+/// Pixels from the top of a line to its baseline.
+pub fn ascent(fc: Face): int = int(ceil(float(fc.font.ascent) * fc.scale))
+
+/// Pixels from the baseline to the bottom of a line.
+pub fn descent(fc: Face): int = int(ceil(float(-fc.font.descent) * fc.scale))
+
+/// Pixels from one line's top to the next's.
+pub fn line_height(fc: Face): int {
+  let f = fc.font
+  int(round(float(f.ascent - f.descent + f.line_gap) * fc.scale))
+}
+
+fn glyph_for(fc: var Face, c: char): int {
+  let n = int(c)
+  if n < 256 {
+    let g = fc.latin[n]
+    if g >= 0 { return g }
+    let found = glyph_index(fc.font, c)
+    fc.latin[n] = found
+    return found
+  }
+  match fc.glyph_of.get(n) {
+    some(g) => g
+    none => {
+      let g = glyph_index(fc.font, c)
+      fc.glyph_of[n] = g
+      g
+    }
+  }
+}
+
+fn kern_for(fc: var Face, a: int, b: int): int {
+  if !fc.kerned { return 0 }
+  let k = a << 16 | b
+  match fc.kerns.get(k) {
+    some(v) => v
+    none => {
+      let v = kern(fc.font, a, b)
+      fc.kerns[k] = v
+      v
+    }
+  }
+}
+
+/// The mask of glyph `g` drawn `quarter` quarter-pixels right of a whole pixel.
+pub fn mask(fc: var Face, g: int, quarter: int): graphics.font.raster.Mask {
+  if g < 0 || g >= fc.font.glyphs {
+    return graphics.font.raster.EMPTY
+  }
+  fc.masks[slot_of(&fc, g, quarter)]
+}
+
+/// The index in `masks` of glyph `g`'s mask at `quarter` quarter-pixels, making it if needed.
+fn slot_of(fc: var Face, g: int, quarter: int): int {
+  if fc.slot.len() == 0 { fc.slot = (0..fc.font.glyphs * 4).map(_ => -1) }
+  let k = g << 2 | quarter
+  let i = fc.slot[k]
+  if i >= 0 { return i }
+  let m = graphics.font.raster.mask(
+    graphics.font.ttf.outline(fc.font, g),
+    fc.scale,
+    float(quarter) / 4.0,
+  )
+  fc.slot[k] = fc.masks.len()
+  fc.masks.push(m)
+  fc.masks.len() - 1
+}
+
+/// `line` laid out, from the cache or now.
+fn run(fc: var Face, line: str): Run {
+  match fc.lines.get(line) {
+    some(r) => r
+    none => {
+      let (gs, xs, w) = pens(&fc, line)
+      var r = Run { a: [], mw: [], dx: [], dy: [], w }
+      for j in 0..gs.len() {
+        let ix = floor(xs[j])
+        let m = fc.masks[slot_of(&fc, gs[j], int((xs[j] - ix) * 4.0))]
+        if m.w > 0 {
+          r.a.push(m.a)
+          r.mw.push(m.w)
+          r.dx.push(int(ix) + m.x)
+          r.dy.push(m.y)
+        }
+      }
+      if fc.lines.len() >= 1000 { fc.lines = {} }
+      fc.lines[line] = r
+      r
+    }
+  }
+}
+
+/// A line's glyphs and where each goes (pen positions in pixels, left to right), then its width.
+fn pens(fc: var Face, line: str): ([int], [float], float) {
+  var gs: [int] = []
+  var xs: [float] = []
+  var pen = 0.0
+  var prev = -1
+  for c in line.chars() {
+    let g = glyph_for(&fc, c)
+    if prev >= 0 { pen += float(kern_for(&fc, prev, g)) * fc.scale }
+    gs.push(g)
+    xs.push(pen)
+    pen += float(advance(fc.font, g)) * fc.scale
+    prev = g
+  }
+  (gs, xs, pen)
+}
+
+/// Draw `text` into the frame `f` in `color` (a `pixels` color: 0xRRGGBB is opaque), the top-left
+/// of its first line at (`x`, `y`). `\n` starts a new line. Returns the x where the last line
+/// ends, for drawing more after it.
+pub fn draw(fc: var Face, f: var pixels.Frame, x: int, y: int, text: str, color: int): int {
+  let base = ascent(fc)
+  let lh = line_height(fc)
+  var end = x
+  for i, line in text.split("\n") {
+    let baseline = y + base + i * lh
+    let r = run(&fc, line)
+    for j in 0..r.a.len() {
+      f.blit_mask(x + r.dx[j], baseline + r.dy[j], r.a[j], r.mw[j], color)
+    }
+    end = x + int(ceil(r.w))
+  }
+  end
+}
+
+/// The width and height in pixels `draw` would cover: the widest line by `line_height` per line.
+pub fn measure(fc: var Face, text: str): (int, int) {
+  var w = 0.0
+  var n = 0
+  for line in text.split("\n") {
+    let (_, _, lw) = pens(&fc, line)
+    if lw > w { w = lw }
+    n += 1
+  }
+  (int(ceil(w)), n * line_height(fc))
+}
+
+/// The index of the character boundary in `line` closest to `x` pixels from its start (for
+/// placing a caret where a click lands): 0 to `line.len()`.
+pub fn hit(fc: var Face, line: str, x: float): int {
+  let (_, xs, w) = pens(&fc, line)
+  let edges = xs + [w]
+  var best = 0
+  for i in 1..edges.len() {
+    if abs(edges[i] - x) < abs(edges[best] - x) { best = i }
+  }
+  best
+}
+
+/// The x in pixels of the character boundary before character `i` of `line` (the caret position).
+pub fn caret_x(fc: var Face, line: str, i: int): float {
+  let (_, xs, w) = pens(&fc, line)
+  if i < xs.len() { xs[i] } else { w }
+}
+
+// ---- tests, on a font built here ----
+
+fn be16(out: var [int], v: int) {
+  out.push((v >> 8) & 0xff)
+  out.push(v & 0xff)
+}
+
+fn be32(out: var [int], v: int) {
+  be16(&out, (v >> 16) & 0xffff)
+  be16(&out, v & 0xffff)
+}
+
+/// A glyf entry for one contour of on-curve points, as word-sized deltas (flags 0).
+fn simple_glyph(pts: [(int, int)], on: [bool]): [int] {
+  var g: [int] = []
+  let xs = pts.map(p => p.0)
+  let ys = pts.map(p => p.1)
+  be16(&g, 1)
+  be16(&g, xs.min()!)
+  be16(&g, ys.min()!)
+  be16(&g, xs.max()!)
+  be16(&g, ys.max()!)
+  be16(&g, pts.len() - 1)
+  be16(&g, 0)
+  for o in on { g.push(if o { 1 } else { 0 }) }
+  var prev = 0
+  for x in xs {
+    be16(&g, x - prev)
+    prev = x
+  }
+  prev = 0
+  for y in ys {
+    be16(&g, y - prev)
+    prev = y
+  }
+  while g.len() % 4 != 0 { g.push(0) }
+  g
+}
+
+/// A font with 1000 units per em: glyph 1 ('A') is a 500-unit square standing on the baseline,
+/// glyph 2 ('B') a diamond of quadratic curves, glyph 3 ('C') two 'A's side by side as a
+/// composite, glyph 4 (' ') blank. 'A' then 'A' kerns by -100.
+pub fn test_font(): [int] {
+  var glyf: [int] = []
+  var offs = [0]
+  let glyphs = [
+    [],
+    simple_glyph([(0, 0), (0, 500), (500, 500), (500, 0)], [true, true, true, true]),
+    simple_glyph(
+      [(250, 0), (0, 0), (0, 250), (0, 500), (250, 500), (500, 500), (500, 250), (500, 0)],
+      [true, false, true, false, true, false, true, false],
+    ),
+  ]
+  for g in glyphs {
+    glyf = glyf + g
+    offs.push(glyf.len())
+  }
+  // the composite: glyph 1 at x 0 and at x 600 (byte offsets)
+  var comp: [int] = []
+  be16(&comp, -1)
+  for v in [0, 0, 1100, 500] { be16(&comp, v) }
+  be16(&comp, 0x0001 | 0x0002 | 0x0020)
+  be16(&comp, 1)
+  be16(&comp, 0)
+  be16(&comp, 0)
+  be16(&comp, 0x0001 | 0x0002)
+  be16(&comp, 1)
+  be16(&comp, 600)
+  be16(&comp, 0)
+  glyf = glyf + comp
+  offs.push(glyf.len())
+  offs.push(glyf.len())  // glyph 4: empty
+  var loca: [int] = []
+  for o in offs { be32(&loca, o) }
+  var head: [int] = []
+  for _ in 0..54 { head.push(0) }
+  head[18] = 1000 >> 8
+  head[19] = 1000 & 0xff
+  head[51] = 1
+  var hhea: [int] = []
+  for _ in 0..36 { hhea.push(0) }
+  hhea[4] = 800 >> 8
+  hhea[5] = 800 & 0xff
+  hhea[6] = 0xff
+  hhea[7] = 0x38  // -200
+  hhea[35] = 5
+  var maxp: [int] = []
+  be32(&maxp, 0x5000)
+  be16(&maxp, 5)
+  var hmtx: [int] = []
+  for adv in [500, 600, 600, 1200, 300] {
+    be16(&hmtx, adv)
+    be16(&hmtx, 0)
+  }
+  // cmap: format 4 with segments ' ' → 4, 'A'..'C' → 1..3, and the 0xffff terminator
+  var sub: [int] = []
+  be16(&sub, 4)
+  be16(&sub, 0)
+  be16(&sub, 0)
+  be16(&sub, 6)
+  for v in [4, 1, 0] { be16(&sub, v) }
+  for v in [32, 67, 0xffff] { be16(&sub, v) }
+  be16(&sub, 0)
+  for v in [32, 65, 0xffff] { be16(&sub, v) }
+  for v in [(4 - 32) & 0xffff, (1 - 65) & 0xffff, 1] { be16(&sub, v) }
+  for _ in 0..3 { be16(&sub, 0) }
+  sub[3] = sub.len()
+  var cmap: [int] = []
+  be16(&cmap, 0)
+  be16(&cmap, 1)
+  be16(&cmap, 3)
+  be16(&cmap, 1)
+  be32(&cmap, 12)
+  cmap = cmap + sub
+  var kern: [int] = []
+  be16(&kern, 0)
+  be16(&kern, 1)
+  be16(&kern, 0)
+  be16(&kern, 20)
+  be16(&kern, 1)
+  for v in [1, 0, 0, 0, 1, 1, (-100) & 0xffff] { be16(&kern, v) }
+  let tables = [
+    ("cmap", cmap),
+    ("glyf", glyf),
+    ("head", head),
+    ("hhea", hhea),
+    ("hmtx", hmtx),
+    ("kern", kern),
+    ("loca", loca),
+    ("maxp", maxp),
+  ]
+  var out: [int] = []
+  be32(&out, 0x00010000)
+  be16(&out, tables.len())
+  for _ in 0..3 { be16(&out, 0) }
+  var at = 12 + 16 * tables.len()
+  for (t, body) in tables {
+    for c in t.chars() { out.push(int(c)) }
+    be32(&out, 0)
+    be32(&out, at)
+    be32(&out, body.len())
+    at += body.len()
+  }
+  for (_, body) in tables { out = out + body }
+  out
+}
+
+test "parse metrics and character map" {
+  let f = parse(test_font())?
+  assert (f.units, f.ascent, f.descent, f.glyphs) == (1000, 800, -200, 5)
+  assert (glyph_index(f, 'A'), glyph_index(f, 'C'), glyph_index(f, ' '), glyph_index(f, 'Z')) ==
+    (1, 3, 4, 0)
+  assert (advance(f, 1), advance(f, 3), advance(f, 4)) == (600, 1200, 300)
+  assert (kern(f, 1, 1), kern(f, 1, 2)) == (-100, 0)
+}
+
+test "bad fonts are errors" {
+  assert parse([1, 2, 3]) is err(_)
+  var d = test_font()
+  d[0] = 0x4f  // 'O' of OTTO
+  assert parse(d) is err(_)
+  assert parse(test_font(), 1) is err(_)
+}
+
+test "outlines: simple, implicit points and composite" {
+  let f = parse(test_font())?
+  let a = graphics.font.ttf.outline(f, 1)
+  assert a.len() == 1 && a[0].xs == [0.0, 0.0, 500.0, 500.0]
+  let c = graphics.font.ttf.outline(f, 3)
+  assert c.len() == 2 && c[1].xs == [600.0, 600.0, 1100.0, 1100.0]
+  assert graphics.font.ttf.outline(f, 4) == [] && graphics.font.ttf.outline(f, 99) == []
+}
+
+test "a square covers whole pixels exactly" {
+  let f = parse(test_font())?
+  // 10 px per em: the square is 5x5 px from the baseline up
+  let m = graphics.font.raster.mask(graphics.font.ttf.outline(f, 1), 0.01, 0.0)
+  assert (m.x, m.y, m.w, m.h) == (0, -5, 5, 5)  // trimmed to the ink
+  for row in 0..m.h {
+    for col in 0..m.w {
+      let want = if row < 5 && col < 5 { 255 } else { 0 }
+      assert m.a[row * m.w + col] == want
+    }
+  }
+  // moved half a pixel right, the edge columns are half covered
+  let h = graphics.font.raster.mask(graphics.font.ttf.outline(f, 1), 0.01, 0.5)
+  assert (h.w, h.h) == (6, 5) && h.a[0] == 128 && h.a[1] == 255 && h.a[5] == 128
+}
+
+test "curves cover their area" {
+  let f = parse(test_font())?
+  // 50 px wide: each side is a parabola from mid-edge to mid-edge with the corner as its control
+  // point, cutting off a corner region of a²/6 (a = 25). Flattening the curves into 8 lines each
+  // loses under 1% of the area.
+  let m = graphics.font.raster.mask(graphics.font.ttf.outline(f, 2), 0.1, 0.0)
+  let area = float(m.a.sum()) / 255.0
+  let want = 50.0 * 50.0 - 4.0 * 25.0 * 25.0 / 6.0
+  assert area < want && area > want * 0.99
+}
+
+test "drawing and measuring text" {
+  let f = parse(test_font())?
+  var fc = face(f, 10.0)
+  assert (ascent(fc), descent(fc), line_height(fc)) == (8, 2, 10)
+  // A (6 px) kerned -1 px with the next A, then C (12 px)
+  assert measure(&fc, "AAC") == (23, 10)
+  assert measure(&fc, "A\nAC") == (18, 20)
+  var f = pixels.frame(30, 12, 0xffffff)
+  let end = fc.draw(&f, 1, 0, "AA", 0x000000)
+  assert end == 12
+  // first square at x 1..6, the second at 6..11 (kerned), rows 3..8 (baseline at 8)
+  assert f.get(1, 3) == 0 && f.get(10, 7) == 0 && f.get(1, 2) == 0xffffff
+  assert f.get(1, 8) == 0xffffff && f.get(11, 5) == 0xffffff
+  // half-transparent text over white: mid grey
+  fc.draw(&f, 1, 0, "A", 0x80000000)
+  assert f.get(1, 3) == 0 && f.get(20, 3) == 0xffffff
+  var g = pixels.frame(30, 12, 0xffffff)
+  fc.draw(&g, 1, 0, "A", 0x80000000)
+  assert g.get(2, 4) == 0x808080
+  assert (hit(&fc, "AA", 0.4), hit(&fc, "AA", 4.0), hit(&fc, "AA", 30.0)) == (0, 1, 2)
+  assert caret_x(&fc, "AA", 1) == 5.0
+}
+
+test "system fonts match Core Text" {
+  // whatever sans the system has draws something sensible
+  let f = system_sans() else return
+  var fc = face(f, 40.0)
+  let (w, h) = fc.measure("Hello")
+  assert w > 60 && w < 140 && h > 40 && h < 60
+  // Arial's masks at 40 px hold as much ink as Core Text's (measured with CTFontDrawGlyphs,
+  // antialiased, no smoothing): 'g' 260.8 px, 'Q' 318.0 px, 'R' 310.4 px
+  let arial = load("/System/Library/Fonts/Supplemental/Arial.ttf") else return
+  var ac = face(arial, 40.0)
+  for (c, want) in [('g', 260.8), ('Q', 318.0), ('R', 310.4)] {
+    let ink = float(ac.mask(glyph_index(arial, c), 0).a.sum()) / 255.0
+    assert abs(ink - want) < want * 0.015
+  }
+}

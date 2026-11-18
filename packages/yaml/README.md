@@ -4,7 +4,7 @@ Converts a practical subset of YAML 1.2 to and from the core `Value` tree, and t
 
 **Effects:** none. **Dependencies:** none.
 
-```duck
+```auk
 struct Server { host: str, port: int }
 struct Config { name: str, debug: bool, servers: [Server] }
 

@@ -1,9 +1,9 @@
 # Plan: the `gui` package
 
-Native desktop windows with widgets drawn in pure Duck, an Elm-style API (state → view → update),
-real TTF text, layout, and `duck run --live` support. It runs on macOS, Linux and Windows.
+Native desktop windows with widgets drawn in pure Auk, an Elm-style API (state → view → update),
+real TTF text, layout, and `auk run --live` support. It runs on macOS, Linux and Windows.
 
-Decisions taken (2026-11-17): native window + Duck-drawn widgets; Elm-style; all three platforms
+Decisions taken (2026-11-17): native window + Auk-drawn widgets; Elm-style; all three platforms
 in v1; v1 includes widgets, layout, TTF text and live reload.
 
 ## 1. Shape of the work
@@ -12,16 +12,16 @@ Three layers, built bottom-up:
 
 | layer | where | language | what it owns |
 |---|---|---|---|
-| **`gui` effect** | `runtime/src/gui/`, `src/prelude/gui.duck` | Rust + Duck externs | windows, presenting pixels, input events, clipboard, cursor shape, DPI |
-| **drawing + text** | `packages/graphics/src/{canvas,font,font/ttf,font/raster}.duck` | Duck | shapes, clipping, TTF parsing, glyph rasterizing, the glyph cache, drawing and measuring text |
-| **UI framework** | `packages/ui/src/{text,node,layout,widgets,app}.duck` | Duck | text layout, the widget tree, layout, hit-testing, focus, the Elm loop |
+| **`gui` effect** | `runtime/src/gui/`, `src/prelude/gui.auk` | Rust + Auk externs | windows, presenting pixels, input events, clipboard, cursor shape, DPI |
+| **drawing + text** | `packages/graphics/src/{canvas,font,font/ttf,font/raster}.auk` | Auk | shapes, clipping, TTF parsing, glyph rasterizing, the glyph cache, drawing and measuring text |
+| **UI framework** | `packages/ui/src/{text,node,layout,widgets,app}.auk` | Auk | text layout, the widget tree, layout, hit-testing, focus, the Elm loop |
 
-A package can't be called `gui`, because quack keeps core module names (`gui` is the effect's
+A package can't be called `gui`, because raft keeps core module names (`gui` is the effect's
 module) out of package names. So drawing is the `graphics` package (its `graphics.font` module was
 done in M3; the canvas of 3.1 goes in `graphics.canvas`), and the framework will be `ui`.
 
 The runtime surface stays small and dumb: it never draws a widget. Everything you can see on screen
-comes from Duck code, so it is the same on every platform and can be changed under `--live`.
+comes from Auk code, so it is the same on every platform and can be changed under `--live`.
 
 ## 2. Runtime layer: the `gui` effect
 
@@ -29,17 +29,17 @@ comes from Duck code, so it is the same on every platform and can be changed und
 
 **Done in M0 (revised after the spike).** The program never loads a window system. Its first
 `gui.open` starts a *window process* (`runtime/src/gui_host.rs`): the same executable, run again
-with `posix_spawn` (a fresh exec) and `DUCK_GUI_HOST` set. `duck_main_wrapper` and the `duck`
+with `posix_spawn` (a fresh exec) and `AUK_GUI_HOST` set. `auk_main_wrapper` and the `auk`
 command check for that variable first. The host owns every native window. The program talks to
 it over a Unix socket (`gui.rs`, `mod wire`), and frames go through POSIX shared memory.
 
-Why: the first spike ran AppKit inside the program, with Duck `main` moved off the main
-thread. Under `duck run --live`, programs run in a child that was forked without exec, and
+Why: the first spike ran AppKit inside the program, with Auk `main` moved off the main
+thread. Under `auk run --live`, programs run in a child that was forked without exec, and
 Apple's frameworks don't support that. It showed up as XPC "Connection invalid" errors, a
 sign that text input and accessibility would break. A freshly exec'd host avoids that, frees
 the program's main thread, and lets windows outlive a `--live` restart.
 
-The host loads the system libraries with `dlopen`, as `audio_out.rs` does, so `duck_rt` adds no
+The host loads the system libraries with `dlopen`, as `audio_out.rs` does, so `auk_rt` adds no
 dependencies:
 
 | platform | window + events | presenting pixels | status |
@@ -48,11 +48,11 @@ dependencies:
 | Linux | Xlib (`libX11.so.6`), XIM for text input | `XPutImage` of the changed rectangle (MIT-SHM later) | M1 |
 | Windows | `user32` message pump | `gdi32` `StretchDIBits` of the changed rectangle | MW |
 
-### 2.2 Duck surface (`src/prelude/gui.duck`, `uses gui`)
+### 2.2 Auk surface (`src/prelude/gui.auk`, `uses gui`)
 
 Windows are **int ids** (the host's), so they can be copied between tasks. As built in M0:
 
-```duck
+```auk
 pub extern fn open(title: str, w: int, h: int): int! uses gui
 pub extern fn close(win: int) uses gui
 pub extern fn width(win: int): int uses gui                // physical pixels
@@ -70,18 +70,18 @@ Still to add in M1: `set_title`, `set_cursor`, `clipboard_get`/`clipboard_set`,
 `Event` is an enum: `Close`, `Resize(w, h)`, `MouseMove(x, y)`, `MouseDown(button, x, y, mods)`,
 `MouseUp(...)`, `Scroll(dx, dy)`, `KeyDown(code, mods, repeat)`, `KeyUp(code, mods)`,
 `Text(str)` (the only source of typed characters), `Focus(bool)`. It crosses the wire as
-`[int]`, and `next_event` decodes it in Duck.
+`[int]`, and `next_event` decodes it in Auk.
 
-The pure core module **`pixels`** (`src/prelude/pixels.duck`, `runtime/src/pixels.rs`) has the
+The pure core module **`pixels`** (`src/prelude/pixels.auk`, `runtime/src/pixels.rs`) has the
 frame type and its hot loops. A **`pixels.Frame`** holds `w`×`h` 32-bit colors `0xTTRRGGBB`,
 where the top byte is *transparency*: 0 is opaque, so a plain `0xRRGGBB` literal is an opaque
 color, and `CLEAR` (`0xff000000`) is fully transparent. Alpha is `255 - T`, straight. Windows
 show frames opaque.
-- **The type.** `Frame` is an `extern type` (`DuckFrame *`), a new runtime *handle* kind
-  (`DUCK_K_FRAME`, pixels stored inline after the header). It's shared by an atomic reference
+- **The type.** `Frame` is an `extern type` (`AukFrame *`), a new runtime *handle* kind
+  (`AUK_K_FRAME`, pixels stored inline after the header). It's shared by an atomic reference
   count, so it crosses tasks without copying and isn't swept with a crashed task's heap. Every
   write goes through a `var` parameter, and the runtime copies the frame first if it's shared, so
-  a frame behaves like any other copy-on-write Duck value. The compiler passes an extern's `var`
+  a frame behaves like any other copy-on-write Auk value. The compiler passes an extern's `var`
   frame by address (as it does lists and maps; `TyInfo::is_cow_opaque`), so the runtime can swap
   in the copy. Handle types like `net.Conn` still go by value.
 - **Functions:** `frame(w, h, color)`, `from_list`/`to_list`, `width`, `height`, `get`/`set`
@@ -96,31 +96,31 @@ show frames opaque.
 
 - **Normally**, the host is the program's child on a socket pair, and it exits (closing its
   windows) when the program ends.
-- **Under `duck run --live`**, the parent sets `DUCK_GUI_SESSION` to a socket path. The first
+- **Under `auk run --live`**, the parent sets `AUK_GUI_SESSION` to a socket path. The first
   child starts a host listening there, and later children connect to the same one.
   - A child that ends without saying goodbye (killed for a restart, or crashed) leaves its
     windows open as orphans. The next child's `gui.open` with the same title takes the window
     over, with no close-and-reopen.
   - A child that returns normally sends `BYE`, and its windows close.
   - The next client to leave closes any orphans nobody took over.
-  - The host exits when the live parent (`DUCK_GUI_OWNER`) is gone, and removes the socket.
+  - The host exits when the live parent (`AUK_GUI_OWNER`) is gone, and removes the socket.
 - The host inherits only the standard streams (`POSIX_SPAWN_CLOEXEC_DEFAULT`), so it never holds
   the program's sockets or files open across a restart.
 
 ### 2.4 Windows prerequisite
 
-`duck_rt` only builds against Unix: pthreads, `libc::dlopen`, `nanosleep`, sockets, `mkdtemp`.
-Supporting Windows in v1 means first porting the runtime and `duck build` linking to Windows
+`auk_rt` only builds against Unix: pthreads, `libc::dlopen`, `nanosleep`, sockets, `mkdtemp`.
+Supporting Windows in v1 means first porting the runtime and `auk build` linking to Windows
 (threads, condvars, dlopen → `LoadLibraryW`, Winsock, file APIs, the panic/`catch.c` path,
 the Windows calling convention in the C-ABI classifier, and the x64 COFF object + linker step). That is a
 separate project in its own right, so it is milestone **MW**, run alongside the GUI work. The GUI
 backend for Windows (`user32`/`gdi32`) is small once the runtime builds.
 
-## 3. Drawing and text (pure Duck)
+## 3. Drawing and text (pure Auk)
 
 ### 3.1 Canvas (`graphics.canvas`)
 
-```duck
+```auk
 pub struct Canvas { w: int, h: int, px: [int], clip: Rect }
 fn fill_rect(c: var Canvas, r: Rect, color: int)
 fn fill_rrect(c: var Canvas, r: Rect, radius: float, color: int)  // anti-aliased corners
@@ -135,7 +135,7 @@ closures per pixel). Measure early: a 1600×1000 full redraw is 1.6M pixels.
 
 ### 3.2 Text: `graphics.font` (done in M3) and layout in `ui`
 
-**Done** (`packages/graphics/src/font.duck` and `font/`, `examples/gui_text.duck`):
+**Done** (`packages/graphics/src/font.auk` and `font/`, `examples/gui_text.auk`):
 - **Parsing:** `.ttf` and `.ttc`; the tables `head`, `hhea`, `maxp`, `cmap` (formats 4 and 12),
   `loca`, `glyf` (quadratic outlines, composite glyphs with all their transforms), `hmtx`, `kern`
   (format 0) and GPOS pair kerning (PairPos formats 1 and 2, through extension lookups, from the
@@ -143,7 +143,7 @@ closures per pixel). Measure early: a 1600×1000 full redraw is 1.6M pixels.
   Variable fonts draw their default instance.
 - **Rasterizing:** signed-area accumulation (as font-rs does). Curves are flattened into lines,
   their area is accumulated, and a running sum gives anti-aliased 8-bit coverage. A glyph takes
-  well under a millisecond, so it stays in Duck.
+  well under a millisecond, so it stays in Auk.
 - **Glyph cache:** in a `Face` (a font at a pixel size), keyed on (glyph, x offset in quarter
   pixels). The masks are drawn with `pixels.blit_mask`. Faces also cache char→glyph lookups and
   kerning pairs.
@@ -168,9 +168,9 @@ closures per pixel). Measure early: a 1600×1000 full redraw is 1.6M pixels.
 
 ## 4. UI framework
 
-### 4.1 The Elm loop (`app.duck`)
+### 4.1 The Elm loop (`app.auk`)
 
-```duck
+```auk
 enum Msg { Inc, Dec, Name(str) }
 struct Model { n: int, name: str }
 
@@ -204,11 +204,11 @@ Widget-local state (the caret position, a scroll offset, hover and pressed state
 has focus) lives in a framework-owned table keyed by each node's **path plus an optional
 `.key(k)`**, like splash's keyed lists. That keeps the user's `Model` free of UI bookkeeping.
 
-### 4.2 Nodes and layout (`node.duck`, `layout.duck`)
+### 4.2 Nodes and layout (`node.auk`, `layout.auk`)
 
 - `Node<Msg>` is an enum of a few primitives: `Box` (children, direction, padding, gap, align,
   background, border, radius), `Text`, `Image`, `Spacer`, `Scroll`, `Custom` (a paint fn plus a
-  size fn, as an escape hatch). Widgets are Duck functions that build these. There are no widget
+  size fn, as an escape hatch). Widgets are Auk functions that build these. There are no widget
   classes.
 - Layout is flexbox-lite, done in a single measure pass and a single place pass: row and column
   directions, `gap`, `pad`, `align`/`justify`, `grow(n)`, `width`/`height` as fixed, fill, or fit
@@ -216,7 +216,7 @@ has focus) lives in a framework-owned table keyed by each node's **path plus an 
 - Every size is in logical units, multiplied by `gui.scale(win)` when painting, so Retina and
   high-DPI Windows come out crisp.
 
-### 4.3 Widgets for v1 (`widgets.duck`)
+### 4.3 Widgets for v1 (`widgets.auk`)
 
 `text`, `button`, `input` (single line: caret, selection, mouse selection, clipboard, word jumps
 with Opt/Ctrl+arrow, Home/End, undo later), `checkbox`, `radio`, `slider`, `select` (a popup drawn
@@ -233,26 +233,26 @@ repaints on a Retina display are too slow to do on every change. So the framewor
 (2) diff the old and new layout boxes into damage rectangles, repaint only those (clipped), and
 show them with `present_rect`, and later (3) keep a cached raster for subtrees that didn't
 change. All drawing goes through `pixels` (native fills, blends and blits), never per-pixel
-Duck loops.
+Auk loops.
 
 M0 measurements (M-series Mac, 1600×1000 points = 2940×1612 pixels):
 
-| | Duck loop / first spike | now |
+| | Auk loop / first spike | now |
 |---|---|---|
 | draw a full frame | 38–41 ms (`push` per pixel) | 3 ms (`pixels.new` + 40 `fill`s + 40 `blend`s) |
-| show a full frame | 10 ms | 2 ms (built), 5 ms (`duck run`) |
-| show a 48×48 change | 10 ms (always full) | 15 µs (built), 30 µs (`duck run`) |
+| show a full frame | 10 ms | 2 ms (built), 5 ms (`auk run`) |
+| show a 48×48 change | 10 ms (always full) | 15 µs (built), 30 µs (`auk run`) |
 
 Animations use `request_frame` and `Frame` events, and the loop sleeps while nothing is happening.
 
-**Performance pass (after M3).** `examples/gui_bench.duck` times each stage in a real window, and
-`DUCK_GUI_TRACE=1` makes the window process print how long copying into surfaces, waiting for its
-main thread, and handling requests take, and makes the program report big implicit frame copies. `DUCK_GUI_SNAP=path` makes it save an image of a window
+**Performance pass (after M3).** `examples/gui_bench.auk` times each stage in a real window, and
+`AUK_GUI_TRACE=1` makes the window process print how long copying into surfaces, waiting for its
+main thread, and handling requests take, and makes the program report big implicit frame copies. `AUK_GUI_SNAP=path` makes it save an image of a window
 as it closes (`CGWindowListCreateImage` of its own window, which needs no screen-recording
 permission), so a test can check what's really on screen. What changed:
 - **Double-buffered, pipelined `present`.** Each window has two shared buffers. `present` writes
   the one the window process isn't showing, sends `PRESENT` and returns without waiting. It waits
-  for the previous `PRESENTED` only before writing a buffer again, so Duck draws the next frame
+  for the previous `PRESENTED` only before writing a buffer again, so Auk draws the next frame
   while the window process handles this one. A buffer catches up on what changed in the other
   one since it was last written, skipping what the new rectangle covers. The window process no
   longer keeps its own copy of the frame.
@@ -341,8 +341,8 @@ fill 0.34–0.42 ms, a whole-frame present 1.5 ms, a 48×48 present 33–46 µs.
   Tried and dropped: run-length glyph masks (skipping empty runs, filling solid ones). At text
   sizes most glyph pixels are anti-aliased edges, so the run bookkeeping cost more than it saved
   (7 against 4 µs a line at 15 px).
-- **Accidental copies:** under `DUCK_GUI_TRACE=1`, copying a shared frame of 256K pixels or more
-  before a write is reported with the call site (`pixels.fill at app.duck:12:3: copied a shared
+- **Accidental copies:** under `AUK_GUI_TRACE=1`, copying a shared frame of 256K pixels or more
+  before a write is reported with the call site (`pixels.fill at app.auk:12:3: copied a shared
   1000x1000 frame (4 MB) ...`): the first 20, then a count every 100.
 
 The machine's load average was 9–27 during this pass, so only same-run comparisons count:
@@ -373,13 +373,13 @@ Each milestone ends with an example in `examples/` and tests. It's committed sep
 
 | # | milestone | done when |
 |---|---|---|
-| **M0** ✅ | **macOS spike**: the window process, shared-memory `present_rect`, the `pixels` module, `--live` window takeover | `examples/gui_gradient.duck` runs under `duck run`, `duck build` and `duck run --live` (no XPC errors; a restart keeps window 1); `tests/run.rs` covers `pixels` and (ignored) a real window |
-| M1 | `gui` effect on macOS + Linux/X11: open/close/present/events/scale/cursor/clipboard | `examples/gui_paint.duck` (draw with the mouse) works on both |
+| **M0** ✅ | **macOS spike**: the window process, shared-memory `present_rect`, the `pixels` module, `--live` window takeover | `examples/gui_gradient.auk` runs under `auk run`, `auk build` and `auk run --live` (no XPC errors; a restart keeps window 1); `tests/run.rs` covers `pixels` and (ignored) a real window |
+| M1 | `gui` effect on macOS + Linux/X11: open/close/present/events/scale/cursor/clipboard | `examples/gui_paint.auk` (draw with the mouse) works on both |
 | M2 | canvas: rects, rounded rects, lines, circles, clip, alpha | golden-image tests (PNG-free: compare frames with a hash and dump PPM on failure) |
-| **M3** ✅ | **TTF parse + rasterize + glyph cache** (`graphics.font`); the bundled font is still to do | masks within tolerance of Core Text for a reference set; `examples/gui_text.duck` |
+| **M3** ✅ | **TTF parse + rasterize + glyph cache** (`graphics.font`); the bundled font is still to do | masks within tolerance of Core Text for a reference set; `examples/gui_text.auk` |
 | M4 | text layout: measure, wrap, caret mapping, ellipsis | unit tests for line breaks and caret positions |
 | M5 | nodes, layout, hit-testing, the Elm loop, `Cmd` | the counter example above runs |
-| M6 | widgets + focus + keyboard nav + theme | `examples/gui_form.duck` (every widget) |
+| M6 | widgets + focus + keyboard nav + theme | `examples/gui_form.auk` (every widget) |
 | M7 | live reload: window adoption, `sup` restart, error overlay | editing `view` and `Model` while the app runs behaves as described in 4.5 |
 | M8 | redraw optimisations beyond damage rects (subtree raster cache) | profiled: typing in an input redraws less than 5% of a 1600×1000 window |
 | **MW** | **runtime on Windows** (alongside M1–M8), then the `user32`/`gdi32` backend | `tests/run.rs` passes on Windows; every `examples/gui_*` runs there |
@@ -402,15 +402,15 @@ Each milestone ends with an example in `examples/` and tests. It's committed sep
    cost is one IPC round trip per `present` (15–30 µs for small changes).
 2. **Windows runtime port (2.4):** probably bigger than the GUI backend itself. It might be
    better as its own plan doc.
-3. **Pixel throughput in Duck:** measured in M0 (4.4). Per-pixel Duck loops are about 10× too
+3. **Pixel throughput in Auk:** measured in M0 (4.4). Per-pixel Auk loops are about 10× too
    slow for full frames, hence `pixels` and damage tracking. The TTF rasterizer (M3) produces
-   coverage masks in Duck once per glyph and size. After that, `blit_mask` draws them, so it
+   coverage masks in Auk once per glyph and size. After that, `blit_mask` draws them, so it
    should stay off the per-frame path.
 4. **Wayland:** XWayland covers v1. A native Wayland backend with `dlopen` means writing the
    xdg-shell protocol glue by hand. It's deferred.
 5. **Text input via IME:** NSTextInputClient on macOS, XIM on X11, WM_IME_* on Windows. v1 at
    least handles composed `Text` events and dead keys. Inline preedit display is deferred.
-6. **Accessibility:** a Duck-drawn UI is invisible to screen readers. This is out of scope for
+6. **Accessibility:** an Auk-drawn UI is invisible to screen readers. This is out of scope for
    v1 but worth noting. The fix later would be exposing the node tree through NSAccessibility,
    AT-SPI and UIA.
 7. **Effect name:** `gui` (matches the package name) or `window`/`display`. The plan assumes

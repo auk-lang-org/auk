@@ -9,6 +9,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "auk"
+version = "0.1.0"
+dependencies = [
+ "auk_rt",
+ "libc",
+ "llvm-sys",
+]
+
+[[package]]
+name = "auk_rt"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "libc",
+ "rustls",
+ "webpki-roots",
+]
+
+[[package]]
 name = "cc"
 version = "1.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -23,25 +42,6 @@ name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
-
-[[package]]
-name = "duck"
-version = "0.1.0"
-dependencies = [
- "duck_rt",
- "libc",
- "llvm-sys",
-]
-
-[[package]]
-name = "duck_rt"
-version = "0.1.0"
-dependencies = [
- "cc",
- "libc",
- "rustls",
- "webpki-roots",
-]
 
 [[package]]
 name = "find-msvc-tools"

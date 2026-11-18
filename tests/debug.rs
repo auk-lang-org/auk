@@ -1,4 +1,4 @@
-//! The debugger: `duck run --debug` attached to a front end over `DUCK_DEBUG`'s Unix socket
+//! The debugger: `auk run --debug` attached to a front end over `AUK_DEBUG`'s Unix socket
 //! (runtime/src/dbg.rs, the frame records and statement hooks in lower.rs). Every event read
 //! here must parse as JSON (src/json.rs).
 
@@ -15,9 +15,9 @@ use std::time::Duration;
 
 use json::Json;
 
-fn duck_cmd() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_duck"));
-    for v in ["DUCK_LEAK_CHECK", "DUCK_TRACE", "DUCK_DEBUG"] {
+fn auk_cmd() -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_auk"));
+    for v in ["AUK_LEAK_CHECK", "AUK_TRACE", "AUK_DEBUG"] {
         c.env_remove(v);
     }
     c
@@ -44,11 +44,11 @@ struct Session {
 impl Session {
     fn start(name: &str, src: &str) -> Session {
         let dir = scratch(name);
-        let file = dir.join("prog.duck");
+        let file = dir.join("prog.auk");
         fs::write(&file, src).unwrap();
         let sock = dir.join("s");
         let l = UnixListener::bind(&sock).unwrap();
-        let child = duck_cmd().arg("run").arg("--debug").arg(&file).env("DUCK_DEBUG", &sock).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let child = auk_cmd().arg("run").arg("--debug").arg(&file).env("AUK_DEBUG", &sock).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         // the program connects once it compiles (a test program that doesn't would hang here)
         l.set_nonblocking(true).unwrap();
         let mut child = child;
@@ -161,10 +161,10 @@ fn main() {
 #[test]
 fn breakpoints_stack_and_locals() {
     let mut s = Session::start("basic", PROG);
-    let b = s.cmd("break prog.duck:5");
+    let b = s.cmd("break prog.auk:5");
     assert_eq!((b.get("ev").as_str(), b.get("line").as_i64()), (Some("break"), Some(5)));
     // a blank line moves to the next line with code; a function breakpoint stops at its first
-    assert_eq!(s.cmd("break prog.duck:2").get("line").as_i64(), Some(4));
+    assert_eq!(s.cmd("break prog.auk:2").get("line").as_i64(), Some(4));
     assert_eq!(s.cmd("delete 2").get("ev").as_str(), Some("ok"));
     assert_eq!(s.cmd("break fact").get("line").as_i64(), Some(10));
     assert_eq!(s.cmd("break nowhere").get("ev").as_str(), Some("error"));
@@ -190,7 +190,7 @@ fn breakpoints_stack_and_locals() {
 #[test]
 fn stepping() {
     let mut s = Session::start("step", PROG);
-    s.cmd("break prog.duck:21");
+    s.cmd("break prog.auk:21");
     assert_eq!(s.go("run"), ("breakpoint".into(), "prog.main".into(), 21));
     // into add, over its lines, out to main
     assert_eq!(s.go("step"), ("step".into(), "prog.add".into(), 4));
@@ -208,7 +208,7 @@ fn stepping() {
 #[test]
 fn loops_stop_every_iteration() {
     let mut s = Session::start("loop", PROG);
-    s.cmd("break prog.duck:19");
+    s.cmd("break prog.auk:19");
     assert_eq!(s.go("run").2, 19);
     let mut seen = vec![s.vars(0)];
     for _ in 0..2 {
@@ -255,7 +255,7 @@ fn main() {
     let mut s = Session::start("tasks", src);
     // a caught panic stops only with `catch all`
     s.cmd("catch all");
-    s.cmd("break prog.duck:4");
+    s.cmd("break prog.auk:4");
     let p = s.cmd("run");
     assert_eq!(p.get("ev").as_str(), Some("ok"));
     let st = s.wait("stopped");
@@ -295,32 +295,32 @@ fn an_uncaught_panic_stops_before_the_process_ends() {
 #[test]
 fn detached_and_flagless_programs() {
     let dir = scratch("plain");
-    let f = dir.join("prog.duck");
+    let f = dir.join("prog.auk");
     fs::write(&f, PROG).unwrap();
     // --debug without a front end runs as usual
-    let o = duck_cmd().arg("run").arg("--debug").arg(&f).output().unwrap();
+    let o = auk_cmd().arg("run").arg("--debug").arg(&f).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&o.stdout), "4 7\n");
     // no instrumentation without the flag
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let ir = |args: &[&str]| String::from_utf8(duck_cmd().arg("ir").args(args).current_dir(root).output().unwrap().stdout).unwrap();
-    for f in ["examples/tour.duck", "examples/life.duck"] {
+    let ir = |args: &[&str]| String::from_utf8(auk_cmd().arg("ir").args(args).current_dir(root).output().unwrap().stdout).unwrap();
+    for f in ["examples/tour.auk", "examples/life.auk"] {
         let plain = ir(&[f]);
-        assert!(!plain.contains("duck_dbg"), "{f}");
+        assert!(!plain.contains("auk_dbg"), "{f}");
         let dbg = ir(&["--debug", f]);
-        assert!(dbg.contains("duck_dbg_hook(") && dbg.contains("duck_dbg_init("), "{f}");
+        assert!(dbg.contains("auk_dbg_hook(") && dbg.contains("auk_dbg_init("), "{f}");
     }
 }
 
-// ---- duck debug ----
+// ---- auk debug ----
 
 fn prog_file(name: &str, src: &str) -> PathBuf {
-    let f = scratch(name).join("prog.duck");
+    let f = scratch(name).join("prog.auk");
     fs::write(&f, src).unwrap();
     f
 }
 
 fn debug_cmd(args: &[&str], f: &Path) -> (i32, String) {
-    let o = duck_cmd().arg("debug").args(args).arg(f).stdin(Stdio::null()).output().unwrap();
+    let o = auk_cmd().arg("debug").args(args).arg(f).stdin(Stdio::null()).output().unwrap();
     (o.status.code().unwrap_or(-1), format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)))
 }
 
@@ -328,18 +328,18 @@ fn debug_cmd(args: &[&str], f: &Path) -> (i32, String) {
 fn batch_text_report() {
     let f = prog_file("batch", PROG);
     // stdin is not a terminal: batch mode
-    let (code, out) = debug_cmd(&["-b", "prog.duck:5", "-b", "fact", "-p", "n,nx", "--max-stops", "3"], &f);
+    let (code, out) = debug_cmd(&["-b", "prog.auk:5", "-b", "fact", "-p", "n,nx", "--max-stops", "3"], &f);
     assert_eq!(code, 137, "{out}");
     let want = "\
-#1 breakpoint at prog.duck:5 in prog.add
+#1 breakpoint at prog.auk:5 in prog.add
   nx = 4
-  called from prog.main (prog.duck:21)
-#2 breakpoint at prog.duck:10 in prog.fact
+  called from prog.main (prog.auk:21)
+#2 breakpoint at prog.auk:10 in prog.fact
   n = 3
-  called from prog.main (prog.duck:23)
-#3 breakpoint at prog.duck:10 in prog.fact
+  called from prog.main (prog.auk:23)
+#3 breakpoint at prog.auk:10 in prog.fact
   n = 2
-  called from prog.fact (prog.duck:13) < prog.main (prog.duck:23)
+  called from prog.fact (prog.auk:13) < prog.main (prog.auk:23)
 ended after 3 stops (--max-stops)
 exit 137
 ";
@@ -379,18 +379,18 @@ fn batch_json_panic_and_timeout() {
 #[test]
 fn interactive_prompt() {
     let f = prog_file("repl", PROG);
-    let mut c = duck_cmd().arg("debug").arg("--repl").arg(&f).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut c = auk_cmd().arg("debug").arg("--repl").arg(&f).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     // typed ahead: what is typed while the program runs waits for the next stop
     c.stdin.take().unwrap().write_all(b"b add\nr\nn\n\np nx\nup\nbt\nfinish\np total\nnope\nd\nc\n").unwrap();
     let o = c.wait_with_output().unwrap();
     let out = String::from_utf8_lossy(&o.stdout).replace(&format!("{}/", fs::canonicalize(f.parent().unwrap()).unwrap().display()), "");
     for want in [
-        "breakpoint 1 at prog.duck:4",
-        "breakpoint 1 in prog.add (prog.duck:4)\n4\t    let nx = p.x + d",
+        "breakpoint 1 at prog.auk:4",
+        "breakpoint 1 in prog.add (prog.auk:4)\n4\t    let nx = p.x + d",
         "6\t    Point { x: nx, y: ny }",
         "nx: int = 4",
-        "#1 prog.main (prog.duck:21)",
-        " #0 prog.add (prog.duck:6)\n*#1 prog.main (prog.duck:21)",
+        "#1 prog.main (prog.auk:21)",
+        " #0 prog.add (prog.auk:6)\n*#1 prog.main (prog.auk:21)",
         "total: int = 3",
         "unknown command `nope`",
         "4 7\n",
@@ -401,7 +401,7 @@ fn interactive_prompt() {
     assert_eq!(o.status.code(), Some(0));
 }
 
-// ---- parts of values, `duck dap` ----
+// ---- parts of values, `auk dap` ----
 
 const SCENE: &str = r#"struct Point { x: int, y: int }
 enum Shape { Circle(c: Point, r: float), Square(Point, float), Empty }
@@ -417,7 +417,7 @@ fn main() {
 #[test]
 fn parts_of_values() {
     let mut s = Session::start("kids", SCENE);
-    s.cmd("break prog.duck:8");
+    s.cmd("break prog.auk:8");
     assert_eq!(s.go("run").2, 8);
     let kids = |s: &mut Session, c: &str| -> Vec<String> {
         let r = s.cmd(&format!("kids 0 1 {c}"));
@@ -444,7 +444,7 @@ fn parts_of_values() {
     s.cmd("kill");
 }
 
-/// A DAP client of `duck dap`.
+/// A DAP client of `auk dap`.
 struct Dap {
     child: Child,
     out: BufReader<std::process::ChildStdout>,
@@ -454,7 +454,7 @@ struct Dap {
 
 impl Dap {
     fn start() -> Dap {
-        let mut child = duck_cmd().arg("dap").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn().unwrap();
+        let mut child = auk_cmd().arg("dap").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn().unwrap();
         let out = BufReader::new(child.stdout.take().unwrap());
         Dap { child, out, seq: 0, seen: Vec::new() }
     }
@@ -463,7 +463,7 @@ impl Dap {
         let mut len = 0;
         loop {
             let mut l = String::new();
-            assert!(self.out.read_line(&mut l).unwrap() > 0, "duck dap closed");
+            assert!(self.out.read_line(&mut l).unwrap() > 0, "auk dap closed");
             let l = l.trim();
             if l.is_empty() {
                 break;
@@ -525,7 +525,7 @@ fn dap_session() {
     let f = prog_file("dap", SCENE);
     let path = f.display().to_string();
     let mut d = Dap::start();
-    let init = d.req("initialize", json::obj([("adapterID", "duck".into())]));
+    let init = d.req("initialize", json::obj([("adapterID", "auk".into())]));
     assert_eq!(init.at(&["body", "supportsConfigurationDoneRequest"]), &Json::Bool(true));
     let r = d.req("launch", json::obj([("program", path.as_str().into()), ("stopOnEntry", true.into())]));
     assert_eq!(r.get("success"), &Json::Bool(true), "{r:?}");
@@ -594,7 +594,7 @@ fn dap_panics_and_compile_errors() {
     d.child.wait().unwrap();
 }
 
-// ---- native debug info (`duck build -g`) ----
+// ---- native debug info (`auk build -g`) ----
 
 fn have(tool: &str) -> bool {
     Command::new("which").arg(tool).output().is_ok_and(|o| o.status.success())
@@ -608,7 +608,7 @@ fn native_line_tables() {
     let f = prog_file("native", &prog);
     let dir = f.parent().unwrap();
     let out = dir.join("prog");
-    let o = duck_cmd().arg("build").arg("-g").arg(&f).arg("-o").arg(&out).output().unwrap();
+    let o = auk_cmd().arg("build").arg("-g").arg(&f).arg("-o").arg(&out).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     assert_eq!(String::from_utf8_lossy(&Command::new(&out).output().unwrap().stdout), "4 5 7\n");
     if !cfg!(target_os = "macos") || !have("lldb") || !have("dwarfdump") {
@@ -617,33 +617,33 @@ fn native_line_tables() {
     }
     let dsym = dir.join("prog.dSYM");
     assert!(dsym.is_dir(), "no .dSYM");
-    // a compile unit for the program, with its functions by their Duck names and a line table
+    // a compile unit for the program, with its functions by their Auk names and a line table
     let info = String::from_utf8_lossy(&Command::new("dwarfdump").arg("--debug-info").arg(&dsym).output().unwrap().stdout).into_owned();
-    assert!(info.contains("(\"duck ") && info.contains("(\"prog.fact\")") && info.contains("(\"prog.main\")"), "{info:.2000}");
-    // lldb: line and function breakpoints, the backtrace in Duck terms
+    assert!(info.contains("(\"auk ") && info.contains("(\"prog.fact\")") && info.contains("(\"prog.main\")"), "{info:.2000}");
+    // lldb: line and function breakpoints, the backtrace in Auk terms
     let o = Command::new("lldb")
         .current_dir(dir)
-        .args(["-b", "-o", "b prog.duck:5", "-o", "b prog.fact", "-o", "run", "-o", "bt 2", "-o", "c", "-o", "bt 2", "-o", "kill"])
+        .args(["-b", "-o", "b prog.auk:5", "-o", "b prog.fact", "-o", "run", "-o", "bt 2", "-o", "c", "-o", "bt 2", "-o", "kill"])
         .arg(&out)
         .output()
         .unwrap();
     let t = String::from_utf8_lossy(&o.stdout);
     // the line breakpoint is in `add`, which an optimized build may have inlined into its caller
-    // (`where = prog`dk_main_shim + 220 [inlined] prog.add + 16 at prog.duck:5:5`)
+    // (`where = prog`dk_main_shim + 220 [inlined] prog.add + 16 at prog.auk:5:5`)
     let bp1 = t.lines().find(|l| l.starts_with("Breakpoint 1: where = prog`")).unwrap_or_else(|| panic!("no breakpoint 1 in:\n{t}"));
     assert!(bp1.contains("prog`prog.add") || bp1.contains("[inlined] prog.add"), "{bp1}");
     for want in [
-        "at prog.duck:5:5",
+        "at prog.auk:5:5",
         "Breakpoint 2: where = prog`prog.fact",
         "frame #0: 0x",
-        "prog`prog.add at prog.duck:5:5",
-        "prog`prog.main at prog.duck:21:5",
-        "prog`prog.fact at prog.duck:10:5",
+        "prog`prog.add at prog.auk:5:5",
+        "prog`prog.main at prog.auk:21:5",
+        "prog`prog.fact at prog.auk:10:5",
     ] {
         assert!(t.contains(want), "missing {want:?} in:\n{t}");
     }
     // without -g: no debug info
-    let o = duck_cmd().arg("build").arg(&f).arg("-o").arg(dir.join("plain")).output().unwrap();
+    let o = auk_cmd().arg("build").arg(&f).arg("-o").arg(dir.join("plain")).output().unwrap();
     assert!(o.status.success());
     assert!(!dir.join("plain.dSYM").exists());
 }
@@ -674,7 +674,7 @@ fn main() {
 #[test]
 fn expressions_and_conditions() {
     let mut s = Session::start("eval", EVAL);
-    let b = s.cmd("break prog.duck:16 if i == 3");
+    let b = s.cmd("break prog.auk:16 if i == 3");
     assert_eq!(b.get("cond").as_str(), Some("i == 3"));
     s.cmd("break fact if n == 2");
     // stops only where the condition holds
@@ -715,27 +715,27 @@ fn expressions_and_conditions() {
 }
 
 #[test]
-fn expressions_in_duck_debug() {
+fn expressions_in_auk_debug() {
     let f = prog_file("evalcli", EVAL);
-    let (code, out) = debug_cmd(&["-b", "prog.duck:16 if i % 2 == 1", "-p", "total,pts[1].x", "-e", "dist2(pts[0]) + i"], &f);
+    let (code, out) = debug_cmd(&["-b", "prog.auk:16 if i % 2 == 1", "-p", "total,pts[1].x", "-e", "dist2(pts[0]) + i"], &f);
     assert_eq!(code, 0, "{out}");
     let want = "\
-#1 breakpoint at prog.duck:16 in prog.main
+#1 breakpoint at prog.auk:16 in prog.main
   total = 0
   pts[1].x = 3
   dist2(pts[0]) + i = 6
-#2 breakpoint at prog.duck:16 in prog.main
+#2 breakpoint at prog.auk:16 in prog.main
   total = 3
   pts[1].x = 3
   dist2(pts[0]) + i = 8
 ";
     assert!(out.replace(&format!("{}/", fs::canonicalize(f.parent().unwrap()).unwrap().display()), "").starts_with(want), "{out}");
     // the prompt: `p <expression>`, `p x = v`, `b <line> if <cond>`
-    let mut c = duck_cmd().arg("debug").arg("--repl").arg(&f).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut c = auk_cmd().arg("debug").arg("--repl").arg(&f).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     c.stdin.take().unwrap().write_all(b"b 16 if i == 2\nr\np i * 100\np total = 1000\np total\nd\nc\n").unwrap();
     let o = c.wait_with_output().unwrap();
     let out = String::from_utf8_lossy(&o.stdout).replace(&format!("{}/", fs::canonicalize(f.parent().unwrap()).unwrap().display()), "");
-    for want in ["breakpoint 1 at prog.duck:16 if i == 2", "i * 100: int = 200", "total: int = 1000", "1009 120 2"] {
+    for want in ["breakpoint 1 at prog.auk:16 if i == 2", "i * 100: int = 200", "total: int = 1000", "1009 120 2"] {
         assert!(out.contains(want), "missing {want:?} in:\n{out}");
     }
 }

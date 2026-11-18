@@ -1,5 +1,0 @@
-// error: E0011 Duck does not use semicolons
-fn main() {
-  let x = 1;
-  print(x)
-}

@@ -2,13 +2,13 @@
 //!
 //! A program is a set of packages, each a tree of modules (one module per file):
 //! - the **root package**: the file given on the command line is its root module. If the file is
-//!   inside a project (the nearest `quack.toml` above it), the project's `src/**/*.duck` files are
-//!   its other modules (`src/geo/shapes.duck` is `geo.shapes`), and the manifest's `[deps]` are
+//!   inside a project (the nearest `raft.toml` above it), the project's `src/**/*.auk` files are
+//!   its other modules (`src/geo/shapes.auk` is `geo.shapes`), and the manifest's `[deps]` are
 //!   its dependencies. A standalone file gets core only.
-//! - each **dependency** `d`: installed at `<project>/.quack/d/`; its root module is
-//!   `src/lib.duck` and `src/x.duck` is `d.x`. Its own `[deps]` are found in the same `.quack/`
-//!   (quack installs the whole tree flat).
-//! - **core**: the prelude compiled into the compiler (`src/prelude/*.duck`): the root `core`
+//! - each **dependency** `d`: installed at `<project>/.raft/d/`; its root module is
+//!   `src/lib.auk` and `src/x.auk` is `d.x`. Its own `[deps]` are found in the same `.raft/`
+//!   (raft installs the whole tree flat).
+//! - **core**: the prelude compiled into the compiler (`src/prelude/*.auk`): the root `core`
 //!   module, always in scope, plus the modules `fs net time rand env proc str int float`.
 //!
 //! Paths (spec "Modules, packages"): a path's first segment names, in this order, a top-level
@@ -35,19 +35,19 @@ pub type PkgId = usize;
 
 /// The core prelude, compiled in: (module name, source). The first is the root `core` module.
 pub const PRELUDE: &[(&str, &str)] = &[
-    ("core", include_str!("prelude/core.duck")),
-    ("fs", include_str!("prelude/fs.duck")),
-    ("net", include_str!("prelude/net.duck")),
-    ("time", include_str!("prelude/time.duck")),
-    ("rand", include_str!("prelude/rand.duck")),
-    ("env", include_str!("prelude/env.duck")),
-    ("proc", include_str!("prelude/proc.duck")),
-    ("audio_out", include_str!("prelude/audio_out.duck")),
-    ("gui", include_str!("prelude/gui.duck")),
-    ("pixels", include_str!("prelude/pixels.duck")),
-    ("str", include_str!("prelude/str.duck")),
-    ("int", include_str!("prelude/int.duck")),
-    ("float", include_str!("prelude/float.duck")),
+    ("core", include_str!("prelude/core.auk")),
+    ("fs", include_str!("prelude/fs.auk")),
+    ("net", include_str!("prelude/net.auk")),
+    ("time", include_str!("prelude/time.auk")),
+    ("rand", include_str!("prelude/rand.auk")),
+    ("env", include_str!("prelude/env.auk")),
+    ("proc", include_str!("prelude/proc.auk")),
+    ("audio_out", include_str!("prelude/audio_out.auk")),
+    ("gui", include_str!("prelude/gui.auk")),
+    ("pixels", include_str!("prelude/pixels.auk")),
+    ("str", include_str!("prelude/str.auk")),
+    ("int", include_str!("prelude/int.auk")),
+    ("float", include_str!("prelude/float.auk")),
 ];
 
 thread_local! {
@@ -57,7 +57,7 @@ thread_local! {
 }
 
 /// Run `f` with the given files' texts replacing what is on disk, for loading (and so checking
-/// and building) a program whose edits haven't been written yet (`duck hatch`). Keys are file
+/// and building) a program whose edits haven't been written yet (`auk hatch`). Keys are file
 /// names as they appear in `Module::file`.
 pub fn with_sources<R>(srcs: &HashMap<String, String>, f: impl FnOnce() -> R) -> R {
     let old = OVERRIDES.with(|o| std::mem::replace(&mut *o.borrow_mut(), srcs.clone()));
@@ -76,7 +76,7 @@ fn read_file(path: &Path) -> std::io::Result<String> {
 
 /// The text of a file named in a diagnostic (a prelude file or a file on disk).
 pub fn source_of(file: &str) -> Option<String> {
-    if let Some(name) = file.strip_prefix("<prelude>/").and_then(|f| f.strip_suffix(".duck")) {
+    if let Some(name) = file.strip_prefix("<prelude>/").and_then(|f| f.strip_suffix(".auk")) {
         return PRELUDE.iter().find(|(n, _)| *n == name).map(|(_, s)| s.to_string());
     }
     read_file(Path::new(file)).ok()
@@ -85,7 +85,7 @@ pub fn source_of(file: &str) -> Option<String> {
 #[derive(Debug)]
 pub struct Package {
     pub name: String,
-    /// The project directory (with `quack.toml`), if any.
+    /// The project directory (with `raft.toml`), if any.
     pub dir: Option<PathBuf>,
     pub root: ModId,
     /// Direct dependencies by name.
@@ -102,7 +102,7 @@ pub struct Module {
     /// The full path: `["http", "uri"]`, `["core", "fs"]`; the root module of a standalone file
     /// is `[<file stem>]`.
     pub path: Vec<String>,
-    /// The file as given (for diagnostics); `<prelude>/x.duck` for core, empty for a folder
+    /// The file as given (for diagnostics); `<prelude>/x.auk` for core, empty for a folder
     /// without its own file.
     pub file: String,
     pub src: String,
@@ -117,7 +117,7 @@ pub struct Program {
     /// The root module (the file given on the command line).
     pub root: ModId,
     /// The module being looked at: `root`, except from `load_in_package`, where it is the
-    /// submodule whose file was given (and `root` is its package's `lib.duck`/`main.duck`).
+    /// submodule whose file was given (and `root` is its package's `lib.auk`/`main.auk`).
     pub focus: ModId,
     pub core_pkg: PkgId,
     pub core_root: ModId,
@@ -155,7 +155,7 @@ impl Program {
     }
 }
 
-/// A `quack.toml`, as much as the compiler needs.
+/// A `raft.toml`, as much as the compiler needs.
 #[derive(Debug, Default, Clone)]
 pub struct Manifest {
     pub name: String,
@@ -163,7 +163,7 @@ pub struct Manifest {
     pub effects: Vec<String>,
 }
 
-/// Read the `[package]` name and effects and the `[deps]` names. (quack validates manifests
+/// Read the `[package]` name and effects and the `[deps]` names. (raft validates manifests
 /// fully; the compiler only needs these keys.)
 pub fn parse_manifest(text: &str) -> Manifest {
     let mut m = Manifest::default();
@@ -208,11 +208,11 @@ fn strip_comment(line: &str) -> &str {
     line
 }
 
-/// The nearest directory at or above `dir` that has a `quack.toml`.
+/// The nearest directory at or above `dir` that has a `raft.toml`.
 pub fn find_project(dir: &Path) -> Option<PathBuf> {
     let mut d = Some(dir);
     while let Some(x) = d {
-        if x.join("quack.toml").is_file() {
+        if x.join("raft.toml").is_file() {
             return Some(x.to_path_buf());
         }
         d = x.parent();
@@ -226,8 +226,8 @@ struct Loader {
     errs: Vec<FileDiag>,
     /// Installed dependencies already loaded, by name.
     loaded: BTreeMap<String, PkgId>,
-    /// `<project>/.quack`, where every dependency of the program is installed.
-    quack_dir: Option<PathBuf>,
+    /// `<project>/.raft`, where every dependency of the program is installed.
+    raft_dir: Option<PathBuf>,
 }
 
 fn err_at(file: &str, code: &'static str, msg: String) -> FileDiag {
@@ -269,7 +269,7 @@ impl Loader {
         let mut root = None;
         for (name, src) in PRELUDE {
             let path = if *name == "core" { vec!["core".to_string()] } else { vec!["core".to_string(), name.to_string()] };
-            let m = self.add_module(pkg, path, format!("<prelude>/{name}.duck"), src.to_string(), true);
+            let m = self.add_module(pkg, path, format!("<prelude>/{name}.auk"), src.to_string(), true);
             match root {
                 None => root = Some(m),
                 Some(r) => {
@@ -281,11 +281,11 @@ impl Loader {
         pkg
     }
 
-    /// Add `src/**/*.duck` under `src_dir` as submodules of `root` (skipping `skip`, and the
-    /// package roots `lib.duck` / `main.duck` at the top).
+    /// Add `src/**/*.auk` under `src_dir` as submodules of `root` (skipping `skip`, and the
+    /// package roots `lib.auk` / `main.auk` at the top).
     fn add_tree(&mut self, pkg: PkgId, root: ModId, src_dir: &Path, skip: Option<&Path>) {
         let mut files = Vec::new();
-        collect_duck_files(src_dir, &mut files);
+        collect_auk_files(src_dir, &mut files);
         files.sort();
         for f in files {
             if skip.is_some_and(|s| same_file(s, &f)) {
@@ -294,7 +294,7 @@ impl Loader {
             let Ok(rel) = f.strip_prefix(src_dir) else { continue };
             let mut segs: Vec<String> = rel.iter().map(|s| s.to_string_lossy().to_string()).collect();
             let last = segs.pop().unwrap();
-            let stem = last.trim_end_matches(".duck").to_string();
+            let stem = last.trim_end_matches(".auk").to_string();
             if segs.is_empty() && (stem == "lib" || stem == "main") {
                 continue;
             }
@@ -339,9 +339,9 @@ impl Loader {
         if let Some(&p) = self.loaded.get(name) {
             return Some(p);
         }
-        let dir = self.quack_dir.as_ref().map(|q| q.join(name));
-        let Some(dir) = dir.filter(|d| d.join("src/lib.duck").is_file()) else {
-            let where_ = self.quack_dir.as_ref().and_then(|q| q.parent()).map(|p| p.display().to_string()).unwrap_or_else(|| ".".into());
+        let dir = self.raft_dir.as_ref().map(|q| q.join(name));
+        let Some(dir) = dir.filter(|d| d.join("src/lib.auk").is_file()) else {
+            let where_ = self.raft_dir.as_ref().and_then(|q| q.parent()).map(|p| p.display().to_string()).unwrap_or_else(|| ".".into());
             self.errs.push(FileDiag {
                 file: from_file.to_string(),
                 diag: Diag::new(
@@ -349,11 +349,11 @@ impl Loader {
                     Span { line: 1, col: 1, end_line: 1, end_col: 1 },
                     format!("dependency `{name}` of `{wanted_by}` is not installed"),
                 )
-                .note(format!("run `quack install` in {where_} (expected {name}/src/lib.duck under .quack/)")),
+                .note(format!("run `raft install` in {where_} (expected {name}/src/lib.auk under .raft/)")),
             });
             return None;
         };
-        let manifest = fs::read_to_string(dir.join("quack.toml")).map(|t| parse_manifest(&t)).unwrap_or_default();
+        let manifest = fs::read_to_string(dir.join("raft.toml")).map(|t| parse_manifest(&t)).unwrap_or_default();
         let pkg = self.pkgs.len();
         self.pkgs.push(Package {
             name: name.to_string(),
@@ -364,7 +364,7 @@ impl Loader {
             is_core: false,
         });
         self.loaded.insert(name.to_string(), pkg);
-        let lib = dir.join("src/lib.duck");
+        let lib = dir.join("src/lib.auk");
         let src = fs::read_to_string(&lib).unwrap_or_default();
         let root = self.add_module(pkg, vec![name.to_string()], lib.display().to_string(), src, false);
         self.pkgs[pkg].root = root;
@@ -392,20 +392,20 @@ impl Loader {
                         Span { line: 1, col: 1, end_line: 1, end_col: 1 },
                         format!("module `{}` has the same name as the dependency `{name}`", self.mods[m].path.join(".")),
                     )
-                    .note(format!("`{name}.` would be ambiguous; rename the module (src/{name}.duck) or remove the dependency from quack.toml")),
+                    .note(format!("`{name}.` would be ambiguous; rename the module (src/{name}.auk) or remove the dependency from raft.toml")),
                 });
             }
         }
     }
 }
 
-fn collect_duck_files(dir: &Path, out: &mut Vec<PathBuf>) {
+fn collect_auk_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let p = e.path();
         if p.is_dir() {
-            collect_duck_files(&p, out);
-        } else if p.extension().is_some_and(|x| x == "duck") {
+            collect_auk_files(&p, out);
+        } else if p.extension().is_some_and(|x| x == "auk") {
             out.push(p);
         }
     }
@@ -429,12 +429,12 @@ pub fn load(path: &Path) -> Result<Program, Vec<FileDiag>> {
 /// Like `load`, with the root file's text given (used by tests and `check`).
 pub fn load_source(path: &Path, src: String) -> Result<Program, Vec<FileDiag>> {
     let file = path.display().to_string();
-    let mut l = Loader { pkgs: Vec::new(), mods: Vec::new(), errs: Vec::new(), loaded: BTreeMap::new(), quack_dir: None };
+    let mut l = Loader { pkgs: Vec::new(), mods: Vec::new(), errs: Vec::new(), loaded: BTreeMap::new(), raft_dir: None };
     let core_pkg = l.load_core();
     let core_root = l.pkgs[core_pkg].root;
     let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let project = abs.parent().and_then(find_project);
-    let manifest = project.as_ref().and_then(|p| fs::read_to_string(p.join("quack.toml")).ok()).map(|t| parse_manifest(&t));
+    let manifest = project.as_ref().and_then(|p| fs::read_to_string(p.join("raft.toml")).ok()).map(|t| parse_manifest(&t));
     let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "main".into());
     let name = manifest.as_ref().map(|m| m.name.clone()).filter(|n| !n.is_empty()).unwrap_or(stem);
     let pkg = l.pkgs.len();
@@ -449,7 +449,7 @@ pub fn load_source(path: &Path, src: String) -> Result<Program, Vec<FileDiag>> {
     let root = l.add_module(pkg, vec![name.clone()], file.clone(), src, false);
     l.pkgs[pkg].root = root;
     if let (Some(dir), Some(m)) = (&project, &manifest) {
-        l.quack_dir = Some(dir.join(".quack"));
+        l.raft_dir = Some(dir.join(".raft"));
         l.add_tree(pkg, root, &dir.join("src"), Some(&abs));
         for d in &m.deps {
             if let Some(dp) = l.load_dep(d, &name, &file) {
@@ -464,9 +464,9 @@ pub fn load_source(path: &Path, src: String) -> Result<Program, Vec<FileDiag>> {
     Ok(Program { pkgs: l.pkgs, mods: l.mods, root, focus: root, core_pkg, core_root })
 }
 
-/// Like `load_source`, for looking at one file of a project (`duck check`, the language server):
-/// a project file other than the package root (`src/wav.duck`) is checked as the module it is
-/// (`audio.wav`), in the program rooted at the project's `src/lib.duck` or `src/main.duck`, so
+/// Like `load_source`, for looking at one file of a project (`auk check`, the language server):
+/// a project file other than the package root (`src/wav.auk`) is checked as the module it is
+/// (`audio.wav`), in the program rooted at the project's `src/lib.auk` or `src/main.auk`, so
 /// paths through the package root (`audio.Fmt`) resolve. `Program::focus` is that module.
 pub fn load_in_package(path: &Path, src: String) -> Result<Program, Vec<FileDiag>> {
     let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -475,7 +475,7 @@ pub fn load_in_package(path: &Path, src: String) -> Result<Program, Vec<FileDiag
         if !abs.starts_with(&src_dir) {
             return None;
         }
-        let root = ["lib.duck", "main.duck"].iter().map(|f| src_dir.join(f)).find(|f| f.is_file())?;
+        let root = ["lib.auk", "main.auk"].iter().map(|f| src_dir.join(f)).find(|f| f.is_file())?;
         (!same_file(&root, &abs)).then_some(root)
     });
     let Some(root_file) = root_file else { return load_source(path, src) };
@@ -508,14 +508,14 @@ mod tests {
     #[test]
     fn prelude_externs_declare_their_effects() {
         const EFFECTS: &[(&str, &[&str])] = &[
-            ("fs", &["duck_fs_"]),
-            ("net", &["duck_net_", "duck_conn_", "duck_listener_"]),
-            ("time", &["duck_time_"]),
-            ("rand", &["duck_rand_"]),
-            ("env", &["duck_env_"]),
-            ("proc", &["duck_proc_"]),
-            ("audio_out", &["duck_audio_out_"]),
-            ("gui", &["duck_gui_"]),
+            ("fs", &["auk_fs_"]),
+            ("net", &["auk_net_", "auk_conn_", "auk_listener_"]),
+            ("time", &["auk_time_"]),
+            ("rand", &["auk_rand_"]),
+            ("env", &["auk_env_"]),
+            ("proc", &["auk_proc_"]),
+            ("audio_out", &["auk_audio_out_"]),
+            ("gui", &["auk_gui_"]),
         ];
         let mut checked = 0;
         for (module, src) in PRELUDE {

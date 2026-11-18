@@ -1,6 +1,6 @@
 # graphics
 
-Graphics in pure Duck, drawn into `pixels.Frame`s (what `gui.present` shows). Two modules:
+Graphics in pure Auk, drawn into `pixels.Frame`s (what `gui.present` shows). Two modules:
 
 - **`graphics.canvas`**: a `Canvas` wraps a frame and records which rectangles its drawing calls change. `show(win)` sends only those to the window, in one message, so redrawing a button costs a button, not a window. Touching or overlapping changes are merged; past 16 separate rectangles they become one, and changes covering most of the canvas send it whole. To draw into `c.frame` directly, `mark` what you changed.
 - **`graphics.font`**: TrueType text:
@@ -16,7 +16,7 @@ Not yet: hinting, CFF outlines (`.otf`), complex shaping (Arabic, Indic), color 
 
 **Effects:** `fs` (only `graphics.font.load`, `system_sans` and `system_mono`; `parse` takes bytes and is pure) and `gui` (only `Canvas.show`).
 
-```duck
+```auk
 fn main(): int! uses gui, fs {
   let win = gui.open("hello", 400, 120)?
   var face = graphics.font.face(graphics.font.system_sans()?, 24.0 * gui.scale(win))  // pixels per em
@@ -42,4 +42,4 @@ fn main(): int! uses gui, fs {
 
 `draw` takes the face as `var` because it fills the face's mask cache. Other functions: `ascent`, `descent`, `line_height`, `hit(face, line, x)` (the caret index nearest x), `caret_x(face, line, i)`, `glyph_index`, `advance`, `kern`, and the submodules `graphics.font.ttf` (tables and outlines) and `graphics.font.raster` (masks).
 
-See `examples/gui_text.duck` for an editable line of text in a window, redrawn on a canvas.
+See `examples/gui_text.auk` for an editable line of text in a window, redrawn on a canvas.

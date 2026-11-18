@@ -1,4 +1,4 @@
-//! Execution traces: `duck run --trace=...` and `duck test --trace=...` (runtime/src/trace.rs, the
+//! Execution traces: `auk run --trace=...` and `auk test --trace=...` (runtime/src/trace.rs, the
 //! wrappers in lower.rs). Every trace line read here must parse as JSON (src/json.rs).
 
 #[allow(dead_code)]
@@ -11,9 +11,9 @@ use std::process::{Command, Output};
 
 use json::Json;
 
-fn duck_cmd() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_duck"));
-    for v in ["DUCK_LEAK_CHECK", "DUCK_TRACE", "DUCK_TRACE_LIMIT", "DUCK_TRACE_TAIL"] {
+fn auk_cmd() -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_auk"));
+    for v in ["AUK_LEAK_CHECK", "AUK_TRACE", "AUK_TRACE_LIMIT", "AUK_TRACE_TAIL"] {
         c.env_remove(v);
     }
     c
@@ -63,20 +63,20 @@ fn brief(es: &[Json]) -> Vec<String> {
         .collect()
 }
 
-/// Write `src` as `<name>.duck` in a scratch dir and `duck run` it with a trace file (plus
+/// Write `src` as `<name>.auk` in a scratch dir and `auk run` it with a trace file (plus
 /// `flags`) and the leak checker on. Returns the output and the events.
 fn run_traced(name: &str, src: &str, flags: &[&str]) -> (Output, Vec<Json>) {
     let d = scratch(name);
-    let f = d.join(format!("{name}.duck"));
+    let f = d.join(format!("{name}.auk"));
     fs::write(&f, src).unwrap();
     let tr = d.join("trace.jsonl");
-    let o = duck_cmd()
+    let o = auk_cmd()
         .arg("run")
         .arg(format!("--trace={}", tr.display()))
         .args(flags)
-        .arg(format!("{name}.duck"))
+        .arg(format!("{name}.auk"))
         .current_dir(&d)
-        .env("DUCK_LEAK_CHECK", "1")
+        .env("AUK_LEAK_CHECK", "1")
         .output()
         .unwrap();
     let es = events(&fs::read_to_string(&tr).unwrap_or_default());
@@ -107,7 +107,7 @@ fn recursive_calls_nest_with_depths() {
     );
     // `loc` is the call site (main's call from the entry point has none: its definition)
     let locs: Vec<&str> = es.iter().filter_map(|e| e.get("loc").as_str()).collect();
-    assert_eq!(locs, ["fact.duck:3:4", "fact.duck:3:19", "fact.duck:2:28", "fact.duck:2:28", "fact.duck:2:28"]);
+    assert_eq!(locs, ["fact.auk:3:4", "fact.auk:3:19", "fact.auk:2:28", "fact.auk:2:28", "fact.auk:2:28"]);
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn a_panic_ends_the_trace() {
         brief(&es),
         ["call boom.main() @0", "call boom.go(5) @1", "call boom.pick([1, 2], 5) @2", "panic index 5 out of range for length 2 @3"]
     );
-    assert_eq!(es[3].get("loc").as_str(), Some("boom.duck:1:35"));
+    assert_eq!(es[3].get("loc").as_str(), Some("boom.auk:1:35"));
 }
 
 #[test]
@@ -159,9 +159,9 @@ fn peeks_are_events() {
     let (o, es) = run_traced("peek", src, &[]);
     assert!(o.status.success(), "{}", text(&o));
     // the human-readable peek line is still printed
-    assert!(String::from_utf8_lossy(&o.stderr).contains("[peek.duck:3] sq(4) + 1 = 17"), "{}", text(&o));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("[peek.auk:3] sq(4) + 1 = 17"), "{}", text(&o));
     assert_eq!(brief(&es), ["call peek.main() @0", "call peek.sq(4) @1", "ret peek.sq = 16 @1", "peek sq(4) + 1 = 17 @1", "ret peek.main = () @0"]);
-    assert_eq!(es[3].get("loc").as_str(), Some("peek.duck:3"));
+    assert_eq!(es[3].get("loc").as_str(), Some("peek.auk:3"));
 }
 
 #[test]
@@ -213,15 +213,15 @@ fn main() {
 #[test]
 fn trace_to_stderr() {
     let d = scratch("stderr");
-    fs::write(d.join("fact.duck"), FACT).unwrap();
-    let o = duck_cmd().args(["run", "--trace=json", "fact.duck"]).current_dir(&d).output().unwrap();
+    fs::write(d.join("fact.auk"), FACT).unwrap();
+    let o = auk_cmd().args(["run", "--trace=json", "fact.auk"]).current_dir(&d).output().unwrap();
     assert!(o.status.success());
     let es = events(&String::from_utf8_lossy(&o.stderr));
     assert_eq!(es.len(), 10);
     // flags must come before the file: after it they are the program's arguments
-    let o = duck_cmd().args(["run", "fact.duck", "--trace=json"]).current_dir(&d).output().unwrap();
+    let o = auk_cmd().args(["run", "fact.auk", "--trace=json"]).current_dir(&d).output().unwrap();
     assert!(o.status.success() && o.stderr.is_empty(), "{}", text(&o));
-    let o = duck_cmd().args(["run", "--trace-limit", "3", "fact.duck"]).current_dir(&d).output().unwrap();
+    let o = auk_cmd().args(["run", "--trace-limit", "3", "fact.auk"]).current_dir(&d).output().unwrap();
     assert_eq!(o.status.code(), Some(2));
     assert!(text(&o).contains("need --trace"), "{}", text(&o));
 }
@@ -238,8 +238,8 @@ test \"overflow\" { assert deep(0) == 1 }
 #[test]
 fn a_failing_test_prints_its_trace() {
     let d = scratch("tests");
-    fs::write(d.join("t.duck"), TESTS).unwrap();
-    let o = duck_cmd().args(["test", "--trace=json", "t.duck"]).current_dir(&d).env("DUCK_LEAK_CHECK", "1").output().unwrap();
+    fs::write(d.join("t.auk"), TESTS).unwrap();
+    let o = auk_cmd().args(["test", "--trace=json", "t.auk"]).current_dir(&d).env("AUK_LEAK_CHECK", "1").output().unwrap();
     let out = String::from_utf8_lossy(&o.stdout).into_owned();
     assert_eq!(o.status.code(), Some(1), "{out}");
     assert!(out.starts_with("ok good\nFAIL bad\n"), "{out}");
@@ -273,15 +273,15 @@ fn a_failing_test_prints_its_trace() {
     assert!(b[1].starts_with("call t.deep("), "{b:?}");
     assert_eq!(b[21..], ["signal", "test"]);
     // a passing run prints no trace
-    let o = duck_cmd().args(["test", "--trace=json", "t.duck", "good"]).current_dir(&d).output().unwrap();
+    let o = auk_cmd().args(["test", "--trace=json", "t.auk", "good"]).current_dir(&d).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&o.stdout), "ok good\n1 passed, 0 failed\n");
 }
 
 #[test]
 fn per_test_trace_files() {
     let d = scratch("test_dir");
-    fs::write(d.join("t.duck"), TESTS).unwrap();
-    let o = duck_cmd().args(["test", "--trace=traces", "--trace-limit", "50", "t.duck"]).current_dir(&d).output().unwrap();
+    fs::write(d.join("t.auk"), TESTS).unwrap();
+    let o = auk_cmd().args(["test", "--trace=traces", "--trace-limit", "50", "t.auk"]).current_dir(&d).output().unwrap();
     assert_eq!(o.status.code(), Some(1), "{}", text(&o));
     assert!(!String::from_utf8_lossy(&o.stdout).contains("\"ev\""), "traces go to the files");
     let read = |n: &str| events(&fs::read_to_string(d.join("traces").join(n)).unwrap());
@@ -300,24 +300,24 @@ fn per_test_trace_files() {
 fn no_instrumentation_without_the_flag() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ir = |args: &[&str], env: bool| {
-        let mut c = duck_cmd();
+        let mut c = auk_cmd();
         c.arg("ir").args(args).current_dir(root);
         if env {
-            c.env("DUCK_TRACE", "-").env("DUCK_TRACE_LIMIT", "5");
+            c.env("AUK_TRACE", "-").env("AUK_TRACE_LIMIT", "5");
         }
         let o = c.output().unwrap();
         assert!(o.status.success(), "{}", text(&o));
         String::from_utf8(o.stdout).unwrap()
     };
-    for f in ["examples/tour.duck", "examples/life.duck", "examples/physics.duck"] {
+    for f in ["examples/tour.auk", "examples/life.auk", "examples/physics.auk"] {
         let plain = ir(&[f], false);
         assert!(!plain.contains("trace"), "{f}: the untraced program mentions tracing");
         assert_eq!(ir(&[f], true), plain, "{f}: the environment changed the generated program");
         // traced: a wrapper per function, call sites, and the tracer's start in main
         let traced = ir(&["--trace", f], false);
         assert_ne!(traced, plain);
-        assert!(traced.contains("    duck_trace_init(false);\n    dk_init();"), "{f}");
-        assert!(traced.contains("_main_untraced(") && traced.contains("duck__trace_site_slot()") && traced.contains("duck_trace_begin()"), "{f}");
+        assert!(traced.contains("    auk_trace_init(false);\n    dk_init();"), "{f}");
+        assert!(traced.contains("_main_untraced(") && traced.contains("auk__trace_site_slot()") && traced.contains("auk_trace_begin()"), "{f}");
         // only the program's functions: core's (like `print`'s helpers) are not wrapped
         assert!(!traced.contains("\"core."), "{f}");
         assert!(ir(&["--trace", "--trace-core", f], false).contains("\"core."), "{f}");
@@ -329,15 +329,15 @@ fn no_instrumentation_without_the_flag() {
 fn traced_builds_are_leak_free() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let d = scratch("clean");
-    for (cmd, f) in [("test", "examples/calc.duck"), ("test", "examples/bank.duck"), ("run", "examples/tour.duck"), ("run", "examples/life.duck")] {
+    for (cmd, f) in [("test", "examples/calc.auk"), ("test", "examples/bank.auk"), ("run", "examples/tour.auk"), ("run", "examples/life.auk")] {
         let tr = d.join("trace.out");
-        let o = duck_cmd()
+        let o = auk_cmd()
             .arg(cmd)
             .arg(if cmd == "run" { format!("--trace={}", tr.display()) } else { "--trace=json".into() })
             .arg("--trace-core")
             .arg(f)
             .current_dir(root)
-            .env("DUCK_LEAK_CHECK", "1")
+            .env("AUK_LEAK_CHECK", "1")
             .output()
             .unwrap();
         assert!(o.status.success(), "{f}: {}", text(&o));
@@ -345,27 +345,27 @@ fn traced_builds_are_leak_free() {
     }
 }
 
-/// `duck hatch` feeds a failing candidate's trace back: the fake model only gives the right
+/// `auk hatch` feeds a failing candidate's trace back: the fake model only gives the right
 /// answer when the retry prompt shows what the wrong one returned.
 #[test]
 fn hatch_retry_prompt_includes_the_trace() {
     let d = scratch("hatch");
     let src = "fn mid(xs: [int]): int { ?? }\ntest \"mid\" { assert mid([5, 7, 9]) == 7 }\n";
-    fs::write(d.join("h.duck"), src).unwrap();
+    fs::write(d.join("h.auk"), src).unwrap();
     let script = "#!/bin/sh\np=$(cat)\nn=$(ls \"$D\" | grep -c '^prompt\\.')\nprintf '%s' \"$p\" > \"$D/prompt.$n\"\n\
-        if printf '%s' \"$p\" | grep -qF '{\"ev\":\"ret\",\"fn\":\"h.mid\",\"value\":\"5\"'; then\n  printf '```duck\\nxs[xs.len() / 2]\\n```\\n'\n\
-        else\n  printf '```duck\\nxs[0]\\n```\\n'\nfi\n";
+        if printf '%s' \"$p\" | grep -qF '{\"ev\":\"ret\",\"fn\":\"h.mid\",\"value\":\"5\"'; then\n  printf '```auk\\nxs[xs.len() / 2]\\n```\\n'\n\
+        else\n  printf '```auk\\nxs[0]\\n```\\n'\nfi\n";
     fs::write(d.join("model.sh"), script).unwrap();
-    let o = duck_cmd()
-        .args(["hatch", "h.duck"])
+    let o = auk_cmd()
+        .args(["hatch", "h.auk"])
         .current_dir(&d)
-        .env("DUCK_HATCH_CMD", format!("D='{}' sh '{}'", d.display(), d.join("model.sh").display()))
+        .env("AUK_HATCH_CMD", format!("D='{}' sh '{}'", d.display(), d.join("model.sh").display()))
         .output()
         .unwrap();
     assert!(o.status.success(), "{}", text(&o));
     assert!(text(&o).contains("filled after 2 tries"), "{}", text(&o));
     let second = fs::read_to_string(d.join("prompt.1")).unwrap();
     assert!(second.contains("execution trace"), "{second}");
-    assert!(second.contains("    {\"ev\":\"call\",\"fn\":\"h.mid\",\"loc\":\"h.duck:4:21\",\"args\":[\"[5, 7, 9]\"],\"depth\":0}\n"), "{second}");
+    assert!(second.contains("    {\"ev\":\"call\",\"fn\":\"h.mid\",\"loc\":\"h.auk:4:21\",\"args\":[\"[5, 7, 9]\"],\"depth\":0}\n"), "{second}");
     assert!(second.contains("    {\"ev\":\"test\",\"name\":\"mid\",\"result\":\"FAIL\"}"), "{second}");
 }

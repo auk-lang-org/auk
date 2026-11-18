@@ -56,7 +56,7 @@ impl Lower<'_, '_> {
                     Lit::Char(c) => Ex::bin(BOp::Eq, v.clone(), Ex::int_as(*c as i64, MTy::D(Ty::Char))),
                     Lit::Str(s) => {
                         let l = self.g.lit(s);
-                        Ex::rt("duck_str_eq", vec![v.clone(), l], MTy::D(Ty::Bool))
+                        Ex::rt("auk_str_eq", vec![v.clone(), l], MTy::D(Ty::Bool))
                     }
                 };
                 conds.push(c);
@@ -70,7 +70,7 @@ impl Lower<'_, '_> {
             PatKind::List { head, rest, tail } => {
                 let Ty::List(et) = ty else { return };
                 let n = (head.len() + tail.len()) as i64;
-                let len = Ex::rt("duck_arr_len", vec![v.clone()], MTy::D(Ty::Int));
+                let len = Ex::rt("auk_arr_len", vec![v.clone()], MTy::D(Ty::Int));
                 if rest.is_some() {
                     if n > 0 {
                         conds.push(Ex::bin(BOp::Ge, len, Ex::int(n)));
@@ -124,7 +124,7 @@ impl Lower<'_, '_> {
                 }
                 for (k, q) in es {
                     let key = self.key_lit(k, &kt);
-                    let find = Ex::rt("duck_map_find", vec![m.clone(), key], MTy::void_ptr());
+                    let find = Ex::rt("auk_map_find", vec![m.clone(), key], MTy::void_ptr());
                     conds.push(Ex::bin(BOp::Ne, find.clone(), Ex::null()));
                     let val = find.cast(MTy::ptr(d(&vt))).deref(d(&vt));
                     self.sub_test(q, &val, conds);
@@ -132,7 +132,7 @@ impl Lower<'_, '_> {
             }
             PatKind::StrPrefix { prefix, .. } => {
                 let l = self.g.lit(prefix);
-                conds.push(Ex::rt("duck_str_starts_with", vec![v.clone(), l], MTy::D(Ty::Bool)));
+                conds.push(Ex::rt("auk_str_starts_with", vec![v.clone(), l], MTy::D(Ty::Bool)));
             }
             PatKind::Some(q) => {
                 conds.push(self.fld(v, Sel::F(0)));
@@ -150,7 +150,7 @@ impl Lower<'_, '_> {
                 let err = self.fld(v, Sel::F(2));
                 if let Some(pt) = self.payload_ty(p, ty) {
                     let id = self.g.type_id(&pt);
-                    let pl = Ex::rt("duck_err_payload", vec![err, Ex::int_as(id as i64, MTy::U32)], MTy::void_ptr());
+                    let pl = Ex::rt("auk_err_payload", vec![err, Ex::int_as(id as i64, MTy::U32)], MTy::void_ptr());
                     conds.push(Ex::bin(BOp::Ne, pl.clone(), Ex::null()));
                     let val = pl.cast(MTy::ptr(d(&pt))).deref(d(&pt));
                     self.sub_test(q, &val, conds);
@@ -241,7 +241,7 @@ impl Lower<'_, '_> {
                         return;
                     }
                     let hi = Ex::bin(BOp::Sub, v.clone().rt_field(RtF::ArrLen), Ex::int(tl));
-                    let slice = Ex::rt("duck_arr_slice", vec![v.clone(), Ex::int(head.len() as i64), hi, Ex::cstr("")], d(&ty));
+                    let slice = Ex::rt("auk_arr_slice", vec![v.clone(), Ex::int(head.len() as i64), hi, Ex::cstr("")], d(&ty));
                     let n = self.decl(&ty, slice);
                     self.register_local(&n, &ty);
                     if let PatKind::Bind(_) = &rp.kind
@@ -292,7 +292,7 @@ impl Lower<'_, '_> {
                 };
                 for (k, q) in es {
                     let key = self.key_lit(k, &kt);
-                    let val = Ex::rt("duck_map_find", vec![m.clone(), key], MTy::void_ptr()).cast(MTy::ptr(d(&vt))).deref(d(&vt));
+                    let val = Ex::rt("auk_map_find", vec![m.clone(), key], MTy::void_ptr()).cast(MTy::ptr(d(&vt))).deref(d(&vt));
                     self.bind_sub(q, &val);
                 }
             }
@@ -301,8 +301,8 @@ impl Lower<'_, '_> {
                     && let Some(&l) = self.t.binds.get(&rest.id)
                 {
                     let nchars = prefix.chars().count() as i64;
-                    let len = Ex::rt("duck_str_len", vec![v.clone()], MTy::D(Ty::Int));
-                    let s = Ex::rt("duck_str_slice", vec![v.clone(), Ex::int(nchars), len, Ex::cstr("")], MTy::D(Ty::Str));
+                    let len = Ex::rt("auk_str_len", vec![v.clone()], MTy::D(Ty::Int));
+                    let s = Ex::rt("auk_str_slice", vec![v.clone(), Ex::int(nchars), len, Ex::cstr("")], MTy::D(Ty::Str));
                     let n = self.decl(&Ty::Str, s);
                     self.register_local(&n, &Ty::Str);
                     self.bind_name(l, Slot { c: n, ty: Ty::Str });
@@ -316,7 +316,7 @@ impl Lower<'_, '_> {
                 let err = self.fld(v, Sel::F(2));
                 if let Some(pt) = self.payload_ty(p, &ty) {
                     let id = self.g.type_id(&pt);
-                    let val = Ex::rt("duck_err_payload", vec![err, Ex::int_as(id as i64, MTy::U32)], MTy::void_ptr()).cast(MTy::ptr(d(&pt))).deref(d(&pt));
+                    let val = Ex::rt("auk_err_payload", vec![err, Ex::int_as(id as i64, MTy::U32)], MTy::void_ptr()).cast(MTy::ptr(d(&pt))).deref(d(&pt));
                     self.bind_sub(q, &val);
                 } else {
                     self.bind_sub(q, &err);

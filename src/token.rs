@@ -61,7 +61,7 @@ pub enum Tok {
     DotDot,
     DotDotEq,
     FatArrow,
-    /// `->`: not Duck syntax; lexed only so the parser can suggest `:`.
+    /// `->`: not Auk syntax; lexed only so the parser can suggest `:`.
     Arrow,
     PipeGt,
     Question,

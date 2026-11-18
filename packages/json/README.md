@@ -4,7 +4,7 @@ Converts JSON text (RFC 8259) to and from the core `Value` tree, and to and from
 
 **Effects:** none.
 
-```duck
+```auk
 struct Todo { id: int, title: str, done: bool }
 
 let v = json.parse("[1, 2.5, \"x\", null]")?       // List([Int(1), Float(2.5), Str("x"), Null])

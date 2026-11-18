@@ -1,9 +1,9 @@
-//! Runtime functions inlined into `duck build` programs: the runtime's own LLVM bitcode (built
-//! by build.rs from the same source as `libduck_rt.a`) is linked into the program's module
+//! Runtime functions inlined into `auk build` programs: the runtime's own LLVM bitcode (built
+//! by build.rs from the same source as `libauk_rt.a`) is linked into the program's module
 //! before it is optimized, so LLVM can inline small runtime functions (string and map helpers,
 //! element ops) into generated code. Nothing from it is emitted: a function LLVM may inline
 //! becomes `available_externally`, so every call it doesn't inline still goes to
-//! `libduck_rt.a`, and the runtime's state stays in one place.
+//! `libauk_rt.a`, and the runtime's state stays in one place.
 //!
 //! The runtime keeps state in private globals (task heaps, the tracer, the debugger) and
 //! thread-locals. A copy of a function that touched them would have its own copy of that state,
@@ -24,7 +24,7 @@ use llvm_sys::linker::LLVMLinkModules2;
 use llvm_sys::prelude::*;
 use llvm_sys::LLVMLinkage;
 
-static RUNTIME_BC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/duck_rt.bc"));
+static RUNTIME_BC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/auk_rt.bc"));
 
 fn is_local(l: LLVMLinkage) -> bool {
     matches!(l, LLVMLinkage::LLVMInternalLinkage | LLVMLinkage::LLVMPrivateLinkage)
@@ -124,7 +124,7 @@ fn name(v: LLVMValueRef) -> String {
 /// data layout already set). Returns false if the runtime bitcode can't be used here.
 pub fn link(cx: LLVMContextRef, m: LLVMModuleRef) -> bool {
     unsafe {
-        let buf = LLVMCreateMemoryBufferWithMemoryRangeCopy(RUNTIME_BC.as_ptr().cast(), RUNTIME_BC.len(), c"duck_rt".as_ptr());
+        let buf = LLVMCreateMemoryBufferWithMemoryRangeCopy(RUNTIME_BC.as_ptr().cast(), RUNTIME_BC.len(), c"auk_rt".as_ptr());
         let mut rm = std::ptr::null_mut();
         if LLVMParseBitcodeInContext2(cx, buf, &mut rm) != 0 || rm.is_null() {
             LLVMDisposeMemoryBuffer(buf);
@@ -191,7 +191,7 @@ pub fn link(cx: LLVMContextRef, m: LLVMModuleRef) -> bool {
             LLVMReplaceAllUsesWith(f, decl);
             LLVMDeleteFunction(f);
         }
-        // exported globals: the runtime's own (one copy, in libduck_rt.a)
+        // exported globals: the runtime's own (one copy, in libauk_rt.a)
         for g in globals(rm) {
             if LLVMIsDeclaration(g) != 0 || is_local(LLVMGetLinkage(g)) {
                 continue;
@@ -203,7 +203,7 @@ pub fn link(cx: LLVMContextRef, m: LLVMModuleRef) -> bool {
                 LLVMSetLinkage(g, LLVMLinkage::LLVMExternalLinkage);
             }
         }
-        // exported aliases (identical functions folded, e.g. `duck_str_len` = `duck_arr_len`):
+        // exported aliases (identical functions folded, e.g. `auk_str_len` = `auk_arr_len`):
         // a declaration takes over the name; the alias goes private and unused (dropped later)
         let mut a = LLVMGetFirstGlobalAlias(rm);
         while !a.is_null() {

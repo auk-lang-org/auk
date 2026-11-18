@@ -1,5 +1,5 @@
-//! The packages from `docs/packages-next.md`: `duck test` passes for each with the leak checker
-//! on, and quack installs each one into a fresh project.
+//! The packages from `docs/packages-next.md`: `auk test` passes for each with the leak checker
+//! on, and raft installs each one into a fresh project.
 
 use std::path::Path;
 use std::process::Command;
@@ -8,11 +8,11 @@ use std::{env, fs};
 
 const PKGS: [&str; 3] = ["term", "template", "markdown"];
 
-fn quack(dir: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_quack"))
+fn raft(dir: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_raft"))
         .args(args)
         .current_dir(dir)
-        .env("QUACK_REGISTRY", Path::new(env!("CARGO_MANIFEST_DIR")).join("packages"))
+        .env("RAFT_REGISTRY", Path::new(env!("CARGO_MANIFEST_DIR")).join("packages"))
         .output()
         .unwrap()
 }
@@ -22,14 +22,14 @@ fn setup() {
     ONCE.call_once(|| {
         for p in PKGS {
             let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("packages").join(p);
-            if !fs::read_to_string(dir.join("quack.toml")).unwrap().contains("[deps]") {
+            if !fs::read_to_string(dir.join("raft.toml")).unwrap().contains("[deps]") {
                 continue;
             }
-            if !quack(&dir, &["install"]).status.success() {
-                let _ = fs::remove_file(dir.join("quack.lock"));
-                let _ = fs::remove_dir_all(dir.join(".quack"));
-                let out = quack(&dir, &["install"]);
-                assert!(out.status.success(), "quack install in {p}: {}", String::from_utf8_lossy(&out.stderr));
+            if !raft(&dir, &["install"]).status.success() {
+                let _ = fs::remove_file(dir.join("raft.lock"));
+                let _ = fs::remove_dir_all(dir.join(".raft"));
+                let out = raft(&dir, &["install"]);
+                assert!(out.status.success(), "raft install in {p}: {}", String::from_utf8_lossy(&out.stderr));
             }
         }
     });
@@ -39,9 +39,9 @@ fn setup() {
 fn next_package_tests_pass_without_leaks() {
     setup();
     for p in PKGS {
-        let o = Command::new(env!("CARGO_BIN_EXE_duck"))
-            .args(["test", &format!("packages/{p}/src/lib.duck")])
-            .env("DUCK_LEAK_CHECK", "1")
+        let o = Command::new(env!("CARGO_BIN_EXE_auk"))
+            .args(["test", &format!("packages/{p}/src/lib.auk")])
+            .env("AUK_LEAK_CHECK", "1")
             .output()
             .unwrap();
         let out = String::from_utf8_lossy(&o.stdout);
@@ -54,8 +54,8 @@ fn app(name: &str, effects: &str, main: &str) -> std::path::PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("next").join(name);
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join("src")).unwrap();
-    fs::write(dir.join("quack.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\neffects = [{effects}]\n")).unwrap();
-    fs::write(dir.join("src/main.duck"), main).unwrap();
+    fs::write(dir.join("raft.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\neffects = [{effects}]\n")).unwrap();
+    fs::write(dir.join("src/main.auk"), main).unwrap();
     dir
 }
 
@@ -66,11 +66,11 @@ fn term_colors_follow_no_color_and_force_color() {
         "\"env\"",
         "fn main(): int uses env {\n  term.println(term.red(\"hi\"))\n  print(term.width(term.bold(\"日本\")))\n  0\n}\n",
     );
-    let out = quack(&dir, &["add", "term"]);
-    assert!(out.status.success(), "quack add term: {}", String::from_utf8_lossy(&out.stderr));
+    let out = raft(&dir, &["add", "term"]);
+    assert!(out.status.success(), "raft add term: {}", String::from_utf8_lossy(&out.stderr));
     let run = |vars: &[(&str, &str)]| {
-        let mut c = Command::new(env!("CARGO_BIN_EXE_duck"));
-        c.args(["run", "src/main.duck"]).current_dir(&dir).env_remove("NO_COLOR").env_remove("FORCE_COLOR");
+        let mut c = Command::new(env!("CARGO_BIN_EXE_auk"));
+        c.args(["run", "src/main.auk"]).current_dir(&dir).env_remove("NO_COLOR").env_remove("FORCE_COLOR");
         for (k, v) in vars {
             c.env(k, v);
         }
@@ -102,9 +102,9 @@ fn main(): int! {
 }
 "#,
     );
-    let out = quack(&dir, &["add", "template"]);
-    assert!(out.status.success(), "quack add template: {}", String::from_utf8_lossy(&out.stderr));
-    let o = Command::new(env!("CARGO_BIN_EXE_duck")).args(["run", "src/main.duck"]).current_dir(&dir).output().unwrap();
+    let out = raft(&dir, &["add", "template"]);
+    assert!(out.status.success(), "raft add template: {}", String::from_utf8_lossy(&out.stderr));
+    let o = Command::new(env!("CARGO_BIN_EXE_auk")).args(["run", "src/main.auk"]).current_dir(&dir).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     assert_eq!(
         String::from_utf8_lossy(&o.stdout),
@@ -119,9 +119,9 @@ fn markdown_renders_safely_from_an_app() {
         "",
         "fn main() {\n  print(markdown.html(\"# Hi\\n\\n*a* <script>x</script> [b](javascript:x)\"))\n  print(markdown.text(\"**t** &amp; u\"))\n}\n",
     );
-    let out = quack(&dir, &["add", "markdown"]);
-    assert!(out.status.success(), "quack add markdown: {}", String::from_utf8_lossy(&out.stderr));
-    let o = Command::new(env!("CARGO_BIN_EXE_duck")).args(["run", "src/main.duck"]).current_dir(&dir).output().unwrap();
+    let out = raft(&dir, &["add", "markdown"]);
+    assert!(out.status.success(), "raft add markdown: {}", String::from_utf8_lossy(&out.stderr));
+    let o = Command::new(env!("CARGO_BIN_EXE_auk")).args(["run", "src/main.auk"]).current_dir(&dir).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     assert_eq!(
         String::from_utf8_lossy(&o.stdout),

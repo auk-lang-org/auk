@@ -1,15 +1,15 @@
 # regex
 
-A backtracking regular-expression engine for Duck. `regex(p)` compiles a pattern into an AST once; matching runs on an explicit backtracking stack, so long inputs don't grow the call stack. Positions are char indexes, so non-ASCII text works the same as ASCII.
+A backtracking regular-expression engine for Auk. `regex(p)` compiles a pattern into an AST once; matching runs on an explicit backtracking stack, so long inputs don't grow the call stack. Positions are char indexes, so non-ASCII text works the same as ASCII.
 
 **Effects:** none (`effects = []`)
 
 ## Usage
 ```
 let email = regex(r"(\w+)@(\w+)\.com")?
-email.find("mail ann@duck.com")          // some("ann@duck.com")
-email.captures("ann@duck.com")           // some([some("ann@duck.com"), some("ann"), some("duck")])
-email.replace("ann@duck.com", "$2/$1")   // "duck/ann"
+email.find("mail ann@auk.com")          // some("ann@auk.com")
+email.captures("ann@auk.com")           // some([some("ann@auk.com"), some("ann"), some("auk")])
+email.replace("ann@auk.com", "$2/$1")   // "auk/ann"
 (regex(r"\d+")?).find_all("a1b22")       // ["1", "22"]
 (regex(r"\s*,\s*")?).split("a , b,c")    // ["a", "b", "c"]
 regex("a(b")                             // err(Unclosed(1, '(')); .message() explains it

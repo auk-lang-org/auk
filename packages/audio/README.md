@@ -1,10 +1,10 @@
 # audio
 
-Audio in pure Duck, covering the audio side of ffmpeg for uncompressed and lossless formats. It decodes and encodes WAV, AIFF/AIFC, AU and FLAC, and probes files. It resamples, remixes channels, filters (biquads, EQ, echo, compressor, limiter, gate, fades, time stretch, pitch shift), measures (stats, EBU R128 loudness, true peak, spectra, silence) and generates signals. Filter chains use ffmpeg's `-af` syntax. Errors are a typed `AErr`.
+Audio in pure Auk, covering the audio side of ffmpeg for uncompressed and lossless formats. It decodes and encodes WAV, AIFF/AIFC, AU and FLAC, and probes files. It resamples, remixes channels, filters (biquads, EQ, echo, compressor, limiter, gate, fades, time stretch, pitch shift), measures (stats, EBU R128 loudness, true peak, spectra, silence) and generates signals. Filter chains use ffmpeg's `-af` syntax. Errors are a typed `AErr`.
 
 **Effects:** none. **Dependencies:** none.
 
-```duck
+```auk
 let a = audio.decode(fs.read_bytes("take1.wav")?)?
 let clean = a.apply("highpass=f=80,acompressor=threshold=-20dB:ratio=3,loudnorm=I=-16")?
 let b = clean.resample(48000).remix(1)
@@ -16,7 +16,7 @@ print("{a.loudness().integrated:.1} LUFS, peak {audio.gain_to_db(a.peak()):.1} d
 let beep = audio.source("sine=f=1000:d=0.5")?
 ```
 
-`examples/aconv.duck` is an ffmpeg-style command line built on it (`aconv -i in.wav -af ... -ar 48000 out.flac`).
+`examples/aconv.auk` is an ffmpeg-style command line built on it (`aconv -i in.wav -af ... -ar 48000 out.flac`).
 
 ## How it was checked
 
@@ -134,5 +134,5 @@ Unknown filters, bad values and out-of-range frequencies are `BadArg` errors.
 - **No lossy codecs.** MP3, AAC, Vorbis and Opus can't be decoded or encoded, and there are no Ogg, MP4 or Matroska containers. They are detected and reported as `Unsupported`.
 - **FLAC.** It writes 8, 16 or 24 bits, not 32. It doesn't verify the STREAMINFO MD5 on decode (ffmpeg doesn't either). It writes no seek table.
 - **Memory.** Everything is in memory. Samples take 8 bytes each, and input bytes do too until core has a bytes type. There is no streaming API.
-- **Speed in a `duck build` binary on a laptop.** FLAC encodes at about 25x real time and decodes at about 50x for 44.1 kHz stereo. PCM is far faster. `duck run` (unoptimized JIT) is about 5x slower.
+- **Speed in an `auk build` binary on a laptop.** FLAC encodes at about 25x real time and decodes at about 50x for 44.1 kHz stereo. PCM is far faster. `auk run` (unoptimized JIT) is about 5x slower.
 - **Algorithms that differ from ffmpeg's.** `alimiter`, `atempo` (WSOLA, so pitch is kept but the artifacts differ), `loudnorm` (linear mode only), `dynaudnorm`, `silenceremove` (trim only), and `pan` and `remix` defaults.

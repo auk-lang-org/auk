@@ -1,4 +1,4 @@
-//! `duck explain`: the error catalogue. Every diagnostic code in `diag::CODES` has a page in
+//! `auk explain`: the error catalogue. Every diagnostic code in `diag::CODES` has a page in
 //! docs/errors/<code>.md (what went wrong, a wrong and a fixed example, common causes), embedded
 //! in the binary and rendered as plain text for a terminal.
 
@@ -29,7 +29,7 @@ pub fn page(code: &str) -> Option<&'static str> {
     PAGES.iter().find(|(c, _)| *c == code).map(|(_, p)| *p)
 }
 
-/// `duck explain [code]`. Returns the exit code.
+/// `auk explain [code]`. Returns the exit code.
 pub fn run(args: &[String]) -> i32 {
     match args {
         [] => {
@@ -47,7 +47,7 @@ pub fn run(args: &[String]) -> i32 {
             }
         },
         _ => {
-            eprintln!("usage: duck explain [E0xxx]");
+            eprintln!("usage: auk explain [E0xxx]");
             2
         }
     }
@@ -55,7 +55,7 @@ pub fn run(args: &[String]) -> i32 {
 
 /// Every code with its title, one per line.
 pub fn list() -> String {
-    let mut out = String::from("Duck error codes (run `duck explain E0xxx` for details):\n\n");
+    let mut out = String::from("Auk error codes (run `auk explain E0xxx` for details):\n\n");
     for (c, t) in CODES {
         out += &format!("  {c}  {t}\n");
     }
@@ -73,7 +73,7 @@ fn normalize(arg: &str) -> Option<String> {
 /// mentions the word given.
 fn unknown(arg: &str) -> String {
     let shown = normalize(arg).unwrap_or_else(|| arg.to_string());
-    let mut out = format!("error: `{shown}` is not a Duck error code\n");
+    let mut out = format!("error: `{shown}` is not an Auk error code\n");
     let near: Vec<&(&str, &str)> = match normalize(arg) {
         Some(c) => {
             let n: i64 = c[1..].parse().unwrap_or(0);
@@ -92,7 +92,7 @@ fn unknown(arg: &str) -> String {
             out += &format!("    {c}  {t}\n");
         }
     }
-    out += "  help: run `duck explain` to list every code\n";
+    out += "  help: run `auk explain` to list every code\n";
     out
 }
 
@@ -107,7 +107,7 @@ pub fn render(md: &str) -> String {
                 let mut parts = info.split_whitespace();
                 let lang = parts.next().unwrap_or("");
                 if let Some(path) = parts.next() {
-                    let comment = if lang == "duck" { "//" } else { "#" };
+                    let comment = if lang == "auk" { "//" } else { "#" };
                     out += &format!("    {comment} {path}\n");
                 }
             }
@@ -160,10 +160,10 @@ mod tests {
 
     #[test]
     fn render_markdown() {
-        let md = "# E1: t\n\ntext `x`\n\n## Wrong\n\n```duck\nfn f() {\n\n}\n```\n\n```toml quack.toml\n[package]\n```\n";
+        let md = "# E1: t\n\ntext `x`\n\n## Wrong\n\n```auk\nfn f() {\n\n}\n```\n\n```toml raft.toml\n[package]\n```\n";
         assert_eq!(
             render(md),
-            "E1: t\n=====\n\ntext `x`\n\nWrong\n-----\n\n    fn f() {\n\n    }\n\n    # quack.toml\n    [package]\n"
+            "E1: t\n=====\n\ntext `x`\n\nWrong\n-----\n\n    fn f() {\n\n    }\n\n    # raft.toml\n    [package]\n"
         );
     }
 }

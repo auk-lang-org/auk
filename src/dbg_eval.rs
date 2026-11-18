@@ -1,6 +1,6 @@
-//! Evaluating Duck expressions at a debugger stop (`eval`, conditional breakpoints): the
+//! Evaluating Auk expressions at a debugger stop (`eval`, conditional breakpoints): the
 //! compiler side of the debug engine's eval hook (runtime/src/dbg.rs), installed by
-//! `duck run --debug` in the program's own process.
+//! `auk run --debug` in the program's own process.
 //!
 //! To check an expression with exactly the names, types and scopes of the stopped statement, it
 //! is written into a copy of the program's source right there, as `let __dbg_r = (<expr>)`
@@ -19,7 +19,7 @@ use super::ast::{ExprKind, PatKind};
 use super::mir::progen::{DbgInfo, Gen, Mode};
 use super::mir::types::TyInfo;
 use super::typed::{NameRef, TypedProgram};
-use duck_rt::dbg::Compiled;
+use auk_rt::dbg::Compiled;
 
 /// What evaluation needs of the running program.
 struct Cx {
@@ -34,11 +34,11 @@ static CX: Mutex<Option<Cx>> = Mutex::new(None);
 /// The name an evaluated expression is bound to.
 const RESULT: &str = "__dbg_r";
 
-/// Make expressions evaluable in this process's program (`duck run --debug`).
+/// Make expressions evaluable in this process's program (`auk run --debug`).
 pub fn install(root: &Path, tp: &TypedProgram, info: DbgInfo) {
     let srcs = tp.program.mods.iter().enumerate().filter(|(m, _)| !tp.program.is_core(*m)).map(|(_, m)| (m.file.clone(), m.src.clone())).collect();
     *CX.lock().unwrap_or_else(|e| e.into_inner()) = Some(Cx { root: root.to_path_buf(), srcs, info });
-    duck_rt::dbg::set_eval_hook(hook);
+    auk_rt::dbg::set_eval_hook(hook);
 }
 
 fn hook(func: u32, site: u32, expr: &str) -> Result<Compiled, String> {
@@ -144,6 +144,6 @@ fn compile_as(cx: &Cx, func: usize, site: usize, expr: &str) -> Result<Compiled,
     let (entry, init) = super::mir::backend::jit_eval(&g.prog, &info)?;
     // its string literals and constants
     unsafe { std::mem::transmute::<*const u8, extern "C" fn()>(init)() };
-    let run = unsafe { std::mem::transmute::<*const u8, unsafe extern "C" fn(*const *mut std::ffi::c_void) -> *mut duck_rt::DuckStr>(entry) };
+    let run = unsafe { std::mem::transmute::<*const u8, unsafe extern "C" fn(*const *mut std::ffi::c_void) -> *mut auk_rt::AukStr>(entry) };
     Ok(Compiled { run, slots, ty })
 }

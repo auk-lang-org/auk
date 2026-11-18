@@ -1,6 +1,6 @@
 //! Contracts, holes, assert, peek, the test registry/runner and program entry.
 
-use crate::{DuckArr, DuckErr, DuckRes_int, DuckStr, c_stderr, c_stdout, cstr, fwrite_bytes, rt_panic, sstr};
+use crate::{AukArr, AukErr, AukRes_int, AukStr, c_stderr, c_stdout, cstr, fwrite_bytes, rt_panic, sstr};
 use std::ffi::{CString, c_char, c_int, c_void};
 use std::sync::Mutex;
 
@@ -10,31 +10,31 @@ unsafe extern "C" {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_requires_fail(loc: *const c_char, cond_text: *const c_char) -> ! {
+pub unsafe extern "C" fn auk_requires_fail(loc: *const c_char, cond_text: *const c_char) -> ! {
     rt_panic!(loc, "requires failed: {}", unsafe { cstr(cond_text) })
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_ensures_fail(loc: *const c_char, cond_text: *const c_char) -> ! {
+pub unsafe extern "C" fn auk_ensures_fail(loc: *const c_char, cond_text: *const c_char) -> ! {
     rt_panic!(loc, "ensures failed: {}", unsafe { cstr(cond_text) })
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_hole(loc: *const c_char, expected: *const c_char) -> ! {
+pub unsafe extern "C" fn auk_hole(loc: *const c_char, expected: *const c_char) -> ! {
     rt_panic!(loc, "unfilled hole (expected {})", unsafe { cstr(expected) })
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_assert_fail(loc: *const c_char, cond_text: *const c_char) -> ! {
+pub unsafe extern "C" fn auk_assert_fail(loc: *const c_char, cond_text: *const c_char) -> ! {
     rt_panic!(loc, "assertion failed: {}", unsafe { cstr(cond_text) })
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_assert_fail_cmp(
+pub unsafe extern "C" fn auk_assert_fail_cmp(
     loc: *const c_char,
     cond_text: *const c_char,
-    left: *const DuckStr,
-    right: *const DuckStr,
+    left: *const AukStr,
+    right: *const AukStr,
 ) -> ! {
     rt_panic!(loc, "assertion failed: {}\n  left: {}\n  right: {}", unsafe { cstr(cond_text) }, unsafe { sstr(left) }, unsafe {
         sstr(right)
@@ -42,28 +42,28 @@ pub unsafe extern "C" fn duck_assert_fail_cmp(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_peek(loc: *const c_char, src_text: *const c_char, shown: *const DuckStr) {
+pub unsafe extern "C" fn auk_peek(loc: *const c_char, src_text: *const c_char, shown: *const AukStr) {
     unsafe {
         libc::fflush(c_stdout());
         let line = format!("[{}] {} = {}\n", cstr(loc), cstr(src_text), sstr(shown));
         flockfile(c_stderr());
         fwrite_bytes(c_stderr(), line.as_bytes());
         funlockfile(c_stderr());
-        if crate::trace::duck_trace_live.load(std::sync::atomic::Ordering::Relaxed) {
-            crate::trace::duck__trace_peek(loc, src_text, shown);
+        if crate::trace::auk_trace_live.load(std::sync::atomic::Ordering::Relaxed) {
+            crate::trace::auk__trace_peek(loc, src_text, shown);
         }
     }
 }
 
 // ---- tests --------------------------------------------------------------------------------
 
-pub type DuckTestFn = unsafe extern "C" fn() -> *mut DuckErr;
-pub type DuckMainFn = unsafe extern "C" fn(*mut DuckArr) -> DuckRes_int;
+pub type AukTestFn = unsafe extern "C" fn() -> *mut AukErr;
+pub type AukMainFn = unsafe extern "C" fn(*mut AukArr) -> AukRes_int;
 
 #[derive(Clone, Copy)]
 struct TestEntry {
     name: *const c_char,
-    fn_: DuckTestFn,
+    fn_: AukTestFn,
 }
 // The names are static strings of the generated program.
 unsafe impl Send for TestEntry {}
@@ -71,7 +71,7 @@ unsafe impl Send for TestEntry {}
 static TESTS: Mutex<Vec<TestEntry>> = Mutex::new(Vec::new());
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_test_register(name: *const c_char, fn_: DuckTestFn) {
+pub unsafe extern "C" fn auk_test_register(name: *const c_char, fn_: AukTestFn) {
     TESTS.lock().unwrap_or_else(|e| e.into_inner()).push(TestEntry { name, fn_ });
 }
 
@@ -117,19 +117,19 @@ fn strerror(e: c_int) -> String {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_test_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
+pub unsafe extern "C" fn auk_test_main(argc: c_int, argv: *mut *mut c_char) -> c_int {
     unsafe {
-        crate::core::duck_env_set_args(argc, argv);
+        crate::core::auk_env_set_args(argc, argv);
         let filter: Option<&[u8]> = if argc > 1 { Some(crate::cbytes(*argv.add(1))) } else { None };
         let (mut passed, mut failed) = (0i64, 0i64);
-        let tail = crate::trace::duck__trace_tail_mode();
-        let traced = tail || !crate::trace::duck__trace_dir().is_null();
+        let tail = crate::trace::auk__trace_tail_mode();
+        let traced = tail || !crate::trace::auk__trace_dir().is_null();
         let mut tail_path = CString::default();
         if tail {
             let tmp = libc::getenv(c"TMPDIR".as_ptr());
             let tmp = if !tmp.is_null() && *tmp != 0 { crate::cbytes(tmp) } else { b"/tmp" };
             let mut p = tmp.to_vec();
-            p.extend_from_slice(format!("/duck-trace-{}.jsonl", libc::getpid()).as_bytes());
+            p.extend_from_slice(format!("/auk-trace-{}.jsonl", libc::getpid()).as_bytes());
             p.truncate(1023); // C's char[1024]
             tail_path = CString::new(p).expect("no NUL in a C string");
         }
@@ -146,11 +146,11 @@ pub unsafe extern "C" fn duck_test_main(argc: c_int, argv: *mut *mut c_char) -> 
             libc::fflush(c_stderr());
             let mut fds = [0 as c_int; 2];
             if libc::pipe(fds.as_mut_ptr()) < 0 {
-                rt_panic!(c"duck test".as_ptr(), "pipe: {}", strerror(errno()));
+                rt_panic!(c"auk test".as_ptr(), "pipe: {}", strerror(errno()));
             }
             let pid = libc::fork();
             if pid < 0 {
-                rt_panic!(c"duck test".as_ptr(), "fork: {}", strerror(errno()));
+                rt_panic!(c"auk test".as_ptr(), "fork: {}", strerror(errno()));
             }
             if pid == 0 {
                 libc::close(fds[0]);
@@ -158,19 +158,19 @@ pub unsafe extern "C" fn duck_test_main(argc: c_int, argv: *mut *mut c_char) -> 
                 libc::dup2(fds[1], 2);
                 libc::close(fds[1]);
                 if traced {
-                    crate::trace::duck__trace_test_begin(t.name, tail_ptr);
+                    crate::trace::auk__trace_test_begin(t.name, tail_ptr);
                 }
                 let e = (t.fn_)();
                 if !e.is_null() {
-                    let s = crate::err::duck_err_show(e);
+                    let s = crate::err::auk_err_show(e);
                     libc::fflush(c_stdout());
                     fwrite_bytes(c_stderr(), format!("error: {}\n", sstr(s)).as_bytes());
                     libc::fflush(c_stderr());
-                    crate::trace::duck__trace_flush();
+                    crate::trace::auk__trace_flush();
                     libc::_exit(1);
                 }
-                crate::trace::duck__trace_flush();
-                if crate::rc::duck_leak_check() != 0 {
+                crate::trace::auk__trace_flush();
+                if crate::rc::auk_leak_check() != 0 {
                     libc::_exit(1);
                 }
                 libc::fflush(c_stdout());
@@ -195,7 +195,7 @@ pub unsafe extern "C" fn duck_test_main(argc: c_int, argv: *mut *mut c_char) -> 
             while libc::waitpid(pid, &mut status, 0) < 0 && errno() == libc::EINTR {}
             let ok = libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0;
             if traced {
-                crate::trace::duck__trace_test_end(t.name, ok, tail_ptr);
+                crate::trace::auk__trace_test_end(t.name, ok, tail_ptr);
             }
             let name_s = String::from_utf8_lossy(name);
             if ok {
@@ -227,27 +227,27 @@ pub unsafe extern "C" fn duck_test_main(argc: c_int, argv: *mut *mut c_char) -> 
 // ---- program entry ------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_main_wrapper(argc: c_int, argv: *mut *mut c_char, user_main: DuckMainFn) -> c_int {
+pub unsafe extern "C" fn auk_main_wrapper(argc: c_int, argv: *mut *mut c_char, user_main: AukMainFn) -> c_int {
     // started by a `gui.open` of this same program to own its windows (gui.rs)
-    if std::env::var_os("DUCK_GUI_HOST").is_some() {
+    if std::env::var_os("AUK_GUI_HOST").is_some() {
         return crate::gui_host::host_main();
     }
     unsafe {
-        crate::core::duck_env_set_args(argc, argv);
-        let r = user_main(crate::core::duck_env_args());
+        crate::core::auk_env_set_args(argc, argv);
+        let r = user_main(crate::core::auk_env_args());
         libc::fflush(c_stdout());
         if !r.ok {
-            let s = crate::err::duck_err_show(r.err);
+            let s = crate::err::auk_err_show(r.err);
             fwrite_bytes(c_stderr(), format!("error: {}\n", sstr(s)).as_bytes());
-            crate::rc::duck_release(s.cast::<c_void>());
-            crate::rc::duck_release(r.err.cast::<c_void>());
+            crate::rc::auk_release(s.cast::<c_void>());
+            crate::rc::auk_release(r.err.cast::<c_void>());
             libc::fflush(c_stderr());
-            if crate::rc::duck_leak_check() != 0 {
+            if crate::rc::auk_leak_check() != 0 {
                 return 102;
             }
             return 1;
         }
-        if crate::rc::duck_leak_check() != 0 {
+        if crate::rc::auk_leak_check() != 0 {
             return 102;
         }
         r.val as c_int

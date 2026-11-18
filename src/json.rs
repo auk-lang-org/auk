@@ -1,4 +1,4 @@
-//! A minimal JSON value with a parser and a serializer, for the language server (`duck lsp`).
+//! A minimal JSON value with a parser and a serializer, for the language server (`auk lsp`).
 //! Numbers are `f64` (JSON-RPC ids and LSP positions are small integers); objects keep their
 //! key order.
 
@@ -411,8 +411,8 @@ mod tests {
         assert!(parse(r#""\q""#).is_err());
         assert!(parse("\"a\nb\"").is_err());
         assert!(parse(r#""open"#).is_err());
-        let s = "quote \" back \\ nl \n ctl \u{1} duck 🦆";
-        assert_eq!(Json::Str(s.into()).to_string(), r#""quote \" back \\ nl \n ctl \u0001 duck 🦆""#);
+        let s = "quote \" back \\ nl \n ctl \u{1} auk 🦆";
+        assert_eq!(Json::Str(s.into()).to_string(), r#""quote \" back \\ nl \n ctl \u0001 auk 🦆""#);
         assert_eq!(parse(&Json::Str(s.into()).to_string()), Ok(Json::Str(s.into())));
     }
 

@@ -1,4 +1,4 @@
-//! `duck run --live <file> [args...]`: run a program and swap in new code as its source changes.
+//! `auk run --live <file> [args...]`: run a program and swap in new code as its source changes.
 //!
 //! A parent process compiles the program and forks a child to run it. The program is compiled in
 //! live mode: every call to a user function loads its target from the live table, one slot per
@@ -404,7 +404,7 @@ fn build(path: &Path, slots: &mut HashMap<String, usize>) -> Result<Build, (Stri
         }
         fs.insert(f, slot);
     }
-    let jit = jit_live(&g.prog, &info, table().as_ptr() as usize, &fs).map_err(|e| fail(format!("error: code generation failed (this is a duck compiler bug): {e}\n")))?;
+    let jit = jit_live(&g.prog, &info, table().as_ptr() as usize, &fs).map_err(|e| fail(format!("error: code generation failed (this is an auk compiler bug): {e}\n")))?;
     let uses = uses(&g.prog, &tp);
     Ok(Build { jit, files, layouts: layouts(&tp), uses })
 }
@@ -463,10 +463,10 @@ fn watch(path: PathBuf, mut slots: HashMap<String, usize>, mut files: Files, mut
                     }
                 }
                 install(&b);
-                duck_rt::task::LIVE_RELOADS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                auk_rt::task::LIVE_RELOADS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if !moved.is_empty() {
                     // only tasks can hold the old shape: stop those (their supervisors restart them)
-                    let n = duck_rt::task::cancel_running(|entry, hint| seen.task_uses(entry, hint, &moved));
+                    let n = auk_rt::task::cancel_running(|entry, hint| seen.task_uses(entry, hint, &moved));
                     let names: Vec<String> = moved.iter().map(short).collect();
                     note(&format!("`{}` changed shape: stopped {n} task(s) that use it", names.join("`, `")));
                 }
@@ -479,10 +479,10 @@ fn watch(path: PathBuf, mut slots: HashMap<String, usize>, mut files: Files, mut
     }
 }
 
-/// `duck run --live <file> [args...]`.
+/// `auk run --live <file> [args...]`.
 pub fn cli(args: &[String]) -> i32 {
     let Some((file, rest)) = args.split_first() else {
-        eprintln!("usage: duck run --live <file.duck> [args...]");
+        eprintln!("usage: auk run --live <file.auk> [args...]");
         return 2;
     };
     let path = PathBuf::from(file);
@@ -490,8 +490,8 @@ pub fn cli(args: &[String]) -> i32 {
     argv.extend(rest.iter().cloned());
     let mut last: Files = vec![(path.clone(), mtime(&path))];
     // every run of the program shares one window process (gui.rs), so a restart keeps its windows
-    let session = std::env::temp_dir().join(format!("duck-gui-{}.sock", std::process::id()));
-    unsafe { std::env::set_var("DUCK_GUI_SESSION", &session) };
+    let session = std::env::temp_dir().join(format!("auk-gui-{}.sock", std::process::id()));
+    unsafe { std::env::set_var("AUK_GUI_SESSION", &session) };
     loop {
         let mut slots = HashMap::new();
         let b = match build(&path, &mut slots) {
@@ -524,7 +524,7 @@ pub fn cli(args: &[String]) -> i32 {
             std::thread::spawn(move || watch(p, slots, files, lay, seen, me));
             let code = b.jit.jit.run(&argv);
             // a normal end: its windows close now instead of waiting for the next run
-            duck_rt::gui::shutdown();
+            auk_rt::gui::shutdown();
             unsafe {
                 libc::fflush(std::ptr::null_mut());
                 libc::_exit(code);

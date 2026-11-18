@@ -3,7 +3,7 @@
 use std::ffi::{c_char, c_int, c_void};
 use std::ptr::null_mut;
 
-use crate::rc::{duck__alloc, duck__free_obj, duck__xmalloc, duck__xrealloc, duck_release, duck_retain};
+use crate::rc::{auk__alloc, auk__free_obj, auk__xmalloc, auk__xrealloc, auk_release, auk_retain};
 use crate::*;
 
 /// Bytes at p[0..n) (empty when n <= 0, so p may be NULL then).
@@ -22,26 +22,26 @@ fn upto_nul(b: &[u8]) -> &[u8] {
 // ---- accessors (exported for generated code) ------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_len(s: *const DuckStr) -> i64 {
+pub unsafe extern "C" fn auk_str_len(s: *const AukStr) -> i64 {
     if s.is_null() { 0 } else { unsafe { (*s).len_chars } }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_byte_len(s: *const DuckStr) -> i64 {
+pub unsafe extern "C" fn auk_str_byte_len(s: *const AukStr) -> i64 {
     if s.is_null() { 0 } else { unsafe { (*s).len_bytes } }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_cstr(s: *const DuckStr) -> *const c_char {
+pub unsafe extern "C" fn auk_str_cstr(s: *const AukStr) -> *const c_char {
     if s.is_null() { c"".as_ptr() } else { unsafe { (*s).data.as_ptr().cast() } }
 }
 
-unsafe fn is_ascii(s: *const DuckStr) -> bool {
+unsafe fn is_ascii(s: *const AukStr) -> bool {
     s.is_null() || unsafe { (*s).is_ascii }
 }
 
-unsafe fn arr_len(a: *const DuckArr) -> i64 {
+unsafe fn arr_len(a: *const AukArr) -> i64 {
     if a.is_null() { 0 } else { unsafe { (*a).len } }
 }
-unsafe fn arr_data(a: *const DuckArr) -> *const u8 {
+unsafe fn arr_data(a: *const AukArr) -> *const u8 {
     if a.is_null() { std::ptr::null() } else { unsafe { (*a).data } }
 }
 
@@ -90,7 +90,7 @@ fn utf8_valid(s: &[u8]) -> Option<(i64, bool)> {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_utf8_valid(p: *const c_char, n: i64, chars_out: *mut i64, ascii_out: *mut bool) -> bool {
+pub unsafe extern "C" fn auk_utf8_valid(p: *const c_char, n: i64, chars_out: *mut i64, ascii_out: *mut bool) -> bool {
     match utf8_valid(unsafe { raw(p, n) }) {
         None => false,
         Some((chars, ascii)) => {
@@ -135,7 +135,7 @@ pub fn utf8_decode(s: &[u8], i: usize) -> (u32, usize) {
     }
 }
 
-pub unsafe fn duck__utf8_decode(p: *const c_char, len: *mut c_int) -> u32 {
+pub unsafe fn auk__utf8_decode(p: *const c_char, len: *mut c_int) -> u32 {
     let s = p as *const u8;
     unsafe {
         let b = |k: usize| *s.add(k) as u32;
@@ -184,7 +184,7 @@ pub fn utf8_encode(mut c: u32, b: &mut [u8; 4]) -> usize {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_utf8_encode(c: u32, buf: *mut c_char) -> c_int {
+pub unsafe extern "C" fn auk_utf8_encode(c: u32, buf: *mut c_char) -> c_int {
     let mut b = [0u8; 4];
     let n = utf8_encode(c, &mut b);
     unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), buf.cast(), n) };
@@ -194,10 +194,10 @@ pub unsafe extern "C" fn duck_utf8_encode(c: u32, buf: *mut c_char) -> c_int {
 // ---- construction ------------------------------------------------------------------------
 
 /// A string from bytes whose metadata is already known.
-pub fn str_raw(b: &[u8], chars: i64, ascii: bool) -> *mut DuckStr {
+pub fn str_raw(b: &[u8], chars: i64, ascii: bool) -> *mut AukStr {
     let n = b.len();
     unsafe {
-        let s = duck__alloc(size_of::<DuckStr>() + n + 1, DUCK_K_STR) as *mut DuckStr;
+        let s = auk__alloc(size_of::<AukStr>() + n + 1, AUK_K_STR) as *mut AukStr;
         let d = (*s).data.as_mut_ptr();
         if n != 0 {
             std::ptr::copy_nonoverlapping(b.as_ptr(), d, n);
@@ -210,12 +210,12 @@ pub fn str_raw(b: &[u8], chars: i64, ascii: bool) -> *mut DuckStr {
     }
 }
 
-pub unsafe fn duck__str_raw(p: *const c_char, n: i64, chars: i64, ascii: bool) -> *mut DuckStr {
+pub unsafe fn auk__str_raw(p: *const c_char, n: i64, chars: i64, ascii: bool) -> *mut AukStr {
     str_raw(unsafe { raw(p, n) }, chars, ascii)
 }
 
 /// A string from bytes already known to be valid UTF-8.
-pub fn str_new(b: &[u8]) -> *mut DuckStr {
+pub fn str_new(b: &[u8]) -> *mut AukStr {
     let mut chars = 0i64;
     let mut ascii = true;
     for &u in b {
@@ -229,16 +229,16 @@ pub fn str_new(b: &[u8]) -> *mut DuckStr {
     str_raw(b, chars, ascii)
 }
 
-pub unsafe fn duck__str_new(p: *const c_char, n: i64) -> *mut DuckStr {
+pub unsafe fn auk__str_new(p: *const c_char, n: i64) -> *mut AukStr {
     str_new(unsafe { raw(p, n) })
 }
 
 /// A string from arbitrary bytes, each invalid byte replaced with U+FFFD.
-pub fn str_from_bytes(s: &[u8]) -> *mut DuckStr {
+pub fn str_from_bytes(s: &[u8]) -> *mut AukStr {
     if let Some((chars, ascii)) = utf8_valid(s) {
         return str_raw(s, chars, ascii);
     }
-    let mut b = DuckStrBuf::INIT;
+    let mut b = AukStrBuf::INIT;
     let mut i = 0usize;
     unsafe {
         while i < s.len() {
@@ -251,28 +251,28 @@ pub fn str_from_bytes(s: &[u8]) -> *mut DuckStr {
                 i += 1;
             }
         }
-        duck_sb_finish(&mut b)
+        auk_sb_finish(&mut b)
     }
 }
 
-/// A string from Rust text (same as `duck_str_lit`).
-pub fn str_from(s: &str) -> *mut DuckStr {
+/// A string from Rust text (same as `auk_str_lit`).
+pub fn str_from(s: &str) -> *mut AukStr {
     str_from_bytes(s.as_bytes())
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_from_bytes(p: *const c_char, n: i64) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_str_from_bytes(p: *const c_char, n: i64) -> *mut AukStr {
     str_from_bytes(unsafe { raw(p, n) })
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_lit(cstr: *const c_char) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_str_lit(cstr: *const c_char) -> *mut AukStr {
     str_from_bytes(unsafe { cbytes(cstr) })
 }
 
-fn try_from_bytes(s: &[u8]) -> DuckRes_str {
+fn try_from_bytes(s: &[u8]) -> AukRes_str {
     if let Some((chars, ascii)) = utf8_valid(s) {
-        return DuckRes::ok(str_raw(s, chars, ascii));
+        return AukRes::ok(str_raw(s, chars, ascii));
     }
     let mut i = 0usize;
     while i < s.len() {
@@ -286,12 +286,12 @@ fn try_from_bytes(s: &[u8]) -> DuckRes_str {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_try_from_bytes(p: *const c_char, n: i64) -> DuckRes_str {
+pub unsafe extern "C" fn auk_str_try_from_bytes(p: *const c_char, n: i64) -> AukRes_str {
     try_from_bytes(unsafe { raw(p, n) })
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_from_utf8(bytes: *mut DuckArr) -> DuckRes_str {
+pub unsafe extern "C" fn auk_str_from_utf8(bytes: *mut AukArr) -> AukRes_str {
     unsafe {
         let n = arr_len(bytes);
         let xs = arr_data(bytes) as *const i64;
@@ -309,7 +309,7 @@ pub unsafe extern "C" fn duck_str_from_utf8(bytes: *mut DuckArr) -> DuckRes_str 
 
 // ---- indexing ----------------------------------------------------------------------------
 
-pub unsafe fn duck__str_byte_offset(s: *const DuckStr, i: i64) -> i64 {
+pub unsafe fn auk__str_byte_offset(s: *const AukStr, i: i64) -> i64 {
     if s.is_null() {
         return 0;
     }
@@ -335,9 +335,9 @@ pub unsafe fn duck__str_byte_offset(s: *const DuckStr, i: i64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_char_at(s: *const DuckStr, i: i64, loc: *const c_char) -> u32 {
+pub unsafe extern "C" fn auk_str_char_at(s: *const AukStr, i: i64, loc: *const c_char) -> u32 {
     unsafe {
-        let n = duck_str_len(s);
+        let n = auk_str_len(s);
         if i < 0 || i >= n {
             rt_panic!(loc, "index {i} out of range for string of length {n}");
         }
@@ -345,65 +345,65 @@ pub unsafe extern "C" fn duck_str_char_at(s: *const DuckStr, i: i64, loc: *const
         if (*s).is_ascii {
             return d[i as usize] as u32;
         }
-        utf8_decode(d, duck__str_byte_offset(s, i) as usize).0
+        utf8_decode(d, auk__str_byte_offset(s, i) as usize).0
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_get(s: *const DuckStr, i: i64) -> DuckOpt_char {
+pub unsafe extern "C" fn auk_str_get(s: *const AukStr, i: i64) -> AukOpt_char {
     unsafe {
-        if i < 0 || i >= duck_str_len(s) {
-            return DuckOpt::none();
+        if i < 0 || i >= auk_str_len(s) {
+            return AukOpt::none();
         }
-        DuckOpt::some(duck_str_char_at(s, i, std::ptr::null()))
+        AukOpt::some(auk_str_char_at(s, i, std::ptr::null()))
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_slice(s: *const DuckStr, a: i64, b: i64, loc: *const c_char) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_str_slice(s: *const AukStr, a: i64, b: i64, loc: *const c_char) -> *mut AukStr {
     unsafe {
-        let n = duck_str_len(s);
+        let n = auk_str_len(s);
         if a < 0 || b < a || b > n {
             rt_panic!(loc, "slice {a}..{b} out of range for string of length {n}");
         }
         if a == 0 && b == n && !s.is_null() {
-            return duck_retain(s as *mut c_void).cast();
+            return auk_retain(s as *mut c_void).cast();
         }
-        let ba = duck__str_byte_offset(s, a) as usize;
-        let bb = duck__str_byte_offset(s, b) as usize;
+        let ba = auk__str_byte_offset(s, a) as usize;
+        let bb = auk__str_byte_offset(s, b) as usize;
         str_raw(&sbytes(s)[ba..bb], b - a, is_ascii(s))
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_concat(a: *const DuckStr, b: *const DuckStr) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_str_concat(a: *const AukStr, b: *const AukStr) -> *mut AukStr {
     unsafe {
         let (x, y) = (sbytes(a), sbytes(b));
         let (na, nb) = (x.len(), y.len());
-        let s = duck__alloc(size_of::<DuckStr>() + na + nb + 1, DUCK_K_STR) as *mut DuckStr;
+        let s = auk__alloc(size_of::<AukStr>() + na + nb + 1, AUK_K_STR) as *mut AukStr;
         let d = (*s).data.as_mut_ptr();
         std::ptr::copy_nonoverlapping(x.as_ptr(), d, na);
         std::ptr::copy_nonoverlapping(y.as_ptr(), d.add(na), nb);
         *d.add(na + nb) = 0;
         (*s).len_bytes = (na + nb) as i64;
-        (*s).len_chars = duck_str_len(a) + duck_str_len(b);
+        (*s).len_chars = auk_str_len(a) + auk_str_len(b);
         (*s).is_ascii = is_ascii(a) && is_ascii(b);
         s
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_eq(a: *const DuckStr, b: *const DuckStr) -> bool {
+pub unsafe extern "C" fn auk_str_eq(a: *const AukStr, b: *const AukStr) -> bool {
     a == b || unsafe { sbytes(a) == sbytes(b) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_eq_lit(s: *const DuckStr, lit: *const c_char) -> bool {
+pub unsafe extern "C" fn auk_str_eq_lit(s: *const AukStr, lit: *const c_char) -> bool {
     unsafe { sbytes(s) == cbytes(lit) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_cmp(a: *const DuckStr, b: *const DuckStr) -> c_int {
+pub unsafe extern "C" fn auk_str_cmp(a: *const AukStr, b: *const AukStr) -> c_int {
     // memcmp on the common prefix, then length: exactly lexicographic byte order.
     match unsafe { sbytes(a).cmp(sbytes(b)) } {
         std::cmp::Ordering::Less => -1,
@@ -413,12 +413,12 @@ pub unsafe extern "C" fn duck_str_cmp(a: *const DuckStr, b: *const DuckStr) -> c
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_hash(s: *const DuckStr) -> u64 {
-    unsafe { crate::rc::duck_hash_bytes(duck_str_cstr(s).cast(), duck_str_byte_len(s) as usize) }
+pub unsafe extern "C" fn auk_str_hash(s: *const AukStr) -> u64 {
+    unsafe { crate::rc::auk_hash_bytes(auk_str_cstr(s).cast(), auk_str_byte_len(s) as usize) }
 }
 
-pub unsafe fn duck__str_free(s: *mut DuckStr) {
-    unsafe { duck__free_obj(s.cast()) }
+pub unsafe fn auk__str_free(s: *mut AukStr) {
+    unsafe { auk__free_obj(s.cast()) }
 }
 
 // ---- searching ---------------------------------------------------------------------------
@@ -447,10 +447,10 @@ fn chars_in(p: &[u8]) -> i64 {
 }
 
 /// Sub-string by byte range [a, b) of s (s valid UTF-8, a/b on boundaries).
-unsafe fn sub_bytes(s: *const DuckStr, a: usize, b: usize) -> *mut DuckStr {
+unsafe fn sub_bytes(s: *const AukStr, a: usize, b: usize) -> *mut AukStr {
     unsafe {
         if !s.is_null() && a == 0 && b as i64 == (*s).len_bytes {
-            return duck_retain(s as *mut c_void).cast();
+            return auk_retain(s as *mut c_void).cast();
         }
         let p = &sbytes(s)[a..b];
         let ascii = is_ascii(s);
@@ -458,10 +458,10 @@ unsafe fn sub_bytes(s: *const DuckStr, a: usize, b: usize) -> *mut DuckStr {
     }
 }
 
-unsafe fn push_own(a: &mut *mut DuckArr, s: *mut DuckStr) {
+unsafe fn push_own(a: &mut *mut AukArr, s: *mut AukStr) {
     unsafe {
-        crate::arr::duck_arr_push(a, (&s as *const *mut DuckStr).cast());
-        duck_release(s.cast());
+        crate::arr::auk_arr_push(a, (&s as *const *mut AukStr).cast());
+        auk_release(s.cast());
     }
 }
 
@@ -470,9 +470,9 @@ fn is_ws(c: u8) -> bool {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_split_ws(s: *const DuckStr) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_str_split_ws(s: *const AukStr) -> *mut AukArr {
     unsafe {
-        let mut out = crate::arr::duck_arr_new(&crate::rc::duck_ops_str, 0);
+        let mut out = crate::arr::auk_arr_new(&crate::rc::auk_ops_str, 0);
         let p = sbytes(s);
         let n = p.len();
         let mut i = 0;
@@ -494,9 +494,9 @@ pub unsafe extern "C" fn duck_str_split_ws(s: *const DuckStr) -> *mut DuckArr {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_split(s: *const DuckStr, sep: *const DuckStr) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_str_split(s: *const AukStr, sep: *const AukStr) -> *mut AukArr {
     unsafe {
-        let mut out = crate::arr::duck_arr_new(&crate::rc::duck_ops_str, 0);
+        let mut out = crate::arr::auk_arr_new(&crate::rc::auk_ops_str, 0);
         let p = sbytes(s);
         let n = p.len();
         let sp = sbytes(sep);
@@ -524,7 +524,7 @@ pub unsafe extern "C" fn duck_str_split(s: *const DuckStr, sep: *const DuckStr) 
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_trim_start(s: *const DuckStr) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_str_trim_start(s: *const AukStr) -> *mut AukStr {
     unsafe {
         let p = sbytes(s);
         let mut a = 0;
@@ -536,7 +536,7 @@ pub unsafe extern "C" fn duck_str_trim_start(s: *const DuckStr) -> *mut DuckStr 
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_trim_end(s: *const DuckStr) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_str_trim_end(s: *const AukStr) -> *mut AukStr {
     unsafe {
         let p = sbytes(s);
         let mut b = p.len();
@@ -548,7 +548,7 @@ pub unsafe extern "C" fn duck_str_trim_end(s: *const DuckStr) -> *mut DuckStr {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_trim(s: *const DuckStr) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_str_trim(s: *const AukStr) -> *mut AukStr {
     unsafe {
         let p = sbytes(s);
         let n = p.len();
@@ -564,9 +564,9 @@ pub unsafe extern "C" fn duck_str_trim(s: *const DuckStr) -> *mut DuckStr {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_lines(s: *const DuckStr) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_str_lines(s: *const AukStr) -> *mut AukArr {
     unsafe {
-        let mut out = crate::arr::duck_arr_new(&crate::rc::duck_ops_str, 0);
+        let mut out = crate::arr::auk_arr_new(&crate::rc::auk_ops_str, 0);
         let p = sbytes(s);
         let n = p.len();
         let mut st = 0;
@@ -587,41 +587,41 @@ pub unsafe extern "C" fn duck_str_lines(s: *const DuckStr) -> *mut DuckArr {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_starts_with(s: *const DuckStr, pre: *const DuckStr) -> bool {
+pub unsafe extern "C" fn auk_str_starts_with(s: *const AukStr, pre: *const AukStr) -> bool {
     unsafe { sbytes(s).starts_with(sbytes(pre)) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_ends_with(s: *const DuckStr, suf: *const DuckStr) -> bool {
+pub unsafe extern "C" fn auk_str_ends_with(s: *const AukStr, suf: *const AukStr) -> bool {
     unsafe { sbytes(s).ends_with(sbytes(suf)) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_contains(s: *const DuckStr, sub: *const DuckStr) -> bool {
+pub unsafe extern "C" fn auk_str_contains(s: *const AukStr, sub: *const AukStr) -> bool {
     unsafe { find_bytes(sbytes(s), sbytes(sub), 0) >= 0 }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_find(s: *const DuckStr, sub: *const DuckStr) -> DuckOpt_int {
+pub unsafe extern "C" fn auk_str_find(s: *const AukStr, sub: *const AukStr) -> AukOpt_int {
     unsafe {
         let p = sbytes(s);
         let at = find_bytes(p, sbytes(sub), 0);
         if at < 0 {
-            return DuckOpt::none();
+            return AukOpt::none();
         }
-        DuckOpt::some(if !s.is_null() && (*s).is_ascii { at } else { chars_in(&p[..at as usize]) })
+        AukOpt::some(if !s.is_null() && (*s).is_ascii { at } else { chars_in(&p[..at as usize]) })
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_replace(s: *const DuckStr, from: *const DuckStr, to: *const DuckStr) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_str_replace(s: *const AukStr, from: *const AukStr, to: *const AukStr) -> *mut AukStr {
     unsafe {
         let f = sbytes(from);
         let p = sbytes(s);
         if f.is_empty() {
-            return if s.is_null() { duck_str_lit(c"".as_ptr()) } else { duck_retain(s as *mut c_void).cast() };
+            return if s.is_null() { auk_str_lit(c"".as_ptr()) } else { auk_retain(s as *mut c_void).cast() };
         }
-        let mut b = DuckStrBuf::INIT;
+        let mut b = AukStrBuf::INIT;
         let mut st = 0usize;
         loop {
             let at = find_bytes(p, f, st as i64);
@@ -629,17 +629,17 @@ pub unsafe extern "C" fn duck_str_replace(s: *const DuckStr, from: *const DuckSt
                 break;
             }
             sb_bytes(&mut b, &p[st..at as usize]);
-            duck_sb_str(&mut b, to);
+            auk_sb_str(&mut b, to);
             st = at as usize + f.len();
         }
         sb_bytes(&mut b, &p[st..]);
-        duck_sb_finish(&mut b)
+        auk_sb_finish(&mut b)
     }
 }
 
-unsafe fn map_ascii(s: *const DuckStr, up: bool) -> *mut DuckStr {
+unsafe fn map_ascii(s: *const AukStr, up: bool) -> *mut AukStr {
     unsafe {
-        let r = str_raw(sbytes(s), duck_str_len(s), is_ascii(s));
+        let r = str_raw(sbytes(s), auk_str_len(s), is_ascii(s));
         let n = (*r).len_bytes as usize;
         let d = std::slice::from_raw_parts_mut((*r).data.as_mut_ptr(), n);
         for c in d.iter_mut() {
@@ -655,16 +655,16 @@ unsafe fn map_ascii(s: *const DuckStr, up: bool) -> *mut DuckStr {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_upper(s: *const DuckStr) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_str_upper(s: *const AukStr) -> *mut AukStr {
     unsafe { map_ascii(s, true) }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_lower(s: *const DuckStr) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_str_lower(s: *const AukStr) -> *mut AukStr {
     unsafe { map_ascii(s, false) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_repeat(s: *const DuckStr, n: i64, loc: *const c_char) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_str_repeat(s: *const AukStr, n: i64, loc: *const c_char) -> *mut AukStr {
     unsafe {
         if n < 0 {
             rt_panic!(loc, "repeat count {n} is negative");
@@ -673,9 +673,9 @@ pub unsafe extern "C" fn duck_str_repeat(s: *const DuckStr, n: i64, loc: *const 
         let bl = src.len() as i64;
         let total = match bl.checked_mul(n) {
             Some(t) => t,
-            None => crate::rc::duck_panic_overflow(loc, c"repeat".as_ptr()),
+            None => crate::rc::auk_panic_overflow(loc, c"repeat".as_ptr()),
         };
-        let r = duck__alloc(size_of::<DuckStr>() + total as usize + 1, DUCK_K_STR) as *mut DuckStr;
+        let r = auk__alloc(size_of::<AukStr>() + total as usize + 1, AUK_K_STR) as *mut AukStr;
         let d = (*r).data.as_mut_ptr();
         if bl > 0 {
             for i in 0..n {
@@ -684,18 +684,18 @@ pub unsafe extern "C" fn duck_str_repeat(s: *const DuckStr, n: i64, loc: *const 
         }
         *d.add(total as usize) = 0;
         (*r).len_bytes = total;
-        (*r).len_chars = duck_str_len(s).wrapping_mul(n);
+        (*r).len_chars = auk_str_len(s).wrapping_mul(n);
         (*r).is_ascii = is_ascii(s);
         r
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_chars(s: *const DuckStr) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_str_chars(s: *const AukStr) -> *mut AukArr {
     unsafe {
-        let n = duck_str_len(s);
-        let mut out = crate::arr::duck_arr_new(&crate::rc::duck_ops_char, n);
-        let d = crate::arr::duck_arr_make_unique(&mut out) as *mut u32;
+        let n = auk_str_len(s);
+        let mut out = crate::arr::auk_arr_new(&crate::rc::auk_ops_char, n);
+        let d = crate::arr::auk_arr_make_unique(&mut out) as *mut u32;
         let p = sbytes(s);
         let (mut i, mut k) = (0usize, 0usize);
         while i < p.len() {
@@ -710,12 +710,12 @@ pub unsafe extern "C" fn duck_str_chars(s: *const DuckStr) -> *mut DuckArr {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_bytes(s: *const DuckStr) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_str_bytes(s: *const AukStr) -> *mut AukArr {
     unsafe {
         let p = sbytes(s);
         let n = p.len() as i64;
-        let mut out = crate::arr::duck_arr_new(&crate::rc::duck_ops_int, n);
-        let d = crate::arr::duck_arr_make_unique(&mut out) as *mut i64;
+        let mut out = crate::arr::auk_arr_new(&crate::rc::auk_ops_int, n);
+        let d = crate::arr::auk_arr_make_unique(&mut out) as *mut i64;
         for (i, &c) in p.iter().enumerate() {
             *d.add(i) = c as i64;
         }
@@ -725,24 +725,24 @@ pub unsafe extern "C" fn duck_str_bytes(s: *const DuckStr) -> *mut DuckArr {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_from_chars(chars: *mut DuckArr) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_str_from_chars(chars: *mut AukArr) -> *mut AukStr {
     unsafe {
-        let mut b = DuckStrBuf::INIT;
+        let mut b = AukStrBuf::INIT;
         let cs = arr_data(chars) as *const u32;
         for i in 0..arr_len(chars) {
-            duck_sb_char(&mut b, *cs.add(i as usize));
+            auk_sb_char(&mut b, *cs.add(i as usize));
         }
-        duck_sb_finish(&mut b)
+        auk_sb_finish(&mut b)
     }
 }
 
 // ---- parsing -----------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_int_parse(s: *const DuckStr) -> DuckRes_int {
+pub unsafe extern "C" fn auk_int_parse(s: *const AukStr) -> AukRes_int {
     let p = unsafe { sbytes(s) };
     let shown = || String::from_utf8_lossy(upto_nul(p)).into_owned();
-    let bad = || DuckRes::err(crate::err::err_msg(&format!("int.parse: invalid int \"{}\"", shown())));
+    let bad = || AukRes::err(crate::err::err_msg(&format!("int.parse: invalid int \"{}\"", shown())));
     let n = p.len();
     let mut i = 0;
     let mut neg = false;
@@ -768,25 +768,25 @@ pub unsafe extern "C" fn duck_int_parse(s: *const DuckStr) -> DuckRes_int {
         }
         let d = (c - b'0') as u64;
         if acc > (limit - d) / 10 {
-            return DuckRes::err(crate::err::err_msg(&format!("int.parse: \"{}\" is out of range", shown())));
+            return AukRes::err(crate::err::err_msg(&format!("int.parse: \"{}\" is out of range", shown())));
         }
         acc = acc * 10 + d;
         prev_digit = true;
         i += 1;
     }
     if neg {
-        return DuckRes::ok(if acc == i64::MAX as u64 + 1 { i64::MIN } else { -(acc as i64) });
+        return AukRes::ok(if acc == i64::MAX as u64 + 1 { i64::MIN } else { -(acc as i64) });
     }
-    DuckRes::ok(acc as i64)
+    AukRes::ok(acc as i64)
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_float_parse(s: *const DuckStr) -> DuckRes_float {
+pub unsafe extern "C" fn auk_float_parse(s: *const AukStr) -> AukRes_float {
     unsafe {
         let p = sbytes(s);
         let n = p.len();
         let bad = || {
-            DuckRes::err(crate::err::err_msg(&format!(
+            AukRes::err(crate::err::err_msg(&format!(
                 "float.parse: invalid float \"{}\"",
                 String::from_utf8_lossy(upto_nul(p))
             )))
@@ -798,43 +798,43 @@ pub unsafe extern "C" fn duck_float_parse(s: *const DuckStr) -> DuckRes_float {
         if p.iter().any(|&c| c == b'x' || c == b'X' || c == b'(') {
             return bad();
         }
-        let cp = duck_str_cstr(s);
+        let cp = auk_str_cstr(s);
         let mut end: *mut c_char = null_mut();
         let d = libc::strtod(cp, &mut end);
         if !std::ptr::eq(end, cp.add(n)) {
             return bad();
         }
-        DuckRes::ok(d)
+        AukRes::ok(d)
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_char_is_digit(c: u32) -> bool {
+pub extern "C" fn auk_char_is_digit(c: u32) -> bool {
     (b'0' as u32..=b'9' as u32).contains(&c)
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_char_is_alpha(c: u32) -> bool {
+pub extern "C" fn auk_char_is_alpha(c: u32) -> bool {
     (b'a' as u32..=b'z' as u32).contains(&c) || (b'A' as u32..=b'Z' as u32).contains(&c)
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_char_is_space(c: u32) -> bool {
+pub extern "C" fn auk_char_is_space(c: u32) -> bool {
     c < 128 && is_ws(c as u8)
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_char_upper(c: u32) -> u32 {
+pub extern "C" fn auk_char_upper(c: u32) -> u32 {
     if (b'a' as u32..=b'z' as u32).contains(&c) { c - 32 } else { c }
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_char_lower(c: u32) -> u32 {
+pub extern "C" fn auk_char_lower(c: u32) -> u32 {
     if (b'A' as u32..=b'Z' as u32).contains(&c) { c + 32 } else { c }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_char_from_int(n: i64) -> DuckOpt_char {
+pub extern "C" fn auk_char_from_int(n: i64) -> AukOpt_char {
     if !(0..=0x10FFFF).contains(&n) || (0xD800..=0xDFFF).contains(&n) {
-        return DuckOpt::none();
+        return AukOpt::none();
     }
-    DuckOpt::some(n as u32)
+    AukOpt::some(n as u32)
 }
 
 // ---- formatting --------------------------------------------------------------------------
@@ -859,7 +859,7 @@ fn int_digits(v: i64, buf: &mut [u8; 20]) -> usize {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_str_from_int(v: i64) -> *mut DuckStr {
+pub extern "C" fn auk_str_from_int(v: i64) -> *mut AukStr {
     let mut buf = [0u8; 20];
     let at = int_digits(v, &mut buf);
     str_raw(&buf[at..], (buf.len() - at) as i64, true)
@@ -867,7 +867,7 @@ pub extern "C" fn duck_str_from_int(v: i64) -> *mut DuckStr {
 
 /// Append `v` in decimal (what interpolating an int does: no temporary string).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_sb_int(b: *mut DuckStrBuf, v: i64) {
+pub unsafe extern "C" fn auk_sb_int(b: *mut AukStrBuf, v: i64) {
     let mut buf = [0u8; 20];
     let at = int_digits(v, &mut buf);
     unsafe { sb_put(b, &buf[at..]) }
@@ -880,7 +880,7 @@ fn c_fmt_e(prec: c_int, v: f64) -> Vec<u8> {
     buf[..(n.max(0) as usize).min(63)].to_vec()
 }
 
-/// Shortest round-trip float text (see duck_str_from_float).
+/// Shortest round-trip float text (see auk_str_from_float).
 pub fn fmt_float_shortest(v: f64) -> String {
     if v.is_nan() {
         return "NaN".into();
@@ -956,7 +956,7 @@ pub fn fmt_float_shortest(v: f64) -> String {
     String::from_utf8(res).unwrap_or_default()
 }
 
-pub unsafe fn duck__fmt_float_shortest(v: f64, out: *mut c_char, outn: usize) {
+pub unsafe fn auk__fmt_float_shortest(v: f64, out: *mut c_char, outn: usize) {
     if outn == 0 {
         return;
     }
@@ -969,24 +969,24 @@ pub unsafe fn duck__fmt_float_shortest(v: f64, out: *mut c_char, outn: usize) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_str_from_float(v: f64) -> *mut DuckStr {
+pub extern "C" fn auk_str_from_float(v: f64) -> *mut AukStr {
     let s = fmt_float_shortest(v);
     str_raw(s.as_bytes(), s.len() as i64, true)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_str_from_char(c: u32) -> *mut DuckStr {
+pub extern "C" fn auk_str_from_char(c: u32) -> *mut AukStr {
     let mut b = [0u8; 4];
     let n = utf8_encode(c, &mut b);
     str_raw(&b[..n], 1, n == 1)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_str_from_bool(b: bool) -> *mut DuckStr {
+pub extern "C" fn auk_str_from_bool(b: bool) -> *mut AukStr {
     str_from_bytes(if b { b"true" } else { b"false" })
 }
 
-unsafe fn quote_char(b: *mut DuckStrBuf, c: u32, q: u8) {
+unsafe fn quote_char(b: *mut AukStrBuf, c: u32, q: u8) {
     unsafe {
         match c {
             0x0A => return sb_bytes(b, b"\\n"),
@@ -997,21 +997,21 @@ unsafe fn quote_char(b: *mut DuckStrBuf, c: u32, q: u8) {
             _ => {}
         }
         if c == q as u32 {
-            duck_sb_char(b, '\\' as u32);
-            duck_sb_char(b, c);
+            auk_sb_char(b, '\\' as u32);
+            auk_sb_char(b, c);
         } else if c < 0x20 || c == 0x7F {
             sb_push_str(b, &format!("\\u{{{c:X}}}"));
         } else {
-            duck_sb_char(b, c);
+            auk_sb_char(b, c);
         }
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_str_quote(s: *const DuckStr) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_str_quote(s: *const AukStr) -> *mut AukStr {
     unsafe {
-        let mut b = DuckStrBuf::INIT;
-        duck_sb_char(&mut b, '"' as u32);
+        let mut b = AukStrBuf::INIT;
+        auk_sb_char(&mut b, '"' as u32);
         let p = sbytes(s);
         let mut i = 0;
         while i < p.len() && !crate::trace::show_exhausted() {
@@ -1019,19 +1019,19 @@ pub unsafe extern "C" fn duck_str_quote(s: *const DuckStr) -> *mut DuckStr {
             quote_char(&mut b, c, b'"');
             i += len;
         }
-        duck_sb_char(&mut b, '"' as u32);
-        duck_sb_finish(&mut b)
+        auk_sb_char(&mut b, '"' as u32);
+        auk_sb_finish(&mut b)
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_char_quote(c: u32) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_char_quote(c: u32) -> *mut AukStr {
     unsafe {
-        let mut b = DuckStrBuf::INIT;
-        duck_sb_char(&mut b, '\'' as u32);
+        let mut b = AukStrBuf::INIT;
+        auk_sb_char(&mut b, '\'' as u32);
         quote_char(&mut b, c, b'\'');
-        duck_sb_char(&mut b, '\'' as u32);
-        duck_sb_finish(&mut b)
+        auk_sb_char(&mut b, '\'' as u32);
+        auk_sb_finish(&mut b)
     }
 }
 
@@ -1098,14 +1098,14 @@ unsafe fn parse_spec(spec: *const c_char) -> Spec {
 }
 
 /// Pad body (owned, consumed) according to sp.
-unsafe fn pad(body: *mut DuckStr, sp: &Spec, numeric: bool) -> *mut DuckStr {
+unsafe fn pad(body: *mut AukStr, sp: &Spec, numeric: bool) -> *mut AukStr {
     unsafe {
-        let n = duck_str_len(body);
+        let n = auk_str_len(body);
         if sp.width <= n {
             return body;
         }
         let extra = sp.width - n;
-        let mut b = DuckStrBuf::INIT;
+        let mut b = AukStrBuf::INIT;
         let p = sbytes(body);
         if numeric && sp.zero && sp.align == 0 {
             let mut i = 0;
@@ -1114,103 +1114,103 @@ unsafe fn pad(body: *mut DuckStr, sp: &Spec, numeric: bool) -> *mut DuckStr {
                 i = 1;
             }
             for _ in 0..extra {
-                duck_sb_char(&mut b, '0' as u32);
+                auk_sb_char(&mut b, '0' as u32);
             }
             sb_bytes(&mut b, &p[i..]);
         } else {
             let al = if sp.align != 0 { sp.align } else if numeric { b'>' } else { b'<' };
             let left = if al == b'>' { extra } else if al == b'^' { extra / 2 } else { 0 };
             for _ in 0..left {
-                duck_sb_char(&mut b, sp.fill);
+                auk_sb_char(&mut b, sp.fill);
             }
-            duck_sb_str(&mut b, body);
+            auk_sb_str(&mut b, body);
             for _ in 0..extra - left {
-                duck_sb_char(&mut b, sp.fill);
+                auk_sb_char(&mut b, sp.fill);
             }
         }
-        duck_release(body.cast());
-        duck_sb_finish(&mut b)
+        auk_release(body.cast());
+        auk_sb_finish(&mut b)
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_fmt_int(v: i64, spec: *const c_char) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_fmt_int(v: i64, spec: *const c_char) -> *mut AukStr {
     unsafe {
         let sp = parse_spec(spec);
-        pad(duck_str_from_int(v), &sp, true)
+        pad(auk_str_from_int(v), &sp, true)
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_fmt_float(v: f64, spec: *const c_char) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_fmt_float(v: f64, spec: *const c_char) -> *mut AukStr {
     unsafe {
         let sp = parse_spec(spec);
         let body = if sp.prec >= 0 && v.is_finite() {
             let prec = sp.prec as c_int;
             let n = libc::snprintf(null_mut(), 0, c"%.*f".as_ptr(), prec, v);
-            let buf = duck__xmalloc(n as usize + 1) as *mut c_char;
+            let buf = auk__xmalloc(n as usize + 1) as *mut c_char;
             libc::snprintf(buf, n as usize + 1, c"%.*f".as_ptr(), prec, v);
-            let r = duck__str_raw(buf, n as i64, n as i64, true);
+            let r = auk__str_raw(buf, n as i64, n as i64, true);
             libc::free(buf.cast());
             r
         } else {
-            duck_str_from_float(v)
+            auk_str_from_float(v)
         };
         pad(body, &sp, true)
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_fmt_str(s: *const DuckStr, spec: *const c_char) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_fmt_str(s: *const AukStr, spec: *const c_char) -> *mut AukStr {
     unsafe {
         let sp = parse_spec(spec);
-        let body = if sp.prec >= 0 && sp.prec < duck_str_len(s) {
-            duck_str_slice(s, 0, sp.prec, std::ptr::null())
+        let body = if sp.prec >= 0 && sp.prec < auk_str_len(s) {
+            auk_str_slice(s, 0, sp.prec, std::ptr::null())
         } else if s.is_null() {
-            duck_str_lit(c"".as_ptr())
+            auk_str_lit(c"".as_ptr())
         } else {
-            duck_retain(s as *mut c_void).cast()
+            auk_retain(s as *mut c_void).cast()
         };
         pad(body, &sp, false)
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_fmt_char(c: u32, spec: *const c_char) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_fmt_char(c: u32, spec: *const c_char) -> *mut AukStr {
     unsafe {
         let sp = parse_spec(spec);
-        pad(duck_str_from_char(c), &sp, false)
+        pad(auk_str_from_char(c), &sp, false)
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_fmt_bool(v: bool, spec: *const c_char) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_fmt_bool(v: bool, spec: *const c_char) -> *mut AukStr {
     unsafe {
         let sp = parse_spec(spec);
-        pad(duck_str_from_bool(v), &sp, false)
+        pad(auk_str_from_bool(v), &sp, false)
     }
 }
 
 // ---- builder -----------------------------------------------------------------------------
 
 /// Where the builder's text is: its inline bytes or its heap buffer.
-unsafe fn sb_data(b: *mut DuckStrBuf) -> *mut u8 {
+unsafe fn sb_data(b: *mut AukStrBuf) -> *mut u8 {
     unsafe { if (*b).buf.is_null() { (*b).small.as_mut_ptr() } else { (*b).buf } }
 }
 
-unsafe fn sb_reserve(b: *mut DuckStrBuf, extra: i64) {
+unsafe fn sb_reserve(b: *mut AukStrBuf, extra: i64) {
     unsafe {
         let b = &mut *b;
         if b.buf.is_null() {
             // inline until the text outgrows it, then to the heap with what's there
-            if b.len + extra <= DUCK_SB_SMALL as i64 {
+            if b.len + extra <= AUK_SB_SMALL as i64 {
                 return;
             }
-            let mut cap = 2 * DUCK_SB_SMALL as i64;
+            let mut cap = 2 * AUK_SB_SMALL as i64;
             while cap < b.len + extra + 1 {
                 cap *= 2;
             }
-            let heap: *mut u8 = duck__xrealloc(std::ptr::null_mut(), cap as usize).cast();
+            let heap: *mut u8 = auk__xrealloc(std::ptr::null_mut(), cap as usize).cast();
             std::ptr::copy_nonoverlapping(b.small.as_ptr(), heap, b.len as usize);
             b.buf = heap;
             b.cap = cap;
@@ -1223,12 +1223,12 @@ unsafe fn sb_reserve(b: *mut DuckStrBuf, extra: i64) {
         while cap < b.len + extra + 1 {
             cap *= 2;
         }
-        b.buf = duck__xrealloc(b.buf.cast(), cap as usize).cast();
+        b.buf = auk__xrealloc(b.buf.cast(), cap as usize).cast();
         b.cap = cap;
     }
 }
 
-unsafe fn sb_put(b: *mut DuckStrBuf, p: &[u8]) {
+unsafe fn sb_put(b: *mut AukStrBuf, p: &[u8]) {
     if p.is_empty() {
         return;
     }
@@ -1239,59 +1239,59 @@ unsafe fn sb_put(b: *mut DuckStrBuf, p: &[u8]) {
     }
 }
 
-/// `duck_sb_bytes` for a Rust slice. Pieces of text count against a trace's show budget;
+/// `auk_sb_bytes` for a Rust slice. Pieces of text count against a trace's show budget;
 /// whole strings (a part already built, e.g. a field's show) don't, so a capped show is an
 /// exact prefix of the full one.
-pub unsafe fn sb_bytes(b: *mut DuckStrBuf, p: &[u8]) {
+pub unsafe fn sb_bytes(b: *mut AukStrBuf, p: &[u8]) {
     if crate::trace::show_take(p.len() as i64) {
         unsafe { sb_put(b, p) }
     }
 }
 
-/// Replacement for C's `duck_sb_printf`: format with `format!`, then push here.
-pub unsafe fn sb_push_str(b: *mut DuckStrBuf, s: &str) {
+/// Replacement for C's `auk_sb_printf`: format with `format!`, then push here.
+pub unsafe fn sb_push_str(b: *mut AukStrBuf, s: &str) {
     if !s.is_empty() && crate::trace::show_take(s.len() as i64) {
         unsafe { sb_put(b, s.as_bytes()) }
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_sb_bytes(b: *mut DuckStrBuf, p: *const c_char, n: i64) {
+pub unsafe extern "C" fn auk_sb_bytes(b: *mut AukStrBuf, p: *const c_char, n: i64) {
     if crate::trace::show_take(n) {
         unsafe { sb_put(b, raw(p, n)) }
     }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_sb_lit(b: *mut DuckStrBuf, cstr: *const c_char) {
+pub unsafe extern "C" fn auk_sb_lit(b: *mut AukStrBuf, cstr: *const c_char) {
     unsafe { sb_bytes(b, cbytes(cstr)) }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_sb_str(b: *mut DuckStrBuf, s: *const DuckStr) {
+pub unsafe extern "C" fn auk_sb_str(b: *mut AukStrBuf, s: *const AukStr) {
     unsafe { sb_put(b, sbytes(s)) }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_sb_str_own(b: *mut DuckStrBuf, s: *mut DuckStr) {
+pub unsafe extern "C" fn auk_sb_str_own(b: *mut AukStrBuf, s: *mut AukStr) {
     unsafe {
-        duck_sb_str(b, s);
-        duck_release(s.cast());
+        auk_sb_str(b, s);
+        auk_release(s.cast());
     }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_sb_char(b: *mut DuckStrBuf, c: u32) {
+pub unsafe extern "C" fn auk_sb_char(b: *mut AukStrBuf, c: u32) {
     let mut buf = [0u8; 4];
     let n = utf8_encode(c, &mut buf);
     unsafe { sb_bytes(b, &buf[..n]) }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_sb_finish(b: *mut DuckStrBuf) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_sb_finish(b: *mut AukStrBuf) -> *mut AukStr {
     unsafe {
         let s = str_from_bytes(raw(sb_data(b) as *const c_char, (*b).len));
-        duck_sb_free(b);
+        auk_sb_free(b);
         s
     }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_sb_free(b: *mut DuckStrBuf) {
+pub unsafe extern "C" fn auk_sb_free(b: *mut AukStrBuf) {
     unsafe {
         if !(*b).buf.is_null() {
             libc::free((*b).buf.cast());

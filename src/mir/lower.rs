@@ -4,12 +4,12 @@
 //!
 //! # How a body is lowered
 //! Expressions are lowered in evaluation order to statements; each returns a `Val`: an
-//! expression of a Duck type that is either **owned** (a temporary variable the current scope
+//! expression of an Auk type that is either **owned** (a temporary variable the current scope
 //! will release unless it is moved out with `own`) or **borrowed** (a local, a field of a value
 //! that outlives the statement, a global). Locals own their values; parameters are borrowed (or,
 //! in a function whose self tail calls became a loop, owned copies).
 //!
-//! Scopes mirror Duck's: a statement scope holds that statement's temporaries, block scopes hold
+//! Scopes mirror Auk's: a statement scope holds that statement's temporaries, block scopes hold
 //! locals, a loop marks where `break`/`continue` stop releasing. An early exit (`return`, `?`,
 //! `fail`, `break`, `continue`, a self tail call) releases every scope it leaves.
 //!
@@ -30,7 +30,7 @@ use crate::typed::{
 };
 use crate::types::{Builtin, ParamId, Ty};
 
-/// A lowered value of Duck type `ty`.
+/// A lowered value of Auk type `ty`.
 #[derive(Debug, Clone)]
 pub struct Val {
     pub c: Ex,
@@ -169,7 +169,7 @@ pub fn emit_instance(g: &mut Gen, i: InstId) {
 }
 
 /// The debugger's evaluation function for `value`, an expression inserted into the body of
-/// instance `i` (`src/dbg_eval.rs`): `DuckStr *f(void **slots)` reads each local of `binds` from
+/// instance `i` (`src/dbg_eval.rs`): `AukStr *f(void **slots)` reads each local of `binds` from
 /// the address in the same position of `slots` and returns the value shown (debug `Show`).
 pub fn emit_eval(g: &mut Gen, i: InstId, value: &Expr, binds: &[LocalId]) -> FuncId {
     let tp = g.tp;
@@ -197,7 +197,7 @@ pub fn emit_eval(g: &mut Gen, i: InstId, value: &Expr, binds: &[LocalId]) -> Fun
     }
     let v = lw.expr(value);
     let shown = if v.is_never() || v.ty.is_unit() {
-        Ex::rt("duck_str_from_bytes", vec![Ex::cstr("()"), Ex::int(2)], MTy::D(Ty::Str))
+        Ex::rt("auk_str_from_bytes", vec![Ex::cstr("()"), Ex::int(2)], MTy::D(Ty::Str))
     } else {
         let c = v.c.clone();
         lw.trace_show(&v.ty, c)
@@ -272,12 +272,12 @@ impl<'g, 'a> Lower<'g, 'a> {
     }
 
     /// A cancellation point at the top of every iteration of a user loop: one load of
-    /// `duck_cancel_pending` while no task is cancelled (runtime/src/task.rs).
+    /// `auk_cancel_pending` while no task is cancelled (runtime/src/task.rs).
     fn cancel_point(&mut self, span: crate::diag::Span) {
-        let pending = Ex::rt_global("duck_cancel_pending", MTy::D(Ty::Int)).deref(MTy::D(Ty::Int));
+        let pending = Ex::rt_global("auk_cancel_pending", MTy::D(Ty::Int)).deref(MTy::D(Ty::Int));
         self.open_if(Ex::bin(BOp::Ne, pending, Ex::int(0)));
         let loc = self.loc(span);
-        self.do_(Ex::rt("duck_cancel_check", vec![loc], MTy::Void));
+        self.do_(Ex::rt("auk_cancel_check", vec![loc], MTy::Void));
         self.close();
     }
 
@@ -460,9 +460,9 @@ impl<'g, 'a> Lower<'g, 'a> {
         self.g.fld(v, s)
     }
 
-    /// The `DuckStr *` show of a non-primitive value for a message, or `<T>`.
+    /// The `AukStr *` show of a non-primitive value for a message, or `<T>`.
     fn trace_site(&mut self, loc: Ex) {
-        let slot = Ex::rt("duck__trace_site_slot", vec![], MTy::ptr(MTy::CStr));
+        let slot = Ex::rt("auk__trace_site_slot", vec![], MTy::ptr(MTy::CStr));
         self.set(slot.deref(MTy::CStr), loc);
     }
 
@@ -484,10 +484,10 @@ impl<'g, 'a> Lower<'g, 'a> {
         // instrumented: push the frame record first, pop it before every return
         let (body, mut vars) = st.b.finish();
         let fp = dbg.frame.clone().addr().cast(MTy::void_ptr());
-        let leave = Stmt::Do(Ex::rt("duck_dbg_leave", vec![fp.clone()], MTy::Void));
+        let leave = Stmt::Do(Ex::rt("auk_dbg_leave", vec![fp.clone()], MTy::Void));
         let mut out = vec![
             Stmt::Let(dbg.frame.as_var().expect("frame var"), Ex::agg(MTy::Agg(dbg.agg), vec![(Sel::F(0), Ex::int_as(dbg.func as i64, MTy::I64))])),
-            Stmt::Do(Ex::rt("duck_dbg_enter", vec![fp], MTy::Void)),
+            Stmt::Do(Ex::rt("auk_dbg_enter", vec![fp], MTy::Void)),
         ];
         out.extend(dbg_rets(body, &mut vars, &leave));
         let func = &mut self.g.prog.funcs[f as usize];
@@ -495,7 +495,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         func.vars = vars;
     }
 
-    /// Record the Duck name of a generated function (for debug info).
+    /// Record the Auk name of a generated function (for debug info).
     fn name_fn(&mut self, f: FuncId, name: &str) {
         if self.g.lines {
             self.g.prog.names.insert(f, name.to_string());
@@ -566,9 +566,9 @@ impl<'g, 'a> Lower<'g, 'a> {
         self.g.dbg_info.sites.push(site);
         let id = self.g.dbg_info.sites.len() as i64 - 1;
         self.set(frame.clone().field(Sel::F(2), MTy::I64), Ex::int_as(id, MTy::I64));
-        let armed = Ex::rt_global("duck_dbg_armed", MTy::D(Ty::Int)).deref(MTy::D(Ty::Int));
+        let armed = Ex::rt_global("auk_dbg_armed", MTy::D(Ty::Int)).deref(MTy::D(Ty::Int));
         self.open_if(Ex::bin(BOp::Ne, armed, Ex::int(0)));
-        self.do_(Ex::rt("duck_dbg_hook", vec![frame.addr().cast(MTy::void_ptr())], MTy::Void));
+        self.do_(Ex::rt("auk_dbg_hook", vec![frame.addr().cast(MTy::void_ptr())], MTy::Void));
         self.close();
     }
 
@@ -582,14 +582,14 @@ impl<'g, 'a> Lower<'g, 'a> {
     fn emit_fn(&mut self, fid: FnId, group: &'a crate::ast::FnGroup) {
         let tp = self.tp;
         let info = &tp.fns[fid];
-        let FnKind::Duck { clauses, header, .. } = &info.kind else { unreachable!() };
+        let FnKind::Auk { clauses, header, .. } = &info.kind else { unreachable!() };
         let outer = self.g.inst_fn(self.inst);
         let base = self.g.prog.funcs[outer as usize].name.clone();
         let sig = self.g.prog.funcs[outer as usize].vars.clone();
         let rty = self.g.func_ret(outer);
         // traced: `outer` becomes the tracing wrapper around the function, `_untraced`
         let traced = self.g.traced(info.module);
-        let name = if traced { self.g.declare(format!("{base}_untraced"), sig.clone(), rty.clone(), Abi::Duck) } else { outer };
+        let name = if traced { self.g.declare(format!("{base}_untraced"), sig.clone(), rty.clone(), Abi::Auk) } else { outer };
         let params: Vec<(Ty, bool)> = info.params.iter().map(|p| (self.sub(&p.ty), p.var)).collect();
         let ret = self.sub(&info.ret);
         let hdr = if *header { group.header.as_deref() } else { None };
@@ -597,7 +597,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         let ensures = self.g.debug() && (hdr.is_some_and(|h| !h.ensures.is_empty()) || cls.iter().any(|c| !c.ensures.is_empty()));
         let body_name = if ensures {
             let n = self.g.prog.funcs[name as usize].name.clone();
-            self.g.declare(format!("{n}_body"), sig.clone(), rty.clone(), Abi::Duck)
+            self.g.declare(format!("{n}_body"), sig.clone(), rty.clone(), Abi::Auk)
         } else {
             name
         };
@@ -660,7 +660,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         }
         let loc = self.loc(info.span);
         let msg = format!("no clause of `{}` matches the arguments", info.name);
-        self.do_(Ex::rt("duck_panic_str", vec![loc, Ex::cstr(&msg)], MTy::Void));
+        self.do_(Ex::rt("auk_panic_str", vec![loc, Ex::cstr(&msg)], MTy::Void));
         self.emit(Stmt::Unreachable);
         self.f.scopes.clear();
         self.end(body_name);
@@ -672,7 +672,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         }
     }
 
-    /// The tracing wrapper `outer` of the function `inner` (`duck run/test --trace`): records a
+    /// The tracing wrapper `outer` of the function `inner` (`auk run/test --trace`): records a
     /// call event with the shown arguments, and a return (or error) event with the shown result.
     fn trace_wrapper(&mut self, fid: FnId, outer: FuncId, inner: FuncId, params: &[(Ty, bool)], ret: &Ty) {
         let info = &self.tp.fns[fid];
@@ -680,7 +680,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         let loc = self.loc(info.span);
         let ps = self.begin_fn(outer, ret.clone());
         let call = self.g.call(inner, ps.clone());
-        self.open_if(Ex::rt("duck_trace_begin", vec![], MTy::Bool).not());
+        self.open_if(Ex::rt("auk_trace_begin", vec![], MTy::Bool).not());
         self.emit(Stmt::Ret(Some(call.clone())));
         self.close();
         let mut shows = Vec::new();
@@ -696,23 +696,23 @@ impl<'g, 'a> Lower<'g, 'a> {
             let arr = self.f.b.decl(Ex::agg(MTy::Agg(a), shows.into_iter().enumerate().map(|(i, s)| (Sel::F(i as u32), s)).collect()));
             arr.addr().cast(MTy::ptr(MTy::D(Ty::Str)))
         };
-        self.do_(Ex::rt("duck_trace_call", vec![fname.clone(), loc, Ex::int_as(n as i64, MTy::I32), args], MTy::Void));
+        self.do_(Ex::rt("auk_trace_call", vec![fname.clone(), loc, Ex::int_as(n as i64, MTy::I32), args], MTy::Void));
         let r = self.decl(ret, call);
         let unitish = |t: &Ty| t.is_unit() || *t == Ty::Never;
-        self.open_if(Ex::rt("duck_trace_exit", vec![], MTy::Bool));
+        self.open_if(Ex::rt("auk_trace_exit", vec![], MTy::Bool));
         match ret {
             Ty::Res(t, _) => {
                 self.open_if(self.fld(&r, Sel::F(0)));
                 let ok = if unitish(t) { Ex::zero(MTy::D(Ty::Str)) } else { self.trace_show(t, self.fld(&r, Sel::F(1))) };
-                self.do_(Ex::rt("duck_trace_ret", vec![fname.clone(), ok], MTy::Void));
+                self.do_(Ex::rt("auk_trace_ret", vec![fname.clone(), ok], MTy::Void));
                 self.else_();
-                self.do_(Ex::rt("duck_trace_err", vec![fname, self.fld(&r, Sel::F(2))], MTy::Void));
+                self.do_(Ex::rt("auk_trace_err", vec![fname, self.fld(&r, Sel::F(2))], MTy::Void));
                 self.close();
             }
-            t if unitish(t) => self.do_(Ex::rt("duck_trace_ret", vec![fname, Ex::zero(MTy::D(Ty::Str))], MTy::Void)),
+            t if unitish(t) => self.do_(Ex::rt("auk_trace_ret", vec![fname, Ex::zero(MTy::D(Ty::Str))], MTy::Void)),
             t => {
                 let s = self.trace_show(t, r.clone());
-                self.do_(Ex::rt("duck_trace_ret", vec![fname, s], MTy::Void));
+                self.do_(Ex::rt("auk_trace_ret", vec![fname, s], MTy::Void));
             }
         }
         self.close();
@@ -732,7 +732,7 @@ impl<'g, 'a> Lower<'g, 'a> {
     }
 
     /// A module's name in trace events: its path (`json`, `http.uri`), but the root file of a
-    /// program that isn't a project's `src/lib.duck`/`src/main.duck` goes by its file name.
+    /// program that isn't a project's `src/lib.auk`/`src/main.auk` goes by its file name.
     fn trace_mod_name(&self, m: ModId) -> String {
         let p = &self.tp.program;
         let stem = std::path::Path::new(&p.mods[m].file).file_stem().map(|s| s.to_string_lossy().into_owned());
@@ -742,13 +742,13 @@ impl<'g, 'a> Lower<'g, 'a> {
         }
     }
 
-    /// The shown value of `e` (type `t`) in a trace event: an owned `DuckStr *`.
+    /// The shown value of `e` (type `t`) in a trace event: an owned `AukStr *`.
     fn trace_show(&mut self, t: &Ty, e: Ex) -> Ex {
         match self.g.dshow_fn(t) {
             Some(f) => self.g.call_ref(&f, vec![e], MTy::D(Ty::Str)),
             None => {
                 let text = format!("<{}>", self.g.show_ty(t));
-                Ex::rt("duck_str_from_bytes", vec![Ex::cstr(&text), Ex::int(text.len() as i64)], MTy::D(Ty::Str))
+                Ex::rt("auk_str_from_bytes", vec![Ex::cstr(&text), Ex::int(text.len() as i64)], MTy::D(Ty::Str))
             }
         }
     }
@@ -762,7 +762,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         let loc = self.loc(r.span);
         let text = Ex::cstr(&self.g.span_text(self.m, r.span));
         self.open_if(cv.not());
-        self.do_(Ex::rt("duck_requires_fail", vec![loc, text], MTy::Void));
+        self.do_(Ex::rt("auk_requires_fail", vec![loc, text], MTy::Void));
         self.close();
     }
 
@@ -922,7 +922,7 @@ impl<'g, 'a> Lower<'g, 'a> {
             let loc = self.loc(e.span);
             let text = Ex::cstr(&self.g.span_text(self.m, e.span));
             self.open_if(b.not());
-            self.do_(Ex::rt("duck_ensures_fail", vec![loc, text], MTy::Void));
+            self.do_(Ex::rt("auk_ensures_fail", vec![loc, text], MTy::Void));
             self.close();
         }
         if is_res {
@@ -936,7 +936,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         let outer = self.g.inst_fn(self.inst);
         let base = self.g.prog.funcs[outer as usize].name.clone();
         let ret = Ty::res(Ty::unit(), self.g.err_ty());
-        let inner = self.g.declare(format!("{base}_body"), Vec::new(), d(&ret), Abi::Duck);
+        let inner = self.g.declare(format!("{base}_body"), Vec::new(), d(&ret), Abi::Auk);
         self.begin_fn(inner, ret.clone());
         if let BodyRef::Test(t) = self.tp.instances[self.inst].body {
             let n = format!("test \"{}\"", self.tp.tests[t].name);
@@ -1181,7 +1181,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let loc = self.loc(e.span);
                 let exp = self.g.show_ty(&ty);
                 self.g.note_hole(format!("{}:{}:{}", self.file, e.span.line, e.span.col), exp.clone());
-                self.do_(Ex::rt("duck_hole", vec![loc, Ex::cstr(&exp)], MTy::Void));
+                self.do_(Ex::rt("auk_hole", vec![loc, Ex::cstr(&exp)], MTy::Void));
                 Val::never()
             }
             EK::Field { expr, name } => {
@@ -1216,9 +1216,9 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let l = self.expr(lo);
                 let h = self.expr(hi);
                 let loc = self.loc(e.span);
-                let hc = if *inclusive { Ex::rt("duck_add", vec![h.c.clone(), Ex::int(1), loc.clone()], MTy::D(Ty::Int)) } else { h.c.clone() };
+                let hc = if *inclusive { Ex::rt("auk_add", vec![h.c.clone(), Ex::int(1), loc.clone()], MTy::D(Ty::Int)) } else { h.c.clone() };
                 let ty = x.ty.clone();
-                let f = if ty == Ty::Str { "duck_str_slice" } else { "duck_arr_slice" };
+                let f = if ty == Ty::Str { "auk_str_slice" } else { "auk_arr_slice" };
                 let call = Ex::rt(f, vec![x.c, l.c, hc, loc], d(&ty));
                 self.tmp(&ty, call)
             }
@@ -1240,7 +1240,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                     let v = self.expr(expr);
                     if v.ty == Ty::Int {
                         let loc = self.loc(e.span);
-                        let c = Ex::rt("duck_neg", vec![v.c, loc], MTy::D(Ty::Int));
+                        let c = Ex::rt("auk_neg", vec![v.c, loc], MTy::D(Ty::Int));
                         self.tmp(&Ty::Int, c)
                     } else {
                         let c = Ex::new(K::Un(UOp::Neg, Box::new(v.c)), MTy::D(Ty::Float));
@@ -1252,7 +1252,7 @@ impl<'g, 'a> Lower<'g, 'a> {
             EK::Range { lo, hi, inclusive } => {
                 let l = self.expr(lo);
                 let h = self.expr(hi);
-                let new = Ex::rt("duck_arr_new", vec![Ex::rt_global("duck_ops_int", MTy::Rt(Rt::ElemOps)), Ex::int(0)], d(&Ty::list(Ty::Int)));
+                let new = Ex::rt("auk_arr_new", vec![Ex::rt_global("auk_ops_int", MTy::Rt(Rt::ElemOps)), Ex::int(0)], d(&Ty::list(Ty::Int)));
                 let xs = self.tmp(&Ty::list(Ty::Int), new);
                 let i = self.decl(&Ty::Int, l.c);
                 let hv = self.decl(&Ty::Int, h.c);
@@ -1261,7 +1261,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 self.open_if(Ex::bin(op, i.clone(), hv).not());
                 self.emit(Stmt::Break);
                 self.close();
-                self.do_(Ex::rt("duck_arr_push", vec![xs.c.clone().addr(), i.addr()], MTy::Void));
+                self.do_(Ex::rt("auk_arr_push", vec![xs.c.clone().addr(), i.addr()], MTy::Void));
                 self.emit(Stmt::Continue);
                 self.close();
                 xs
@@ -1283,8 +1283,8 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let ty = self.ty(e.id);
                 self.open_if(self.fld(&w, Sel::F(0)).not());
                 match v.ty {
-                    Ty::Opt(_) => self.do_(Ex::rt("duck_unwrap_none", vec![loc], MTy::Void)),
-                    _ => self.do_(Ex::rt("duck_unwrap_err", vec![loc, self.fld(&w, Sel::F(2))], MTy::Void)),
+                    Ty::Opt(_) => self.do_(Ex::rt("auk_unwrap_none", vec![loc], MTy::Void)),
+                    _ => self.do_(Ex::rt("auk_unwrap_err", vec![loc, self.fld(&w, Sel::F(2))], MTy::Void)),
                 }
                 self.emit(Stmt::Unreachable);
                 self.close();
@@ -1414,8 +1414,8 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let s = self.decl(&Ty::Str, shown);
                 let loc = Ex::cstr(&format!("{}:{}", self.file, e.span.line));
                 let text = Ex::cstr(&self.g.span_text(self.m, x.span));
-                self.do_(Ex::rt("duck_peek", vec![loc, text, s.clone()], MTy::Void));
-                self.do_(Ex::rt("duck_release", vec![s], MTy::Void));
+                self.do_(Ex::rt("auk_peek", vec![loc, text, s.clone()], MTy::Void));
+                self.do_(Ex::rt("auk_release", vec![s], MTy::Void));
                 v
             }
             EK::Struct { .. } => self.struct_lit(e),
@@ -1424,7 +1424,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let Ty::List(et) = &ty else { return Val::never() };
                 let et = (**et).clone();
                 let ops = self.g.ops(&et);
-                let new = Ex::rt("duck_arr_new", vec![ops, Ex::int(xs.len() as i64)], d(&ty));
+                let new = Ex::rt("auk_arr_new", vec![ops, Ex::int(xs.len() as i64)], d(&ty));
                 if xs.is_empty() {
                     return self.tmp(&ty, new);
                 }
@@ -1438,7 +1438,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let a = self.tmp(&ty, new);
                 for c in parts {
                     let el = if c.is_place() { c } else { self.decl(&et, c) };
-                    self.do_(Ex::rt("duck_arr_push", vec![a.c.clone().addr(), el.addr()], MTy::Void));
+                    self.do_(Ex::rt("auk_arr_push", vec![a.c.clone().addr(), el.addr()], MTy::Void));
                 }
                 a
             }
@@ -1447,14 +1447,14 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let Ty::Map(kt, vt) = &ty else { return Val::unit() };
                 let (kt, vt) = ((**kt).clone(), (**vt).clone());
                 let (ko, vo) = (self.g.ops(&kt), self.g.ops(&vt));
-                let new = Ex::rt("duck_map_new", vec![ko, vo], d(&ty));
+                let new = Ex::rt("auk_map_new", vec![ko, vo], d(&ty));
                 let m = self.tmp(&ty, new);
                 for (k, v) in es {
                     let kv = self.expr(k);
                     let kc = self.lvalue(&kv, &kt);
                     let vv = self.expr(v);
                     let vc = self.lvalue(&vv, &vt);
-                    self.do_(Ex::rt("duck_map_set", vec![m.c.clone().addr(), kc.addr(), vc.addr()], MTy::Void));
+                    self.do_(Ex::rt("auk_map_set", vec![m.c.clone().addr(), kc.addr(), vc.addr()], MTy::Void));
                 }
                 m
             }
@@ -1791,7 +1791,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         }
     }
 
-    /// The owned result of a call expression of Duck type `ty`.
+    /// The owned result of a call expression of Auk type `ty`.
     fn result(&mut self, ty: &Ty, call: Ex) -> Val {
         if ty.is_unit() {
             self.do_(call);
@@ -1869,7 +1869,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         let a = self.val_as(v, ty);
         match self.g.show_fn(ty) {
             Some(f) => self.g.call_ref(&f, vec![a], MTy::D(Ty::Str)),
-            None => Ex::rt("duck_str_lit", vec![Ex::cstr(&format!("<{}>", self.g.show_ty(ty)))], MTy::D(Ty::Str)),
+            None => Ex::rt("auk_str_lit", vec![Ex::cstr(&format!("<{}>", self.g.show_ty(ty)))], MTy::D(Ty::Str)),
         }
     }
 
@@ -1896,7 +1896,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         let (thunk, argty) = self.thunk(i);
         let args_drop = self.g.memo2[&format!("thunkdrop{i}")];
         // the task's heap, with deep copies of the arguments in it (it shares nothing with us)
-        let heap = self.f.b.decl(Ex::rt("duck_heap_new", vec![], MTy::void_ptr()));
+        let heap = self.f.b.decl(Ex::rt("auk_heap_new", vec![], MTy::void_ptr()));
         let vals: Vec<Ex> = args
             .into_iter()
             .map(|a| match a {
@@ -1904,15 +1904,15 @@ impl<'g, 'a> Lower<'g, 'a> {
                 ArgV::Addr(p, _) => p,
             })
             .collect();
-        let old = self.f.b.decl(Ex::rt("duck_heap_switch", vec![heap.clone()], MTy::void_ptr()));
+        let old = self.f.b.decl(Ex::rt("auk_heap_switch", vec![heap.clone()], MTy::void_ptr()));
         let mut fields = Vec::new();
         for (k, (v, (pt, var))) in vals.into_iter().zip(&ps).enumerate() {
             let c = if *var { v } else { self.g.copy_ex(pt, v) };
             fields.push((Sel::F(k as u32), c));
         }
         let a = self.f.b.decl(Ex::agg(MTy::Agg(argty), fields));
-        self.do_(Ex::rt("duck_heap_switch", vec![old], MTy::void_ptr()));
-        // `duck run --live` narrows what the task can reach to its closure, when it gets exactly
+        self.do_(Ex::rt("auk_heap_switch", vec![old], MTy::void_ptr()));
+        // `auk run --live` narrows what the task can reach to its closure, when it gets exactly
         // one and nothing else that could hold a closure (sup children: `go(f)`)
         let closures: Vec<usize> = ps.iter().enumerate().filter(|(_, (t, var))| !*var && matches!(t, Ty::Fn(..))).map(|(k, _)| k).collect();
         let others_plain = ps.iter().all(|(t, var)| matches!(t, Ty::Fn(..)) || (!*var && !self.g.holds_fn(t)));
@@ -1925,7 +1925,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         };
         let ops = if self.g.needs_rc(&rt) { self.g.ops(&rt) } else { Ex::zero(MTy::ptr(MTy::Rt(Rt::ElemOps))) };
         let call = Ex::rt(
-            "duck_task_spawn",
+            "auk_task_spawn",
             vec![Ex::fn_addr(thunk), a.addr().cast(MTy::void_ptr()), Ex::size_of(MTy::Agg(argty)), Ex::size_of(d(&rt)), ops, heap, Ex::fn_addr(args_drop), hint],
             d(ret),
         );
@@ -1983,7 +1983,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         (n, argty)
     }
 
-    /// A function usable as a closure (`R f(DuckEnv *, args...)`) that calls `target`.
+    /// A function usable as a closure (`R f(AukEnv *, args...)`) that calls `target`.
     fn fn_value(&mut self, target: &Target, func: Option<FnId>, fty: &Ty) -> FuncId {
         let key = format!("fv{target:?}/{fty:?}");
         if let Some(&n) = self.g.memo2.get(&key) {
@@ -1994,7 +1994,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         let k = self.g.fresh();
         let mut pts = vec![MTy::obj_ptr()];
         pts.extend(ps.iter().map(d));
-        let n = self.g.declare(format!("dk_fv{k}"), pts, d(&r), Abi::Duck);
+        let n = self.g.declare(format!("dk_fv{k}"), pts, d(&r), Abi::Auk);
         self.g.memo2.insert(key, n);
         let pv = self.begin_fn(n, r.clone());
         self.push(ScopeKind::Block);
@@ -2029,7 +2029,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let pt = self.g.method_ty(p, vt.shape);
                 pts.push(d(&pt));
             }
-            let mn = self.g.declare(format!("dk_vt{vid}_m{k}"), pts, d(&r), Abi::Duck);
+            let mn = self.g.declare(format!("dk_vt{vid}_m{k}"), pts, d(&r), Abi::Auk);
             let pv = self.begin_fn(mn, r.clone());
             self.push(ScopeKind::Block);
             let recv = self.g.unbox(&vt.ty, pv[0].clone());
@@ -2070,14 +2070,14 @@ impl<'g, 'a> Lower<'g, 'a> {
         let v = self.expr(x);
         let et = d(&self.g.err_ty());
         let err = match kind {
-            FailKind::Message => Ex::rt("duck_err_new", vec![v.c], et),
+            FailKind::Message => Ex::rt("auk_err_new", vec![v.c], et),
             FailKind::Err => self.own(v),
             FailKind::Typed | FailKind::TypedToErr(_) => {
                 let ty = v.ty.clone();
                 let lv = self.lvalue(&v, &ty);
                 let id = self.g.type_id(&ty);
                 let ops = self.g.ops(&ty);
-                Ex::rt("duck_err_typed", vec![Ex::int_as(id as i64, MTy::U32), lv.addr().cast(MTy::void_ptr()), ops, Ex::zero(MTy::D(Ty::Str))], et)
+                Ex::rt("auk_err_typed", vec![Ex::int_as(id as i64, MTy::U32), lv.addr().cast(MTy::void_ptr()), ops, Ex::zero(MTy::D(Ty::Str))], et)
             }
         };
         let ety = self.g.err_ty();
@@ -2086,7 +2086,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         Val::never()
     }
 
-    /// Return an owned `DuckErr *` from the current (fallible) function.
+    /// Return an owned `AukErr *` from the current (fallible) function.
     fn return_err(&mut self, err: Ex) {
         let ret = self.f.ret.clone();
         self.cleanup_from(0);
@@ -2096,7 +2096,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 self.emit(Stmt::Ret(Some(e)));
             }
             _ => {
-                self.do_(Ex::rt("duck_release", vec![err], MTy::Void));
+                self.do_(Ex::rt("auk_release", vec![err], MTy::Void));
                 let z = self.g.zero(&ret);
                 self.emit(Stmt::Ret(Some(z)));
             }
@@ -2150,18 +2150,18 @@ impl<'g, 'a> Lower<'g, 'a> {
                     Sub => Ex::bin(BOp::Sub, a, b),
                     Mul => Ex::bin(BOp::Mul, a, b),
                     Div => Ex::bin(BOp::Div, a, b),
-                    Rem => Ex::rt("duck_fmod", vec![a, b], MTy::D(Ty::Float)),
-                    Pow => Ex::rt("duck_fpow", vec![a, b], MTy::D(Ty::Float)),
+                    Rem => Ex::rt("auk_fmod", vec![a, b], MTy::D(Ty::Float)),
+                    Pow => Ex::rt("auk_fpow", vec![a, b], MTy::D(Ty::Float)),
                     _ => Ex::float(0.0),
                 };
                 self.tmp(&Ty::Float, c)
             }
             Ty::Str => {
-                let c = Ex::rt("duck_str_concat", vec![a, b], MTy::D(Ty::Str));
+                let c = Ex::rt("auk_str_concat", vec![a, b], MTy::D(Ty::Str));
                 self.tmp(&Ty::Str, c)
             }
             t @ Ty::List(_) => {
-                let c = Ex::rt("duck_arr_concat", vec![a, b], d(&t));
+                let c = Ex::rt("auk_arr_concat", vec![a, b], d(&t));
                 self.tmp(&t, c)
             }
             _ => Val::never(),
@@ -2221,9 +2221,9 @@ impl<'g, 'a> Lower<'g, 'a> {
         match ty {
             Ty::Int | Ty::Float | Ty::Char | Ty::Bool => Ex::bin(bop, a, b),
             Ty::Str => match op {
-                Eq => Ex::rt("duck_str_eq", vec![a, b], MTy::D(Ty::Bool)),
-                Ne => Ex::rt("duck_str_eq", vec![a, b], MTy::D(Ty::Bool)).not(),
-                _ => Ex::bin(bop, Ex::rt("duck_str_cmp", vec![a, b], MTy::I32), Ex::int_as(0, MTy::I32)),
+                Eq => Ex::rt("auk_str_eq", vec![a, b], MTy::D(Ty::Bool)),
+                Ne => Ex::rt("auk_str_eq", vec![a, b], MTy::D(Ty::Bool)).not(),
+                _ => Ex::bin(bop, Ex::rt("auk_str_cmp", vec![a, b], MTy::I32), Ex::int_as(0, MTy::I32)),
             },
             Ty::Never => Ex::bool(false),
             Ty::Tuple(ts) if ts.is_empty() => Ex::bool(matches!(op, Eq | Le | Ge)),
@@ -2240,7 +2240,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         let loc = self.loc(e.span);
         match xv.ty.clone() {
             Ty::List(et) => {
-                let el = Ex::rt("duck_arr_at", vec![xv.c, iv.c, loc], MTy::void_ptr()).cast(MTy::ptr(d(&et))).deref(d(&et));
+                let el = Ex::rt("auk_arr_at", vec![xv.c, iv.c, loc], MTy::void_ptr()).cast(MTy::ptr(d(&et))).deref(d(&et));
                 let el = self.f.b.decl(el);
                 let v = Val::plain(el, (*et).clone());
                 let o = self.own(v);
@@ -2248,14 +2248,14 @@ impl<'g, 'a> Lower<'g, 'a> {
             }
             Ty::Map(kt, vt) => {
                 let k = self.lvalue(&iv, &kt);
-                let p = Ex::rt("duck_map_at", vec![xv.c, k.addr().cast(MTy::void_ptr()), loc], MTy::void_ptr()).cast(MTy::ptr(d(&vt))).deref(d(&vt));
+                let p = Ex::rt("auk_map_at", vec![xv.c, k.addr().cast(MTy::void_ptr()), loc], MTy::void_ptr()).cast(MTy::ptr(d(&vt))).deref(d(&vt));
                 let p = self.f.b.decl(p);
                 let v = Val::plain(p, (*vt).clone());
                 let o = self.own(v);
                 self.adopt(&vt, o)
             }
             Ty::Str => {
-                let c = Ex::rt("duck_str_char_at", vec![xv.c, iv.c, loc], MTy::D(Ty::Char));
+                let c = Ex::rt("auk_str_char_at", vec![xv.c, iv.c, loc], MTy::D(Ty::Char));
                 self.tmp(&Ty::Char, c)
             }
             _ => Val::never(),
@@ -2295,16 +2295,16 @@ impl<'g, 'a> Lower<'g, 'a> {
                         let iv = self.expr(index);
                         let ic = self.val_as(&iv, &Ty::Int);
                         let i = self.decl(&Ty::Int, ic);
-                        self.do_(Ex::rt("duck_arr_make_unique", vec![b.clone().addr()], MTy::void_ptr()));
-                        let p = Ex::rt("duck_arr_at", vec![b, i, loc], MTy::void_ptr()).cast(MTy::ptr(d(&et)));
+                        self.do_(Ex::rt("auk_arr_make_unique", vec![b.clone().addr()], MTy::void_ptr()));
+                        let p = Ex::rt("auk_arr_at", vec![b, i, loc], MTy::void_ptr()).cast(MTy::ptr(d(&et)));
                         let p = self.f.b.decl(p);
                         (p.deref(d(&et)), *et)
                     }
                     Ty::Map(kt, vt) => {
                         let kv = self.expr(index);
                         let k = self.lvalue(&kv, &kt);
-                        self.do_(Ex::rt("duck_map_make_unique", vec![b.clone().addr()], MTy::void_ptr()));
-                        let p = Ex::rt("duck_map_at", vec![b, k.addr().cast(MTy::void_ptr()), loc], MTy::void_ptr()).cast(MTy::ptr(d(&vt)));
+                        self.do_(Ex::rt("auk_map_make_unique", vec![b.clone().addr()], MTy::void_ptr()));
+                        let p = Ex::rt("auk_map_at", vec![b, k.addr().cast(MTy::void_ptr()), loc], MTy::void_ptr()).cast(MTy::ptr(d(&vt)));
                         let p = self.f.b.decl(p);
                         (p.deref(d(&vt)), *vt)
                     }
@@ -2378,14 +2378,14 @@ impl<'g, 'a> Lower<'g, 'a> {
                         let kv = self.expr(index);
                         let k = self.lvalue(&kv, &kt);
                         let vc = self.lvalue(&v, &vt);
-                        self.do_(Ex::rt("duck_map_set", vec![b.addr(), k.addr().cast(MTy::void_ptr()), vc.addr().cast(MTy::void_ptr())], MTy::Void));
+                        self.do_(Ex::rt("auk_map_set", vec![b.addr(), k.addr().cast(MTy::void_ptr()), vc.addr().cast(MTy::void_ptr())], MTy::Void));
                         return;
                     }
                     if let Ty::List(et) = bt {
                         let iv = self.expr(index);
                         let vc = self.lvalue(&v, &et);
                         let loc = self.loc(target.span);
-                        self.do_(Ex::rt("duck_arr_set", vec![b.addr(), iv.c, vc.addr().cast(MTy::void_ptr()), loc], MTy::Void));
+                        self.do_(Ex::rt("auk_arr_set", vec![b.addr(), iv.c, vc.addr().cast(MTy::void_ptr()), loc], MTy::Void));
                         return;
                     }
                 }
@@ -2402,7 +2402,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                             let (raw, _) = self.g.field_raw(&bt, i, &b);
                             let old = self.f.b.decl(raw.clone());
                             self.set(raw, put);
-                            self.do_(Ex::rt("duck_release", vec![old], MTy::Void));
+                            self.do_(Ex::rt("auk_release", vec![old], MTy::Void));
                             return;
                         }
                         self.place_field(target, &b, &bt, &name.name)
@@ -2437,16 +2437,16 @@ impl<'g, 'a> Lower<'g, 'a> {
                             BinOp::Sub => Ex::bin(BOp::Sub, lv.clone(), rc),
                             BinOp::Mul => Ex::bin(BOp::Mul, lv.clone(), rc),
                             BinOp::Div => Ex::bin(BOp::Div, lv.clone(), rc),
-                            _ => Ex::rt("duck_fmod", vec![lv.clone(), rc], MTy::D(Ty::Float)),
+                            _ => Ex::rt("auk_fmod", vec![lv.clone(), rc], MTy::D(Ty::Float)),
                         };
                         self.set(lv, c);
                     }
                     Ty::Str => {
-                        let n = self.decl(&Ty::Str, Ex::rt("duck_str_concat", vec![lv.clone(), rc], MTy::D(Ty::Str)));
-                        self.do_(Ex::rt("duck_release", vec![lv.clone()], MTy::Void));
+                        let n = self.decl(&Ty::Str, Ex::rt("auk_str_concat", vec![lv.clone(), rc], MTy::D(Ty::Str)));
+                        self.do_(Ex::rt("auk_release", vec![lv.clone()], MTy::Void));
                         self.set(lv, n);
                     }
-                    Ty::List(_) => self.do_(Ex::rt("duck_arr_extend", vec![lv.addr(), rc], MTy::Void)),
+                    Ty::List(_) => self.do_(Ex::rt("auk_arr_extend", vec![lv.addr(), rc], MTy::Void)),
                     _ => {}
                 }
             }
@@ -2488,7 +2488,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         if name.name != "get" || args.len() != 1 || arm.binder.is_some() || self.t.calls.contains_key(&value.id) {
             return false;
         }
-        let core_get = matches!(self.tp.instances[self.inst].resolved.get(&got.id), Some(Target::Extern { symbol, .. }) if symbol == "duck_map_get_opt");
+        let core_get = matches!(self.tp.instances[self.inst].resolved.get(&got.id), Some(Target::Extern { symbol, .. }) if symbol == "auk_map_get_opt");
         if !core_get || !self.same_operand(m1, m2) || !self.same_operand(k1, &args[0]) || !self.simple_operand(k1) || !self.simple_operand(&arm.body) || !self.simple_operand(rhs) {
             return false;
         }
@@ -2523,8 +2523,8 @@ impl<'g, 'a> Lower<'g, 'a> {
         let (b, _) = self.place(m1);
         let kv = self.expr(k1);
         let k = self.lvalue(&kv, &kt);
-        self.do_(Ex::rt("duck_map_make_unique", vec![b.clone().addr()], MTy::void_ptr()));
-        let p = self.f.b.decl(Ex::rt("duck_map_find", vec![b.clone(), k.clone().addr().cast(MTy::void_ptr())], MTy::void_ptr()).cast(MTy::ptr(d(&vt))));
+        self.do_(Ex::rt("auk_map_make_unique", vec![b.clone().addr()], MTy::void_ptr()));
+        let p = self.f.b.decl(Ex::rt("auk_map_find", vec![b.clone(), k.clone().addr().cast(MTy::void_ptr())], MTy::void_ptr()).cast(MTy::ptr(d(&vt))));
         self.open_if(Ex::bin(BOp::Ne, p.clone(), Ex::null().cast(MTy::ptr(d(&vt)))));
         let x = self.expr(rhs);
         let cur = p.clone().deref(d(&vt));
@@ -2534,7 +2534,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         let dv = self.expr(&arm.body);
         let x = self.expr(rhs);
         let n = self.decl(&vt, combine(dv.c, x.c, loc));
-        self.do_(Ex::rt("duck_map_set", vec![b.addr(), k.addr().cast(MTy::void_ptr()), n.addr().cast(MTy::void_ptr())], MTy::Void));
+        self.do_(Ex::rt("auk_map_set", vec![b.addr(), k.addr().cast(MTy::void_ptr()), n.addr().cast(MTy::void_ptr())], MTy::Void));
         self.close();
         true
     }
@@ -2570,8 +2570,8 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let Ty::List(inner) = ty.clone() else { return Val::never() };
                 let xs = self.hold(v);
                 let ops = self.g.ops(&inner);
-                let len = Ex::rt("duck_arr_len", vec![xs.clone()], MTy::D(Ty::Int));
-                let out = self.decl(&ty, Ex::rt("duck_arr_new", vec![ops, len.clone()], d(&ty)));
+                let len = Ex::rt("auk_arr_len", vec![xs.clone()], MTy::D(Ty::Int));
+                let out = self.decl(&ty, Ex::rt("auk_arr_new", vec![ops, len.clone()], d(&ty)));
                 let k = self.decl(&Ty::Int, Ex::int(0));
                 self.f.b.open_loop(vec![Stmt::Set(k.clone(), Ex::bin(BOp::Add, k.clone(), Ex::int(1)))]);
                 self.open_if(Ex::bin(BOp::Lt, k.clone(), len).not());
@@ -2581,20 +2581,20 @@ impl<'g, 'a> Lower<'g, 'a> {
                 self.open_if(self.fld(&r, Sel::F(0)).not());
                 if info.kind == TryKind::ListResult {
                     let ety = self.g.err_ty();
-                    let en = self.decl(&ety, Ex::rt("duck_retain", vec![self.fld(&r, Sel::F(2))], d(&ety)));
-                    self.do_(Ex::rt("duck_release", vec![out.clone()], MTy::Void));
-                    self.do_(Ex::rt("duck_release", vec![xs.clone()], MTy::Void));
+                    let en = self.decl(&ety, Ex::rt("auk_retain", vec![self.fld(&r, Sel::F(2))], d(&ety)));
+                    self.do_(Ex::rt("auk_release", vec![out.clone()], MTy::Void));
+                    self.do_(Ex::rt("auk_release", vec![xs.clone()], MTy::Void));
                     self.return_err(en);
                 } else {
-                    self.do_(Ex::rt("duck_release", vec![out.clone()], MTy::Void));
-                    self.do_(Ex::rt("duck_release", vec![xs.clone()], MTy::Void));
+                    self.do_(Ex::rt("auk_release", vec![out.clone()], MTy::Void));
+                    self.do_(Ex::rt("auk_release", vec![xs.clone()], MTy::Void));
                     self.return_none();
                 }
                 self.close();
-                self.do_(Ex::rt("duck_arr_push", vec![out.clone().addr(), self.fld(&r, Sel::F(1)).addr().cast(MTy::void_ptr())], MTy::Void));
+                self.do_(Ex::rt("auk_arr_push", vec![out.clone().addr(), self.fld(&r, Sel::F(1)).addr().cast(MTy::void_ptr())], MTy::Void));
                 self.emit(Stmt::Continue);
                 self.close();
-                self.do_(Ex::rt("duck_release", vec![xs], MTy::Void));
+                self.do_(Ex::rt("auk_release", vec![xs], MTy::Void));
                 self.reown(out, ty)
             }
         }
@@ -2643,20 +2643,20 @@ impl<'g, 'a> Lower<'g, 'a> {
                 } else {
                     let id = self.g.type_id(&lt);
                     let n = self.zero_decl(&lt);
-                    let pl = self.f.b.decl(Ex::rt("duck_err_payload", vec![err.clone(), Ex::int_as(id as i64, MTy::U32)], MTy::void_ptr()));
+                    let pl = self.f.b.decl(Ex::rt("auk_err_payload", vec![err.clone(), Ex::int_as(id as i64, MTy::U32)], MTy::void_ptr()));
                     self.open_if(Ex::bin(BOp::Ne, pl.clone(), Ex::null()));
                     self.set(n.clone(), pl.cast(MTy::ptr(d(&lt))).deref(d(&lt)));
                     self.close();
                     if let Some(r) = self.g.retain(&lt, &n) {
                         self.emit(r);
                     }
-                    self.do_(Ex::rt("duck_release", vec![err], MTy::Void));
+                    self.do_(Ex::rt("auk_release", vec![err], MTy::Void));
                     n
                 };
                 self.register_local(&n, &lt);
                 self.bind_name(l, Slot { c: n, ty: lt });
             }
-            None => self.do_(Ex::rt("duck_release", vec![err], MTy::Void)),
+            None => self.do_(Ex::rt("auk_release", vec![err], MTy::Void)),
         }
     }
 
@@ -2720,7 +2720,7 @@ impl<'g, 'a> Lower<'g, 'a> {
             AwaitKind::Task => {
                 let t = self.expr(x);
                 let r = self.zero_decl(&ty);
-                self.do_(Ex::rt("duck_task_await", vec![t.c, r.clone().addr().cast(MTy::void_ptr())], MTy::Void));
+                self.do_(Ex::rt("auk_task_await", vec![t.c, r.clone().addr().cast(MTy::void_ptr())], MTy::Void));
                 self.reown(r, ty)
             }
             AwaitKind::Tuple => {
@@ -2729,11 +2729,11 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let fields: Vec<Ex> = (0..ts.len()).map(|i| self.fld(&tv.c, Sel::F(i as u32))).collect();
                 let a = self.tasks_agg(ts.len());
                 let arr = self.f.b.decl(Ex::agg(MTy::Agg(a), fields.iter().enumerate().map(|(i, f)| (Sel::F(i as u32), f.clone().cast(MTy::ptr(MTy::Rt(Rt::Task))))).collect()));
-                self.do_(Ex::rt("duck_task_join_all", vec![arr.addr().cast(MTy::ptr(MTy::ptr(MTy::Rt(Rt::Task)))), Ex::int(ts.len() as i64)], MTy::Void));
+                self.do_(Ex::rt("auk_task_join_all", vec![arr.addr().cast(MTy::ptr(MTy::ptr(MTy::Rt(Rt::Task)))), Ex::int(ts.len() as i64)], MTy::Void));
                 let r = self.zero_decl(&ty);
                 for (i, f) in fields.into_iter().enumerate() {
                     let slot = self.fld(&r, Sel::F(i as u32)).addr().cast(MTy::void_ptr());
-                    self.do_(Ex::rt("duck_task_await", vec![f, slot], MTy::Void));
+                    self.do_(Ex::rt("auk_task_await", vec![f, slot], MTy::Void));
                 }
                 self.reown(r, ty)
             }
@@ -2741,11 +2741,11 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let tv = self.expr(x);
                 let Ty::List(inner) = ty.clone() else { return Val::never() };
                 let ops = self.g.ops(&inner);
-                let n = self.decl(&Ty::Int, Ex::rt("duck_arr_len", vec![tv.c.clone()], MTy::D(Ty::Int)));
-                let out = self.decl(&ty, Ex::rt("duck_arr_new", vec![ops, n.clone()], d(&ty)));
+                let n = self.decl(&Ty::Int, Ex::rt("auk_arr_len", vec![tv.c.clone()], MTy::D(Ty::Int)));
+                let out = self.decl(&ty, Ex::rt("auk_arr_new", vec![ops, n.clone()], d(&ty)));
                 self.open_if(Ex::bin(BOp::Gt, n.clone(), Ex::int(0)));
                 let tasks = tv.c.rt_field(RtF::ArrData).cast(MTy::ptr(MTy::ptr(MTy::Rt(Rt::Task))));
-                self.do_(Ex::rt("duck_task_await_all", vec![tasks, n.clone(), out.clone().rt_field(RtF::ArrData)], MTy::Void));
+                self.do_(Ex::rt("auk_task_await_all", vec![tasks, n.clone(), out.clone().rt_field(RtF::ArrData)], MTy::Void));
                 self.set(out.clone().rt_field(RtF::ArrLen), n);
                 self.close();
                 self.reown(out, ty)
@@ -2852,7 +2852,7 @@ impl<'g, 'a> Lower<'g, 'a> {
             self.close();
         }
         let loc = self.loc(e.span);
-        self.do_(Ex::rt("duck_panic_str", vec![loc, Ex::cstr("no match arm matches the value")], MTy::Void));
+        self.do_(Ex::rt("auk_panic_str", vec![loc, Ex::cstr("no match arm matches the value")], MTy::Void));
         self.emit(Stmt::Unreachable);
         self.emit(Stmt::Label(end));
         match r {
@@ -2895,7 +2895,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let k = self.decl(&Ty::Int, Ex::int(0));
                 self.f.b.open_loop(vec![Stmt::Set(k.clone(), Ex::bin(BOp::Add, k.clone(), Ex::int(1)))]);
                 self.cancel_point(e.span);
-                let len = Ex::rt("duck_arr_len", vec![it.clone()], MTy::D(Ty::Int));
+                let len = Ex::rt("auk_arr_len", vec![it.clone()], MTy::D(Ty::Int));
                 self.open_if(Ex::bin(BOp::Lt, k.clone(), len).not());
                 self.emit(Stmt::Break);
                 self.close();
@@ -2922,7 +2922,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let vp = self.f.b.decl(Ex::null());
                 self.f.b.open_loop(vec![]);
                 self.cancel_point(e.span);
-                let next = Ex::rt("duck_map_next", vec![m.clone(), it.addr(), kp.clone().addr(), vp.clone().addr()], MTy::Bool);
+                let next = Ex::rt("auk_map_next", vec![m.clone(), it.addr(), kp.clone().addr(), vp.clone().addr()], MTy::Bool);
                 self.open_if(next.not());
                 self.emit(Stmt::Break);
                 self.close();
@@ -2958,7 +2958,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 self.push(ScopeKind::Block);
                 let depth = self.f.scopes.len() - 1;
                 let x = self.zero_decl(&et);
-                let got = Ex::rt("duck_chan_recv", vec![r, x.clone().addr().cast(MTy::void_ptr())], MTy::Bool);
+                let got = Ex::rt("auk_chan_recv", vec![r, x.clone().addr().cast(MTy::void_ptr())], MTy::Bool);
                 self.open_if(got.not());
                 self.emit(Stmt::Break);
                 self.close();
@@ -3050,7 +3050,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                     }
                     if !is_opt {
                         self.open_if(okv.not());
-                        self.do_(Ex::rt("duck_release", vec![self.fld(&w, Sel::F(2))], MTy::Void));
+                        self.do_(Ex::rt("auk_release", vec![self.fld(&w, Sel::F(2))], MTy::Void));
                         self.close();
                     }
                     let fb = self.expr(&arm.body);
@@ -3133,7 +3133,7 @@ impl<'g, 'a> Lower<'g, 'a> {
             self.open_if(cv.not());
             let ls = self.dshow(&l);
             let rs = self.dshow(&r);
-            self.do_(Ex::rt("duck_assert_fail_cmp", vec![loc, text, ls, rs], MTy::Void));
+            self.do_(Ex::rt("auk_assert_fail_cmp", vec![loc, text, ls, rs], MTy::Void));
             self.emit(Stmt::Unreachable);
             self.close();
             return;
@@ -3141,7 +3141,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         let v = self.expr(x);
         let c = self.val_as(&v, &Ty::Bool);
         self.open_if(c.not());
-        self.do_(Ex::rt("duck_assert_fail", vec![loc, text], MTy::Void));
+        self.do_(Ex::rt("auk_assert_fail", vec![loc, text], MTy::Void));
         self.emit(Stmt::Unreachable);
         self.close();
     }
@@ -3153,7 +3153,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         }
         match self.g.dshow_fn(&v.ty) {
             Some(f) => self.g.call_ref(&f, vec![v.c.clone()], MTy::D(Ty::Str)),
-            None => Ex::rt("duck_str_lit", vec![Ex::cstr(&format!("<{}>", self.g.show_ty(&v.ty)))], MTy::D(Ty::Str)),
+            None => Ex::rt("auk_str_lit", vec![Ex::cstr(&format!("<{}>", self.g.show_ty(&v.ty)))], MTy::D(Ty::Str)),
         }
     }
 
@@ -3174,7 +3174,7 @@ impl<'g, 'a> Lower<'g, 'a> {
             match p {
                 InterpPart::Lit(s) => {
                     if !s.is_empty() {
-                        self.do_(Ex::rt("duck_sb_bytes", vec![sbp.clone(), Ex::cstr(s), Ex::int(s.len() as i64)], MTy::Void));
+                        self.do_(Ex::rt("auk_sb_bytes", vec![sbp.clone(), Ex::cstr(s), Ex::int(s.len() as i64)], MTy::Void));
                     }
                 }
                 InterpPart::Expr { expr, .. } => {
@@ -3186,25 +3186,25 @@ impl<'g, 'a> Lower<'g, 'a> {
                         continue;
                     }
                     let st = MTy::D(Ty::Str);
-                    let own = |s: Ex| Ex::rt("duck_sb_str_own", vec![sbp.clone(), s], MTy::Void);
+                    let own = |s: Ex| Ex::rt("auk_sb_str_own", vec![sbp.clone(), s], MTy::Void);
                     let e = match (&v.ty, spec) {
-                        (Ty::Int, Some(s)) => own(Ex::rt("duck_fmt_int", vec![c, s], st)),
-                        (Ty::Int, None) => Ex::rt("duck_sb_int", vec![sbp.clone(), c], MTy::Void),
-                        (Ty::Float, Some(s)) => own(Ex::rt("duck_fmt_float", vec![c, s], st)),
-                        (Ty::Float, None) => own(Ex::rt("duck_str_from_float", vec![c], st)),
-                        (Ty::Str, Some(s)) => own(Ex::rt("duck_fmt_str", vec![c, s], st)),
-                        (Ty::Str, None) => Ex::rt("duck_sb_str", vec![sbp.clone(), c], MTy::Void),
-                        (Ty::Char, Some(s)) => own(Ex::rt("duck_fmt_char", vec![c, s], st)),
-                        (Ty::Char, None) => Ex::rt("duck_sb_char", vec![sbp.clone(), c], MTy::Void),
-                        (Ty::Bool, Some(s)) => own(Ex::rt("duck_fmt_bool", vec![c, s], st)),
-                        (Ty::Bool, None) => Ex::rt("duck_sb_lit", vec![sbp.clone(), Ex::cond(c, Ex::cstr("true"), Ex::cstr("false"))], MTy::Void),
+                        (Ty::Int, Some(s)) => own(Ex::rt("auk_fmt_int", vec![c, s], st)),
+                        (Ty::Int, None) => Ex::rt("auk_sb_int", vec![sbp.clone(), c], MTy::Void),
+                        (Ty::Float, Some(s)) => own(Ex::rt("auk_fmt_float", vec![c, s], st)),
+                        (Ty::Float, None) => own(Ex::rt("auk_str_from_float", vec![c], st)),
+                        (Ty::Str, Some(s)) => own(Ex::rt("auk_fmt_str", vec![c, s], st)),
+                        (Ty::Str, None) => Ex::rt("auk_sb_str", vec![sbp.clone(), c], MTy::Void),
+                        (Ty::Char, Some(s)) => own(Ex::rt("auk_fmt_char", vec![c, s], st)),
+                        (Ty::Char, None) => Ex::rt("auk_sb_char", vec![sbp.clone(), c], MTy::Void),
+                        (Ty::Bool, Some(s)) => own(Ex::rt("auk_fmt_bool", vec![c, s], st)),
+                        (Ty::Bool, None) => Ex::rt("auk_sb_lit", vec![sbp.clone(), Ex::cond(c, Ex::cstr("true"), Ex::cstr("false"))], MTy::Void),
                         (_, spec) => {
                             let shown = self.show_of(expr.id, &v);
                             match spec {
                                 Some(s) => {
                                     let t = self.decl(&Ty::Str, shown);
-                                    self.do_(own(Ex::rt("duck_fmt_str", vec![t.clone(), s], st)));
-                                    Ex::rt("duck_release", vec![t], MTy::Void)
+                                    self.do_(own(Ex::rt("auk_fmt_str", vec![t.clone(), s], st)));
+                                    Ex::rt("auk_release", vec![t], MTy::Void)
                                 }
                                 None => own(shown),
                             }
@@ -3213,12 +3213,12 @@ impl<'g, 'a> Lower<'g, 'a> {
                     self.do_(e);
                     if let Some(u) = self.t.units.get(&expr.id) {
                         let u = format!(" {u}");
-                        self.do_(Ex::rt("duck_sb_bytes", vec![sbp.clone(), Ex::cstr(&u), Ex::int(u.len() as i64)], MTy::Void));
+                        self.do_(Ex::rt("auk_sb_bytes", vec![sbp.clone(), Ex::cstr(&u), Ex::int(u.len() as i64)], MTy::Void));
                     }
                 }
             }
         }
-        self.tmp(&Ty::Str, Ex::rt("duck_sb_finish", vec![sbp], MTy::D(Ty::Str)))
+        self.tmp(&Ty::Str, Ex::rt("auk_sb_finish", vec![sbp], MTy::D(Ty::Str)))
     }
 
     fn struct_lit(&mut self, e: &Expr) -> Val {
@@ -3268,7 +3268,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                     let ft = defs[fi].ty.subst(&s);
                     let (f, boxed) = self.g.field_raw(&ty, fi, &r);
                     if boxed {
-                        self.do_(Ex::rt("duck_release", vec![f.clone()], MTy::Void));
+                        self.do_(Ex::rt("auk_release", vec![f.clone()], MTy::Void));
                     } else if let Some(rel) = self.g.release(&ft, &f) {
                         self.emit(rel);
                     }
@@ -3291,7 +3291,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         }
     }
 
-    /// `await any ts` → `duck_task_await_any(data, n, &out, &err, loc)`: the index, and the
+    /// `await any ts` → `auk_task_await_any(data, n, &out, &err, loc)`: the index, and the
     /// result (`T!` as is; a plain `T` wrapped) or the panic as the `Err`.
     fn await_any(&mut self, e: &Expr, x: &Expr) -> Val {
         let ty = self.ty(e.id);
@@ -3302,7 +3302,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         let Ty::List(tt) = tv.ty.clone() else { return Val::never() };
         let Ty::Task(inner) = *tt else { return Val::never() };
         let wrapped = matches!(*inner, Ty::Res(..));
-        let n = self.decl(&Ty::Int, Ex::rt("duck_arr_len", vec![tv.c.clone()], MTy::D(Ty::Int)));
+        let n = self.decl(&Ty::Int, Ex::rt("auk_arr_len", vec![tv.c.clone()], MTy::D(Ty::Int)));
         let data = tv.c.rt_field(RtF::ArrData).cast(MTy::ptr(MTy::ptr(MTy::Rt(Rt::Task))));
         let et = self.g.err_ty();
         let err = self.zero_decl(&et);
@@ -3316,7 +3316,7 @@ impl<'g, 'a> Lower<'g, 'a> {
             (Ex::zero(MTy::void_ptr()), None)
         };
         let loc = self.loc(e.span);
-        let idx = self.decl(&Ty::Int, Ex::rt("duck_task_await_any", vec![data, n, out, err.clone().addr().cast(MTy::void_ptr()), loc], MTy::D(Ty::Int)));
+        let idx = self.decl(&Ty::Int, Ex::rt("auk_task_await_any", vec![data, n, out, err.clone().addr().cast(MTy::void_ptr()), loc], MTy::D(Ty::Int)));
         self.open_if(Ex::bin(BOp::Ne, err.clone().cast(MTy::void_ptr()), Ex::zero(MTy::void_ptr())));
         self.set(r.clone(), Ex::agg(d(&res), vec![(Sel::F(2), err)]));
         if !wrapped {
@@ -3335,7 +3335,7 @@ impl<'g, 'a> Lower<'g, 'a> {
 
     /// `catch body`: lift the body into `R dk_catch{k}(env)` (R = `T!`; env points at the
     /// captured variables, captured by reference) and a C thunk `dk_catcht{k}(env, out)` that
-    /// stores its value; `duck_catch` runs the thunk under a recovery point and returns the panic
+    /// stores its value; `auk_catch` runs the thunk under a recovery point and returns the panic
     /// as an `Err` (NULL when the body finished).
     fn catch_(&mut self, e: &Expr, body: &Expr) -> Val {
         let Some(info) = self.t.closures.get(&e.id).cloned() else { return Val::never() };
@@ -3355,7 +3355,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         }
         let env = self.g.agg(format!("DkCatchEnv{k}"), caps.iter().map(|(_, _, t)| MTy::ptr(d(t))).chain([MTy::void_ptr()]).collect());
         // the body
-        let fname = self.g.declare(format!("dk_catch{k}"), vec![MTy::void_ptr()], d(&ret), Abi::Duck);
+        let fname = self.g.declare(format!("dk_catch{k}"), vec![MTy::void_ptr()], d(&ret), Abi::Auk);
         let pv = self.begin_fn(fname, ret.clone());
         self.push(ScopeKind::Block);
         let ev = pv[0].clone().cast(MTy::ptr(MTy::Agg(env))).deref(MTy::Agg(env));
@@ -3383,7 +3383,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         let et = self.g.err_ty();
         let err = self.decl(
             &et,
-            Ex::rt("duck_catch", vec![Ex::fn_addr(thunk), envv.addr().cast(MTy::void_ptr()), r.clone().addr().cast(MTy::void_ptr())], d(&et)),
+            Ex::rt("auk_catch", vec![Ex::fn_addr(thunk), envv.addr().cast(MTy::void_ptr()), r.clone().addr().cast(MTy::void_ptr())], d(&et)),
         );
         self.open_if(Ex::bin(BOp::Ne, err.clone().cast(MTy::void_ptr()), Ex::zero(MTy::void_ptr())));
         self.set(r.clone(), Ex::agg(d(&ret), vec![(Sel::F(2), err)]));
@@ -3430,7 +3430,7 @@ impl<'g, 'a> Lower<'g, 'a> {
             let copy = self.g.declare(format!("DkEnv{k}_copy"), vec![MTy::obj_ptr()], MTy::obj_ptr(), Abi::C);
             let (mut b, pv) = self.g.body_for(copy);
             let ev = pv[0].clone().cast(MTy::ptr(MTy::Agg(a))).deref(MTy::Agg(a));
-            let nv = b.decl(Ex::rt("duck_obj_alloc", vec![Ex::size_of(MTy::Agg(a)), Ex::fn_addr(drop), Ex::fn_addr(copy)], MTy::ptr(MTy::Agg(a))));
+            let nv = b.decl(Ex::rt("auk_obj_alloc", vec![Ex::size_of(MTy::Agg(a)), Ex::fn_addr(drop), Ex::fn_addr(copy)], MTy::ptr(MTy::Agg(a))));
             for (i, (_, _, ty)) in caps.iter().enumerate() {
                 let f = self.g.fld(&ev, Sel::F(i as u32 + 1));
                 let c = self.g.copy_ex(ty, f);
@@ -3445,7 +3445,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         let fty = if info.unpack { vec![Ty::Tuple(ptys.clone())] } else { ptys.clone() };
         let mut pts = vec![MTy::obj_ptr()];
         pts.extend(fty.iter().map(d));
-        let fname = self.g.declare(format!("dk_clo{k}"), pts, d(&ret), Abi::Duck);
+        let fname = self.g.declare(format!("dk_clo{k}"), pts, d(&ret), Abi::Auk);
         let pv = self.begin_fn(fname, ret.clone());
         let owner = match self.tp.instances[self.inst].body {
             BodyRef::Fn(f) => format!("{}.{}", self.trace_mod_name(self.tp.fns[f].module), self.tp.fns[f].name),
@@ -3492,7 +3492,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         let Some((a, (drop, copy))) = env else {
             return Val::plain(self.closure_val(fname, &fnty, Ex::zero(MTy::obj_ptr())), fnty);
         };
-        let ev = self.f.b.decl(Ex::rt("duck_obj_alloc", vec![Ex::size_of(MTy::Agg(a)), Ex::fn_addr(drop), Ex::fn_addr(copy)], MTy::ptr(MTy::Agg(a))));
+        let ev = self.f.b.decl(Ex::rt("auk_obj_alloc", vec![Ex::size_of(MTy::Agg(a)), Ex::fn_addr(drop), Ex::fn_addr(copy)], MTy::ptr(MTy::Agg(a))));
         for (i, (_, c, ty)) in caps.into_iter().enumerate() {
             let o = self.own(Val::plain(c, ty));
             let f = self.fld(&ev.clone().deref(MTy::Agg(a)), Sel::F(i as u32 + 1));
@@ -3558,20 +3558,20 @@ fn int_op(op: BinOp, a: Ex, b: Ex, loc: Ex) -> Ex {
     let int = MTy::D(Ty::Int);
     let rt = |s: &str, args: Vec<Ex>| Ex::rt(s, args, int.clone());
     match op {
-        Add => rt("duck_add", vec![a, b, loc]),
-        Sub => rt("duck_sub", vec![a, b, loc]),
-        Mul => rt("duck_mul", vec![a, b, loc]),
-        Div => rt("duck_div", vec![a, b, loc]),
-        Rem => rt("duck_mod", vec![a, b, loc]),
-        Pow => rt("duck_pow", vec![a, b, loc]),
+        Add => rt("auk_add", vec![a, b, loc]),
+        Sub => rt("auk_sub", vec![a, b, loc]),
+        Mul => rt("auk_mul", vec![a, b, loc]),
+        Div => rt("auk_div", vec![a, b, loc]),
+        Rem => rt("auk_mod", vec![a, b, loc]),
+        Pow => rt("auk_pow", vec![a, b, loc]),
         AddWrap => Ex::bin(BOp::Add, a, b),
         SubWrap => Ex::bin(BOp::Sub, a, b),
         MulWrap => Ex::bin(BOp::Mul, a, b),
         BitAnd => Ex::bin(BOp::BitAnd, a, b),
         BitOr => Ex::bin(BOp::BitOr, a, b),
         BitXor => Ex::bin(BOp::BitXor, a, b),
-        Shl => rt("duck_shl", vec![a, b, loc]),
-        Shr => rt("duck_shr", vec![a, b, loc]),
+        Shl => rt("auk_shl", vec![a, b, loc]),
+        Shr => rt("auk_shr", vec![a, b, loc]),
         _ => Ex::int(0),
     }
 }

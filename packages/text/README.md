@@ -12,7 +12,7 @@ Each output from `unified` was checked by applying it with `patch(1)`.
 
 **Effects:** none.
 
-```duck
+```auk
 fn main(args: [str]): int! {
   print(text.snake("XMLHttpRequest"))          // xml_http_request
   print(text.camel("user_id"))                 // userId

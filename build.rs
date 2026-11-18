@@ -1,7 +1,7 @@
-//! Builds the runtime (`runtime/`, the `duck_rt` crate) as a static library and puts it in
-//! `OUT_DIR/libduck_rt.a`, which the compiler embeds (`include_bytes!`) and links into every
-//! program it builds, plus the runtime's own LLVM bitcode (`OUT_DIR/duck_rt.bc`, one codegen
-//! unit), which `duck build` links into the program so small runtime functions can inline. A nested `cargo build` with its own target directory (so it never waits
+//! Builds the runtime (`runtime/`, the `auk_rt` crate) as a static library and puts it in
+//! `OUT_DIR/libauk_rt.a`, which the compiler embeds (`include_bytes!`) and links into every
+//! program it builds, plus the runtime's own LLVM bitcode (`OUT_DIR/auk_rt.bc`, one codegen
+//! unit), which `auk build` links into the program so small runtime functions can inline. A nested `cargo build` with its own target directory (so it never waits
 //! on the outer build's lock) and the `rt` profile (release, `panic = "abort"`).
 
 use std::env;
@@ -20,7 +20,7 @@ fn main() {
     let tdir = out.join("rt-target");
     let mut cmd = Command::new(cargo);
     cmd.current_dir(&manifest)
-        .args(["rustc", "-p", "duck_rt", "--lib", "--crate-type", "staticlib", "--profile", "rt", "--target", &target])
+        .args(["rustc", "-p", "auk_rt", "--lib", "--crate-type", "staticlib", "--profile", "rt", "--target", &target])
         .arg("--target-dir")
         .arg(&tdir)
         .args(["--", "--emit=link,llvm-bc", "-C", "codegen-units=1"]);
@@ -34,23 +34,23 @@ fn main() {
         cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
     }
     let status = cmd.status().expect("could not run cargo to build the runtime");
-    assert!(status.success(), "building the runtime (duck_rt) failed");
-    let lib = tdir.join(&target).join("rt").join("libduck_rt.a");
-    std::fs::copy(&lib, out.join("libduck_rt.a")).unwrap_or_else(|e| panic!("copying {}: {e}", lib.display()));
-    // the bitcode is `deps/duck_rt-<hash>.bc`: the newest one
+    assert!(status.success(), "building the runtime (auk_rt) failed");
+    let lib = tdir.join(&target).join("rt").join("libauk_rt.a");
+    std::fs::copy(&lib, out.join("libauk_rt.a")).unwrap_or_else(|e| panic!("copying {}: {e}", lib.display()));
+    // the bitcode is `deps/auk_rt-<hash>.bc`: the newest one
     let deps = tdir.join(&target).join("rt").join("deps");
     let bc = std::fs::read_dir(&deps)
         .unwrap()
         .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|e| e == "bc") && p.file_name().unwrap().to_string_lossy().starts_with("duck_rt-"))
+        .filter(|p| p.extension().is_some_and(|e| e == "bc") && p.file_name().unwrap().to_string_lossy().starts_with("auk_rt-"))
         .max_by_key(|p| p.metadata().and_then(|m| m.modified()).unwrap())
-        .unwrap_or_else(|| panic!("no duck_rt bitcode in {}", deps.display()));
-    std::fs::copy(&bc, out.join("duck_rt.bc")).unwrap_or_else(|e| panic!("copying {}: {e}", bc.display()));
+        .unwrap_or_else(|| panic!("no auk_rt bitcode in {}", deps.display()));
+    std::fs::copy(&bc, out.join("auk_rt.bc")).unwrap_or_else(|e| panic!("copying {}: {e}", bc.display()));
     symbols(&manifest.join("runtime/src"), &out.join("rt_symbols.rs"));
 }
 
 /// Write the table of the runtime's exported symbols (`#[unsafe(no_mangle)]` functions and
-/// statics) with their addresses in the `duck_rt` library linked into the compiler: the JIT
+/// statics) with their addresses in the `auk_rt` library linked into the compiler: the JIT
 /// resolves generated code's runtime calls with it.
 fn symbols(src: &std::path::Path, out: &std::path::Path) {
     let mut files: Vec<_> = std::fs::read_dir(src).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "rs")).collect();
@@ -73,10 +73,10 @@ fn symbols(src: &std::path::Path, out: &std::path::Path) {
             let words: Vec<&str> = t.split(|c: char| c.is_whitespace() || c == '(' || c == ':' || c == '<').filter(|w| !w.is_empty()).collect();
             if let Some(i) = words.iter().position(|w| *w == "fn") {
                 let name = words[i + 1];
-                body += &format!("        (\"{name}\", duck_rt::{module}::{name} as *const u8),\n");
+                body += &format!("        (\"{name}\", auk_rt::{module}::{name} as *const u8),\n");
             } else if let Some(i) = words.iter().position(|w| *w == "static") {
                 let name = if words[i + 1] == "mut" { words[i + 2] } else { words[i + 1] };
-                body += &format!("        (\"{name}\", (&raw const duck_rt::{module}::{name}).cast::<u8>()),\n");
+                body += &format!("        (\"{name}\", (&raw const auk_rt::{module}::{name}).cast::<u8>()),\n");
             }
         }
     }

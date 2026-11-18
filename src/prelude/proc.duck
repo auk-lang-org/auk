@@ -1,8 +1,0 @@
-/// Child processes and this process (`uses proc`).
-
-/// Run `cmd` (found on PATH) with `args` and return its stdout; an Err if it can't start or
-/// exits with a non-zero status.
-pub extern fn run(cmd: str, args: [str]): str! uses proc = "duck_proc_run"
-/// End the program now with status `code` (0..=255): stdout and stderr are flushed, but nothing
-/// after the call runs. Returning from `main` is the usual way to exit.
-pub extern fn exit(code: int): never uses proc = "duck_proc_exit +loc"

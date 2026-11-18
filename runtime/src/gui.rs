@@ -1,16 +1,16 @@
-//! Windows (`uses gui`): open native windows, show pixels drawn by Duck code, and read input.
+//! Windows (`uses gui`): open native windows, show pixels drawn by Auk code, and read input.
 //! (Drawing into a frame natively is the pure `pixels` module, pixels.rs.)
 //!
 //! **A separate window process.** The program never loads a window system itself. The first
 //! `gui.open` starts a *host*: this same executable run again (`posix_spawn`, a fresh exec)
-//! with `DUCK_GUI_HOST` set, which owns every native window (gui_host.rs). The two talk over a
+//! with `AUK_GUI_HOST` set, which owns every native window (gui_host.rs). The two talk over a
 //! Unix socket (the `wire` protocol below), and pixels go through shared memory. This keeps
-//! Apple's frameworks out of processes that were forked without exec, as `duck run --live`
+//! Apple's frameworks out of processes that were forked without exec, as `auk run --live`
 //! children are (they don't support that), and leaves the program's main thread alone.
 //!
 //! - Normally the host is the program's own child, on a socket pair, and it exits (closing the
 //!   windows) when the program ends.
-//! - Under `duck run --live`, the parent sets `DUCK_GUI_SESSION` to a socket path. The first
+//! - Under `auk run --live`, the parent sets `AUK_GUI_SESSION` to a socket path. The first
 //!   child starts a host listening there, and later children (after a restart) connect to the
 //!   same host. A child that ends without saying goodbye (killed for a restart, or crashed)
 //!   leaves its windows open, and the next child's `gui.open` with the same title takes over
@@ -293,7 +293,7 @@ fn connect() -> Result<i32, String> {
     if DEAD.load(Ordering::SeqCst) {
         return Err("gui: the window process has stopped".into());
     }
-    let fd = match std::env::var("DUCK_GUI_SESSION") {
+    let fd = match std::env::var("AUK_GUI_SESSION") {
         Ok(path) if !path.is_empty() => connect_session(&path)?,
         _ => {
             let mut sv = [0 as c_int; 2];
@@ -312,14 +312,14 @@ fn connect() -> Result<i32, String> {
     unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
     wire::no_sigpipe(fd);
     std::thread::Builder::new()
-        .name("duck gui".into())
+        .name("auk gui".into())
         .spawn(move || reader(fd))
         .map_err(|e| format!("gui: cannot start the event thread: {e}"))?;
     *c = Some(fd);
     Ok(fd)
 }
 
-/// Connect to the `duck run --live` session's host at `path`, starting it first if no one is
+/// Connect to the `auk run --live` session's host at `path`, starting it first if no one is
 /// listening there yet.
 #[cfg(target_os = "macos")]
 fn connect_session(path: &str) -> Result<i32, String> {
@@ -370,9 +370,9 @@ unsafe extern "C" {
     fn posix_spawn_file_actions_addinherit_np(actions: *mut libc::posix_spawn_file_actions_t, fd: c_int) -> c_int;
 }
 
-/// Start the host: this executable again, with `DUCK_GUI_HOST=spec`, inheriting only the
+/// Start the host: this executable again, with `AUK_GUI_HOST=spec`, inheriting only the
 /// standard streams (and `child_fd` as fd 3), so it holds none of the program's sockets or
-/// files. Under `--live`, `DUCK_GUI_OWNER` is the live parent (the host outlives this child).
+/// files. Under `--live`, `AUK_GUI_OWNER` is the live parent (the host outlives this child).
 #[cfg(target_os = "macos")]
 fn spawn_host(spec: &str, child_fd: Option<c_int>) -> Result<(), String> {
     unsafe {
@@ -384,7 +384,7 @@ fn spawn_host(spec: &str, child_fd: Option<c_int>) -> Result<(), String> {
         }
         let exe = std::ffi::CStr::from_ptr(buf.as_ptr()).to_owned();
         let mut env: Vec<CString> = std::env::vars_os()
-            .filter(|(k, _)| k != "DUCK_GUI_HOST" && k != "DUCK_GUI_OWNER")
+            .filter(|(k, _)| k != "AUK_GUI_HOST" && k != "AUK_GUI_OWNER")
             .filter_map(|(k, v)| {
                 let mut kv = k.into_encoded_bytes();
                 kv.push(b'=');
@@ -392,9 +392,9 @@ fn spawn_host(spec: &str, child_fd: Option<c_int>) -> Result<(), String> {
                 CString::new(kv).ok()
             })
             .collect();
-        env.push(CString::new(format!("DUCK_GUI_HOST={spec}")).unwrap_or_default());
+        env.push(CString::new(format!("AUK_GUI_HOST={spec}")).unwrap_or_default());
         if child_fd.is_none() {
-            env.push(CString::new(format!("DUCK_GUI_OWNER={}", libc::getppid())).unwrap_or_default());
+            env.push(CString::new(format!("AUK_GUI_OWNER={}", libc::getppid())).unwrap_or_default());
         }
         let mut envp: Vec<*mut c_char> = env.iter().map(|c| c.as_ptr() as *mut c_char).collect();
         envp.push(std::ptr::null_mut());
@@ -506,24 +506,24 @@ fn tell(op: u8, body: wire::W) {
     }
 }
 
-/// Close this program's windows: it is ending normally (`duck run --live` calls this when the
+/// Close this program's windows: it is ending normally (`auk run --live` calls this when the
 /// program returns, so its windows don't wait to be taken over by the next run).
 pub fn shutdown() {
     tell(wire::BYE, wire::W::default());
 }
 
-// ---- the Duck-facing calls ------------------------------------------------------------------
+// ---- the Auk-facing calls ------------------------------------------------------------------
 
 /// Open a window with a `w`×`h` (logical points) content area; returns its id.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_gui_open(title: *const DuckStr, w: i64, h: i64) -> DuckRes_int {
+pub unsafe extern "C" fn auk_gui_open(title: *const AukStr, w: i64, h: i64) -> AukRes_int {
     if !(1..=16384).contains(&w) || !(1..=16384).contains(&h) {
-        return DuckRes::err(err_msg(&format!("gui.open: size {w}x{h} (expected 1 to 16384 each)")));
+        return AukRes::err(err_msg(&format!("gui.open: size {w}x{h} (expected 1 to 16384 each)")));
     }
     let title = unsafe { sstr(title) }.to_string();
     match open(&title, w, h) {
-        Ok(id) => DuckRes::ok(id),
-        Err(e) => DuckRes::err(err_msg(&e)),
+        Ok(id) => AukRes::ok(id),
+        Err(e) => AukRes::err(err_msg(&e)),
     }
 }
 
@@ -548,7 +548,7 @@ fn open(_title: &str, _w: i64, _h: i64) -> Result<i64, String> {
 
 /// Close a window (a no-op for one that is already closed).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_gui_close(win: i64) {
+pub unsafe extern "C" fn auk_gui_close(win: i64) {
     let was_open = with_wins(|ws| {
         ws.closed.insert(win);
         ws.open.remove(&win).is_some()
@@ -565,19 +565,19 @@ pub unsafe extern "C" fn duck_gui_close(win: i64) {
 
 /// The window's content width in physical pixels (0 once it is closed).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_gui_width(win: i64) -> i64 {
+pub unsafe extern "C" fn auk_gui_width(win: i64) -> i64 {
     with_wins(|ws| ws.open.get(&win).map_or(0, |w| w.w))
 }
 
 /// The window's content height in physical pixels (0 once it is closed).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_gui_height(win: i64) -> i64 {
+pub unsafe extern "C" fn auk_gui_height(win: i64) -> i64 {
     with_wins(|ws| ws.open.get(&win).map_or(0, |w| w.h))
 }
 
 /// Physical pixels per logical point (2.0 on a Retina display).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_gui_scale(win: i64) -> f64 {
+pub unsafe extern "C" fn auk_gui_scale(win: i64) -> f64 {
     with_wins(|ws| ws.open.get(&win).map_or(1.0, |w| w.scale))
 }
 
@@ -597,7 +597,7 @@ impl Shm {
         static N: AtomicI64 = AtomicI64::new(0);
         let len = (w * h * 4) as usize;
         unsafe {
-            let name = CString::new(format!("/duckgui.{}.{}", libc::getpid(), N.fetch_add(1, Ordering::SeqCst))).unwrap_or_default();
+            let name = CString::new(format!("/aukgui.{}.{}", libc::getpid(), N.fetch_add(1, Ordering::SeqCst))).unwrap_or_default();
             let fd = libc::shm_open(name.as_ptr(), libc::O_CREAT | libc::O_EXCL | libc::O_RDWR, 0o600 as libc::c_uint);
             if fd < 0 {
                 return Err(format!("gui.present: shared memory: {}", std::io::Error::last_os_error()));
@@ -702,23 +702,23 @@ fn add_rect(v: &mut Vec<Rect>, r: Rect) {
 /// the rest of what it shows stays. Only those rectangles are copied, and they go to the window
 /// process together, in one message.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_gui_present_rects(win: i64, f: *const DuckFrame, rects: *const DuckArr) -> DuckRes_unit {
+pub unsafe extern "C" fn auk_gui_present_rects(win: i64, f: *const AukFrame, rects: *const AukArr) -> AukRes_unit {
     let (w, h) = unsafe { ((*f).w, (*f).hgt) };
     if w < 1 || h < 1 {
-        return DuckRes::err(err_msg(&format!("gui.present: an empty {w}x{h} frame")));
+        return AukRes::err(err_msg(&format!("gui.present: an empty {w}x{h} frame")));
     }
     let n = if rects.is_null() { 0 } else { unsafe { (*rects).len } };
     if n % 4 != 0 {
-        return DuckRes::err(err_msg(&format!("gui.present_rects: {n} ints is not a list of x, y, w, h quads")));
+        return AukRes::err(err_msg(&format!("gui.present_rects: {n} ints is not a list of x, y, w, h quads")));
     }
     if with_wins(|ws| !ws.open.contains_key(&win)) {
-        return DuckRes::err(err_msg(&format!("gui.present: window {win} is closed")));
+        return AukRes::err(err_msg(&format!("gui.present: window {win} is closed")));
     }
     let q: &[i64] = if n == 0 { &[] } else { unsafe { std::slice::from_raw_parts((*rects).data as *const i64, n as usize) } };
     let rs: Vec<Rect> = q.chunks_exact(4).map(|r| (r[0].max(0), r[1].max(0), r[0].saturating_add(r[2]).min(w), r[1].saturating_add(r[3]).min(h))).filter(|r| r.0 < r.2 && r.1 < r.3).collect();
     match present(win, unsafe { crate::pixels::pixels(f) }, w, h, rs) {
-        Ok(()) => DuckRes::ok(0),
-        Err(e) => DuckRes::err(err_msg(&e)),
+        Ok(()) => AukRes::ok(0),
+        Err(e) => AukRes::err(err_msg(&e)),
     }
 }
 
@@ -794,7 +794,7 @@ fn present(_win: i64, _src: &[u32], _w: i64, _h: i64, _rs: Vec<Rect>) -> Result<
 /// unknown window reports `Close`, so a loop over its events ends. A task waiting here can be
 /// cancelled.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_gui_next_event(win: i64, ms: i64, loc: *const c_char) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_gui_next_event(win: i64, ms: i64, loc: *const c_char) -> *mut AukArr {
     let deadline = (ms >= 0).then(|| std::time::Instant::now() + Duration::from_millis(ms as u64));
     let mut g = lock(&WINS);
     let found = loop {
@@ -824,10 +824,10 @@ pub unsafe extern "C" fn duck_gui_next_event(win: i64, ms: i64, loc: *const c_ch
     int_arr(&found.unwrap_or_default())
 }
 
-fn int_arr(v: &[i64]) -> *mut DuckArr {
+fn int_arr(v: &[i64]) -> *mut AukArr {
     unsafe {
-        let mut out = crate::arr::duck_arr_new(&crate::rc::duck_ops_int, v.len() as i64);
-        let d = crate::arr::duck_arr_make_unique(&mut out) as *mut i64;
+        let mut out = crate::arr::auk_arr_new(&crate::rc::auk_ops_int, v.len() as i64);
+        let d = crate::arr::auk_arr_make_unique(&mut out) as *mut i64;
         std::ptr::copy_nonoverlapping(v.as_ptr(), d, v.len());
         (*out).len = v.len() as i64;
         out

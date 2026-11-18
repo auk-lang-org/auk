@@ -1,6 +1,6 @@
 //! Core console and file I/O end to end: stdin (`env.read_line`, `env.read_all`,
 //! `env.lines`), `eprint`, `proc.exit`, the `fs` extras, binary files, and `rand.bytes`,
-//! `rand.shuffle`, `rand.choice` and `rand.seed`. Every program runs under `DUCK_LEAK_CHECK`.
+//! `rand.shuffle`, `rand.choice` and `rand.seed`. Every program runs under `AUK_LEAK_CHECK`.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -14,18 +14,18 @@ fn scratch(name: &str) -> PathBuf {
     d
 }
 
-fn duck_cmd() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_duck"));
-    c.env("DUCK_LEAK_CHECK", "1");
+fn auk_cmd() -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_auk"));
+    c.env("AUK_LEAK_CHECK", "1");
     c
 }
 
-/// `duck run` a program (written to its own scratch dir) with `args`, feeding it `stdin`.
+/// `auk run` a program (written to its own scratch dir) with `args`, feeding it `stdin`.
 fn run(name: &str, src: &str, args: &[&str], stdin: &str) -> Output {
     let d = scratch(name);
-    let p = d.join("main.duck");
+    let p = d.join("main.auk");
     fs::write(&p, src).unwrap();
-    let mut child = duck_cmd()
+    let mut child = auk_cmd()
         .arg("run")
         .arg(&p)
         .args(args)
@@ -65,10 +65,10 @@ fn stdin_read_line_then_the_rest() {
     expect("read_line", src, "héllo\r\nworld\nthe\nend\n", "line 5: héllo\nline 5: world\nrest: the\nend\nnone\n0\n");
     // invalid UTF-8 (raw bytes, so not through `run`)
     let d = scratch("read_all_bad_utf8");
-    fs::write(d.join("main.duck"), "fn main(): ()! uses env { print(env.read_all()?) }\n").unwrap();
-    let mut c = duck_cmd()
+    fs::write(d.join("main.auk"), "fn main(): ()! uses env { print(env.read_all()?) }\n").unwrap();
+    let mut c = auk_cmd()
         .arg("run")
-        .arg(d.join("main.duck"))
+        .arg(d.join("main.auk"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -100,7 +100,7 @@ fn exit_codes_flush_and_pass_the_leak_check() {
     assert_eq!(out, "before {\"k\": [\"a\", \"b\"]}\n");
     assert_eq!(err, "");
     // never-typed: it fills any type, e.g. a `let ... else`
-    let src = "fn main() uses env, proc {\n  let home = env.get(\"DUCK_NO_SUCH_VAR\") else proc.exit(0)\n  print(home)\n}\n";
+    let src = "fn main() uses env, proc {\n  let home = env.get(\"AUK_NO_SUCH_VAR\") else proc.exit(0)\n  print(home)\n}\n";
     let o = run("exit0", src, &[], "");
     assert_eq!(o.status.code(), Some(0));
     assert_eq!(text(&o), (String::new(), String::new()));
@@ -201,16 +201,16 @@ fn new_effectful_functions_need_their_effect() {
         ("shuffle", "fn mix(xs: [int]): [int] = rand.shuffle(xs)\nfn main() { print(mix([1])) }\n", "rand"),
     ];
     for (name, src, effect) in cases {
-        let p = d.join(format!("{name}.duck"));
+        let p = d.join(format!("{name}.auk"));
         fs::write(&p, src).unwrap();
-        let o = duck_cmd().arg("check").arg(&p).output().unwrap();
+        let o = auk_cmd().arg("check").arg(&p).output().unwrap();
         let err = String::from_utf8_lossy(&o.stderr).into_owned() + &String::from_utf8_lossy(&o.stdout);
         assert!(!o.status.success(), "{name}: expected E0410");
         assert!(err.contains("E0410") && err.contains(&format!("uses {effect}")), "{name}:\n{err}");
     }
     // `eprint`, like `print`, needs no effect
-    let p = d.join("eprint.duck");
+    let p = d.join("eprint.auk");
     fs::write(&p, "fn warn(s: str) { eprint(\"warning: {s}\") }\nfn main() { warn(\"x\") }\n").unwrap();
-    let o = duck_cmd().arg("check").arg(&p).output().unwrap();
+    let o = auk_cmd().arg("check").arg(&p).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
 }

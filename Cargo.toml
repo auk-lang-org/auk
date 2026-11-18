@@ -1,10 +1,10 @@
 [package]
-name = "duck"
+name = "auk"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-duck_rt = { path = "runtime" }
+auk_rt = { path = "runtime" }
 libc = "0.2"
 # The LLVM back end (C API; LLVM 23, linked dynamically: see .cargo/config.toml)
 llvm-sys = { version = "231", features = ["prefer-dynamic"] }

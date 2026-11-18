@@ -1,4 +1,4 @@
-"""The model command `duck hatch` runs (DUCK_HATCH_CMD): prompt on stdin, reply on stdout.
+"""The model command `auk hatch` runs (AUK_HATCH_CMD): prompt on stdin, reply on stdout.
 Calls `claude -p` exactly like the one-shot conditions and logs every call.
 Usage: python3 -I model_cmd.py <log dir>"""
 import os

@@ -1,11 +1,11 @@
-"""Shared helpers for the Duck accuracy benchmark (run everything with `python3 -I`)."""
+"""Shared helpers for the Auk accuracy benchmark (run everything with `python3 -I`)."""
 import os
 import subprocess
 import sys
 
 BENCH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TASKS = os.path.join(BENCH, "tasks")
-DUCK = os.environ.get("BENCH_DUCK", os.path.join(BENCH, "bin", "duck"))
+AUK = os.environ.get("BENCH_AUK", os.path.join(BENCH, "bin", "auk"))
 
 PY_RUNNER = '''
 
@@ -47,7 +47,7 @@ def task_ids():
 def task(tid):
     d = os.path.join(TASKS, tid)
     t = {"id": tid, "desc": read(os.path.join(d, "desc.md")).strip()}
-    for ext, lang in (("duck", "duck"), ("py", "py")):
+    for ext, lang in (("auk", "auk"), ("py", "py")):
         for part in ("given", "stub", "ref", "visible", "tests"):
             t[f"{lang}_{part}"] = read(os.path.join(d, f"{part}.{ext}")).strip("\n")
     return t
@@ -57,16 +57,16 @@ def join(*parts):
     return "\n\n".join(p.strip("\n") for p in parts if p.strip()) + "\n"
 
 
-def duck_program(t, solution):
+def auk_program(t, solution):
     """given + solution + visible tests + hidden tests (the scored file)."""
-    return join(t["duck_given"], solution, t["duck_visible"], t["duck_tests"])
+    return join(t["auk_given"], solution, t["auk_visible"], t["auk_tests"])
 
 
-def duck_hatch_file(t):
+def auk_hatch_file(t):
     """The task description (as comments) + given + stub (with ?? holes) + visible tests: what
-    `duck hatch` sees. Hatch's prompt includes the whole file, so the description reaches the model."""
+    `auk hatch` sees. Hatch's prompt includes the whole file, so the description reaches the model."""
     desc = "\n".join(("// " + l).rstrip() for l in ("Task:\n\n" + t["desc"]).splitlines())
-    return join(desc, t["duck_given"], t["duck_stub"], t["duck_visible"])
+    return join(desc, t["auk_given"], t["auk_stub"], t["auk_visible"])
 
 
 def py_program(t, solution):
@@ -84,12 +84,12 @@ def run(cmd, cwd=None, timeout=120, stdin=None, env=None):
         return 124, out + f"\n[timeout after {timeout}s]"
 
 
-def duck_check(path):
-    return run([DUCK, "check", path], timeout=60)
+def auk_check(path):
+    return run([AUK, "check", path], timeout=60)
 
 
-def duck_test(path):
-    return run([DUCK, "test", path], timeout=180)
+def auk_test(path):
+    return run([AUK, "test", path], timeout=180)
 
 
 def py_syntax(path):
@@ -112,7 +112,7 @@ CALL_TIMEOUT = int(os.environ.get("BENCH_CALL_TIMEOUT", "300"))
 
 def model_argv(model=None):
     # no tools (the model must answer from the prompt alone), no user/project settings or
-    # CLAUDE.md files (they could mention Duck), no saved session
+    # CLAUDE.md files (they could mention Auk), no saved session
     return ["claude", "-p", "--model", model or MODEL, "--output-format", "json", "--tools", "",
             "--setting-sources", "", "--no-session-persistence"]
 
@@ -122,7 +122,7 @@ def call_model(prompt, log_prefix, model=None, timeout=None):
     <prefix>.reply.txt and <prefix>.meta.json. Returns (reply text or None, meta dict)."""
     timeout = timeout or CALL_TIMEOUT
     write(log_prefix + ".prompt.txt", prompt)
-    cwd = tempfile.mkdtemp(prefix="duck-bench-cwd-")
+    cwd = tempfile.mkdtemp(prefix="auk-bench-cwd-")
     t0 = time.time()
     meta = {"model": model or MODEL, "timeout_s": timeout}
     text = None
@@ -152,11 +152,11 @@ def call_model(prompt, log_prefix, model=None, timeout=None):
 
 def extract_code(reply, lang):
     """The first ```<lang> fence (or the first ``` fence) of a reply, or the whole reply.
-    Mirrors `duck hatch`'s extract_code."""
+    Mirrors `auk hatch`'s extract_code."""
     lines = reply.splitlines()
     def find(pred):
         return next((i for i, l in enumerate(lines) if pred(l.strip())), None)
-    tags = {"duck": ("```duck",), "py": ("```python", "```py")}[lang]
+    tags = {"auk": ("```auk",), "py": ("```python", "```py")}[lang]
     i = find(lambda l: l.startswith(tags))
     if i is None:
         i = find(lambda l: l.startswith("```"))
@@ -172,12 +172,12 @@ def extract_code(reply, lang):
 # ---------------------------------------------------------------- the prompt
 
 LANG = {
-    "duck": {
-        "name": "Duck",
-        "fence": "duck",
-        "intro": "You are writing code in Duck, a statically typed language compiled to native code. "
+    "auk": {
+        "name": "Auk",
+        "fence": "auk",
+        "intro": "You are writing code in Auk, a statically typed language compiled to native code. "
                  "Its complete reference is below; use only what it describes.\n\n"
-                 "# The Duck language reference\n\n{spec}\n\n",
+                 "# The Auk language reference\n\n{spec}\n\n",
         "hole": "`{ ?? }`",
     },
     "py": {
@@ -225,7 +225,7 @@ Reply with ONLY the code, in one fenced block:
 
 def make_prompt(t, lang, spec):
     L = LANG[lang]
-    given = t[f"{lang}_given"] or ("// (nothing)" if lang == "duck" else "# (nothing)")
+    given = t[f"{lang}_given"] or ("// (nothing)" if lang == "auk" else "# (nothing)")
     return TEMPLATE.format(
         intro=L["intro"].replace("{spec}", spec.strip()), desc=t["desc"], fence=L["fence"], given=given,
         hole=L["hole"], stub=t[f"{lang}_stub"], visible=t[f"{lang}_visible"], name=L["name"])

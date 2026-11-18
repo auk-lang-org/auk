@@ -6,7 +6,7 @@
 //! unreported.
 //!
 //! Cancelling a task is cooperative: `t.cancel()` sets a flag that the task checks at loop
-//! back-edges (generated code reads `duck_cancel_pending` first, so loops pay one load while no
+//! back-edges (generated code reads `auk_cancel_pending` first, so loops pay one load while no
 //! task is cancelled) and in blocking calls (sleep, await, net I/O wait in short slices). The
 //! check panics "cancelled", and once a task is cancelled no `catch` inside it can keep it alive.
 //!
@@ -21,22 +21,22 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
-use crate::rc::{duck__alloc, duck__free_obj, duck__xcalloc, duck__xmalloc};
+use crate::rc::{auk__alloc, auk__free_obj, auk__xcalloc, auk__xmalloc};
 use crate::*;
 
-/// `typedef void (*DuckThunk)(void *args, void *result);`
-pub type DuckThunk = unsafe extern "C" fn(*mut c_void, *mut c_void);
+/// `typedef void (*AukThunk)(void *args, void *result);`
+pub type AukThunk = unsafe extern "C" fn(*mut c_void, *mut c_void);
 
 #[repr(C)]
-pub struct DuckTask {
-    pub h: DuckHeader,
+pub struct AukTask {
+    pub h: AukHeader,
     pub th: libc::pthread_t,
     pub mu: libc::pthread_mutex_t,
-    pub fn_: DuckThunk,
+    pub fn_: AukThunk,
     pub args: *mut c_void,
     pub result: *mut c_void,
     pub result_size: usize,
-    pub ops: *const DuckElemOps,
+    pub ops: *const AukElemOps,
     pub joined: bool,
     /// Set (a `Box<Panic>`) when the task's code panicked.
     pub panic: *mut crate::catch::Panic,
@@ -48,14 +48,14 @@ pub struct DuckTask {
     pub done: AtomicBool,
     /// The tasks this task started (retained; a `Box<Vec<_>>`, null until the first), for the
     /// link: cancelled when this task ends with a panic.
-    pub kids: *mut Vec<*mut DuckTask>,
+    pub kids: *mut Vec<*mut AukTask>,
     /// The task's own heap (heap.rs): its arguments were copied into it, everything it
     /// allocates goes there, and it is swept when the task crashes or is freed.
     pub heap: *mut crate::heap::Heap,
     /// Releases the arguments (what the thunk does after the call), for a task that crashed.
     pub args_drop: Option<unsafe extern "C" fn(*mut c_void)>,
     /// The code address of the task's one closure argument, when it has exactly one and nothing
-    /// else that could hold a closure (0 otherwise): `duck run --live` narrows what the task can
+    /// else that could hold a closure (0 otherwise): `auk run --live` narrows what the task can
     /// reach to it.
     pub hint: usize,
 }
@@ -63,9 +63,9 @@ pub struct DuckTask {
 /// How many tasks are cancelled but still running: generated loops check a task's flag only
 /// while this is non-zero.
 #[unsafe(no_mangle)]
-pub static duck_cancel_pending: AtomicI64 = AtomicI64::new(0);
+pub static auk_cancel_pending: AtomicI64 = AtomicI64::new(0);
 
-/// The tasks whose code is running (for `duck run --live`: a reload that changes a type's
+/// The tasks whose code is running (for `auk run --live`: a reload that changes a type's
 /// layout cancels the ones that use it). A task is on it from its start to its end, so a task
 /// on it can't be freed while the list is locked.
 static RUNNING: Mutex<Vec<usize>> = Mutex::new(Vec::new());
@@ -76,9 +76,9 @@ pub fn cancel_running(pick: impl Fn(usize, usize) -> bool) -> usize {
     let g = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
     let mut n = 0;
     for &t in g.iter() {
-        let t = t as *mut DuckTask;
+        let t = t as *mut AukTask;
         if pick(unsafe { (*t).fn_ } as usize, unsafe { (*t).hint }) {
-            unsafe { duck_task_cancel(t) };
+            unsafe { auk_task_cancel(t) };
             n += 1;
         }
     }
@@ -93,7 +93,7 @@ const SLICE: Duration = Duration::from_millis(50);
 
 thread_local! {
     /// The task this thread runs (null on the main thread).
-    static CURRENT: Cell<*mut DuckTask> = const { Cell::new(null_mut()) };
+    static CURRENT: Cell<*mut AukTask> = const { Cell::new(null_mut()) };
 }
 
 /// Has the task running on this thread been cancelled?
@@ -114,9 +114,9 @@ pub fn check_cancel(loc: *const c_char) {
     }
 }
 
-/// The loop back-edge check (called only while `duck_cancel_pending` is non-zero).
+/// The loop back-edge check (called only while `auk_cancel_pending` is non-zero).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_cancel_check(loc: *const c_char) {
+pub unsafe extern "C" fn auk_cancel_check(loc: *const c_char) {
     check_cancel(loc);
 }
 
@@ -148,7 +148,7 @@ pub fn sleep_ms(ms: i64) {
 }
 
 extern "C" fn task_entry(p: *mut c_void) -> *mut c_void {
-    let t = p as *mut DuckTask;
+    let t = p as *mut AukTask;
     unsafe {
         CURRENT.with(|c| c.set(t));
         crate::heap::switch((*t).heap);
@@ -172,16 +172,16 @@ extern "C" fn task_entry(p: *mut c_void) -> *mut c_void {
             (*t).kids = null_mut();
             for &k in kids.iter() {
                 if !(*t).panic.is_null() {
-                    duck_task_cancel(k);
+                    auk_task_cancel(k);
                 }
-                crate::rc::duck_release(k.cast());
+                crate::rc::auk_release(k.cast());
             }
         }
         RUNNING.lock().unwrap_or_else(|e| e.into_inner()).retain(|&x| x != t as usize);
         let g = STATE.lock().unwrap_or_else(|e| e.into_inner());
         (*t).done.store(true, Ordering::SeqCst);
         if (*t).cancel.load(Ordering::SeqCst) {
-            duck_cancel_pending.fetch_sub(1, Ordering::SeqCst);
+            auk_cancel_pending.fetch_sub(1, Ordering::SeqCst);
         }
         drop(g);
         DONE.notify_all();
@@ -192,35 +192,35 @@ extern "C" fn task_entry(p: *mut c_void) -> *mut c_void {
 
 /// `t.done()`: has the task finished (its result or panic is in)?
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_task_done(t: *mut DuckTask) -> bool {
+pub unsafe extern "C" fn auk_task_done(t: *mut AukTask) -> bool {
     !t.is_null() && unsafe { (*t).done.load(Ordering::SeqCst) }
 }
 
-/// How many times `duck run --live` has swapped new code into this program (the driver bumps it
+/// How many times `auk run --live` has swapped new code into this program (the driver bumps it
 /// after each reload; 0 when not live).
 pub static LIVE_RELOADS: AtomicI64 = AtomicI64::new(0);
 
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_live_reloads() -> i64 {
+pub extern "C" fn auk_live_reloads() -> i64 {
     LIVE_RELOADS.load(Ordering::SeqCst)
 }
 
 /// `t.cancel()`: see the module docs. No effect on a finished task.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_task_cancel(t: *mut DuckTask) {
+pub unsafe extern "C" fn auk_task_cancel(t: *mut AukTask) {
     if t.is_null() {
         return;
     }
     let _g = STATE.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         if !(*t).done.load(Ordering::SeqCst) && !(*t).cancel.swap(true, Ordering::SeqCst) {
-            duck_cancel_pending.fetch_add(1, Ordering::SeqCst);
+            auk_cancel_pending.fetch_add(1, Ordering::SeqCst);
         }
     }
 }
 
 /// Block until one of `ts` is done (the lowest index wins); cancellable.
-unsafe fn wait_any(ts: &[*mut DuckTask]) -> usize {
+unsafe fn wait_any(ts: &[*mut AukTask]) -> usize {
     let mut g = STATE.lock().unwrap_or_else(|e| e.into_inner());
     loop {
         if let Some(i) = ts.iter().position(|&t| unsafe { (*t).done.load(Ordering::SeqCst) }) {
@@ -237,10 +237,10 @@ unsafe fn wait_any(ts: &[*mut DuckTask]) -> usize {
 }
 
 /// `await any ts`: wait for the first task of `ts` to finish and return its index. Its result
-/// goes to `out` (as `duck_task_await` writes it), or, when it panicked, the panic goes to
+/// goes to `out` (as `auk_task_await` writes it), or, when it panicked, the panic goes to
 /// `*err` as an owned `Err` (the panic counts as seen).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_task_await_any(ts: *mut *mut DuckTask, n: i64, out: *mut c_void, err: *mut *mut DuckErr, loc: *const c_char) -> i64 {
+pub unsafe extern "C" fn auk_task_await_any(ts: *mut *mut AukTask, n: i64, out: *mut c_void, err: *mut *mut AukErr, loc: *const c_char) -> i64 {
     unsafe {
         if n <= 0 {
             rt_panic!(loc, "`await any` of an empty list");
@@ -253,36 +253,36 @@ pub unsafe extern "C" fn duck_task_await_any(ts: *mut *mut DuckTask, n: i64, out
             (*t).observed = true;
             *err = crate::err::err_msg(&(*(*t).panic).err_text());
         } else {
-            duck_task_await(t, out);
+            auk_task_await(t, out);
         }
         i as i64
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_task_spawn(
-    fn_: DuckThunk,
+pub unsafe extern "C" fn auk_task_spawn(
+    fn_: AukThunk,
     args: *const c_void,
     args_size: usize,
     result_size: usize,
-    result_ops: *const DuckElemOps,
+    result_ops: *const AukElemOps,
     heap: *mut c_void,
     args_drop: Option<unsafe extern "C" fn(*mut c_void)>,
     hint: *const c_void,
-) -> *mut DuckTask {
+) -> *mut AukTask {
     unsafe {
-        let t = duck__alloc(size_of::<DuckTask>(), DUCK_K_TASK) as *mut DuckTask;
+        let t = auk__alloc(size_of::<AukTask>(), AUK_K_TASK) as *mut AukTask;
         (*t).heap = heap.cast();
         (*t).args_drop = args_drop;
         (*t).hint = hint as usize;
         libc::pthread_mutex_init(&raw mut (*t).mu, ptr::null());
         // The object is calloc'd; write the fn pointer without reading the zeroed field.
         ptr::write(&raw mut (*t).fn_, fn_);
-        (*t).args = duck__xmalloc(args_size);
+        (*t).args = auk__xmalloc(args_size);
         if args_size != 0 {
             ptr::copy_nonoverlapping(args as *const u8, (*t).args as *mut u8, args_size);
         }
-        (*t).result = duck__xcalloc(1, if result_size != 0 { result_size } else { 1 });
+        (*t).result = auk__xcalloc(1, if result_size != 0 { result_size } else { 1 });
         (*t).result_size = result_size;
         (*t).ops = result_ops;
         let mut attr: libc::pthread_attr_t = std::mem::zeroed();
@@ -300,7 +300,7 @@ pub unsafe extern "C" fn duck_task_spawn(
             kids.retain(|&k| {
                 let keep = !(*k).done.load(Ordering::SeqCst);
                 if !keep {
-                    crate::rc::duck_release(k.cast());
+                    crate::rc::auk_release(k.cast());
                 }
                 keep
             });
@@ -317,7 +317,7 @@ pub unsafe extern "C" fn duck_task_spawn(
     }
 }
 
-unsafe fn task_join(t: *mut DuckTask) {
+unsafe fn task_join(t: *mut AukTask) {
     unsafe {
         libc::pthread_mutex_lock(&raw mut (*t).mu);
         if !(*t).joined {
@@ -329,7 +329,7 @@ unsafe fn task_join(t: *mut DuckTask) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_task_await(t: *mut DuckTask, out: *mut c_void) {
+pub unsafe extern "C" fn auk_task_await(t: *mut AukTask, out: *mut c_void) {
     unsafe {
         if on_task() {
             wait_any(&[t]);
@@ -354,7 +354,7 @@ pub unsafe extern "C" fn duck_task_await(t: *mut DuckTask, out: *mut c_void) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_task_join_all(ts: *mut *mut DuckTask, n: i64) {
+pub unsafe extern "C" fn auk_task_join_all(ts: *mut *mut AukTask, n: i64) {
     unsafe {
         for i in 0..n {
             task_join(*ts.add(i as usize));
@@ -363,9 +363,9 @@ pub unsafe extern "C" fn duck_task_join_all(ts: *mut *mut DuckTask, n: i64) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_task_await_all(ts: *mut *mut DuckTask, n: i64, outs: *mut c_void) {
+pub unsafe extern "C" fn auk_task_await_all(ts: *mut *mut AukTask, n: i64, outs: *mut c_void) {
     unsafe {
-        duck_task_join_all(ts, n);
+        auk_task_join_all(ts, n);
         for i in 0..n {
             let t = *ts.add(i as usize);
             let out = if outs.is_null() {
@@ -373,12 +373,12 @@ pub unsafe extern "C" fn duck_task_await_all(ts: *mut *mut DuckTask, n: i64, out
             } else {
                 (outs as *mut u8).add(i as usize * (*t).result_size).cast()
             };
-            duck_task_await(t, out);
+            auk_task_await(t, out);
         }
     }
 }
 
-pub unsafe fn duck__task_free(t: *mut DuckTask) {
+pub unsafe fn auk__task_free(t: *mut AukTask) {
     unsafe {
         task_join(t);
         if !(*t).panic.is_null() {
@@ -396,7 +396,7 @@ pub unsafe fn duck__task_free(t: *mut DuckTask) {
             // the result was never written: don't release it
             libc::free((*t).result);
             libc::pthread_mutex_destroy(&raw mut (*t).mu);
-            duck__free_obj(t.cast());
+            auk__free_obj(t.cast());
             return;
         }
         if !(*t).ops.is_null()
@@ -412,6 +412,6 @@ pub unsafe fn duck__task_free(t: *mut DuckTask) {
         (*t).heap = null_mut();
         libc::free((*t).result);
         libc::pthread_mutex_destroy(&raw mut (*t).mu);
-        duck__free_obj(t.cast());
+        auk__free_obj(t.cast());
     }
 }

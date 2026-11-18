@@ -208,7 +208,7 @@ impl Lexer {
             ',' => Tok::Comma,
             ';' => {
                 let span = self.from(start);
-                return Err(Diag::new("E0011", span, "Duck does not use semicolons")
+                return Err(Diag::new("E0011", span, "Auk does not use semicolons")
                     .note("a line break ends a statement; put the next statement on its own line")
                     .fix(span, ""));
             }

@@ -55,7 +55,7 @@ pub struct FileDiag {
     pub diag: Diag,
 }
 
-/// Every diagnostic code with a one-line title (for `duck explain`).
+/// Every diagnostic code with a one-line title (for `auk explain`).
 /// E0001–E0099 are lexing and parsing errors; E0100–E0399 are name resolution and type errors
 /// (check.rs); E0400–E0499 are patterns and effects (patterns.rs, effects.rs), and E0420, an
 /// imprint whose compile-time evaluation panicked (build.rs).
@@ -184,14 +184,14 @@ pub const CODES: &[(&str, &str)] = &[
     ("E0410", "effect used but not declared"),
     ("E0411", "effect declared but not used"),
     ("E0412", "constant initializer with an effect"),
-    ("E0413", "effect not allowed by the package's quack.toml"),
+    ("E0413", "effect not allowed by the package's raft.toml"),
     ("E0414", "unknown effect"),
     ("E0415", "conversion to `any Shape` exceeds the shape method's effects"),
     ("E0420", "imprint panicked at compile time"),
 ];
 
 /// Codes reported as warnings: they are rendered as `warning[..]`, have severity "warning" in
-/// JSON, and don't fail `duck check`.
+/// JSON, and don't fail `auk check`.
 pub const WARNINGS: &[&str] = &["E0411"];
 
 /// The one-line title of `code`, if it is registered.
@@ -227,7 +227,7 @@ impl Diag {
 
     /// `file:line:col: error[E0012]: msg`, then the source line with a caret underline across the
     /// span (to the end of the line for a multi-line span), then notes, fixes and a pointer to
-    /// `duck explain`.
+    /// `auk explain`.
     pub fn render(&self, path: &str, src: &str) -> String {
         let Span { line, col, end_line, end_col } = self.span;
         let text = src.lines().nth((line as usize).saturating_sub(1)).unwrap_or("");
@@ -261,7 +261,7 @@ impl Diag {
 
     /// The command that explains this diagnostic's code (see `explain.rs`).
     pub fn explain(&self) -> String {
-        format!("duck explain {}", self.code)
+        format!("auk explain {}", self.code)
     }
 
     fn json(&self) -> String {
@@ -300,7 +300,7 @@ impl Diag {
 
 /// The `check --json` report: `{file, ok, diagnostics:[{code, severity, line, col, end_line,
 /// end_col, message, notes, fixes:[{line, col, end_line, end_col, text}], explain}]}`, where
-/// `explain` is the command that explains the code (`duck explain E0011`).
+/// `explain` is the command that explains the code (`auk explain E0011`).
 pub fn json_report(path: &str, diags: &[Diag]) -> String {
     let ds: Vec<String> = diags.iter().map(Diag::json).collect();
     let ok = diags.iter().all(Diag::is_warning);
@@ -357,10 +357,10 @@ mod tests {
     #[test]
     fn render_underlines_the_span() {
         let d = Diag::new("E0020", sp(2, 5, 8), "expected `)`, found `let`").note("a note").fix(sp(2, 5, 5), ")");
-        let out = d.render("a.duck", "fn f() {\n  f(let)\n}\n");
+        let out = d.render("a.auk", "fn f() {\n  f(let)\n}\n");
         assert_eq!(
             out,
-            "a.duck:2:5: error[E0020]: expected `)`, found `let`\n  |\n2 |   f(let)\n  |     ^^^\n  = note: a note\n  = fix: insert `)` at 2:5\n  = help: run `duck explain E0020` for details\n"
+            "a.auk:2:5: error[E0020]: expected `)`, found `let`\n  |\n2 |   f(let)\n  |     ^^^\n  = note: a note\n  = fix: insert `)` at 2:5\n  = help: run `auk explain E0020` for details\n"
         );
     }
 
@@ -368,17 +368,17 @@ mod tests {
     fn json_shape() {
         let d = Diag::new("E0011", sp(1, 10, 11), "no \"semicolons\"").fix(sp(1, 10, 11), "");
         assert_eq!(
-            json_report("x.duck", &[d]),
-            r#"{"file":"x.duck","ok":false,"diagnostics":[{"code":"E0011","severity":"error","line":1,"col":10,"end_line":1,"end_col":11,"message":"no \"semicolons\"","notes":[],"fixes":[{"line":1,"col":10,"end_line":1,"end_col":11,"text":""}],"explain":"duck explain E0011"}]}"#
+            json_report("x.auk", &[d]),
+            r#"{"file":"x.auk","ok":false,"diagnostics":[{"code":"E0011","severity":"error","line":1,"col":10,"end_line":1,"end_col":11,"message":"no \"semicolons\"","notes":[],"fixes":[{"line":1,"col":10,"end_line":1,"end_col":11,"text":""}],"explain":"auk explain E0011"}]}"#
         );
-        assert_eq!(json_report("x.duck", &[]), r#"{"file":"x.duck","ok":true,"diagnostics":[]}"#);
+        assert_eq!(json_report("x.auk", &[]), r#"{"file":"x.auk","ok":true,"diagnostics":[]}"#);
     }
 
     #[test]
     fn warnings_render_and_stay_ok() {
         let d = Diag::new("E0411", sp(1, 15, 17), "`f` declares the effect `fs` but doesn't use it");
-        assert!(d.render("a.duck", "fn f(): int uses fs = 1\n").starts_with("a.duck:1:15: warning[E0411]: "));
-        let j = json_report("x.duck", &[d]);
+        assert!(d.render("a.auk", "fn f(): int uses fs = 1\n").starts_with("a.auk:1:15: warning[E0411]: "));
+        let j = json_report("x.auk", &[d]);
         assert!(j.contains(r#""ok":true"#) && j.contains(r#""severity":"warning""#), "{j}");
         assert!(WARNINGS.iter().all(|w| title(w).is_some()));
     }

@@ -1,10 +1,10 @@
 # hash
 
-Hashes and checksums in plain Duck: SHA-256 (one-shot or streaming), HMAC-SHA-256, CRC-32, FNV-1a (64-bit), and a constant-time comparison for MACs. Bytes are `[int]` (0..255); hash text with `s.bytes()`. Tested against the NIST SHA-256 vectors, RFC 4231 (HMAC) and the standard CRC-32 check value.
+Hashes and checksums in plain Auk: SHA-256 (one-shot or streaming), HMAC-SHA-256, CRC-32, FNV-1a (64-bit), and a constant-time comparison for MACs. Bytes are `[int]` (0..255); hash text with `s.bytes()`. Tested against the NIST SHA-256 vectors, RFC 4231 (HMAC) and the standard CRC-32 check value.
 
 **Effects:** none.
 
-```duck
+```auk
 let digest = hash.sha256(fs.read_bytes("app.tar")?)      // 32 bytes
 print(hash.sha256_hex("abc"))                              // ba7816bf8f01cfea...
 var h = hash.new_sha256()                                  // streaming

@@ -1,5 +1,5 @@
 //! The window process (gui.rs explains why there is one). A program's first `gui.open` runs its
-//! own executable again with `DUCK_GUI_HOST` set. `duck_main_wrapper` (and the `duck` command)
+//! own executable again with `AUK_GUI_HOST` set. `auk_main_wrapper` (and the `auk` command)
 //! see that variable and call `host_main` instead of running the program.
 //!
 //! The host's main thread runs AppKit. One thread per client reads its requests and hands them
@@ -12,17 +12,17 @@
 //! last shown) from the buffer the client just wrote into the back surface, flips the layer to
 //! it, and answers `PRESENTED`. The client then writes its other buffer.
 //!
-//! - `DUCK_GUI_HOST=fd:N`: one client on fd N (a socket pair). Exit when it closes.
-//! - `DUCK_GUI_HOST=listen:PATH` (`duck run --live`): accept clients on a Unix socket. When a
+//! - `AUK_GUI_HOST=fd:N`: one client on fd N (a socket pair). Exit when it closes.
+//! - `AUK_GUI_HOST=listen:PATH` (`auk run --live`): accept clients on a Unix socket. When a
 //!   client goes away without `BYE`, its windows stay open as *orphans*. A later client's
 //!   `OPEN` with the same title takes one over, and the next client to leave closes the rest.
-//!   Exit when `DUCK_GUI_OWNER` (the live parent's pid) is gone.
+//!   Exit when `AUK_GUI_OWNER` (the live parent's pid) is gone.
 
 /// Run the window process. Returns an exit code only if it can't start.
 pub fn host_main() -> i32 {
-    let spec = std::env::var("DUCK_GUI_HOST").unwrap_or_default();
+    let spec = std::env::var("AUK_GUI_HOST").unwrap_or_default();
     unsafe {
-        std::env::remove_var("DUCK_GUI_HOST");
+        std::env::remove_var("AUK_GUI_HOST");
     }
     #[cfg(target_os = "macos")]
     {
@@ -116,7 +116,7 @@ mod mac {
         surface_row_bytes: unsafe extern "C" fn(*mut c_void) -> usize,
         surface_in_use: unsafe extern "C" fn(*mut c_void) -> bool,
         surface_set_value: unsafe extern "C" fn(*mut c_void, Id, *const c_void),
-        // for DUCK_GUI_SNAP (tests): an image of one of this process's own windows
+        // for AUK_GUI_SNAP (tests): an image of one of this process's own windows
         window_image: Option<unsafe extern "C" fn(Rect, u32, u32, u32) -> *mut c_void>,
         image_provider: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
         provider_copy_data: unsafe extern "C" fn(*mut c_void) -> *const c_void,
@@ -252,7 +252,7 @@ mod mac {
         m.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// `DUCK_GUI_TRACE=1`: time copying into surfaces, waiting for the main thread, and handling
+    /// `AUK_GUI_TRACE=1`: time copying into surfaces, waiting for the main thread, and handling
     /// requests, and print the averages to stderr every half second.
     mod trace {
         use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
@@ -458,7 +458,7 @@ mod mac {
     // ---- running ----
 
     pub fn run(spec: &str) -> i32 {
-        if std::env::var_os("DUCK_GUI_TRACE").is_some_and(|v| v == "1") {
+        if std::env::var_os("AUK_GUI_TRACE").is_some_and(|v| v == "1") {
             trace::ON.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         let sys = match unsafe { load() } {
@@ -472,7 +472,7 @@ mod mac {
         unsafe { start_app() };
         if let Some(n) = spec.strip_prefix("fd:") {
             let Ok(fd) = n.parse::<c_int>() else {
-                eprintln!("gui host: bad DUCK_GUI_HOST={spec}");
+                eprintln!("gui host: bad AUK_GUI_HOST={spec}");
                 return 1;
             };
             st(|s| s.single = true);
@@ -483,7 +483,7 @@ mod mac {
                 return 1;
             }
         } else {
-            eprintln!("gui host: bad DUCK_GUI_HOST={spec}");
+            eprintln!("gui host: bad AUK_GUI_HOST={spec}");
             return 1;
         }
         unsafe { msg![(); app(), c"run"] };
@@ -515,7 +515,7 @@ mod mac {
         }
     }
 
-    /// Accept clients on `path`; exit once the live parent (`DUCK_GUI_OWNER`) is gone.
+    /// Accept clients on `path`; exit once the live parent (`AUK_GUI_OWNER`) is gone.
     fn listen(path: &str) -> Result<(), String> {
         let fd = unsafe {
             let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
@@ -527,7 +527,7 @@ mod mac {
             }
             fd
         };
-        let owner: i32 = std::env::var("DUCK_GUI_OWNER").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let owner: i32 = std::env::var("AUK_GUI_OWNER").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
         let p = path.to_string();
         std::thread::spawn(move || {
             loop {
@@ -649,7 +649,7 @@ mod mac {
     }
 
     unsafe fn open(client: u64, title: &str, w: i64, h: i64) {
-        // take over an orphan with this title (the program was restarted by `duck run --live`)
+        // take over an orphan with this title (the program was restarted by `auk run --live`)
         let adopt = st(|s| {
             let id = s.wins.iter().filter(|(_, x)| matches!(x.owner, Owner::Orphan(_)) && x.title == title).map(|(&id, _)| id).min()?;
             let x = s.wins.get_mut(&id)?;
@@ -743,7 +743,7 @@ mod mac {
             return;
         };
         unsafe {
-            if let Some(path) = std::env::var_os("DUCK_GUI_SNAP") {
+            if let Some(path) = std::env::var_os("AUK_GUI_SNAP") {
                 // show what's pending first
                 st(|s| s.wins.insert(id, w));
                 for _ in 0..50 {
@@ -774,7 +774,7 @@ mod mac {
         unsafe {
             let s = sys();
             let Some(capture) = s.window_image else {
-                eprintln!("gui: DUCK_GUI_SNAP: no CGWindowListCreateImage on this system");
+                eprintln!("gui: AUK_GUI_SNAP: no CGWindowListCreateImage on this system");
                 return;
             };
             let flush: unsafe extern "C" fn(Id, Sel) = std::mem::transmute(s.msg_send);
@@ -785,7 +785,7 @@ mod mac {
             // including only this window, its contents without the frame, at full resolution
             let img = capture(null, 8, num, 1 | 8);
             if img.is_null() {
-                eprintln!("gui: DUCK_GUI_SNAP: could not capture the window");
+                eprintln!("gui: AUK_GUI_SNAP: could not capture the window");
                 return;
             }
             let (w, h, rb) = ((s.image_width)(img), (s.image_height)(img), (s.image_row_bytes)(img));
@@ -961,7 +961,7 @@ mod mac {
             msg![(); bar, c"addItem:", item => Id];
             let app_menu = msg![Id; msg![Id; class(c"NSMenu"), c"new"], c"autorelease"];
             let quit = msg![Id; msg![Id; class(c"NSMenuItem"), c"alloc"], c"initWithTitle:action:keyEquivalent:",
-                ns_string("Quit") => Id, sel(c"duckQuit:") => Sel, ns_string("q") => Id];
+                ns_string("Quit") => Id, sel(c"aukQuit:") => Sel, ns_string("q") => Id];
             let target = msg![Id; msg![Id; view_class(), c"alloc"], c"init"];
             msg![(); quit, c"setTarget:", target => Id];
             msg![(); app_menu, c"addItem:", msg![Id; quit, c"autorelease"] => Id];
@@ -977,7 +977,7 @@ mod mac {
     fn view_class() -> Class {
         *VIEW_CLASS.get_or_init(|| unsafe {
             let s = sys();
-            let cls = (s.alloc_class_pair)(class(c"NSView"), c"DuckGuiView".as_ptr(), 0);
+            let cls = (s.alloc_class_pair)(class(c"NSView"), c"AukGuiView".as_ptr(), 0);
             let add = |name: &CStr, imp: *const c_void, types: &CStr| {
                 (s.add_method)(cls, sel(name), imp, types.as_ptr());
             };
@@ -1002,7 +1002,7 @@ mod mac {
             add(c"windowDidChangeBackingProperties:", did_resize as *const c_void, c"v@:@");
             add(c"windowDidBecomeKey:", did_become_key as *const c_void, c"v@:@");
             add(c"windowDidResignKey:", did_resign_key as *const c_void, c"v@:@");
-            add(c"duckQuit:", quit as *const c_void, c"v@:@");
+            add(c"aukQuit:", quit as *const c_void, c"v@:@");
             (s.register_class_pair)(cls);
             cls as usize
         }) as Class

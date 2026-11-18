@@ -4,7 +4,7 @@ Binary-to-text encodings: base64 (RFC 4648, standard and URL-safe, with or witho
 
 **Effects:** none.
 
-```duck
+```auk
 let token = encoding.base64("user:pass".bytes())           // "dXNlcjpwYXNz"
 let raw = encoding.from_base64(token)?                     // [117, 115, ...]
 print(str.from_utf8(raw)?)

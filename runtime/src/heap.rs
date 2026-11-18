@@ -25,7 +25,7 @@ use std::sync::atomic::Ordering;
 
 use crate::*;
 
-/// `DuckHeader::flags`: the object has a `Link` prefix and belongs to a heap.
+/// `AukHeader::flags`: the object has a `Link` prefix and belongs to a heap.
 pub const TRACKED: u32 = 1;
 
 /// The prefix of a tracked object (32 bytes, so the header stays 16-byte aligned).
@@ -49,7 +49,7 @@ pub struct Heap {
 
 /// Is an object of this kind a handle (never tracked, shared by reference count)?
 pub fn is_handle(kind: u32) -> bool {
-    matches!(kind, DUCK_K_TASK | DUCK_K_CONN | DUCK_K_LISTENER | DUCK_K_CHAN | DUCK_K_FRAME)
+    matches!(kind, AUK_K_TASK | AUK_K_CONN | AUK_K_LISTENER | AUK_K_CHAN | AUK_K_FRAME)
 }
 
 /// The current task took (`+1`) or gave back (`-1`) a reference to the handle `p`.
@@ -101,31 +101,31 @@ pub fn switch(h: *mut Heap) -> *mut Heap {
 /// For generated code: switch heaps (a constant's initializer runs untracked, since its value
 /// outlives the task that happened to compute it first).
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_heap_switch(h: *mut c_void) -> *mut c_void {
+pub extern "C" fn auk_heap_switch(h: *mut c_void) -> *mut c_void {
     switch(h.cast()).cast()
 }
 
 /// For generated code: a fresh heap for a task about to be spawned.
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_heap_new() -> *mut c_void {
+pub extern "C" fn auk_heap_new() -> *mut c_void {
     new().cast()
 }
 
 /// Allocate `size` zeroed bytes for an object of `kind` in the current heap (untracked when
 /// there is none, or for a handle kind). Returns the header's address.
-pub unsafe fn alloc(size: usize, kind: u32) -> *mut DuckHeader {
+pub unsafe fn alloc(size: usize, kind: u32) -> *mut AukHeader {
     let heap = if is_handle(kind) { null_mut() } else { current() };
     unsafe {
         if heap.is_null() {
-            let h = crate::rc::duck__xcalloc(1, size) as *mut DuckHeader;
+            let h = crate::rc::auk__xcalloc(1, size) as *mut AukHeader;
             (*h).kind = kind;
             if is_handle(kind) {
                 note_handle(h.cast(), 1);
             }
             return h;
         }
-        let l = crate::rc::duck__xcalloc(1, PREFIX + size) as *mut Link;
-        let h = (l as *mut u8).add(PREFIX) as *mut DuckHeader;
+        let l = crate::rc::auk__xcalloc(1, PREFIX + size) as *mut Link;
+        let h = (l as *mut u8).add(PREFIX) as *mut AukHeader;
         (*h).kind = kind;
         (*h).flags = TRACKED;
         (*l).heap = heap;
@@ -140,7 +140,7 @@ pub unsafe fn alloc(size: usize, kind: u32) -> *mut DuckHeader {
 }
 
 /// Free an object's memory (taking it off its heap's list).
-pub unsafe fn free(h: *mut DuckHeader) {
+pub unsafe fn free(h: *mut AukHeader) {
     unsafe {
         if (*h).flags & TRACKED == 0 {
             libc::free(h.cast());
@@ -166,13 +166,13 @@ pub unsafe fn sweep(heap: *mut Heap) {
         return;
     }
     unsafe {
-        let objs: Vec<*mut DuckHeader> = {
+        let objs: Vec<*mut AukHeader> = {
             let _g = (*heap).lock.lock().unwrap_or_else(|e| e.into_inner());
             let s = &raw mut (*heap).head;
             let mut out = Vec::new();
             let mut l = (*s).next;
             while l != s {
-                let h = (l as *mut u8).add(PREFIX) as *mut DuckHeader;
+                let h = (l as *mut u8).add(PREFIX) as *mut AukHeader;
                 let next = (*l).next;
                 if (*h).rc.load(Ordering::SeqCst) < 0 {
                     // immortal: it must stay; just take it off the list
@@ -196,7 +196,7 @@ pub unsafe fn sweep(heap: *mut Heap) {
         let held: Vec<(usize, i64)> = (*heap).handles.lock().unwrap_or_else(|e| e.into_inner()).drain().collect();
         for (p, n) in held {
             for _ in 0..n {
-                crate::rc::duck_release(p as *mut c_void);
+                crate::rc::auk_release(p as *mut c_void);
             }
         }
         switch(if old == heap { null_mut() } else { old });

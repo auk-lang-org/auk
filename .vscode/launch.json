@@ -5,9 +5,9 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "type": "duck",
+            "type": "auk",
             "request": "launch",
-            "name": "Debug Duck file",
+            "name": "Debug Auk file",
             "program": "${file}",
             "cwd": "${fileDirname}"
         }

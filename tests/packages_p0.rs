@@ -1,5 +1,5 @@
-//! The P0 packages (`encoding`, `hash`, `datetime`, `url`, `toml`, `log`): `duck test` passes for
-//! each, with the leak checker on, and quack installs each one into a fresh project.
+//! The P0 packages (`encoding`, `hash`, `datetime`, `url`, `toml`, `log`): `auk test` passes for
+//! each, with the leak checker on, and raft installs each one into a fresh project.
 
 use std::path::Path;
 use std::process::Command;
@@ -8,29 +8,29 @@ use std::{env, fs};
 
 const PKGS: [&str; 6] = ["encoding", "hash", "datetime", "url", "toml", "log"];
 
-fn quack(dir: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_quack"))
+fn raft(dir: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_raft"))
         .args(args)
         .current_dir(dir)
-        .env("QUACK_REGISTRY", Path::new(env!("CARGO_MANIFEST_DIR")).join("packages"))
+        .env("RAFT_REGISTRY", Path::new(env!("CARGO_MANIFEST_DIR")).join("packages"))
         .output()
         .unwrap()
 }
 
-/// Install the dependencies of the packages that have any (`.quack/` is not committed).
+/// Install the dependencies of the packages that have any (`.raft/` is not committed).
 fn setup() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         for p in PKGS {
             let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("packages").join(p);
-            if !fs::read_to_string(dir.join("quack.toml")).unwrap().contains("[deps]") {
+            if !fs::read_to_string(dir.join("raft.toml")).unwrap().contains("[deps]") {
                 continue;
             }
-            if !quack(&dir, &["install"]).status.success() {
-                let _ = fs::remove_file(dir.join("quack.lock"));
-                let _ = fs::remove_dir_all(dir.join(".quack"));
-                let out = quack(&dir, &["install"]);
-                assert!(out.status.success(), "quack install in {p}: {}", String::from_utf8_lossy(&out.stderr));
+            if !raft(&dir, &["install"]).status.success() {
+                let _ = fs::remove_file(dir.join("raft.lock"));
+                let _ = fs::remove_dir_all(dir.join(".raft"));
+                let out = raft(&dir, &["install"]);
+                assert!(out.status.success(), "raft install in {p}: {}", String::from_utf8_lossy(&out.stderr));
             }
         }
     });
@@ -40,9 +40,9 @@ fn setup() {
 fn p0_package_tests_pass_without_leaks() {
     setup();
     for p in PKGS {
-        let o = Command::new(env!("CARGO_BIN_EXE_duck"))
-            .args(["test", &format!("packages/{p}/src/lib.duck")])
-                .env("DUCK_LEAK_CHECK", "1")
+        let o = Command::new(env!("CARGO_BIN_EXE_auk"))
+            .args(["test", &format!("packages/{p}/src/lib.auk")])
+                .env("AUK_LEAK_CHECK", "1")
             .output()
             .unwrap();
         let out = String::from_utf8_lossy(&o.stdout);
@@ -54,23 +54,23 @@ fn p0_package_tests_pass_without_leaks() {
 }
 
 #[test]
-fn quack_adds_each_p0_package() {
+fn raft_adds_each_p0_package() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("p0").join("app");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("quack.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\neffects = []\n").unwrap();
+    fs::write(dir.join("raft.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\neffects = []\n").unwrap();
     for p in PKGS {
-        let out = quack(&dir, &["add", p]);
-        assert!(out.status.success(), "quack add {p}: {}", String::from_utf8_lossy(&out.stderr));
+        let out = raft(&dir, &["add", p]);
+        assert!(out.status.success(), "raft add {p}: {}", String::from_utf8_lossy(&out.stderr));
     }
-    let list = String::from_utf8_lossy(&quack(&dir, &["list"]).stdout).into_owned();
+    let list = String::from_utf8_lossy(&raft(&dir, &["list"]).stdout).into_owned();
     for p in PKGS {
         assert!(list.contains(&format!("{p} 0.1.0")), "{list}");
     }
     assert!(!list.contains("uses"), "P0 packages use no effects:\n{list}");
     fs::create_dir_all(dir.join("src")).unwrap();
     fs::write(
-        dir.join("src/main.duck"),
+        dir.join("src/main.auk"),
         r#"fn main(): int! {
   let u = url.parse("https://a.com/x?q=a+b")?
   print(u.param("q") else "")
@@ -85,7 +85,7 @@ fn quack_adds_each_p0_package() {
 "#,
     )
     .unwrap();
-    let o = Command::new(env!("CARGO_BIN_EXE_duck")).args(["run", "src/main.duck"]).current_dir(&dir).output().unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_auk")).args(["run", "src/main.auk"]).current_dir(&dir).output().unwrap();
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(o.status.success(), "{out}\n{}", String::from_utf8_lossy(&o.stderr));
     assert_eq!(out, "a b\n64\naGk=\n1970-01-01T00:00:00Z\ntrue\n");

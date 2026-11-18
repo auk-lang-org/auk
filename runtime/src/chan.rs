@@ -1,4 +1,4 @@
-//! Channels: `Chan<T>` (core.duck) wraps a `DuckChan *`, an unbounded FIFO shared by every copy
+//! Channels: `Chan<T>` (core.auk) wraps a `AukChan *`, an unbounded FIFO shared by every copy
 //! of the channel (a handle: never copied, never in a task's heap). `send` stores an untracked
 //! deep copy of the message; `recv` deep-copies it again into the receiver's heap and frees the
 //! stored one, so sender and receiver never share an object (heap.rs).
@@ -9,19 +9,19 @@ use std::ptr::null_mut;
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
-use crate::rc::duck__alloc;
+use crate::rc::auk__alloc;
 use crate::*;
 
 #[repr(C)]
-pub struct DuckChan {
-    pub h: DuckHeader,
+pub struct AukChan {
+    pub h: AukHeader,
     inner: *mut Inner,
 }
 
 struct Inner {
     state: Mutex<State>,
     cv: Condvar,
-    ops: *const DuckElemOps,
+    ops: *const AukElemOps,
 }
 
 struct State {
@@ -31,9 +31,9 @@ struct State {
 
 /// A new channel for elements described by `proto`'s element ops (`proto` is an empty `[T]`).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_chan_new(proto: *mut DuckArr) -> *mut DuckChan {
+pub unsafe extern "C" fn auk_chan_new(proto: *mut AukArr) -> *mut AukChan {
     unsafe {
-        let c = duck__alloc(size_of::<DuckChan>(), DUCK_K_CHAN) as *mut DuckChan;
+        let c = auk__alloc(size_of::<AukChan>(), AUK_K_CHAN) as *mut AukChan;
         let inner = Inner { state: Mutex::new(State { items: VecDeque::new(), closed: false }), cv: Condvar::new(), ops: (*proto).ops };
         (*c).inner = Box::into_raw(Box::new(inner));
         c
@@ -42,7 +42,7 @@ pub unsafe extern "C" fn duck_chan_new(proto: *mut DuckArr) -> *mut DuckChan {
 
 /// `c.send(x)`: queue a copy of `*x`. Panics on a closed channel.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_chan_send(c: *mut DuckChan, x: *const c_void, loc: *const c_char) {
+pub unsafe extern "C" fn auk_chan_send(c: *mut AukChan, x: *const c_void, loc: *const c_char) {
     unsafe {
         let inner = &*(*c).inner;
         let mut buf = vec![0u8; (*inner.ops).size.max(1)].into_boxed_slice();
@@ -66,7 +66,7 @@ pub unsafe extern "C" fn duck_chan_send(c: *mut DuckChan, x: *const c_void, loc:
 /// `c.recv()`: wait for a message and write a copy to `out`; false once the channel is closed
 /// and empty. Cancellable on a task thread.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_chan_recv(c: *mut DuckChan, out: *mut c_void) -> bool {
+pub unsafe extern "C" fn auk_chan_recv(c: *mut AukChan, out: *mut c_void) -> bool {
     unsafe {
         let inner = &*(*c).inner;
         let mut st = inner.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -99,7 +99,7 @@ pub unsafe extern "C" fn duck_chan_recv(c: *mut DuckChan, out: *mut c_void) -> b
 /// `c.recv_for(ms)`: `recv`, giving up after `ms` milliseconds (false: closed and empty, or
 /// nothing came in time). Cancellable on a task thread.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_chan_recv_for(c: *mut DuckChan, ms: i64, out: *mut c_void) -> bool {
+pub unsafe extern "C" fn auk_chan_recv_for(c: *mut AukChan, ms: i64, out: *mut c_void) -> bool {
     unsafe {
         let inner = &*(*c).inner;
         let end = std::time::Instant::now() + Duration::from_millis(ms.max(0) as u64);
@@ -132,7 +132,7 @@ pub unsafe extern "C" fn duck_chan_recv_for(c: *mut DuckChan, ms: i64, out: *mut
 
 /// `c.close()`: no more sends; receivers drain what is queued, then get none.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_chan_close(c: *mut DuckChan) {
+pub unsafe extern "C" fn auk_chan_close(c: *mut AukChan) {
     unsafe {
         let inner = &*(*c).inner;
         inner.state.lock().unwrap_or_else(|e| e.into_inner()).closed = true;
@@ -140,7 +140,7 @@ pub unsafe extern "C" fn duck_chan_close(c: *mut DuckChan) {
     }
 }
 
-pub unsafe fn duck__chan_free(c: *mut DuckChan) {
+pub unsafe fn auk__chan_free(c: *mut AukChan) {
     unsafe {
         let inner = Box::from_raw((*c).inner);
         let st = inner.state.into_inner().unwrap_or_else(|e| e.into_inner());
@@ -149,6 +149,6 @@ pub unsafe fn duck__chan_free(c: *mut DuckChan) {
                 r(b.as_mut_ptr().cast());
             }
         }
-        crate::rc::duck__free_obj(c.cast());
+        crate::rc::auk__free_obj(c.cast());
     }
 }

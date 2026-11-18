@@ -1,6 +1,6 @@
 //! TLS client sessions for `net.tls` (was tls.c).
 //!
-//! Duck never implements cryptography itself. The C runtime drove the platform's TLS stack
+//! Auk never implements cryptography itself. The C runtime drove the platform's TLS stack
 //! (Network.framework on macOS, a dlopen'ed OpenSSL elsewhere); this port uses one portable
 //! implementation instead: rustls (with the `ring` crypto provider) and the Mozilla root
 //! store from `webpki-roots`, so it needs nothing installed at build or run time.
@@ -9,8 +9,8 @@
 //! the bundled roots and its certificate against `host` (SNI is sent for DNS names). A failure
 //! is an Err "net.tls <host>:<port>: certificate verification failed: <reason>".
 //!
-//! The session drives the TCP socket the DuckConn owns (`c->fd`), as the OpenSSL backend did:
-//! duck_conn_close frees the session (sending close_notify) and then closes the socket. Socket
+//! The session drives the TCP socket the AukConn owns (`c->fd`), as the OpenSSL backend did:
+//! auk_conn_close frees the session (sending close_notify) and then closes the socket. Socket
 //! I/O uses send(MSG_NOSIGNAL) / SO_NOSIGPIPE, so a peer reset never raises SIGPIPE.
 
 use std::ffi::{CString, c_int, c_void};
@@ -21,7 +21,7 @@ use rustls::pki_types::ServerName;
 use rustls::{CertificateError, ClientConfig, ClientConnection, RootCertStore};
 
 use crate::core::{SEND_FLAGS, conn_new, ctext, cs, err_code, errno, strerror, tcp_connect};
-use crate::err::{duck__err_errno, err_msg};
+use crate::err::{auk__err_errno, err_msg};
 use crate::*;
 
 /// The connected socket, read and written with recv/send (EINTR retried).
@@ -107,7 +107,7 @@ fn cert_reason(e: &CertificateError) -> String {
 }
 
 /// "<prefix>: <reason>" for a failure.
-unsafe fn fail_err(prefix: &str, f: Fail) -> *mut DuckErr {
+unsafe fn fail_err(prefix: &str, f: Fail) -> *mut AukErr {
     match f {
         Fail::Io(e) => match e.raw_os_error() {
             Some(code) if code != 0 => unsafe { err_code(&format!("{prefix}: {}", strerror(code)), code) },
@@ -196,7 +196,7 @@ impl RustlsTls {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_net_tls(host: *const DuckStr, port: i64) -> DuckRes_conn {
+pub unsafe extern "C" fn auk_net_tls(host: *const AukStr, port: i64) -> AukRes_conn {
     unsafe {
         let ht = ctext(host);
         if !(port > 0 && port <= 65535) {
@@ -234,14 +234,14 @@ pub unsafe extern "C" fn duck_net_tls(host: *const DuckStr, port: i64) -> DuckRe
         }
         let c = conn_new(fd);
         (*c).tls = Box::into_raw(t).cast();
-        DuckRes::ok(c)
+        AukRes::ok(c)
     }
 }
 
-pub unsafe fn duck__tls_read(tls: *mut c_void, max: i64) -> DuckRes_arr {
+pub unsafe fn auk__tls_read(tls: *mut c_void, max: i64) -> AukRes_arr {
     let t = unsafe { &mut *(tls as *mut RustlsTls) };
     if t.eof {
-        return DuckRes::ok(unsafe { crate::core::bytes_to_arr(&[]) });
+        return AukRes::ok(unsafe { crate::core::bytes_to_arr(&[]) });
     }
     let mut buf = vec![0u8; max.max(0) as usize];
     match t.read(&mut buf) {
@@ -249,32 +249,32 @@ pub unsafe fn duck__tls_read(tls: *mut c_void, max: i64) -> DuckRes_arr {
             if n == 0 {
                 t.eof = true;
             }
-            DuckRes::ok(unsafe { crate::core::bytes_to_arr(&buf[..n]) })
+            AukRes::ok(unsafe { crate::core::bytes_to_arr(&buf[..n]) })
         }
         Err(Fail::Io(e)) if e.raw_os_error().is_some_and(|c| c != 0) => {
-            err_ptr(unsafe { duck__err_errno(c"net read".as_ptr(), std::ptr::null(), e.raw_os_error().unwrap()) })
+            err_ptr(unsafe { auk__err_errno(c"net read".as_ptr(), std::ptr::null(), e.raw_os_error().unwrap()) })
         }
         Err(f) => err_ptr(unsafe { fail_err("net read", f) }),
     }
 }
 
-pub unsafe fn duck__tls_write(tls: *mut c_void, buf: *const u8, n: i64) -> DuckRes_unit {
+pub unsafe fn auk__tls_write(tls: *mut c_void, buf: *const u8, n: i64) -> AukRes_unit {
     let t = unsafe { &mut *(tls as *mut RustlsTls) };
     if n <= 0 {
-        return DuckRes::ok(0);
+        return AukRes::ok(0);
     }
     let b = unsafe { std::slice::from_raw_parts(buf, n as usize) };
     match t.write_all(b) {
-        Ok(()) => DuckRes::ok(0),
+        Ok(()) => AukRes::ok(0),
         Err(Fail::Io(e)) if e.raw_os_error().is_some_and(|c| c != 0) => {
-            DuckRes::err(unsafe { duck__err_errno(c"net write".as_ptr(), std::ptr::null(), e.raw_os_error().unwrap()) })
+            AukRes::err(unsafe { auk__err_errno(c"net write".as_ptr(), std::ptr::null(), e.raw_os_error().unwrap()) })
         }
-        Err(f) => DuckRes::err(unsafe { fail_err("net write", f) }),
+        Err(f) => AukRes::err(unsafe { fail_err("net write", f) }),
     }
 }
 
 /// Closes the session (best-effort close_notify; the caller then closes the socket) and frees it.
-pub unsafe fn duck__tls_free(tls: *mut c_void) {
+pub unsafe fn auk__tls_free(tls: *mut c_void) {
     if tls.is_null() {
         return;
     }

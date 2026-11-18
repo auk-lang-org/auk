@@ -3,11 +3,11 @@
 //! - `examples` programs with a `main` run and print their expected output (with fixtures
 //!   supplied here: a text file for `wc`, a CSV for `csv_stats`, a temp dir for
 //!   `todo`, a local HTTP listener for `fetch`);
-//! - `duck test` passes for every example with tests (except `hatch.duck`, whose holes must fail
+//! - `auk test` passes for every example with tests (except `hatch.auk`, whose holes must fail
 //!   its tests) and for every package, one file at a time and as a flat directory;
-//! - leak checks (`DUCK_LEAK_CHECK`), a sanitizer run, and codegen edge cases;
-//! - every `tests/errors` program fails `duck check` with the code in its header;
-//! - `duck spec` prints docs/spec.md.
+//! - leak checks (`AUK_LEAK_CHECK`), a sanitizer run, and codegen edge cases;
+//! - every `tests/errors` program fails `auk check` with the code in its header;
+//! - `auk spec` prints docs/spec.md.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -16,28 +16,28 @@ use std::process::{Command, Output};
 use std::sync::Once;
 use std::{env, fs, thread};
 
-fn duck_cmd() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_duck"));
-    c.env_remove("DUCK_LEAK_CHECK");
+fn auk_cmd() -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_auk"));
+    c.env_remove("AUK_LEAK_CHECK");
     c
 }
 
-fn duck(args: &[&str]) -> Output {
-    duck_cmd().args(args).output().unwrap()
+fn auk(args: &[&str]) -> Output {
+    auk_cmd().args(args).output().unwrap()
 }
 
 fn text(o: &Output) -> (String, String) {
     (String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
 }
 
-/// `quack install` in `dir` (regenerating a stale lock, as tests/check.rs does).
+/// `raft install` in `dir` (regenerating a stale lock, as tests/check.rs does).
 fn install(dir: &str) {
-    let run = || Command::new(env!("CARGO_BIN_EXE_quack")).arg("install").current_dir(dir).output().unwrap();
+    let run = || Command::new(env!("CARGO_BIN_EXE_raft")).arg("install").current_dir(dir).output().unwrap();
     if !run().status.success() {
-        let _ = fs::remove_file(Path::new(dir).join("quack.lock"));
-        let _ = fs::remove_dir_all(Path::new(dir).join(".quack"));
+        let _ = fs::remove_file(Path::new(dir).join("raft.lock"));
+        let _ = fs::remove_dir_all(Path::new(dir).join(".raft"));
         let out = run();
-        assert!(out.status.success(), "quack install in {dir} failed:\n{}", String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success(), "raft install in {dir} failed:\n{}", String::from_utf8_lossy(&out.stderr));
     }
 }
 
@@ -63,9 +63,9 @@ fn abs(p: &str) -> String {
 }
 
 fn run_ok(args: &[&str]) -> String {
-    let o = duck(args);
+    let o = auk(args);
     let (out, err) = text(&o);
-    assert!(o.status.success(), "duck {args:?} failed ({:?}):\n{out}\n{err}", o.status.code());
+    assert!(o.status.success(), "auk {args:?} failed ({:?}):\n{out}\n{err}", o.status.code());
     out
 }
 
@@ -75,25 +75,25 @@ fn run_ok(args: &[&str]) -> String {
 #[test]
 fn wc_counts_words_in_a_file() {
     setup();
-    let out = run_ok(&["run", "examples/wc.duck", "tests/fixtures/words.txt"]);
+    let out = run_ok(&["run", "examples/wc.auk", "tests/fixtures/words.txt"]);
     assert_eq!(
         out,
-        " 1. the             5\n 2. quack           3\n 3. fox             2\n 4. dog             2\n 5. a               2\n 6. quick           1\n 7. brown           1\n 8. jumps           1\n 9. over            1\n10. lazy            1\n"
+        " 1. the             5\n 2. raft            3\n 3. fox             2\n 4. dog             2\n 5. a               2\n 6. quick           1\n 7. brown           1\n 8. jumps           1\n 9. over            1\n10. lazy            1\n"
     );
-    let o = duck(&["run", "examples/wc.duck"]);
+    let o = auk(&["run", "examples/wc.auk"]);
     assert_eq!(o.status.code(), Some(2));
     assert_eq!(text(&o).0, "usage: wc <file>\n");
-    let o = duck(&["run", "examples/wc.duck", "tests/fixtures/no-such-file.txt"]);
+    let o = auk(&["run", "examples/wc.auk", "tests/fixtures/no-such-file.txt"]);
     assert_eq!(o.status.code(), Some(1));
     assert!(text(&o).1.starts_with("error: "), "{}", text(&o).1);
 }
 
-/// `duck run examples/grep.duck <pattern>` with `input` piped to stdin, under the leak check.
+/// `auk run examples/grep.auk <pattern>` with `input` piped to stdin, under the leak check.
 fn grep(args: &[&str], input: &str) -> Output {
-    let mut c = duck_cmd()
-        .args(["run", "examples/grep.duck"])
+    let mut c = auk_cmd()
+        .args(["run", "examples/grep.auk"])
         .args(args)
-        .env("DUCK_LEAK_CHECK", "1")
+        .env("AUK_LEAK_CHECK", "1")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -106,10 +106,10 @@ fn grep(args: &[&str], input: &str) -> Output {
 #[test]
 fn grep_filters_stdin_with_line_numbers() {
     setup();
-    let o = grep(&["duck"], "a duck\nno\r\n\nducks quack\nend");
+    let o = grep(&["auk"], "an auk\nno\r\n\nauks raft\nend");
     assert_eq!(o.status.code(), Some(0), "{:?}", text(&o));
-    assert_eq!(text(&o), ("1: a duck\n4: ducks quack\n".to_string(), String::new()));
-    let o = grep(&["swan"], "a duck\n");
+    assert_eq!(text(&o), ("1: an auk\n4: auks raft\n".to_string(), String::new()));
+    let o = grep(&["swan"], "an auk\n");
     assert_eq!(o.status.code(), Some(1));
     assert_eq!(text(&o), (String::new(), String::new()));
     let o = grep(&[], "");
@@ -120,30 +120,30 @@ fn grep_filters_stdin_with_line_numbers() {
 #[test]
 fn csv_stats_summarizes_a_column() {
     setup();
-    let out = run_ok(&["run", "examples/csv_stats.duck", "tests/fixtures/stats.csv", "price"]);
+    let out = run_ok(&["run", "examples/csv_stats.auk", "tests/fixtures/stats.csv", "price"]);
     assert_eq!(out, "n=4 mean=3.65 min=0.1 max=12.75 sd=5.282\n");
-    let out = run_ok(&["run", "examples/csv_stats.duck", "tests/fixtures/stats.csv", "qty"]);
+    let out = run_ok(&["run", "examples/csv_stats.auk", "tests/fixtures/stats.csv", "qty"]);
     assert_eq!(out, "n=4 mean=5.25 min=1.0 max=10.0 sd=3.491\n");
-    let o = duck(&["run", "examples/csv_stats.duck", "tests/fixtures/stats.csv", "nope"]);
+    let o = auk(&["run", "examples/csv_stats.auk", "tests/fixtures/stats.csv", "nope"]);
     assert_eq!(o.status.code(), Some(1));
     assert_eq!(text(&o).1, "error: no column nope\n");
 }
 
-/// `examples/aconv.duck`: generate a tone, filter it into a FLAC file, probe it, and measure it.
+/// `examples/aconv.auk`: generate a tone, filter it into a FLAC file, probe it, and measure it.
 #[test]
 fn aconv_generates_converts_and_probes() {
     setup();
     let d = scratch("aconv");
     let flac = d.join("tone.flac");
     let f = flac.to_str().unwrap();
-    let out = run_ok(&["run", "examples/aconv.duck", "-f", "lavfi", "-i", "sine=f=1000:d=0.5:r=8000", "-af", "volume=6dB,afade=t=out:d=0.1", "-metadata", "title=Beep", f]);
+    let out = run_ok(&["run", "examples/aconv.auk", "-f", "lavfi", "-i", "sine=f=1000:d=0.5:r=8000", "-af", "volume=6dB,afade=t=out:d=0.1", "-metadata", "title=Beep", f]);
     assert!(out.contains("tone.flac: flac, 8000 Hz, 1 ch, 00:00:00.500,"), "{out}");
-    let out = run_ok(&["run", "examples/aconv.duck", "-i", f]);
+    let out = run_ok(&["run", "examples/aconv.auk", "-i", f]);
     assert!(out.contains("Stream: Audio: flac (flac), 8000 Hz, 1 channels, 16 bits") && out.contains("title           : Beep"), "{out}");
     let wav = d.join("half.wav");
-    let out = run_ok(&["run", "examples/aconv.duck", "-i", f, "-t", "0.25", "-ar", "16000", "-ac", "2", "-sample_fmt", "s24", "-stats", wav.to_str().unwrap()]);
+    let out = run_ok(&["run", "examples/aconv.auk", "-i", f, "-t", "0.25", "-ar", "16000", "-ac", "2", "-sample_fmt", "s24", "-stats", wav.to_str().unwrap()]);
     assert!(out.contains("channel 1: peak -12.0") && out.contains("half.wav: pcm_s24le, 16000 Hz, 2 ch, 00:00:00.250"), "{out}");
-    let o = duck(&["run", "examples/aconv.duck", "-i", "tests/fixtures/words.txt"]);
+    let o = auk(&["run", "examples/aconv.auk", "-i", "tests/fixtures/words.txt"]);
     assert_eq!(o.status.code(), Some(1));
     assert!(text(&o).1.contains("unsupported: unknown file format"), "{:?}", text(&o));
 }
@@ -152,18 +152,18 @@ fn aconv_generates_converts_and_probes() {
 fn todo_keeps_a_json_file() {
     setup();
     let dir = scratch("todo");
-    let todo = abs("examples/todo.duck");
+    let todo = abs("examples/todo.auk");
     let go = |args: &[&str]| {
-        let o = duck_cmd().arg("run").arg(&todo).args(args).current_dir(&dir).output().unwrap();
+        let o = auk_cmd().arg("run").arg(&todo).args(args).current_dir(&dir).output().unwrap();
         (o.status.code(), text(&o).0, text(&o).1)
     };
     assert_eq!(go(&["add", "buy", "milk"]).0, Some(0));
-    assert_eq!(go(&["add", "walk", "the", "duck"]).0, Some(0));
+    assert_eq!(go(&["add", "walk", "the", "auk"]).0, Some(0));
     assert_eq!(go(&["done", "1"]).0, Some(0));
-    assert_eq!(go(&["ls"]), (Some(0), "x 1. buy milk\n  2. walk the duck\n".into(), String::new()));
+    assert_eq!(go(&["ls"]), (Some(0), "x 1. buy milk\n  2. walk the auk\n".into(), String::new()));
     assert_eq!(
         fs::read_to_string(dir.join("todos.json")).unwrap(),
-        r#"[{"done":true,"id":1,"text":"buy milk"},{"done":false,"id":2,"text":"walk the duck"}]"#
+        r#"[{"done":true,"id":1,"text":"buy milk"},{"done":false,"id":2,"text":"walk the auk"}]"#
     );
     assert_eq!(go(&["done", "9"]), (Some(1), String::new(), "error: no todo #9\n".into()));
     assert_eq!(go(&["done", "x"]), (Some(1), String::new(), "error: not a number: x\n".into()));
@@ -206,7 +206,7 @@ fn fetch_checks_urls_concurrently() {
     let ok = format!("http://127.0.0.1:{port}/ok");
     let missing = format!("http://127.0.0.1:{port}/missing");
     let refused = format!("http://127.0.0.1:{closed}/x");
-    let o = duck(&["run", "examples/fetch.duck", &ok, &missing, &refused]);
+    let o = auk(&["run", "examples/fetch.auk", &ok, &missing, &refused]);
     let (out, err) = text(&o);
     assert_eq!(o.status.code(), Some(1), "{out}\n{err}");
     let lines: Vec<&str> = out.lines().collect();
@@ -217,18 +217,18 @@ fn fetch_checks_urls_concurrently() {
     // all good: exit 0
     let port = serve(1);
     let ok = format!("http://127.0.0.1:{port}/ok");
-    let o = duck(&["run", "examples/fetch.duck", &ok]);
+    let o = auk(&["run", "examples/fetch.auk", &ok]);
     assert_eq!(o.status.code(), Some(0), "{:?}", text(&o));
 }
 
-// ---- duck test ----
+// ---- auk test ----
 
 #[test]
 fn example_tests_pass() {
     setup();
     let mut n = 0;
     for name in ["bank", "calc", "fib", "physics", "router", "tour"] {
-        let out = run_ok(&["test", &format!("examples/{name}.duck")]);
+        let out = run_ok(&["test", &format!("examples/{name}.auk")]);
         assert!(out.ends_with(" passed, 0 failed\n") && !out.contains("FAIL"), "{name}:\n{out}");
         n += 1;
     }
@@ -238,45 +238,45 @@ fn example_tests_pass() {
 #[test]
 fn hatch_tests_fail_on_unfilled_holes() {
     setup();
-    let o = duck(&["test", "examples/hatch.duck"]);
+    let o = auk(&["test", "examples/hatch.auk"]);
     let (out, _) = text(&o);
     assert_eq!(o.status.code(), Some(1));
     assert!(out.ends_with("0 passed, 3 failed\n"), "{out}");
     for t in ["median", "dedup", "seconds"] {
         assert!(out.contains(&format!("FAIL {t}\n")), "{out}");
     }
-    assert!(out.contains("panic: unfilled hole (expected float)\n      at examples/hatch.duck:"), "{out}");
+    assert!(out.contains("panic: unfilled hole (expected float)\n      at examples/hatch.auk:"), "{out}");
     assert!(out.contains("panic: unfilled hole (expected [int])"), "{out}");
     assert!(out.contains("panic: unfilled hole (expected int!DurErr)"), "{out}");
 }
 
-/// `duck test` on a flat directory (no `src/lib.duck` or `src/main.duck`): every top-level file
+/// `auk test` on a flat directory (no `src/lib.auk` or `src/main.auk`): every top-level file
 /// with tests is its own program, run in sorted order under a header, with a combined summary.
 #[test]
 fn test_command_runs_each_file_of_a_flat_dir() {
     setup();
-    let o = duck(&["test", "examples"]);
+    let o = auk(&["test", "examples"]);
     let (out, err) = text(&o);
     assert_eq!(o.status.code(), Some(1), "hatch's holes must fail the run:\n{out}\n{err}");
     let headers: Vec<&str> = out.lines().filter(|l| l.starts_with("== ")).collect();
     assert_eq!(
         headers,
-        ["== bank.duck", "== calc.duck", "== fib.duck", "== hatch.duck", "== physics.duck", "== router.duck", "== tour.duck", "== 7 files: 6 passed, 3 failed"],
+        ["== bank.auk", "== calc.auk", "== fib.auk", "== hatch.auk", "== physics.auk", "== router.auk", "== tour.auk", "== 7 files: 6 passed, 3 failed"],
         "{out}"
     );
     // each file's own report sits under its header; only hatch fails
     let section = |name: &str| out.split(&format!("== {name}\n")).nth(1).unwrap().split("\n== ").next().unwrap().to_string();
     for name in ["bank", "calc", "fib", "physics", "router", "tour"] {
-        let sec = section(&format!("{name}.duck"));
+        let sec = section(&format!("{name}.auk"));
         assert!(sec.ends_with(" passed, 0 failed") && !sec.contains("FAIL"), "{name}:\n{sec}");
     }
-    let hatch = section("hatch.duck");
+    let hatch = section("hatch.auk");
     assert!(hatch.contains("FAIL median\n") && hatch.ends_with("0 passed, 3 failed"), "{hatch}");
     // files without tests (hello, wc, ...) are skipped
-    assert!(!out.contains("hello.duck") && !err.contains("no `test` blocks"), "{out}\n{err}");
+    assert!(!out.contains("hello.auk") && !err.contains("no `test` blocks"), "{out}\n{err}");
     // a filter applies to every file
     let out = run_ok(&["test", "examples", "calc"]);
-    assert!(out.contains("== calc.duck\nok calc\n1 passed, 0 failed\n"), "{out}");
+    assert!(out.contains("== calc.auk\nok calc\n1 passed, 0 failed\n"), "{out}");
     assert!(out.ends_with("== 7 files: 1 passed, 0 failed\n"), "{out}");
 }
 
@@ -290,7 +290,7 @@ fn package_tests_pass() {
         ("num", 15), ("text", 14), ("glob", 8), ("compress", 9), ("yaml", 14), ("xml", 11), ("sup", 7), ("splash", 24), ("audio", 17), ("graphics", 7),
     ];
     for (pkg, min) in pkgs {
-        let out = run_ok(&["test", &format!("packages/{pkg}/src/lib.duck")]);
+        let out = run_ok(&["test", &format!("packages/{pkg}/src/lib.auk")]);
         assert!(out.ends_with(" passed, 0 failed\n") && !out.contains("FAIL"), "{pkg}:\n{out}");
         let passed: usize = out.lines().last().unwrap().split(' ').next().unwrap().parse().unwrap();
         assert!(passed >= min, "{pkg}: only {passed} tests ran, expected at least {min}");
@@ -300,12 +300,12 @@ fn package_tests_pass() {
 #[test]
 fn test_command_filters_and_takes_a_project_dir() {
     setup();
-    let out = run_ok(&["test", "packages/regex/src/lib.duck", "captures"]);
+    let out = run_ok(&["test", "packages/regex/src/lib.auk", "captures"]);
     assert_eq!(out, "ok captures\n1 passed, 0 failed\n");
     let out = run_ok(&["test", "packages/csv"]);
     assert!(out.ends_with("11 passed, 0 failed\n"), "{out}");
     // dependencies' tests are excluded: http depends on json
-    let out = run_ok(&["test", "packages/http/src/lib.duck"]);
+    let out = run_ok(&["test", "packages/http/src/lib.auk"]);
     assert!(!out.contains("ok literals and whitespace"), "{out}");
 }
 
@@ -314,8 +314,8 @@ fn test_command_filters_and_takes_a_project_dir() {
 #[test]
 fn no_leaks_in_corpus_tests() {
     setup();
-    for f in ["examples/calc.duck", "examples/bank.duck", "examples/router.duck", "examples/tour.duck", "packages/json/src/lib.duck", "packages/regex/src/lib.duck", "packages/csv/src/lib.duck", "packages/cli/src/lib.duck", "packages/http/src/lib.duck"] {
-        let o = duck_cmd().args(["test", f]).env("DUCK_LEAK_CHECK", "1").output().unwrap();
+    for f in ["examples/calc.auk", "examples/bank.auk", "examples/router.auk", "examples/tour.auk", "packages/json/src/lib.auk", "packages/regex/src/lib.auk", "packages/csv/src/lib.auk", "packages/cli/src/lib.auk", "packages/http/src/lib.auk"] {
+        let o = auk_cmd().args(["test", f]).env("AUK_LEAK_CHECK", "1").output().unwrap();
         let (out, err) = text(&o);
         assert!(o.status.success(), "{f} leaks or fails:\n{out}\n{err}");
         assert!(!out.contains("leak:"), "{f}:\n{out}");
@@ -326,13 +326,13 @@ fn no_leaks_in_corpus_tests() {
 fn no_leaks_in_programs() {
     setup();
     for args in [
-        vec!["run", "examples/inventory.duck"],
-        vec!["run", "examples/life.duck"],
-        vec!["run", "examples/tour.duck"],
-        vec!["run", "examples/wc.duck", "tests/fixtures/words.txt"],
-        vec!["run", "examples/csv_stats.duck", "tests/fixtures/stats.csv", "price"],
+        vec!["run", "examples/inventory.auk"],
+        vec!["run", "examples/life.auk"],
+        vec!["run", "examples/tour.auk"],
+        vec!["run", "examples/wc.auk", "tests/fixtures/words.txt"],
+        vec!["run", "examples/csv_stats.auk", "tests/fixtures/stats.csv", "price"],
     ] {
-        let o = duck_cmd().args(&args).env("DUCK_LEAK_CHECK", "1").output().unwrap();
+        let o = auk_cmd().args(&args).env("AUK_LEAK_CHECK", "1").output().unwrap();
         assert!(o.status.success(), "{args:?}: {:?}", text(&o));
     }
 }
@@ -344,20 +344,20 @@ fn package_tests_are_leak_free() {
     setup();
     // sup's tests crash and cancel children on purpose: their heaps must be swept clean
     for pkg in ["json", "csv", "regex", "cli", "http", "encoding", "hash", "datetime", "url", "toml", "log", "uuid", "num", "text", "glob", "compress", "yaml", "xml", "sup", "splash", "audio"] {
-        let o = duck_cmd().args(["test", &format!("packages/{pkg}/src/lib.duck")]).env("DUCK_LEAK_CHECK", "1").output().unwrap();
+        let o = auk_cmd().args(["test", &format!("packages/{pkg}/src/lib.auk")]).env("AUK_LEAK_CHECK", "1").output().unwrap();
         let (out, err) = text(&o);
         assert!(o.status.success() && out.ends_with(" 0 failed\n"), "{pkg} with the leak checker:\n{out}\n{err}");
         assert!(!out.contains("leak") && !err.contains("leak"), "{pkg}:\n{out}\n{err}");
     }
 }
 
-/// `duck ir` prints the MIR and `duck ir --llvm` the LLVM IR, for real programs.
+/// `auk ir` prints the MIR and `auk ir --llvm` the LLVM IR, for real programs.
 #[test]
 fn ir_prints_mir_and_llvm() {
     setup();
-    for f in ["examples/tour.duck", "examples/fetch.duck", "examples/grep.duck", "examples/life.duck"] {
+    for f in ["examples/tour.auk", "examples/fetch.auk", "examples/grep.auk", "examples/life.auk"] {
         let mir = run_ok(&["ir", f]);
-        assert!(mir.contains("dk_entry(") && mir.contains("duck_main_wrapper("), "{f}");
+        assert!(mir.contains("dk_entry(") && mir.contains("auk_main_wrapper("), "{f}");
         let ll = run_ok(&["ir", "--llvm", f]);
         assert!(ll.contains("define ") && ll.contains(" @main(") && ll.contains("call "), "{f}");
     }
@@ -365,12 +365,12 @@ fn ir_prints_mir_and_llvm() {
 
 // ---- codegen edge cases ----
 
-/// Write a program to a scratch file and `duck run` it with the leak checker on.
+/// Write a program to a scratch file and `auk run` it with the leak checker on.
 fn run_src(name: &str, src: &str) -> Output {
     let d = scratch(name);
-    let p = d.join(format!("{name}.duck"));
+    let p = d.join(format!("{name}.auk"));
     fs::write(&p, src).unwrap();
-    duck_cmd().arg("run").arg(&p).env("DUCK_LEAK_CHECK", "1").current_dir(&d).output().unwrap()
+    auk_cmd().arg("run").arg(&p).env("AUK_LEAK_CHECK", "1").current_dir(&d).output().unwrap()
 }
 
 fn expect_out(name: &str, src: &str, want: &str) {
@@ -436,11 +436,11 @@ fn expect_panic(name: &str, src: &str, msg: &str) {
 /// calls returning `T?` (`max`, `min`, `find`, `first`, `get`) and `T!` (with an `else e =>`).
 #[test]
 fn else_in_tail_position_infers_the_value_type() {
-    let f = "tests/fixtures/else_inference.duck";
-    let o = duck(&["check", f]);
+    let f = "tests/fixtures/else_inference.auk";
+    let o = auk(&["check", f]);
     let (out, err) = text(&o);
     assert!(o.status.success() && out.is_empty() && err.is_empty(), "{out}\n{err}");
-    let o = duck_cmd().args(["run", f]).env("DUCK_LEAK_CHECK", "1").output().unwrap();
+    let o = auk_cmd().args(["run", f]).env("AUK_LEAK_CHECK", "1").output().unwrap();
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}\n{err}");
     assert_eq!(out, "9 2 19 a\n5 1 4\ntrue\nnth: short\n-1 7 0  7 7\n8 8\nshort\n2 1 0 - 0 0\n", "stderr:\n{err}");
@@ -505,8 +505,8 @@ fn peek_prints_source_and_value() {
     let (out, err) = text(&o);
     assert!(o.status.success(), "{err}");
     assert_eq!(out, "42\n");
-    assert!(err.contains("peek.duck:3] x * 2 = 42\n"), "{err}");
-    assert!(err.contains("peek.duck:4] \"s{y}\" = s42\n"), "{err}");
+    assert!(err.contains("peek.auk:3] x * 2 = 42\n"), "{err}");
+    assert!(err.contains("peek.auk:4] \"s{y}\" = s42\n"), "{err}");
 }
 
 #[test]
@@ -529,15 +529,15 @@ fn contract_failures() {
 #[test]
 fn build_refuses_holes() {
     let d = scratch("holes");
-    let p = d.join("h.duck");
+    let p = d.join("h.auk");
     fs::write(&p, "fn f(): int { ?? }\nfn main() { print(f()) }\n").unwrap();
-    let o = duck(&["build", p.to_str().unwrap(), "-o", d.join("h").to_str().unwrap()]);
+    let o = auk(&["build", p.to_str().unwrap(), "-o", d.join("h").to_str().unwrap()]);
     let (_, err) = text(&o);
     assert_eq!(o.status.code(), Some(1));
-    assert!(err.contains("still has 1 unfilled hole(s)") && err.contains("h.duck:1:15: unfilled hole (expected int)"), "{err}");
+    assert!(err.contains("still has 1 unfilled hole(s)") && err.contains("h.auk:1:15: unfilled hole (expected int)"), "{err}");
     assert!(!d.join("h").exists());
     // run allows holes and panics when one is reached
-    let o = duck(&["run", p.to_str().unwrap()]);
+    let o = auk(&["run", p.to_str().unwrap()]);
     assert_eq!(o.status.code(), Some(101));
     assert!(text(&o).1.contains("panic: unfilled hole (expected int)"));
     // a complete program builds and runs
@@ -605,7 +605,7 @@ let BASE = 1000
 imprint COUNT = PRIMES.len() + BASE
 imprint PRIMES = sieve(200)
 imprint SQUARES = {"one": 1, "two": 4, "three": 9}
-imprint CFG = Cfg { name: "duck \"q\" é\n", ratio: 0.1, tags: ["a", "b"], limit: some(3), nick: none }
+imprint CFG = Cfg { name: "auk \"q\" é\n", ratio: 0.1, tags: ["a", "b"], limit: some(3), nick: none }
 imprint OPS = [Push(1), Pop, Jump(0, "start")]
 imprint TREE = build(2)
 imprint EMP = Emp { name: "a", boss: some(Emp { name: "b", boss: none }) }
@@ -637,11 +637,11 @@ fn imprints_are_computed_at_compile_time() {
     expect_out(
         "imprints",
         IMPRINTS,
-        "[2, 3, 5, 7, 11, 13, 17, 19, 23, 29]\nsome(199)\n1046\n{\"one\": 1, \"two\": 4, \"three\": 9}\nCfg { name: \"duck \\\"q\\\" é\\n\", ratio: 0.1, tags: [\"a\", \"b\"], limit: some(3), nick: none }\n[Push(1), Pop, Jump(0, \"start\")]\nNode(Node(Leaf(0), Leaf(1)), Leaf(2))\nEmp { name: \"a\", boss: some(Emp { name: \"b\", boss: none }) }\n[[1.5, -0.0, 1e300], []]\n{\"name\": \"duck \\\"q\\\" é\\n\", \"ratio\": 0.1, \"tags\": [\"a\", \"b\"], \"limit\": 3, \"nick\": Null}\n1 a 3\n",
+        "[2, 3, 5, 7, 11, 13, 17, 19, 23, 29]\nsome(199)\n1046\n{\"one\": 1, \"two\": 4, \"three\": 9}\nCfg { name: \"auk \\\"q\\\" é\\n\", ratio: 0.1, tags: [\"a\", \"b\"], limit: some(3), nick: none }\n[Push(1), Pop, Jump(0, \"start\")]\nNode(Node(Leaf(0), Leaf(1)), Leaf(2))\nEmp { name: \"a\", boss: some(Emp { name: \"b\", boss: none }) }\n[[1.5, -0.0, 1e300], []]\n{\"name\": \"auk \\\"q\\\" é\\n\", \"ratio\": 0.1, \"tags\": [\"a\", \"b\"], \"limit\": 3, \"nick\": Null}\n1 a 3\n",
     );
     // the generated program holds the values, not the computation
     let d = scratch("imprints_ir");
-    let p = d.join("imprints.duck");
+    let p = d.join("imprints.auk");
     fs::write(&p, IMPRINTS).unwrap();
     let ir = run_ok(&["ir", p.to_str().unwrap()]);
     assert!(ir.contains("INT64_C(193)") && ir.contains("INT64_C(199)"), "the primes are data");
@@ -664,22 +664,22 @@ fn imprint_errors() {
         "imprint_panic",
         "fn fact(n: int): int = if n == 0 { 1 } else { n * fact(n - 1) }\nimprint FACTS = (0..=25).map(n => fact(n))\nimprint N = FACTS.len()\nfn main() { print(N) }\n",
     );
-    assert!(err.contains("imprint_panic.duck:2:9: error[E0420]: computing `imprint FACTS` at compile time panicked: integer overflow in `*`"), "{err}");
-    assert!(err.contains("note: the panic happened at ") && err.contains("imprint_panic.duck:1:"), "{err}");
+    assert!(err.contains("imprint_panic.auk:2:9: error[E0420]: computing `imprint FACTS` at compile time panicked: integer overflow in `*`"), "{err}");
+    assert!(err.contains("note: the panic happened at ") && err.contains("imprint_panic.auk:1:"), "{err}");
     let err = compile_err("imprint_index", "let XS = [1, 2]\nfn at(i: int): int = XS[i]\nimprint A = at(5)\nfn main() { print(A) }\n");
     assert!(err.contains("error[E0420]: computing `imprint A` at compile time panicked: index 5 out of range"), "{err}");
     // a cycle through a function
     let err = compile_err("imprint_cycle", "fn f(): int = A + 1\nimprint A: int = f()\nfn main() { print(A) }\n");
-    assert!(err.contains("imprint_cycle.duck:2:9: error[E0115]: the constant `A` depends on itself"), "{err}");
-    // the type must be Data (reported by `duck check`)
+    assert!(err.contains("imprint_cycle.auk:2:9: error[E0115]: the constant `A` depends on itself"), "{err}");
+    // the type must be Data (reported by `auk check`)
     let d = scratch("imprint_data");
-    let p = d.join("t.duck");
+    let p = d.join("t.auk");
     fs::write(&p, "imprint F = (x: int) => x + 1\nimprint T = (1, 2)\nimprint OK = [some(1), none]\nfn main() { print(F(1)) }\n").unwrap();
-    let o = duck(&["check", p.to_str().unwrap()]);
+    let o = auk(&["check", p.to_str().unwrap()]);
     let err = text(&o).1;
     assert_eq!(o.status.code(), Some(1));
-    assert!(err.contains("t.duck:1:9: error[E0350]: `(int) => int` doesn't fit the shape `Data`, which `imprint F` needs"), "{err}");
-    assert!(err.contains("t.duck:2:9: error[E0350]: `(int, int)` doesn't fit the shape `Data`"), "{err}");
+    assert!(err.contains("t.auk:1:9: error[E0350]: `(int) => int` doesn't fit the shape `Data`, which `imprint F` needs"), "{err}");
+    assert!(err.contains("t.auk:2:9: error[E0350]: `(int, int)` doesn't fit the shape `Data`"), "{err}");
     assert_eq!(err.matches("error[").count(), 2, "{err}");
 }
 
@@ -704,15 +704,15 @@ fn ensures_on_clause_groups() {
     let (out, err) = text(&o);
     assert_eq!(o.status.code(), Some(101), "{out}\n{err}");
     assert_eq!(out, "0\n5\n");
-    assert!(err.contains("panic: ensures failed: result == 1\n  at ") && err.contains("ensures_clauses.duck:6:11"), "{err}");
+    assert!(err.contains("panic: ensures failed: result == 1\n  at ") && err.contains("ensures_clauses.auk:6:11"), "{err}");
     let src = "fn len([], acc: int): int\n  ensures result == acc\n{ acc }\nfn len([_, ..t]: [int], acc: int): int\n  ensures result > acc\n{ len(t, acc + 1) }\nfn count(n: int, acc: int): int\n  requires n >= 0\n  ensures result == old(acc) + n\n{\n  if n == 0 { return acc }\n  count(n - 1, acc + 1)\n}\nfn grow(xs: var [int], n: int)\n  ensures xs.len() == old(xs.len()) + n\n{\n  if n > 0 {\n    xs.push(n)\n    grow(&xs, n - 1)\n  }\n}\nfn main() {\n  var xs: [int] = []\n  for i in 0..300000 { xs.push(i) }\n  print(len(xs, 0))\n  print(len([], 5))\n  print(count(1000000, 0))\n  var ys = [1]\n  grow(&ys, 3)\n  print(ys)\n}\n";
     expect_out("ensures_tail", src, "300000\n5\n1000000\n[1, 3, 2, 1]\n");
     let d = scratch("ensures_tail_ir");
-    let p = d.join("t.duck");
+    let p = d.join("t.auk");
     fs::write(&p, src).unwrap();
     let ir = run_ok(&["ir", p.to_str().unwrap()]);
     assert_eq!(ir.matches("goto dk_tail;").count(), 3, "every self tail call is a loop");
-    assert!(ir.contains("duck_ensures_fail("));
+    assert!(ir.contains("auk_ensures_fail("));
     // a header's `ensures` covers every clause
     expect_panic("ensures_header", "fn f(n: int): int\n  ensures result >= 0\nfn f(0): int = 0\nfn f(n: int): int = -n\nfn main() {\n  print(f(0))\n  print(f(3))\n}\n", "ensures failed: result >= 0");
 }
@@ -926,22 +926,22 @@ fn main() {
 }
 "#;
 
-const CATCH_OUT: &str = "ok(2)\ncaught: panic: index 9 out of range for length 3 at catch.duck:1:33\nok(12) err(nan: x) 0\ncount 2 r err(panic: index 5 out of range for length 3 at catch.duck:1:33)\n1 err(panic: index 5 out of range for length 1 at catch.duck:8:3)\ninner true\ntrue\nerr(panic: key not found: \"k\" at catch.duck:36:15)\nalive\n";
+const CATCH_OUT: &str = "ok(2)\ncaught: panic: index 9 out of range for length 3 at catch.auk:1:33\nok(12) err(nan: x) 0\ncount 2 r err(panic: index 5 out of range for length 3 at catch.auk:1:33)\n1 err(panic: index 5 out of range for length 1 at catch.auk:8:3)\ninner true\ntrue\nerr(panic: key not found: \"k\" at catch.auk:36:15)\nalive\n";
 
 /// `catch e` turns a panic (index, missing key, one re-raised by `await`) into an `Err`, passes
 /// `?`/`fail` errors through, composes with `else`, and changes the `var`s it captures; in the
-/// JIT and in a `duck build` executable.
+/// JIT and in an `auk build` executable.
 #[test]
 fn catch_recovers_panics() {
     let d = scratch("catch");
-    let p = d.join("catch.duck");
+    let p = d.join("catch.auk");
     fs::write(&p, CATCH_SRC).unwrap();
-    let o = duck_cmd().arg("run").arg("catch.duck").current_dir(&d).output().unwrap();
+    let o = auk_cmd().arg("run").arg("catch.auk").current_dir(&d).output().unwrap();
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}\n{err}");
     assert_eq!(out, CATCH_OUT, "stderr:\n{err}");
     let exe = d.join("catch");
-    let o = duck_cmd().args(["build", "catch.duck", "-o"]).arg(&exe).current_dir(&d).output().unwrap();
+    let o = auk_cmd().args(["build", "catch.auk", "-o"]).arg(&exe).current_dir(&d).output().unwrap();
     assert!(o.status.success(), "{:?}", text(&o));
     let o = Command::new(&exe).current_dir(&d).output().unwrap();
     assert_eq!(text(&o).0, CATCH_OUT);
@@ -981,7 +981,7 @@ fn task_panics_are_raised_at_await() {
     let (out, err) = text(&o);
     assert_eq!(o.status.code(), Some(101), "{out}\n{err}");
     assert_eq!(out, "before\n");
-    assert!(err.contains("panic: index 4 out of range for length 1\n  at ") && err.contains("task_await.duck:3:3"), "{err}");
+    assert!(err.contains("panic: index 4 out of range for length 1\n  at ") && err.contains("task_await.auk:3:3"), "{err}");
     let o = run_src("task_dropped", &format!("{src}fn go() uses time {{\n  let t = boom(4)\n  time.sleep(20)\n}}\nfn main() uses time {{\n  go()\n  print(\"after\")\n}}\n"));
     let (out, err) = text(&o);
     assert_eq!(o.status.code(), Some(101), "{out}\n{err}");
@@ -996,7 +996,7 @@ fn await_any_and_cancel() {
     // no leak check: cancelling (a panic) leaks what the stopped code owned
     let d = scratch("await_any");
     fs::write(
-        d.join("await_any.duck"),
+        d.join("await_any.auk"),
         r#"async fn slow(ms: int, v: int): int uses time {
   time.sleep(ms)
   v
@@ -1052,12 +1052,12 @@ fn main() uses time {
 "#,
     )
     .unwrap();
-    let o = duck_cmd().args(["run", "await_any.duck"]).current_dir(&d).output().unwrap();
+    let o = auk_cmd().args(["run", "await_any.auk"]).current_dir(&d).output().unwrap();
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}\n{err}");
     assert_eq!(
         out,
-        "1 ok(2)\n2 true\nerr(panic: cancelled at await_any.duck:12:3)\nerr(panic: cancelled at a blocking call)\nerr(panic: cancelled at a blocking call)\ntrue\n",
+        "1 ok(2)\n2 true\nerr(panic: cancelled at await_any.auk:12:3)\nerr(panic: cancelled at a blocking call)\nerr(panic: cancelled at a blocking call)\ntrue\n",
         "{err}"
     );
 }
@@ -1135,7 +1135,7 @@ fn main() uses time {
     );
 }
 
-// ---- duck run --live ----
+// ---- auk run --live ----
 
 /// Lines of a child's stderr, read on a thread, waited for with a deadline.
 struct Lines(std::sync::mpsc::Receiver<String>, Vec<String>);
@@ -1159,20 +1159,20 @@ impl Lines {
     }
 }
 
-/// `duck run --live`: an edited function body is swapped in while the program keeps its state;
+/// `auk run --live`: an edited function body is swapped in while the program keeps its state;
 /// a type error keeps the old code running; a changed struct layout restarts the program.
 #[test]
 fn live_reload_swaps_code_and_keeps_state() {
     let d = scratch("live");
-    let f = d.join("live.duck");
+    let f = d.join("live.auk");
     let src = |msg: &str, fields: &str, init: &str| {
         format!(
             "struct S {{ n: int{fields} }}\n\nfn msg(n: int): str = {msg}\n\nfn main() uses time {{\n  var s = S {{ n: 0{init} }}\n  while s.n < 2_000 {{\n    s.n += 1\n    eprint(msg(s.n))\n    time.sleep(20)\n  }}\n}}\n"
         )
     };
     fs::write(&f, src("\"a{n}\"", "", "")).unwrap();
-    let mut child = duck_cmd()
-        .args(["run", "--live", "live.duck"])
+    let mut child = auk_cmd()
+        .args(["run", "--live", "live.auk"])
         .current_dir(&d)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -1214,30 +1214,30 @@ fn live_reload_swaps_code_and_keeps_state() {
     }
 }
 
-/// `duck run --live` with supervision: a type only a supervised task uses changes shape, so just
+/// `auk run --live` with supervision: a type only a supervised task uses changes shape, so just
 /// that task is stopped and its supervisor starts it on the new code while `main` keeps going;
 /// a type `main` itself holds changes shape, so the whole program restarts.
 #[test]
 fn live_reload_restarts_only_the_tasks_using_a_changed_type() {
     let d = scratch("live_sup");
     fs::create_dir_all(d.join("src")).unwrap();
-    fs::write(d.join("quack.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\neffects = [\"time\"]\n\n[deps]\nsup = \"^0.1\"\n").unwrap();
+    fs::write(d.join("raft.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\neffects = [\"time\"]\n\n[deps]\nsup = \"^0.1\"\n").unwrap();
     let src = |counter: &str, init: &str, step: &str, main_ty: &str| {
         format!(
             "struct Counter {{ {counter} }}\nstruct Main {{ {main_ty} }}\n\nfn count(): ()! uses time {{\n  var c = Counter {{ {init} }}\n  while true {{\n    c.n += {step}\n    eprint(\"count {{c.n}}\")\n    time.sleep(20)\n  }}\n}}\n\nfn main(): int! uses time {{\n  let m = Main {{ a: 1 }}\n  eprint(\"main {{m.a}}\")\n  sup.run([sup.child(\"count\", () => count())], sup.one_for_one(5, 60_000))?\n  0\n}}\n"
         )
     };
-    let f = d.join("src/main.duck");
+    let f = d.join("src/main.auk");
     fs::write(&f, src("n: int", "n: 0", "1", "a: int")).unwrap();
-    let q = Command::new(env!("CARGO_BIN_EXE_quack"))
+    let q = Command::new(env!("CARGO_BIN_EXE_raft"))
         .arg("install")
         .current_dir(&d)
-        .env("QUACK_REGISTRY", Path::new(env!("CARGO_MANIFEST_DIR")).join("packages"))
+        .env("RAFT_REGISTRY", Path::new(env!("CARGO_MANIFEST_DIR")).join("packages"))
         .output()
         .unwrap();
     assert!(q.status.success(), "{:?}", text(&q));
-    let mut child = duck_cmd()
-        .args(["run", "--live", "src/main.duck"])
+    let mut child = auk_cmd()
+        .args(["run", "--live", "src/main.auk"])
         .current_dir(&d)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -1279,15 +1279,15 @@ fn error_files() -> Vec<PathBuf> {
     let mut paths: Vec<_> = fs::read_dir("tests/errors")
         .unwrap()
         .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|e| e == "duck"))
+        .filter(|p| p.extension().is_some_and(|e| e == "auk"))
         .collect();
     paths.sort();
     assert!(paths.len() >= 10, "too few error programs: {paths:?}");
     paths
 }
 
-/// Every `tests/errors/X.duck` starts with `// error: E0xxx <message substring>` and must fail
-/// `duck check` with exactly that code (the first error reported) and message, in both output modes.
+/// Every `tests/errors/X.auk` starts with `// error: E0xxx <message substring>` and must fail
+/// `auk check` with exactly that code (the first error reported) and message, in both output modes.
 #[test]
 fn error_programs_fail_with_their_code() {
     for path in error_files() {
@@ -1299,52 +1299,52 @@ fn error_programs_fail_with_their_code() {
         };
         assert!(code.len() == 5 && code.starts_with('E'), "{p}: bad code {code:?}");
 
-        let o = duck(&["check", p]);
+        let o = auk(&["check", p]);
         let (_, err) = text(&o);
         assert_eq!(o.status.code(), Some(1), "{p} should fail to check:\n{err}");
         let first = err.lines().find(|l| l.contains(": error[")).unwrap_or_else(|| panic!("{p}: no error in:\n{err}"));
         assert!(first.contains(&format!("error[{code}]: ")), "{p}: expected {code} first, got:\n{err}");
         assert!(first.contains(msg), "{p}: expected {msg:?} in:\n{first}");
 
-        let o = duck(&["check", p, "--json"]);
+        let o = auk(&["check", p, "--json"]);
         let (json, _) = text(&o);
         assert!(!o.status.success(), "{p}: {json}");
         assert!(json.contains(r#""ok":false"#) && json.contains(&format!(r#""code":"{code}","severity":"error""#)), "{p}: {json}");
     }
 }
 
-/// `duck check` accepts every example, with an empty JSON report.
+/// `auk check` accepts every example, with an empty JSON report.
 #[test]
 fn examples_check_clean_as_json() {
     setup();
     for e in fs::read_dir("examples").unwrap() {
         let p = e.unwrap().path();
-        if p.extension().is_none_or(|x| x != "duck") {
+        if p.extension().is_none_or(|x| x != "auk") {
             continue;
         }
         let p = p.to_str().unwrap();
-        let o = duck(&["check", p, "--json"]);
+        let o = auk(&["check", p, "--json"]);
         let (json, _) = text(&o);
         assert!(o.status.success() && json.contains(r#""ok":true,"diagnostics":[]"#), "{p}: {json}");
     }
 }
 
-/// `duck spec` prints the embedded language reference.
+/// `auk spec` prints the embedded language reference.
 #[test]
 fn spec() {
-    let o = duck(&["spec"]);
+    let o = auk(&["spec"]);
     assert!(o.status.success());
     assert_eq!(text(&o).0, fs::read_to_string("docs/spec.md").unwrap());
 }
 
-/// `duck` with no command, or an unknown one, prints the usage (listing every command) and exits 2.
+/// `auk` with no command, or an unknown one, prints the usage (listing every command) and exits 2.
 #[test]
 fn usage_lists_every_command() {
     for args in [&[][..], &["frobnicate"][..], &["check"][..]] {
-        let o = duck(args);
+        let o = auk(args);
         let (_, err) = text(&o);
         assert_eq!(o.status.code(), Some(2), "{args:?}");
-        for cmd in ["run", "build", "check", "test", "fmt", "explain", "pond", "lsp", "ir", "spec", "quack"] {
+        for cmd in ["run", "build", "check", "test", "fmt", "explain", "dive", "lsp", "ir", "spec", "raft"] {
             assert!(err.contains(&format!("  {cmd} ")) || err.contains(&format!("`{cmd}`")), "{args:?}: no {cmd} in:\n{err}");
         }
     }
@@ -1357,7 +1357,7 @@ fn usage_lists_every_command() {
 fn gui_pixel_helpers_draw_and_clip() {
     setup();
     let d = scratch("gui_pixels");
-    let f = d.join("px.duck");
+    let f = d.join("px.auk");
     fs::write(
         &f,
         r#"
@@ -1424,7 +1424,7 @@ fn main() {
 #[ignore]
 fn gui_window_round_trip() {
     setup();
-    let out = run_ok(&["run", "examples/gui_gradient.duck", "--for", "800"]);
+    let out = run_ok(&["run", "examples/gui_gradient.auk", "--for", "800"]);
     // a full frame at the start, one more per resize the system made (a display change), and a
     // partial one per mouse move over the window
     assert!(out.ends_with(" partial; 0x0 after closing\n") && out.contains(" full frames, "), "{out}");
@@ -1435,20 +1435,20 @@ fn gui_window_round_trip() {
 #[ignore]
 fn gui_text_window() {
     setup();
-    let out = run_ok(&["run", "examples/gui_text.duck", "--for", "500"]);
+    let out = run_ok(&["run", "examples/gui_text.auk", "--for", "500"]);
     assert!(out.ends_with("frames; text ok\n"), "{out}");
 }
 
 /// The pixels a program presents are what the window shows: `gui_gradient` is green at the
-/// bottom left and yellow at the bottom right (`DUCK_GUI_SNAP` saves the window as it closes).
+/// bottom left and yellow at the bottom right (`AUK_GUI_SNAP` saves the window as it closes).
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore]
 fn gui_window_shows_the_frame() {
     setup();
-    let snap = std::env::temp_dir().join(format!("duck-gui-snap-{}.ppm", std::process::id()));
+    let snap = std::env::temp_dir().join(format!("auk-gui-snap-{}.ppm", std::process::id()));
     let _ = fs::remove_file(&snap);
-    let o = duck_cmd().args(["run", "examples/gui_gradient.duck", "--for", "600"]).env("DUCK_GUI_SNAP", &snap).output().unwrap();
+    let o = auk_cmd().args(["run", "examples/gui_gradient.auk", "--for", "600"]).env("AUK_GUI_SNAP", &snap).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     // the window process writes it just after the program ends
     let mut data = Vec::new();

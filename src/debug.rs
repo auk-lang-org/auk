@@ -1,12 +1,12 @@
-//! `duck debug`: the debugger's command-line front end.
+//! `auk debug`: the debugger's command-line front end.
 //!
-//! It starts the program with `duck run --debug` in a child process and drives the debug engine
-//! (runtime/src/dbg.rs) over a private Unix socket (`DUCK_DEBUG`). Two modes:
+//! It starts the program with `auk run --debug` in a child process and drives the debug engine
+//! (runtime/src/dbg.rs) over a private Unix socket (`AUK_DEBUG`). Two modes:
 //!
 //! - **batch** (`--json`, `--batch`, or stdin not a terminal): set the `--break` points, run,
 //!   and at every stop record where it is, the locals (`--print` names, or all) and the stack,
 //!   then continue; at the end, the program's exit code and output. Made for scripts and agents
-//!   (`duck mcp`'s `duck_debug` tool): one command, no conversation.
+//!   (`auk mcp`'s `auk_debug` tool): one command, no conversation.
 //! - **interactive** (a terminal, or `--repl`): a gdb-style prompt. Ctrl-C pauses the program.
 //!
 //! The program gets no stdin (the terminal belongs to the prompt).
@@ -25,11 +25,11 @@ use std::{env, fs, thread};
 use super::json::{self, Json, obj};
 
 const USAGE: &str = "\
-usage: duck debug [options] <file.duck> [args...]
+usage: auk debug [options] <file.auk> [args...]
   --break, -b <file:line|fn>   stop there (repeatable); `<place> if <cond>`: only when cond holds
   --print, -p <a,b,...>        batch: show only these locals at each stop (default: all);
                                an item that isn't a name is evaluated (`p.x`, `xs[0]`)
-  --eval, -e <expr>            batch: also evaluate this Duck expression at each stop
+  --eval, -e <expr>            batch: also evaluate this Auk expression at each stop
   --catch all|uncaught|none    stop on panics (default: uncaught)
   --max-stops N                batch: end the program after N stops (default 20)
   --timeout S                  batch: after S seconds, pause, report where it is, end it
@@ -43,7 +43,7 @@ const REPL_HELP: &str = "\
   next, n               step over                  catch all|uncaught|none   stop on panics
   step, s               step into                  bt, where                 the stack
   finish, f             step out                   frame N, up, down         select a frame
-  print, p [names|expr] locals, or a Duck expression (`p xs.len()`, `p x = 5`)
+  print, p [names|expr] locals, or an Auk expression (`p xs.len()`, `p x = 5`)
   threads, thread N     list / select threads      break <place> if <cond>   conditional
   list, l               source around the line     quit, q                   end the program
   (an empty line repeats the last command; Ctrl-C pauses a running program)";
@@ -104,12 +104,12 @@ pub fn run(args: &[String]) -> i32 {
     let o = match parse_opts(args) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("duck debug: {e}\n{USAGE}");
+            eprintln!("auk debug: {e}\n{USAGE}");
             return 2;
         }
     };
     if !Path::new(&o.file).is_file() {
-        eprintln!("duck debug: cannot read {}", o.file);
+        eprintln!("auk debug: cannot read {}", o.file);
         return 2;
     }
     let batch = o.batch.unwrap_or(!std::io::stdin().is_terminal());
@@ -152,23 +152,23 @@ pub(crate) struct Session {
     output: Option<thread::JoinHandle<(String, String)>>,
 }
 
-/// Start `duck run --debug <file>` and wait for its engine to say `ready`. Err: the exit code
+/// Start `auk run --debug <file>` and wait for its engine to say `ready`. Err: the exit code
 /// of a program that never connected (it didn't compile) and its output (Inherit: already shown).
 pub(crate) fn launch(file: &str, args: &[String], capture: Capture) -> Result<Session, (i32, String)> {
     let dir = env::temp_dir();
     static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let sock = dir.join(format!("duck-dbg-{}-{}.sock", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+    let sock = dir.join(format!("auk-dbg-{}-{}.sock", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
     let _ = fs::remove_file(&sock);
     let l = match UnixListener::bind(&sock) {
         Ok(l) => l,
         Err(e) => {
-            return Err((1, format!("duck debug: cannot listen on {}: {e}\n", sock.display())));
+            return Err((1, format!("auk debug: cannot listen on {}: {e}\n", sock.display())));
         }
     };
     let _ = l.set_nonblocking(true);
-    let exe = env::current_exe().unwrap_or_else(|_| PathBuf::from("duck"));
+    let exe = env::current_exe().unwrap_or_else(|_| PathBuf::from("auk"));
     let mut cmd = Command::new(exe);
-    cmd.arg("run").arg("--debug").arg(file).args(args).env("DUCK_DEBUG", &sock).stdin(Stdio::null());
+    cmd.arg("run").arg("--debug").arg(file).args(args).env("AUK_DEBUG", &sock).stdin(Stdio::null());
     // its own process group: Ctrl-C reaches only the debugger, which pauses the program
     cmd.process_group(0);
     if capture != Capture::Inherit {
@@ -176,7 +176,7 @@ pub(crate) fn launch(file: &str, args: &[String], capture: Capture) -> Result<Se
     }
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return Err((1, format!("duck debug: cannot start the program: {e}\n"))),
+        Err(e) => return Err((1, format!("auk debug: cannot start the program: {e}\n"))),
     };
     let (tx, rx) = channel();
     let mut streams = Vec::new();
@@ -235,7 +235,7 @@ pub(crate) fn launch(file: &str, args: &[String], capture: Capture) -> Result<Se
             }
             Err(e) => {
                 let _ = child.kill();
-                return Err((1, format!("duck debug: {e}\n")));
+                return Err((1, format!("auk debug: {e}\n")));
             }
         }
     };
@@ -257,7 +257,7 @@ pub(crate) fn launch(file: &str, args: &[String], capture: Capture) -> Result<Se
         In::Ev(e) if e.get("ev").as_str() == Some("ready") => Ok(s),
         _ => {
             let _ = s.child.kill();
-            Err((1, "duck debug: the program did not start its debugger\n".into()))
+            Err((1, "auk debug: the program did not start its debugger\n".into()))
         }
     }
 }
@@ -590,7 +590,7 @@ fn repl(o: &Opts) -> i32 {
     for b in &o.breaks {
         r.command(&format!("break {b}"));
     }
-    println!("duck debug: {} (`run` starts it, `help` lists commands)", o.file);
+    println!("auk debug: {} (`run` starts it, `help` lists commands)", o.file);
     r.prompt();
     // what is typed while the program runs waits for the next stop (as in gdb); `quit` doesn't
     let mut held: VecDeque<In> = VecDeque::new();
@@ -654,7 +654,7 @@ fn repl(o: &Opts) -> i32 {
 
 impl Repl {
     fn prompt(&self) {
-        print!("(duck) ");
+        print!("(auk) ");
         let _ = std::io::stdout().flush();
     }
 
@@ -811,7 +811,7 @@ impl Repl {
                 if need_stop(self) {
                     let r = self.s.cmd(&format!("vars {} {}", self.frame, self.thread));
                     let names: Vec<String> = rest.iter().filter(|w| **w != "locals").map(|w| w.to_string()).collect();
-                    // not just names of locals: a Duck expression (or an assignment, `x = 5`)
+                    // not just names of locals: an Auk expression (or an assignment, `x = 5`)
                     let known = locals(&r, None);
                     if !names.is_empty() && !names.iter().all(|n| known.iter().any(|(k, _, _)| k == n)) {
                         let text = line.split_once(char::is_whitespace).map_or("", |(_, t)| t.trim());
@@ -848,7 +848,7 @@ impl Repl {
                         let id = t.get("id").as_i64().unwrap_or(0);
                         let mark = if id == self.thread { "*" } else { " " };
                         let f = t.get("frame");
-                        println!("{mark}{id} {}", if f.is_null() { "(not in Duck code)".to_string() } else { at(f) });
+                        println!("{mark}{id} {}", if f.is_null() { "(not in Auk code)".to_string() } else { at(f) });
                     }
                 }
             }

@@ -3,215 +3,215 @@
 use std::ffi::{c_char, c_void};
 use std::ptr::null_mut;
 
-use crate::rc::{duck_hash_int, duck_ops_float, duck_ops_str, duck_release, duck_retain};
-use crate::str::{duck_str_eq, duck_str_from_bool, duck_str_from_float, duck_str_from_int, duck_str_hash, duck_str_lit, duck_str_quote};
+use crate::rc::{auk_hash_int, auk_ops_float, auk_ops_str, auk_release, auk_retain};
+use crate::str::{auk_str_eq, auk_str_from_bool, auk_str_from_float, auk_str_from_int, auk_str_hash, auk_str_lit, auk_str_quote};
 use crate::*;
 
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_value_null() -> DuckValue {
-    DuckValue { tag: DUCK_V_NULL, u: DuckValueU { i: 0 } }
+pub extern "C" fn auk_value_null() -> AukValue {
+    AukValue { tag: AUK_V_NULL, u: AukValueU { i: 0 } }
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_value_bool(b: bool) -> DuckValue {
+pub extern "C" fn auk_value_bool(b: bool) -> AukValue {
     // Zero the whole union first, as C's compound literal does.
-    let mut u = DuckValueU { i: 0 };
+    let mut u = AukValueU { i: 0 };
     u.b = b;
-    DuckValue { tag: DUCK_V_BOOL, u }
+    AukValue { tag: AUK_V_BOOL, u }
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_value_int(i: i64) -> DuckValue {
-    DuckValue { tag: DUCK_V_INT, u: DuckValueU { i } }
+pub extern "C" fn auk_value_int(i: i64) -> AukValue {
+    AukValue { tag: AUK_V_INT, u: AukValueU { i } }
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_value_float(f: f64) -> DuckValue {
-    DuckValue { tag: DUCK_V_FLOAT, u: DuckValueU { f } }
+pub extern "C" fn auk_value_float(f: f64) -> AukValue {
+    AukValue { tag: AUK_V_FLOAT, u: AukValueU { f } }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_str(s: *mut DuckStr) -> DuckValue {
-    let s = if s.is_null() { unsafe { duck_str_lit(c"".as_ptr()) } } else { unsafe { duck_retain(s.cast()).cast() } };
-    DuckValue { tag: DUCK_V_STR, u: DuckValueU { s } }
+pub unsafe extern "C" fn auk_value_str(s: *mut AukStr) -> AukValue {
+    let s = if s.is_null() { unsafe { auk_str_lit(c"".as_ptr()) } } else { unsafe { auk_retain(s.cast()).cast() } };
+    AukValue { tag: AUK_V_STR, u: AukValueU { s } }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_list(xs: *mut DuckArr) -> DuckValue {
-    let list = if xs.is_null() { unsafe { duck_value_list_new() } } else { unsafe { duck_retain(xs.cast()).cast() } };
-    DuckValue { tag: DUCK_V_LIST, u: DuckValueU { list } }
+pub unsafe extern "C" fn auk_value_list(xs: *mut AukArr) -> AukValue {
+    let list = if xs.is_null() { unsafe { auk_value_list_new() } } else { unsafe { auk_retain(xs.cast()).cast() } };
+    AukValue { tag: AUK_V_LIST, u: AukValueU { list } }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_map(m: *mut DuckMap) -> DuckValue {
-    let map = if m.is_null() { unsafe { duck_value_map_new() } } else { unsafe { duck_retain(m.cast()).cast() } };
-    DuckValue { tag: DUCK_V_MAP, u: DuckValueU { map } }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_list_new() -> *mut DuckArr {
-    unsafe { crate::arr::duck_arr_new(&duck_ops_value, 0) }
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_map_new() -> *mut DuckMap {
-    unsafe { crate::map::duck_map_new(&duck_ops_str, &duck_ops_value) }
+pub unsafe extern "C" fn auk_value_map(m: *mut AukMap) -> AukValue {
+    let map = if m.is_null() { unsafe { auk_value_map_new() } } else { unsafe { auk_retain(m.cast()).cast() } };
+    AukValue { tag: AUK_V_MAP, u: AukValueU { map } }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_map_put(pm: *mut *mut DuckMap, key: *const c_char, val: DuckValue) {
+pub unsafe extern "C" fn auk_value_list_new() -> *mut AukArr {
+    unsafe { crate::arr::auk_arr_new(&auk_ops_value, 0) }
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk_value_map_new() -> *mut AukMap {
+    unsafe { crate::map::auk_map_new(&auk_ops_str, &auk_ops_value) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk_value_map_put(pm: *mut *mut AukMap, key: *const c_char, val: AukValue) {
     unsafe {
-        let k = duck_str_lit(key);
-        crate::map::duck_map_set(pm, (&k as *const *mut DuckStr).cast(), (&val as *const DuckValue).cast());
-        duck_release(k.cast());
+        let k = auk_str_lit(key);
+        crate::map::auk_map_set(pm, (&k as *const *mut AukStr).cast(), (&val as *const AukValue).cast());
+        auk_release(k.cast());
     }
 }
 
-fn value_ptr(v: DuckValue) -> *mut c_void {
+fn value_ptr(v: AukValue) -> *mut c_void {
     unsafe {
         match v.tag {
-            DUCK_V_STR => v.u.s.cast(),
-            DUCK_V_LIST => v.u.list.cast(),
-            DUCK_V_MAP => v.u.map.cast(),
+            AUK_V_STR => v.u.s.cast(),
+            AUK_V_LIST => v.u.list.cast(),
+            AUK_V_MAP => v.u.map.cast(),
             _ => null_mut(),
         }
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_retain(v: DuckValue) {
-    unsafe { duck_retain(value_ptr(v)) };
+pub unsafe extern "C" fn auk_value_retain(v: AukValue) {
+    unsafe { auk_retain(value_ptr(v)) };
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_release(v: DuckValue) {
-    unsafe { duck_release(value_ptr(v)) }
+pub unsafe extern "C" fn auk_value_release(v: AukValue) {
+    unsafe { auk_release(value_ptr(v)) }
 }
 
 fn tag_name(t: u32) -> &'static std::ffi::CStr {
     match t {
-        DUCK_V_NULL => c"Null",
-        DUCK_V_BOOL => c"Bool",
-        DUCK_V_INT => c"Int",
-        DUCK_V_FLOAT => c"Float",
-        DUCK_V_STR => c"Str",
-        DUCK_V_LIST => c"List",
-        DUCK_V_MAP => c"Map",
+        AUK_V_NULL => c"Null",
+        AUK_V_BOOL => c"Bool",
+        AUK_V_INT => c"Int",
+        AUK_V_FLOAT => c"Float",
+        AUK_V_STR => c"Str",
+        AUK_V_LIST => c"List",
+        AUK_V_MAP => c"Map",
         _ => c"?",
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn duck_value_tag_name(t: u32) -> *const c_char {
+pub extern "C" fn auk_value_tag_name(t: u32) -> *const c_char {
     tag_name(t).as_ptr()
 }
 
-fn mismatch(loc: *const c_char, want: &str, v: DuckValue) -> ! {
+fn mismatch(loc: *const c_char, want: &str, v: AukValue) -> ! {
     rt_panic!(loc, "expected {}, got {}", want, tag_name(v.tag).to_str().unwrap_or("?"))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_as_bool(v: DuckValue, loc: *const c_char) -> bool {
-    if v.tag != DUCK_V_BOOL {
+pub unsafe extern "C" fn auk_value_as_bool(v: AukValue, loc: *const c_char) -> bool {
+    if v.tag != AUK_V_BOOL {
         mismatch(loc, "Bool", v);
     }
     unsafe { v.u.b }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_as_int(v: DuckValue, loc: *const c_char) -> i64 {
-    if v.tag != DUCK_V_INT {
+pub unsafe extern "C" fn auk_value_as_int(v: AukValue, loc: *const c_char) -> i64 {
+    if v.tag != AUK_V_INT {
         mismatch(loc, "Int", v);
     }
     unsafe { v.u.i }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_as_float(v: DuckValue, loc: *const c_char) -> f64 {
-    if v.tag == DUCK_V_INT {
+pub unsafe extern "C" fn auk_value_as_float(v: AukValue, loc: *const c_char) -> f64 {
+    if v.tag == AUK_V_INT {
         return unsafe { v.u.i } as f64;
     }
-    if v.tag != DUCK_V_FLOAT {
+    if v.tag != AUK_V_FLOAT {
         mismatch(loc, "Float", v);
     }
     unsafe { v.u.f }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_as_str(v: DuckValue, loc: *const c_char) -> *mut DuckStr {
-    if v.tag != DUCK_V_STR {
+pub unsafe extern "C" fn auk_value_as_str(v: AukValue, loc: *const c_char) -> *mut AukStr {
+    if v.tag != AUK_V_STR {
         mismatch(loc, "Str", v);
     }
     unsafe { v.u.s }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_as_list(v: DuckValue, loc: *const c_char) -> *mut DuckArr {
-    if v.tag != DUCK_V_LIST {
+pub unsafe extern "C" fn auk_value_as_list(v: AukValue, loc: *const c_char) -> *mut AukArr {
+    if v.tag != AUK_V_LIST {
         mismatch(loc, "List", v);
     }
     unsafe { v.u.list }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_as_map(v: DuckValue, loc: *const c_char) -> *mut DuckMap {
-    if v.tag != DUCK_V_MAP {
+pub unsafe extern "C" fn auk_value_as_map(v: AukValue, loc: *const c_char) -> *mut AukMap {
+    if v.tag != AUK_V_MAP {
         mismatch(loc, "Map", v);
     }
     unsafe { v.u.map }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_eq(a: DuckValue, b: DuckValue) -> bool {
+pub unsafe extern "C" fn auk_value_eq(a: AukValue, b: AukValue) -> bool {
     if a.tag != b.tag {
         return false;
     }
     unsafe {
         match a.tag {
-            DUCK_V_NULL => true,
-            DUCK_V_BOOL => a.u.b == b.u.b,
-            DUCK_V_INT => a.u.i == b.u.i,
-            DUCK_V_FLOAT => a.u.f == b.u.f,
-            DUCK_V_STR => duck_str_eq(a.u.s, b.u.s),
-            DUCK_V_LIST => crate::arr::duck_arr_eq(a.u.list, b.u.list),
-            DUCK_V_MAP => crate::map::duck_map_eq(a.u.map, b.u.map),
+            AUK_V_NULL => true,
+            AUK_V_BOOL => a.u.b == b.u.b,
+            AUK_V_INT => a.u.i == b.u.i,
+            AUK_V_FLOAT => a.u.f == b.u.f,
+            AUK_V_STR => auk_str_eq(a.u.s, b.u.s),
+            AUK_V_LIST => crate::arr::auk_arr_eq(a.u.list, b.u.list),
+            AUK_V_MAP => crate::map::auk_map_eq(a.u.map, b.u.map),
             _ => false,
         }
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_value_show(v: DuckValue) -> *mut DuckStr {
+pub unsafe extern "C" fn auk_value_show(v: AukValue) -> *mut AukStr {
     unsafe {
         match v.tag {
-            DUCK_V_NULL => duck_str_lit(c"Null".as_ptr()),
-            DUCK_V_BOOL => duck_str_from_bool(v.u.b),
-            DUCK_V_INT => duck_str_from_int(v.u.i),
-            DUCK_V_FLOAT => duck_str_from_float(v.u.f),
-            DUCK_V_STR => duck_str_quote(v.u.s),
-            DUCK_V_LIST => crate::arr::duck_arr_show(v.u.list),
-            DUCK_V_MAP => crate::map::duck_map_show(v.u.map),
-            _ => duck_str_lit(c"?".as_ptr()),
+            AUK_V_NULL => auk_str_lit(c"Null".as_ptr()),
+            AUK_V_BOOL => auk_str_from_bool(v.u.b),
+            AUK_V_INT => auk_str_from_int(v.u.i),
+            AUK_V_FLOAT => auk_str_from_float(v.u.f),
+            AUK_V_STR => auk_str_quote(v.u.s),
+            AUK_V_LIST => crate::arr::auk_arr_show(v.u.list),
+            AUK_V_MAP => crate::map::auk_map_show(v.u.map),
+            _ => auk_str_lit(c"?".as_ptr()),
         }
     }
 }
 
 unsafe extern "C" fn v_retain(p: *mut c_void) {
-    unsafe { duck_value_retain(*(p as *const DuckValue)) }
+    unsafe { auk_value_retain(*(p as *const AukValue)) }
 }
 unsafe extern "C" fn v_release(p: *mut c_void) {
-    unsafe { duck_value_release(*(p as *const DuckValue)) }
+    unsafe { auk_value_release(*(p as *const AukValue)) }
 }
 unsafe extern "C" fn v_eq(a: *const c_void, b: *const c_void) -> bool {
-    unsafe { duck_value_eq(*(a as *const DuckValue), *(b as *const DuckValue)) }
+    unsafe { auk_value_eq(*(a as *const AukValue), *(b as *const AukValue)) }
 }
 unsafe extern "C" fn v_hash(p: *const c_void) -> u64 {
     unsafe {
-        let v = &*(p as *const DuckValue);
+        let v = &*(p as *const AukValue);
         match v.tag {
-            DUCK_V_STR => duck_str_hash(v.u.s),
-            DUCK_V_LIST => crate::arr::duck_arr_hash(v.u.list),
-            DUCK_V_FLOAT => (duck_ops_float.hash.unwrap())((&v.u.f as *const f64).cast()),
-            DUCK_V_INT => duck_hash_int(v.u.i),
-            DUCK_V_BOOL => duck_hash_int(v.u.b as i64 + 2),
+            AUK_V_STR => auk_str_hash(v.u.s),
+            AUK_V_LIST => crate::arr::auk_arr_hash(v.u.list),
+            AUK_V_FLOAT => (auk_ops_float.hash.unwrap())((&v.u.f as *const f64).cast()),
+            AUK_V_INT => auk_hash_int(v.u.i),
+            AUK_V_BOOL => auk_hash_int(v.u.b as i64 + 2),
             _ => (v.tag as u64).wrapping_mul(7919),
         }
     }
 }
-unsafe extern "C" fn v_show(p: *const c_void) -> *mut DuckStr {
-    unsafe { duck_value_show(*(p as *const DuckValue)) }
+unsafe extern "C" fn v_show(p: *const c_void) -> *mut AukStr {
+    unsafe { auk_value_show(*(p as *const AukValue)) }
 }
 
 #[unsafe(no_mangle)]
-pub static duck_ops_value: DuckElemOps = DuckElemOps {
-    size: size_of::<DuckValue>(),
+pub static auk_ops_value: AukElemOps = AukElemOps {
+    size: size_of::<AukValue>(),
     retain: Some(v_retain),
     release: Some(v_release),
     eq: Some(v_eq),

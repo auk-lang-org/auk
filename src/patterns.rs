@@ -47,7 +47,7 @@ pub fn check(tp: &TypedProgram) -> Vec<FileDiag> {
         if tp.program.is_core(info.module) {
             continue;
         }
-        let FnKind::Duck { item, clauses, header } = &info.kind else { continue };
+        let FnKind::Auk { item, clauses, header } = &info.kind else { continue };
         let Item::Fn(g) = &tp.program.mods[info.module].ast.items[*item] else { continue };
         cx.m = info.module;
         let cls: Vec<&FnClause> = clauses.iter().map(|&i| &g.clauses[i]).collect();
@@ -760,7 +760,7 @@ impl<'a> Cx<'a> {
 
     // ---- showing witnesses ----
 
-    /// A witness as Duck pattern text. With `names`, wildcards inside variants become their
+    /// A witness as Auk pattern text. With `names`, wildcards inside variants become their
     /// field names (for a fix-it that inserts a clause or arm), each used once.
     fn show(&self, w: &P, ty: &Ty, names: &mut Option<HashSet<String>>, hint: Option<&str>) -> String {
         let wild = |names: &mut Option<HashSet<String>>, hint: Option<&str>| -> String {

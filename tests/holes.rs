@@ -1,4 +1,4 @@
-//! `duck holes`: the brief for every `??` hole (expected type, scope, contracts, tests), as text
+//! `auk holes`: the brief for every `??` hole (expected type, scope, contracts, tests), as text
 //! and as JSON, for a single file and for a project with a hole in a submodule.
 
 #[path = "../src/json.rs"]
@@ -11,14 +11,14 @@ use std::process::{Command, Output};
 
 use json::Json;
 
-fn duck(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_duck")).args(args).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap()
+fn auk(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_auk")).args(args).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap()
 }
 
 fn holes_json(file: &str) -> Json {
-    let o = duck(&["holes", file, "--json"]);
+    let o = auk(&["holes", file, "--json"]);
     let out = String::from_utf8_lossy(&o.stdout);
-    assert!(o.status.success(), "duck holes failed:\n{out}\n{}", String::from_utf8_lossy(&o.stderr));
+    assert!(o.status.success(), "auk holes failed:\n{out}\n{}", String::from_utf8_lossy(&o.stderr));
     json::parse(&out).unwrap_or_else(|e| panic!("bad JSON ({e}): {out}"))
 }
 
@@ -39,7 +39,7 @@ fn scratch(name: &str) -> PathBuf {
 
 #[test]
 fn hatch_example_has_three_holes() {
-    let j = holes_json("examples/hatch.duck");
+    let j = holes_json("examples/hatch.auk");
     assert_eq!(j.get("ok"), &Json::Bool(true));
     let hs = j.get("holes").as_arr();
     assert_eq!(hs.len(), 3, "{j}");
@@ -49,7 +49,7 @@ fn hatch_example_has_three_holes() {
     assert_eq!(names, ["median", "dedup", "seconds"]);
     for (i, h) in hs.iter().enumerate() {
         assert_eq!(h.get("index").as_i64(), Some(i as i64 + 1));
-        assert_eq!(h.get("file").as_str(), Some("examples/hatch.duck"));
+        assert_eq!(h.get("file").as_str(), Some("examples/hatch.auk"));
         assert_eq!(h.get("body"), &Json::Bool(true), "each hole is a whole `{{ ?? }}` body");
         assert_eq!(h.get("end_col").as_i64(), Some(h.get("col").as_i64().unwrap() + 2));
     }
@@ -88,15 +88,15 @@ fn hatch_example_has_three_holes() {
 
 #[test]
 fn text_brief() {
-    let o = duck(&["holes", "examples/hatch.duck"]);
+    let o = auk(&["holes", "examples/hatch.auk"]);
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(o.status.success());
     for want in [
-        "hole 1 at examples/hatch.duck:6:3 in fn median\n  expected type: float\n",
+        "hole 1 at examples/hatch.auk:6:3 in fn median\n  expected type: float\n",
         "    /// Median of a non-empty list.\n    fn median(xs: [float]): float\n      requires xs.len() > 0\n",
         "  in scope:\n    xs: [float]\n",
         "  tests that call it:\n    test \"median\" {\n      assert median([3.0, 1.0, 2.0]) == 2.0\n",
-        "hole 3 at examples/hatch.duck:18:3 in fn seconds\n  expected type: int!DurErr\n",
+        "hole 3 at examples/hatch.auk:18:3 in fn seconds\n  expected type: int!DurErr\n",
         "      ensures result >= 0\n",
     ] {
         assert!(out.contains(want), "missing {want:?} in:\n{out}");
@@ -105,7 +105,7 @@ fn text_brief() {
 
 #[test]
 fn no_holes() {
-    let o = duck(&["holes", "examples/fib.duck", "--json"]);
+    let o = auk(&["holes", "examples/fib.auk", "--json"]);
     let j = json::parse(&String::from_utf8_lossy(&o.stdout)).unwrap();
     assert!(o.status.success());
     assert!(j.get("holes").as_arr().is_empty());
@@ -115,23 +115,23 @@ fn no_holes() {
 fn project_hole_in_a_submodule() {
     let d = scratch("proj");
     fs::create_dir_all(d.join("src")).unwrap();
-    fs::write(d.join("quack.toml"), "[package]\nname = \"proj\"\nversion = \"0.1.0\"\n").unwrap();
+    fs::write(d.join("raft.toml"), "[package]\nname = \"proj\"\nversion = \"0.1.0\"\n").unwrap();
     fs::write(
-        d.join("src/main.duck"),
+        d.join("src/main.auk"),
         "fn main() {\n  print(geo.scale([1, 2], 3))\n}\n\ntest \"scale\" {\n  assert geo.scale([1], 2) == [4]\n}\n\ntest \"other\" {\n  assert 1 + 1 == 2\n}\n",
     )
     .unwrap();
     fs::write(
-        d.join("src/geo.duck"),
+        d.join("src/geo.auk"),
         "/// Multiply by twice `f`.\npub fn scale(xs: [int], f: int): [int] {\n  let k = f * 2\n  for i in 0..3 {\n    let gone = i\n  }\n  xs.map(x => {\n    let y = x * k\n    ??\n  })\n}\n\nfn helper(s: str): int = s.len()\n",
     )
     .unwrap();
-    let main = d.join("src/main.duck").display().to_string();
+    let main = d.join("src/main.auk").display().to_string();
     let j = holes_json(&main);
     let hs = j.get("holes").as_arr();
     assert_eq!(hs.len(), 1, "{j}");
     let h = &hs[0];
-    assert!(h.get("file").as_str().unwrap().ends_with("src/geo.duck"), "{h}");
+    assert!(h.get("file").as_str().unwrap().ends_with("src/geo.auk"), "{h}");
     assert_eq!((h.get("line").as_i64(), h.get("col").as_i64()), (Some(9), Some(5)));
     assert_eq!(h.get("expected").as_str(), Some("int"));
     assert_eq!(h.get("body"), &Json::Bool(false));
@@ -148,9 +148,9 @@ fn project_hole_in_a_submodule() {
 #[test]
 fn type_errors_fail_but_still_brief() {
     let d = scratch("broken");
-    let f = d.join("b.duck");
+    let f = d.join("b.auk");
     fs::write(&f, "fn f(n: int): int {\n  let s: str = 1\n  ??\n}\n").unwrap();
-    let o = duck(&["holes", f.to_str().unwrap(), "--json"]);
+    let o = auk(&["holes", f.to_str().unwrap(), "--json"]);
     assert_eq!(o.status.code(), Some(1));
     let j = json::parse(&String::from_utf8_lossy(&o.stdout)).unwrap();
     assert_eq!(j.get("ok"), &Json::Bool(false));

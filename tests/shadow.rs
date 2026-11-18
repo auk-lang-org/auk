@@ -1,5 +1,5 @@
 //! Locals named like modules (card #518), error cascades, and the `??`, `..base` and `for c in s`
-//! diagnostics, through `duck check --json` and `duck test`.
+//! diagnostics, through `auk check --json` and `auk test`.
 
 
 use std::fs;
@@ -7,14 +7,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-fn duck(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_duck")).args(args).output().unwrap()
+fn auk(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_auk")).args(args).output().unwrap()
 }
 
 fn scratch() -> PathBuf {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!("duck-shadow-{}-{n}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("auk-shadow-{}-{n}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
@@ -34,7 +34,7 @@ struct D {
 
 /// `check --json` on a file: the diagnostics, and whether the exit code was 0.
 fn check_path(path: &Path) -> (Vec<D>, bool) {
-    let out = duck(&["check", path.to_str().unwrap(), "--json"]);
+    let out = auk(&["check", path.to_str().unwrap(), "--json"]);
     let json = String::from_utf8(out.stdout).unwrap();
     let v = Json::parse(&json);
     let ds: Vec<D> = v
@@ -65,7 +65,7 @@ fn check_path(path: &Path) -> (Vec<D>, bool) {
 
 fn check(src: &str) -> Vec<D> {
     let dir = scratch();
-    let path = dir.join("t.duck");
+    let path = dir.join("t.auk");
     fs::write(&path, src).unwrap();
     let (ds, _) = check_path(&path);
     let _ = fs::remove_dir_all(&dir);
@@ -105,27 +105,27 @@ fn apply_fixes(src: &str, fixes: &[(u32, u32, u32, u32, String)]) -> String {
     fs.into_iter().fold(src.to_string(), |s, f| apply_fix(&s, f))
 }
 
-/// `duck test` on `src`: did every test pass? (and the output)
+/// `auk test` on `src`: did every test pass? (and the output)
 fn tests_pass(src: &str) -> (bool, String) {
     let dir = scratch();
-    let path = dir.join("t.duck");
+    let path = dir.join("t.auk");
     fs::write(&path, src).unwrap();
-    let out = duck(&["test", path.to_str().unwrap()]);
+    let out = auk(&["test", path.to_str().unwrap()]);
     let _ = fs::remove_dir_all(&dir);
     (out.status.success(), format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
 }
 
-/// A project `app` with the given extra files (relative paths) and `src/main.duck`.
+/// A project `app` with the given extra files (relative paths) and `src/main.auk`.
 fn project(files: &[(&str, &str)], main: &str) -> PathBuf {
     let dir = scratch();
-    fs::write(dir.join("quack.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n").unwrap();
+    fs::write(dir.join("raft.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n").unwrap();
     for (p, src) in files {
         let path = dir.join(p);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, src).unwrap();
     }
     fs::create_dir_all(dir.join("src")).unwrap();
-    fs::write(dir.join("src/main.duck"), main).unwrap();
+    fs::write(dir.join("src/main.auk"), main).unwrap();
     dir
 }
 
@@ -211,9 +211,9 @@ fn no_effect_fix_for_a_local() {
 /// an error where it is used as a path (E0116), with no other diagnostic about the call.
 #[test]
 fn local_named_like_a_project_module_or_dependency_is_an_error() {
-    let geo = [("src/geo.duck", "pub fn area(w: int, h: int): int = w * h\npub fn first(xs: [int]): int = 0\n")];
+    let geo = [("src/geo.auk", "pub fn area(w: int, h: int): int = w * h\npub fn first(xs: [int]): int = 0\n")];
     let dir = project(&geo, "fn f(geo: [int]): int? = geo.first()\nfn main() {}\n");
-    let (ds, ok) = check_path(&dir.join("src/main.duck"));
+    let (ds, ok) = check_path(&dir.join("src/main.auk"));
     assert!(!ok);
     assert_eq!(ds.len(), 1, "{ds:#?}");
     assert_eq!((ds[0].code.as_str(), ds[0].message.as_str()), ("E0116", "`geo` is both a local and the module `app.geo`, so `geo.` is ambiguous"));
@@ -221,31 +221,31 @@ fn local_named_like_a_project_module_or_dependency_is_an_error() {
     assert!(ds[0].fixes.is_empty(), "{ds:#?}");
     // the module is fine when no local shadows it, and a local of another name is fine
     let dir = project(&geo, "fn f(g: [int]): int = geo.area(g.len(), 2)\nfn main() {}\n");
-    assert!(check_path(&dir.join("src/main.duck")).1);
+    assert!(check_path(&dir.join("src/main.auk")).1);
     // using the local as a plain value (no dot) is fine
     let dir = project(&geo, "fn f(geo: [int]): int = len(geo)\nfn main() {}\n");
-    assert!(check_path(&dir.join("src/main.duck")).1, "{:#?}", check_path(&dir.join("src/main.duck")).0);
+    assert!(check_path(&dir.join("src/main.auk")).1, "{:#?}", check_path(&dir.join("src/main.auk")).0);
 
     // a dependency
     let dep = [
-        ("quack.toml", "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[deps]\njson = \"^0.1\"\n"),
-        (".quack/json/quack.toml", "[package]\nname = \"json\"\nversion = \"0.1.0\"\n"),
-        (".quack/json/src/lib.duck", "pub fn parse(s: str): int = s.len()\n"),
+        ("raft.toml", "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[deps]\njson = \"^0.1\"\n"),
+        (".raft/json/raft.toml", "[package]\nname = \"json\"\nversion = \"0.1.0\"\n"),
+        (".raft/json/src/lib.auk", "pub fn parse(s: str): int = s.len()\n"),
     ];
     let dir = project(&dep, "fn f(json: str): int = json.parse(\"x\")\nfn main() {}\n");
-    let (ds, _) = check_path(&dir.join("src/main.duck"));
+    let (ds, _) = check_path(&dir.join("src/main.auk"));
     assert_eq!(ds.len(), 1, "{ds:#?}");
     assert_eq!((ds[0].code.as_str(), ds[0].message.as_str()), ("E0116", "`json` is both a local and the dependency `json`, so `json.` is ambiguous"));
     // also in a closure and a field access
     let dir = project(&dep, "fn f(xs: [str]): [int] = xs.map(json => json.len())\nfn main() {}\n");
-    let (ds, _) = check_path(&dir.join("src/main.duck"));
+    let (ds, _) = check_path(&dir.join("src/main.auk"));
     assert_eq!(ds.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["E0116"], "{ds:#?}");
     let dir = project(&dep, "fn main() { print(json.parse(\"ab\")) }\n");
-    assert!(check_path(&dir.join("src/main.duck")).1);
+    assert!(check_path(&dir.join("src/main.auk")).1);
 
     // the package's own name, and `core`
     let dir = project(&[], "fn f(app: [int]): int = app.len()\nfn main() {}\n");
-    let (ds, _) = check_path(&dir.join("src/main.duck"));
+    let (ds, _) = check_path(&dir.join("src/main.auk"));
     assert_eq!(ds.iter().map(|d| d.code.as_str()).collect::<Vec<_>>(), ["E0116"], "{ds:#?}");
     let d = one("fn f(core: [int]): int = core.len()\nfn main() {}\n", "E0116", "`core` is both a local and the core library root, so `core.` is ambiguous");
     at(&d, 1, 26);

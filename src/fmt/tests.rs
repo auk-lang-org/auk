@@ -1,4 +1,4 @@
-//! Unit tests for `duck fmt`. Every case also checks that the output parses to the same AST
+//! Unit tests for `auk fmt`. Every case also checks that the output parses to the same AST
 //! (`format_checked`) and that formatting it again changes nothing.
 
 use super::*;

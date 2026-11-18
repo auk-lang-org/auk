@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Auk Programming Language</title>
+<meta name="description" content="Auk is a statically typed language that compiles to native code with LLVM, built so code, especially AI-written code, takes few tokens and is checked hard.">
+<meta property="og:title" content="Auk: short to write, hard to get wrong">
+<meta property="og:description" content="A statically typed language that compiles to native code with LLVM. Exhaustive clauses, errors in the types, declared effects, units of measure, typed holes and an MCP server for agents.">
+<meta property="og:url" content="https://auk-lang.org/">
+<meta name="theme-color" content="#12212b">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@600;700&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Martian+Mono:wght@400;600&display=swap">
+<style>
+/* Brand tokens from branding/brand.css (Ice Floe). */
+:root {
+  --auk-deep: #12212b; --auk-ice: #eef4f7; --auk-glacier: #1f7aa8; --auk-berg: #a9cfe0; --auk-flare: #ff6b4a;
+  --bg: var(--auk-ice); --surface: #ffffff; --fg: var(--auk-deep); --muted: #5a6f7c; --line: #d6e2e8;
+  --accent: var(--auk-glacier); --on-accent: #ffffff; --accent-text: #1a6b94; --alert: var(--auk-flare);
+  --band: var(--auk-deep); --band-fg: var(--auk-ice); --band-muted: #9db3c0; --band-line: #23394a;
+  --code-bg: var(--auk-deep); --code-fg: #e3eef3; --code-line: #23394a;
+  --c-kw: #ff8a6b; --c-ty: #7fd0f5; --c-str: #b8e0a8; --c-num: #f2cf7a; --c-com: #7d93a0; --c-ok: #b8e0a8; --c-err: #ff8a6b; --c-fix: #7fd0f5;
+  --font-display: "Familjen Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Atkinson Hyperlegible", system-ui, -apple-system, sans-serif;
+  --font-mono: "Martian Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1a22; --surface: #162733; --fg: var(--auk-ice); --muted: #9db3c0; --line: #23394a;
+    --accent: #4fa8d6; --on-accent: #0e1a22; --accent-text: #6fbbe2; --alert: #ff8a6b;
+    --band: #0a141a; --band-line: #1c2f3c; --code-bg: #0a141a; --code-line: #1c2f3c;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1a22; --surface: #162733; --fg: var(--auk-ice); --muted: #9db3c0; --line: #23394a;
+  --accent: #4fa8d6; --on-accent: #0e1a22; --accent-text: #6fbbe2; --alert: #ff8a6b;
+  --band: #0a141a; --band-line: #1c2f3c; --code-bg: #0a141a; --code-line: #1c2f3c;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.6 var(--font-body); -webkit-font-smoothing: antialiased; }
+::selection { background: var(--auk-berg); color: var(--auk-deep); }
+.wrap { max-width: 1120px; margin: 0 auto; padding-inline: max(16px, env(safe-area-inset-left)) max(16px, env(safe-area-inset-right)); }
+@media (min-width: 700px) { .wrap { padding-inline: 32px; } }
+h1, h2, h3 { font-family: var(--font-display); margin: 0; line-height: 1.08; letter-spacing: -0.02em; text-wrap: balance; }
+h2 { font-size: clamp(1.7rem, 3.6vw, 2.5rem); font-weight: 700; }
+h3 { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.01em; }
+p { margin: 0; }
+a { color: var(--accent-text); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+code, pre, kbd { font-family: var(--font-mono); }
+p code, li code, td code, h2 code, h3 code { font-size: 0.82em; background: color-mix(in srgb, var(--auk-berg) 35%, transparent); padding: 0.1em 0.35em; border-radius: 4px; }
+.eyebrow { font: 600 0.75rem/1 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent-text); margin-bottom: 14px; }
+
+/* nav + hero band */
+.band { background: var(--band); color: var(--band-fg); }
+nav { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 20px; flex-wrap: wrap; }
+.brand { display: inline-flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; }
+.brand svg { width: 34px; height: 31px; fill: currentColor; }
+.brand span { font: 700 1.6rem/1 var(--font-display); letter-spacing: -0.04em; }
+.links { display: flex; gap: 6px 22px; flex-wrap: wrap; font-size: 0.95rem; }
+.links a { color: var(--band-muted); text-decoration: none; }
+.links a:hover { color: var(--band-fg); }
+.hero { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.25fr); gap: 48px; align-items: center; padding-block: 48px 80px; }
+.hero h1 { font-size: clamp(2.6rem, 6.4vw, 4.6rem); font-weight: 700; letter-spacing: -0.035em; }
+.hero h1 em { font-style: normal; color: #6fbbe2; }
+.lede { margin-top: 22px; font-size: 1.15rem; color: var(--band-muted); max-width: 44ch; }
+.lede b { color: var(--band-fg); }
+.cta { margin-top: 30px; display: flex; flex-wrap: wrap; gap: 12px; }
+.btn { display: inline-block; text-decoration: none; font-weight: 700; padding: 12px 20px; border-radius: 8px; background: #4fa8d6; color: var(--auk-deep); }
+.btn:hover { background: #6fbbe2; }
+.btn.ghost { background: transparent; color: var(--band-fg); box-shadow: inset 0 0 0 1px var(--band-line); }
+.btn.ghost:hover { box-shadow: inset 0 0 0 1px var(--band-muted); }
+.hero .win { border: 1px solid var(--band-line); }
+@media (max-width: 900px) { .hero { grid-template-columns: 1fr; gap: 36px; padding-block: 28px 56px; } }
+
+/* code windows */
+.win { background: var(--code-bg); color: var(--code-fg); border-radius: 12px; overflow: hidden; min-width: 0; }
+.win-bar { display: flex; justify-content: space-between; gap: 12px; padding: 10px 16px; font: 0.72rem/1.4 var(--font-mono); color: var(--c-com); border-bottom: 1px solid var(--code-line); }
+.win pre { margin: 0; padding: 18px 20px; font-size: 0.74rem; line-height: 1.75; overflow-x: auto; tab-size: 2; }
+.win pre + pre { border-top: 1px solid var(--code-line); }
+.win pre.out { color: #c9d9e2; }
+.kw { color: var(--c-kw); } .ty { color: var(--c-ty); } .str { color: var(--c-str); } .num { color: var(--c-num); } .com { color: var(--c-com); font-style: italic; }
+.pr { color: var(--c-com); user-select: none; } .ok { color: var(--c-ok); } .err { color: var(--c-err); font-weight: 600; } .fix { color: var(--c-fix); } .dim { color: var(--c-com); }
+.hole { color: var(--auk-deep); background: var(--c-num); border-radius: 3px; padding: 0 2px; font-weight: 600; }
+
+/* sections */
+section.s { padding-block: 88px; border-bottom: 1px solid var(--line); }
+.split { display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr); gap: 56px; align-items: start; }
+.text { display: flex; flex-direction: column; gap: 16px; }
+.text p { color: var(--muted); max-width: 54ch; }
+.text p strong { color: var(--fg); }
+.stack { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+@media (max-width: 900px) { .split { grid-template-columns: 1fr; gap: 32px; } section.s { padding-block: 64px; } }
+
+/* error tabs */
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.tab { font: 600 0.82rem/1 var(--font-body); padding: 9px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); cursor: pointer; }
+.tab[aria-selected="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.tab code { font-size: 0.9em; }
+
+/* features */
+.features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-top: 48px; }
+.feature { background: var(--surface); padding: 24px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.feature .sig { font: 0.78rem/1.5 var(--font-mono); color: var(--accent-text); }
+.feature p { color: var(--muted); font-size: 0.95rem; }
+@media (max-width: 900px) { .features { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .features { grid-template-columns: 1fr; } }
+
+/* tools */
+.tools { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.tool { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--surface); font-size: 0.9rem; color: var(--muted); }
+.tool code { display: block; color: var(--fg); font-weight: 600; font-size: 0.8rem; margin-bottom: 4px; }
+
+/* packages */
+.pkgs { display: flex; flex-wrap: wrap; gap: 6px; }
+.pkgs code { font-size: 0.76rem; padding: 4px 9px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); color: var(--fg); }
+
+/* perf table */
+.tbl { width: 100%; border-collapse: collapse; font-size: 0.92rem; background: var(--surface); border-radius: 12px; overflow: hidden; border: 1px solid var(--line); }
+.tbl th, .tbl td { padding: 11px 14px; text-align: left; border-bottom: 1px solid var(--line); }
+.tbl th { font: 600 0.72rem/1.3 var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.tbl td.n, .tbl th.n { text-align: right; font-family: var(--font-mono); font-size: 0.82rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tbl tr:last-child td { border-bottom: 0; }
+.tbl td small { display: block; color: var(--muted); font-size: 0.8rem; }
+.tbl .good { color: var(--accent-text); font-weight: 600; }
+.scroll { overflow-x: auto; border-radius: 12px; }
+.note { font-size: 0.85rem; color: var(--muted); }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+.stat b { display: block; font: 700 2rem/1 var(--font-display); letter-spacing: -0.03em; margin-bottom: 6px; }
+.stat span { color: var(--muted); font-size: 0.88rem; }
+@media (max-width: 560px) { .stats { grid-template-columns: 1fr; } }
+
+/* get started */
+.steps { counter-reset: step; display: grid; gap: 14px; }
+.step { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 14px; align-items: start; }
+.step::before { counter-increment: step; content: counter(step); width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--fg); color: var(--bg); font: 700 0.9rem/1 var(--font-display); }
+.step p { color: var(--muted); margin-bottom: 8px; }
+
+footer { padding-block: 48px 64px; display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap; color: var(--muted); font-size: 0.9rem; }
+footer .brand span { font-size: 1.25rem; color: var(--fg); }
+footer .brand svg { width: 26px; height: 24px; color: var(--fg); }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="8 10 94 86">
+    <path fill-rule="evenodd" d="M16 92 C10 64 14 34 34 22 C50 12 70 18 76 32 L78 37 L93 42 Q99.5 44.5 98 50.5 L94.5 55.5 L80 64 C76 71 64 77 52 83 L42 92 Z M85.5 39.5 L89.5 40.8 L89.5 58.6 L85.5 60.6 Z M59.904 32.832 L78.5 37.6 L78.5 40 L59.788 36.546 A3.4 3.4 0 1 1 59.904 32.832 Z"/>
+    <path d="M55.5 34.6 a1.5 1.5 0 1 0 3.0 0 a1.5 1.5 0 1 0 -3.0 0 Z"/>
+  </symbol>
+</svg>
+
+<header class="band">
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="#" aria-label="Auk home"><svg aria-hidden="true"><use href="#mark"/></svg><span>auk</span></a>
+      <div class="links">
+        <a href="#checks">Checks</a><a href="#holes">Holes</a><a href="#agents">Agents</a><a href="#packages">Packages</a><a href="#performance">Performance</a><a href="#start">Get started</a>
+      </div>
+    </nav>
+    <div class="hero">
+      <div>
+        <h1>Short to write. <em>Hard to get wrong.</em></h1>
+        <p class="lede">Auk is a statically typed language that compiles to native code with LLVM. It is built so that code, <b>especially code an AI model writes</b>, takes few tokens and gets checked hard before it runs.</p>
+        <div class="cta">
+          <a class="btn" href="#start">Get started</a>
+          <a class="btn ghost" href="#checks">See the checks</a>
+        </div>
+      </div>
+      <div class="win">
+        <div class="win-bar"><span>shapes.auk</span><span>auk run shapes.auk 2 3</span></div>
+<pre data-auk>enum Shape { Circle(r: float), Rect(w: float, h: float) }
+
+fn area(Circle(r)): float = 3.14159 * r * r  // a gap won't compile
+fn area(Rect(w, h)): float = w * h
+
+fn parse_side(s: str): float! {
+  let x = float.parse(s) else fail("not a number: {s}")
+  if x &lt;= 0.0 { fail("sides must be positive") }
+  x
+}
+
+fn main(args: [str]): int! {
+  let sides = args.skip(1).map(a =&gt; parse_side(a))?
+  let shapes = sides.map(s =&gt; Rect(s, s)) + [Circle(1.0)]
+  for s in shapes {
+    print("{s} has area {area(s):.2}")
+  }
+  0
+}
+
+test "area" { assert area(Rect(2.0, 3.0)) == 6.0 }</pre>
+<pre class="out"><span class="pr">$ </span>auk run shapes.auk 2 3
+Rect(2.0, 2.0) has area 4.00
+Rect(3.0, 3.0) has area 9.00
+Circle(1.0) has area 3.14
+<span class="pr">$ </span>auk run shapes.auk 2 x
+<span class="err">error</span>: not a number: x</pre>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="s" id="checks">
+    <div class="wrap split">
+      <div class="text">
+        <p class="eyebrow">Checked hard</p>
+        <h2>The compiler names what's missing and how to fix it</h2>
+        <p>Functions are written as clauses, one per case, and a case you forgot is a compile error. Errors and missing values are part of the type: <code>float!</code> can fail and <code>str?</code> can be absent, and neither can be ignored.</p>
+        <p>Every diagnostic has a stable code, a page in <code>auk explain</code>, and usually a <strong>fix-it</strong>: the exact edit, with its position, that an editor or an agent can apply.</p>
+      </div>
+      <div class="stack">
+        <div class="tabs" role="tablist" aria-label="Example diagnostics">
+          <button class="tab" role="tab" aria-selected="true" aria-controls="e-clauses" id="t-clauses">Missing case</button>
+          <button class="tab" role="tab" aria-selected="false" aria-controls="e-effects" id="t-effects">Undeclared effect</button>
+          <button class="tab" role="tab" aria-selected="false" aria-controls="e-units" id="t-units">Mixed units</button>
+        </div>
+        <div class="win" role="tabpanel" id="e-clauses" aria-labelledby="t-clauses">
+<pre data-auk>enum Shape { Circle(r: float), Rect(w: float, h: float), Tri(b: float, h: float) }
+
+fn area(Circle(r)): float = 3.14159 * r * r
+fn area(Rect(w, h)): float = w * h</pre>
+<pre class="out"><span class="pr">$ </span>auk check shapes.auk
+shapes.auk:3:4: <span class="err">error[E0400]</span>: the clauses of `area` don't cover every case: `area(Tri(_, _))` is not handled
+  <span class="dim">|</span>
+<span class="dim">3 |</span> fn area(Circle(r)): float = 3.14159 * r * r
+  <span class="dim">|</span>    <span class="err">^^^^</span>
+  <span class="dim">= note:</span> add a clause for each missing case
+  <span class="fix">= fix:</span> insert `fn area(Tri(b, h)): float = ??` at 4:35</pre>
+        </div>
+        <div class="win" role="tabpanel" id="e-effects" aria-labelledby="t-effects" hidden>
+<pre data-auk>fn load(path: str): str! = fs.read(path)</pre>
+<pre class="out"><span class="pr">$ </span>auk check load.auk
+load.auk:1:28: <span class="err">error[E0410]</span>: `load` uses the effect `fs` but doesn't declare it
+  <span class="dim">|</span>
+<span class="dim">1 |</span> fn load(path: str): str! = fs.read(path)
+  <span class="dim">|</span>                            <span class="err">^^^^^^^^^^^^^</span>
+  <span class="dim">= note:</span> call chain: `load` → `fs.read` (uses fs)
+  <span class="fix">= fix:</span> insert ` uses fs` at 1:25</pre>
+        </div>
+        <div class="win" role="tabpanel" id="e-units" aria-labelledby="t-units" hidden>
+<pre data-auk>fn main() {
+  let d = 100.0&lt;m&gt;
+  let t = 9.58&lt;s&gt;
+  print("{d / t}")
+  let bad = d + t
+}</pre>
+<pre class="out"><span class="pr">$ </span>auk check sprint.auk
+sprint.auk:5:13: <span class="err">error[E0290]</span>: can't combine `float&lt;m&gt;` and `float&lt;s&gt;` with `+`: the units differ
+  <span class="dim">|</span>
+<span class="dim">5 |</span>   let bad = d + t
+  <span class="dim">|</span>             <span class="err">^^^^^</span>
+  <span class="dim">= note:</span> both sides need the same unit; convert one with a factor</pre>
+        </div>
+      </div>
+    </div>
+    <div class="wrap">
+      <div class="features">
+        <div class="feature"><h3>Exhaustive clauses</h3><span class="sig">fn area(Circle(r)) = …</span><p>One clause per case. Leave one out and the build stops, naming the case that's missing.</p></div>
+        <div class="feature"><h3>Errors in the types</h3><span class="sig">T!  T?  ?  else</span><p>Failure and absence are in the signature. <code>?</code> passes an error up, and <code>else</code> handles it where it happens.</p></div>
+        <div class="feature"><h3>Declared effects</h3><span class="sig">uses fs, net, time</span><p>A function says what it touches. Code that reaches the disk or the network without saying so doesn't type-check.</p></div>
+        <div class="feature"><h3>Units of measure</h3><span class="sig">9.81&lt;m/s^2&gt;</span><p>Checked at compile time and erased at run time, so adding meters to seconds is caught at no runtime cost.</p></div>
+        <div class="feature"><h3>Shapes</h3><span class="sig">structural generics</span><p>Generic code asks for the fields and methods it uses instead of a named interface, and is compiled per type.</p></div>
+        <div class="feature"><h3>Tests and contracts</h3><span class="sig">test "…" { assert … }</span><p>Tests live next to the code in the same file. <code>auk test</code> runs them, and contracts state what a function promises.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="s" id="holes">
+    <div class="wrap split">
+      <div class="text">
+        <p class="eyebrow">Typed holes</p>
+        <h2>Leave a <code>??</code> where you're not sure yet</h2>
+        <p>Write the parts you know and leave a typed hole, <code>??</code>, where you don't. The program still type-checks. <code>auk holes</code> describes each hole: the type it needs, the variables in scope, its contracts and the tests that call it.</p>
+        <p>That description is everything needed to fill the hole, whether you write it yourself or hand it to an agent through the MCP server's <code>auk_holes</code> tool.</p>
+        <p><code>auk build</code> refuses to build a program that still has holes.</p>
+      </div>
+      <div class="win">
+        <div class="win-bar"><span>stats.auk</span><span>auk holes stats.auk</span></div>
+<pre data-auk>fn median(xs: [float]): float? = ??
+
+test "median" {
+  assert median([3.0, 1.0, 2.0]) == 2.0
+  assert median([]) == none
+}</pre>
+<pre class="out"><span class="pr">$ </span>auk holes stats.auk
+<span class="ok">hole 1</span> at stats.auk:1:34 in fn median
+  <span class="dim">expected type:</span> float?
+  <span class="dim">function:</span>
+    fn median(xs: [float]): float?
+  <span class="dim">in scope:</span>
+    xs: [float]
+  <span class="dim">tests that call it:</span>
+    test "median" {
+      assert median([3.0, 1.0, 2.0]) == 2.0
+      assert median([]) == none
+    }</pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="s" id="agents">
+    <div class="wrap split">
+      <div class="text">
+        <p class="eyebrow">Built for agents</p>
+        <h2>An MCP server ships in the binary</h2>
+        <p>Run <code>auk mcp</code> and any Model Context Protocol client, Claude Code included, gets tools to read the spec, check, run, test, format and list holes. There's nothing to install beyond <code>auk</code> on your <code>PATH</code>.</p>
+        <p>The whole language reference is about 3,200 tokens, small enough to put in a prompt. <code>auk check --json</code> returns diagnostics with codes and fix-its, and <code>auk run --trace=json</code> records every call, return value, error and panic as JSON Lines.</p>
+      </div>
+      <div class="stack">
+        <div class="win"><pre class="out"><span class="pr">$ </span>claude mcp add auk -- auk mcp</pre></div>
+        <div class="tools">
+          <div class="tool"><code>auk_spec</code>The language reference; agents read it first</div>
+          <div class="tool"><code>auk_check</code>JSON diagnostics with codes and fix-its</div>
+          <div class="tool"><code>auk_run</code>Runs a program, optionally with a trace</div>
+          <div class="tool"><code>auk_test</code>Runs the test blocks and reports</div>
+          <div class="tool"><code>auk_fmt</code>Formats a file or a snippet</div>
+          <div class="tool"><code>auk_holes</code>Every <code>??</code> hole, as JSON</div>
+          <div class="tool"><code>auk_explain</code>The page for an error code</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="s" id="packages">
+    <div class="wrap split">
+      <div class="text">
+        <p class="eyebrow">Packages: raft</p>
+        <h2>Dependencies can't do more than you allow</h2>
+        <p>Every package declares its effects. Your project lists the effects it allows in <code>raft.toml</code>, and <code>raft</code> refuses any dependency that needs more, however deep in the tree it sits. One file bounds what all your dependencies can do.</p>
+        <div class="pkgs" aria-label="Official packages">
+          <code>json</code><code>csv</code><code>yaml</code><code>toml</code><code>xml</code><code>regex</code><code>http</code><code>url</code><code>cli</code><code>term</code><code>log</code><code>datetime</code><code>compress</code><code>hash</code><code>uuid</code><code>template</code><code>markdown</code><code>sup</code><code>graphics</code><code>audio</code><code>…</code>
+        </div>
+      </div>
+      <div class="win">
+        <div class="win-bar"><span>a new project</span><span>raft</span></div>
+<pre class="out"><span class="pr">$ </span>raft new weather &amp;&amp; cd weather
+created weather/ (app)
+<span class="pr">$ </span>raft add http
+<span class="err">error</span>: http 0.1.1 needs effect `net`, but weather's raft.toml only allows []
+  <span class="fix">help:</span> add "net" to [package] effects in raft.toml
+<span class="pr">$ </span>raft add http        <span class="com"># after allowing net</span>
+<span class="ok">  + http 0.1.1</span>       uses net
+<span class="ok">  + json 0.1.0</span>       <span class="dim">(via http)</span>
+<span class="ok">  + url 0.1.0</span>        <span class="dim">(via http)</span>
+<span class="ok">  + encoding 0.1.0</span>   <span class="dim">(via url)</span>
+<span class="pr">$ </span>raft list
+weather 0.1.0   uses net
+└── http 0.1.1   uses net
+    ├── json 0.1.0
+    └── url 0.1.0
+        └── encoding 0.1.0</pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="s" id="live">
+    <div class="wrap split">
+      <div class="text">
+        <p class="eyebrow">Live reload</p>
+        <h2>Change the code while the program runs</h2>
+        <p><code>auk run --live</code> swaps in new code every time you save. State, tasks and open sockets survive. A type error keeps the old code running.</p>
+        <p>If a change alters a struct's layout, only the tasks that use it stop, and their <code>sup</code> supervisors restart them on the new code.</p>
+      </div>
+      <div class="text">
+        <p class="eyebrow">Tooling</p>
+        <h2>Everything in one binary</h2>
+        <p><code>auk fmt</code> formats, <code>auk lsp</code> runs the language server (a VS Code extension is included), <code>auk dive</code> is the REPL, and <code>auk ir</code> prints the compiler's intermediate code or its LLVM IR.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="s" id="performance">
+    <div class="wrap">
+      <div class="split" style="margin-bottom:40px">
+        <div class="text">
+          <p class="eyebrow">Performance</p>
+          <h2>Native code, close to Rust</h2>
+        </div>
+        <div class="text">
+          <p>Seven programs written the same way in Auk and Rust, using the same algorithms and data structures. Auk traps on integer overflow, so the fair comparison is Rust with overflow checks on. Best of 5 runs on Apple Silicon; lower is faster.</p>
+        </div>
+      </div>
+      <div class="scroll">
+        <table class="tbl">
+          <thead><tr><th>Benchmark</th><th class="n">Size</th><th class="n">Rust, overflow checks</th><th class="n">Auk</th><th class="n">Auk ÷ Rust</th></tr></thead>
+          <tbody>
+            <tr><td>sort<small>sorting a list of ints</small></td><td class="n">10M</td><td class="n">0.190 s</td><td class="n">0.163 s</td><td class="n good">0.86×</td></tr>
+            <tr><td>fib<small>recursion, integer math</small></td><td class="n">38</td><td class="n">0.086 s</td><td class="n">0.092 s</td><td class="n good">1.07×</td></tr>
+            <tr><td>trees<small>enum allocation and match</small></td><td class="n">depth 18</td><td class="n">1.648 s</td><td class="n">2.594 s</td><td class="n">1.6×</td></tr>
+            <tr><td>hashmap<small>int map insert and lookup</small></td><td class="n">5M</td><td class="n">0.158 s</td><td class="n">0.266 s</td><td class="n">1.7×</td></tr>
+            <tr><td>strings<small>interpolation, join, split, chars</small></td><td class="n">5M</td><td class="n">0.251 s</td><td class="n">0.451 s</td><td class="n">1.8×</td></tr>
+            <tr><td>nbody<small>float lists and float math</small></td><td class="n">5M steps</td><td class="n">0.162 s</td><td class="n">0.350 s</td><td class="n">2.2×</td></tr>
+            <tr><td>sieve<small>bool list index and store</small></td><td class="n">50M</td><td class="n">0.168 s</td><td class="n">0.399 s</td><td class="n">2.4×</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="split" style="margin-top:56px">
+        <div class="text">
+          <p class="eyebrow">Accuracy</p>
+          <h3>Models write correct Auk from the reference alone</h3>
+          <p>We gave three Claude models the 3,200-token spec and 20 function-level tasks with hidden tests, and no other Auk code to learn from.</p>
+        </div>
+        <div class="stats">
+          <div class="stat"><b>59/60</b><span>solved on the first try, across Opus, Sonnet and Haiku</span></div>
+          <div class="stat"><b>20</b><span>function-level tasks, each with hidden tests</span></div>
+          <div class="stat"><b>~3.2k</b><span>tokens in the whole language reference</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="s" id="start">
+    <div class="wrap split">
+      <div class="text">
+        <p class="eyebrow">Get started</p>
+        <h2>Build from source</h2>
+        <p>Auk is at version 0.1. You need Rust and LLVM 23; <code>auk build</code> also needs a system linker. <code>auk run</code> and <code>auk test</code> compile in memory, so they start right away.</p>
+        <p>Then read the language reference with <code>auk spec</code> and try the programs in <code>examples/</code>: start with <code>hello.auk</code>, <code>fib.auk</code> and <code>tour.auk</code>.</p>
+      </div>
+      <div class="steps">
+        <div class="step"><div><p>Install LLVM 23 and build the compiler and package manager.</p>
+          <div class="win"><pre class="out"><span class="pr">$ </span>brew install llvm@23
+<span class="pr">$ </span>cargo install --path .</pre></div></div></div>
+        <div class="step"><div><p>Write a program.</p>
+          <div class="win"><div class="win-bar"><span>hello.auk</span></div><pre data-auk>fn main() {
+  print("Hello from Auk!")
+}</pre></div></div></div>
+        <div class="step"><div><p>Run it, or build a native executable.</p>
+          <div class="win"><pre class="out"><span class="pr">$ </span>auk run hello.auk
+Hello from Auk!
+<span class="pr">$ </span>auk build hello.auk -o hello &amp;&amp; ./hello
+Hello from Auk!</pre></div></div></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="wrap">
+  <footer>
+    <a class="brand" href="#"><svg aria-hidden="true"><use href="#mark"/></svg><span>auk</span></a>
+    <span>Named for the great auk and its living cousin, the razorbill.</span>
+  </footer>
+</div>
+
+<script>
+// Highlight Auk code blocks: comments, strings (with {interpolation}), keywords, types, numbers.
+(function () {
+  var KW = /^(fn|let|var|if|else|for|in|while|match|return|enum|struct|test|assert|uses|async|await|break|continue|none|true|false|fail|is|err|ok|import|pub|shape|sup|catch)$/;
+  function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function hl(src) {
+    var re = /(\/\/[^\n]*)|("(?:[^"\\\n]|\\.)*")|(\?\?)|(\b\d+(?:\.\d+)?(?:<[^>\n]+>)?)|(\b[A-Za-z_]\w*[!?]?)/g, out = '', i = 0, m;
+    while ((m = re.exec(src))) {
+      out += esc(src.slice(i, m.index)); i = re.lastIndex;
+      if (m[1]) out += '<span class="com">' + esc(m[1]) + '</span>';
+      else if (m[2]) out += '<span class="str">' + esc(m[2]) + '</span>';
+      else if (m[3]) out += '<span class="hole">??</span>';
+      else if (m[4]) out += '<span class="num">' + esc(m[4]) + '</span>';
+      else {
+        var w = m[5], base = w.replace(/[!?]$/, '');
+        if (KW.test(base)) out += '<span class="kw">' + esc(w) + '</span>';
+        else if (/^[A-Z]/.test(w) || /^(int|float|str|bool|char)$/.test(base)) out += '<span class="ty">' + esc(w) + '</span>';
+        else out += esc(w);
+      }
+    }
+    return out + esc(src.slice(i));
+  }
+  document.querySelectorAll('pre[data-auk]').forEach(function (p) { p.innerHTML = hl(p.textContent); });
+
+  // Tabs for the diagnostics.
+  var tabs = document.querySelectorAll('.tab');
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () {
+      tabs.forEach(function (o) {
+        var on = o === t;
+        o.setAttribute('aria-selected', on);
+        document.getElementById(o.getAttribute('aria-controls')).hidden = !on;
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>

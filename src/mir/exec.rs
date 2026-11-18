@@ -10,7 +10,7 @@ pub struct Jit {
     code: Option<Box<dyn std::any::Any>>,
 }
 
-/// A program compiled for `duck run --live`: every call to a function in the live slots goes
+/// A program compiled for `auk run --live`: every call to a function in the live slots goes
 /// through the live table, so a later compile can replace bodies.
 pub struct LiveJit {
     pub jit: Jit,

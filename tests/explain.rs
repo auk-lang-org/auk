@@ -1,6 +1,6 @@
 //! The error catalogue: every registered code has a page in docs/errors/, every page's wrong
 //! example produces exactly its code and its fixed example checks clean (run through the real
-//! binary), and `duck explain` renders, lists and suggests.
+//! binary), and `auk explain` renders, lists and suggests.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,22 +12,22 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// `extern` (E0036).
 const UNREACHABLE: &[&str] = &["E0114"];
 
-/// Codes reported while building, not by `duck check`: E0420 (an imprint panicked while it was
-/// computed at compile time). Their wrong example checks clean and fails `duck ir` with the
+/// Codes reported while building, not by `auk check`: E0420 (an imprint panicked while it was
+/// computed at compile time). Their wrong example checks clean and fails `auk ir` with the
 /// code; their fixed example also builds.
 const BUILD_TIME: &[&str] = &["E0420"];
 
-fn duck(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_duck")).args(args).output().unwrap()
+fn auk(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_auk")).args(args).output().unwrap()
 }
 
 fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).to_string()
 }
 
-/// (code, title) for every registered code, from `duck explain`'s listing.
+/// (code, title) for every registered code, from `auk explain`'s listing.
 fn codes() -> Vec<(String, String)> {
-    let out = duck(&["explain"]);
+    let out = auk(&["explain"]);
     assert!(out.status.success());
     let codes: Vec<(String, String)> = text(&out.stdout)
         .lines()
@@ -75,14 +75,14 @@ fn section<'a>(secs: &'a [(String, Files)], name: &str) -> &'a Files {
     &secs.iter().find(|(h, _)| h == name).unwrap_or_else(|| panic!("no `## {name}` section")).1
 }
 
-/// Write `files` to a fresh directory and return the main file: `t.duck` for a lone file, or
-/// `src/main.duck` of a project when any block names a path (quack.toml, other modules, ...).
+/// Write `files` to a fresh directory and return the main file: `t.auk` for a lone file, or
+/// `src/main.auk` of a project when any block names a path (raft.toml, other modules, ...).
 fn materialize(files: &Files) -> (PathBuf, PathBuf) {
     static N: AtomicUsize = AtomicUsize::new(0);
-    let dir = std::env::temp_dir().join(format!("duck-explain-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+    let dir = std::env::temp_dir().join(format!("auk-explain-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
     let _ = fs::remove_dir_all(&dir);
     let project = files.iter().any(|(p, _)| !p.is_empty());
-    let main = dir.join(if project { "src/main.duck" } else { "t.duck" });
+    let main = dir.join(if project { "src/main.auk" } else { "t.auk" });
     for (p, src) in files {
         let path = if p.is_empty() { main.clone() } else { dir.join(p) };
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -96,22 +96,22 @@ fn json_codes(json: &str) -> Vec<String> {
     json.split(r#""code":""#).skip(1).map(|s| s[..5].to_string()).collect()
 }
 
-/// The diagnostic codes `duck ir` (which builds, computing the imprints) reports on the files,
+/// The diagnostic codes `auk ir` (which builds, computing the imprints) reports on the files,
 /// and its stderr.
 fn build_codes(files: &Files) -> (Vec<String>, String) {
     let (dir, main) = materialize(files);
-    let out = duck(&["ir", main.to_str().unwrap()]);
+    let out = auk(&["ir", main.to_str().unwrap()]);
     let _ = fs::remove_dir_all(&dir);
     let err = text(&out.stderr);
     let codes = err.split("error[").skip(1).map(|s| s[..5].to_string()).collect();
     (codes, err)
 }
 
-/// Run `duck parse --json` (lexing and parsing codes) or `duck check --json` on the files.
+/// Run `auk parse --json` (lexing and parsing codes) or `auk check --json` on the files.
 fn diagnose(files: &Files, parse: bool) -> (Vec<String>, String) {
     let (dir, main) = materialize(files);
     let m = main.to_str().unwrap();
-    let out = if parse { duck(&["parse", "--json", m]) } else { duck(&["check", m, "--json"]) };
+    let out = if parse { auk(&["parse", "--json", m]) } else { auk(&["check", m, "--json"]) };
     let _ = fs::remove_dir_all(&dir);
     let json = text(&out.stdout);
     (json_codes(&json), format!("{json}{}", text(&out.stderr)))
@@ -149,8 +149,8 @@ fn every_code_has_a_page() {
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
-/// Each wrong example produces exactly its code (E00xx through `duck parse`, the rest through
-/// `duck check`); each fixed example (the wrong one's files, with the fixed blocks replacing or
+/// Each wrong example produces exactly its code (E00xx through `auk parse`, the rest through
+/// `auk check`); each fixed example (the wrong one's files, with the fixed blocks replacing or
 /// adding files) checks with no diagnostics at all.
 #[test]
 fn examples_trigger_their_code_and_fixes_check_clean() {
@@ -172,7 +172,7 @@ fn examples_trigger_their_code_and_fixes_check_clean() {
         let want = vec![code.clone()];
         if BUILD_TIME.contains(&code.as_str()) {
             if !got.is_empty() {
-                bad.push(format!("{code}: `duck check` on the wrong example gives {got:?}, want none:\n{out}"));
+                bad.push(format!("{code}: `auk check` on the wrong example gives {got:?}, want none:\n{out}"));
             }
             let (got, err) = build_codes(&wrong);
             if got != want {
@@ -200,7 +200,7 @@ fn examples_trigger_their_code_and_fixes_check_clean() {
 
 #[test]
 fn explain_renders_a_page() {
-    let out = duck(&["explain", "E0400"]);
+    let out = auk(&["explain", "E0400"]);
     assert!(out.status.success());
     let s = text(&out.stdout);
     assert!(s.starts_with("E0400: patterns don't cover every case\n======================================\n"), "{s}");
@@ -210,16 +210,16 @@ fn explain_renders_a_page() {
     assert!(!s.contains("```") && !s.contains("## "), "{s}");
     // codes are accepted in any case and without the leading zeros
     for alias in ["e0400", "400", "0400"] {
-        assert_eq!(text(&duck(&["explain", alias]).stdout), s, "{alias}");
+        assert_eq!(text(&auk(&["explain", alias]).stdout), s, "{alias}");
     }
     // a project page shows each extra file's path
-    let s = text(&duck(&["explain", "E0413"]).stdout);
-    assert!(s.contains("    # quack.toml\n    [package]\n"), "{s}");
+    let s = text(&auk(&["explain", "E0413"]).stdout);
+    assert!(s.contains("    # raft.toml\n    [package]\n"), "{s}");
 }
 
 #[test]
 fn explain_lists_every_code() {
-    let out = duck(&["explain"]);
+    let out = auk(&["explain"]);
     assert!(out.status.success());
     let s = text(&out.stdout);
     assert!(s.contains("  E0011  semicolons are not used\n"), "{s}");
@@ -229,32 +229,32 @@ fn explain_lists_every_code() {
 
 #[test]
 fn explain_unknown_code_suggests_closest() {
-    let out = duck(&["explain", "E0206"]);
+    let out = auk(&["explain", "E0206"]);
     assert_eq!(out.status.code(), Some(1));
     let e = text(&out.stderr);
-    assert!(e.starts_with("error: `E0206` is not a Duck error code\n"), "{e}");
+    assert!(e.starts_with("error: `E0206` is not an Auk error code\n"), "{e}");
     assert!(e.contains("E0205") && e.contains("E0207"), "{e}");
-    assert!(e.contains("duck explain"), "{e}");
+    assert!(e.contains("auk explain"), "{e}");
     // a word searches the titles
-    let e = text(&duck(&["explain", "semicolons"]).stderr);
+    let e = text(&auk(&["explain", "semicolons"]).stderr);
     assert!(e.contains("E0011  semicolons are not used"), "{e}");
-    assert_eq!(duck(&["explain", "E0001", "E0002"]).status.code(), Some(2));
+    assert_eq!(auk(&["explain", "E0001", "E0002"]).status.code(), Some(2));
 }
 
 #[test]
 fn diagnostics_point_to_explain() {
-    let dir = std::env::temp_dir().join(format!("duck-explain-help-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("auk-explain-help-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("t.duck");
+    let path = dir.join("t.auk");
     fs::write(&path, "fn label(n: int): str = n\n").unwrap();
     let p = path.to_str().unwrap();
-    let err = text(&duck(&["check", p]).stderr);
-    assert!(err.ends_with("  = help: run `duck explain E0200` for details\n"), "{err}");
-    let json = text(&duck(&["check", p, "--json"]).stdout);
-    assert!(json.contains(r#""explain":"duck explain E0200"}"#), "{json}");
+    let err = text(&auk(&["check", p]).stderr);
+    assert!(err.ends_with("  = help: run `auk explain E0200` for details\n"), "{err}");
+    let json = text(&auk(&["check", p, "--json"]).stdout);
+    assert!(json.contains(r#""explain":"auk explain E0200"}"#), "{json}");
     fs::write(&path, "fn main() {\n  let x = 1;\n}\n").unwrap();
-    let err = text(&duck(&["parse", p]).stderr);
-    assert!(err.ends_with("  = help: run `duck explain E0011` for details\n"), "{err}");
+    let err = text(&auk(&["parse", p]).stderr);
+    assert!(err.ends_with("  = help: run `auk explain E0011` for details\n"), "{err}");
     let _ = fs::remove_dir_all(&dir);
     assert!(Path::new("docs/errors/E0200.md").is_file());
 }

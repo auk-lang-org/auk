@@ -4,10 +4,10 @@
 //! are *structured*, C-like statement trees over typed expressions: every expression knows its
 //! machine type (`MTy`), aggregates are values (copied by value), and control flow is `If`,
 //! `Loop` (with a latch run by `Continue`), `Break`, labels and forward `Goto`s, and `Ret`.
-//! Reference counting is explicit (calls to `duck_retain`/`duck_release` and generated helpers),
+//! Reference counting is explicit (calls to `auk_retain`/`auk_release` and generated helpers),
 //! so the back end (`llvm/`) only translates.
 //!
-//! Duck values have type `MTy::D(ty)`; their representation (and the members `Sel` names) is
+//! Auk values have type `MTy::D(ty)`; their representation (and the members `Sel` names) is
 //! described in `types.rs`. Calls to the runtime name its C symbol (`Callee::Rt`); calls between
 //! generated functions use `Callee::Fn`. Aggregates passed to or returned from *generated*
 //! functions use the back end's own convention; runtime calls follow the C ABI.
@@ -45,7 +45,7 @@ pub enum MTy {
     CStr,
     /// A code pointer (a generated or runtime function's address), `void *` in C.
     Code,
-    /// A Duck value.
+    /// An Auk value.
     D(Ty),
     /// A generated aggregate (box cell, closure environment, task arguments, vtable).
     Agg(AggId),
@@ -57,7 +57,7 @@ pub enum MTy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Rt {
     StrBuf,
-    /// `DuckObj` (a generic heap object header with a drop function).
+    /// `AukObj` (a generic heap object header with a drop function).
     Obj,
     ElemOps,
     Task,
@@ -90,11 +90,11 @@ pub enum Sel {
 /// A field of a runtime struct reached through a pointer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RtF {
-    /// `DuckArr.len` (i64)
+    /// `AukArr.len` (i64)
     ArrLen,
-    /// `DuckArr.data` (char *)
+    /// `AukArr.data` (char *)
     ArrData,
-    /// `DuckErr.msg` (DuckStr *)
+    /// `AukErr.msg` (AukStr *)
     ErrMsg,
 }
 
@@ -159,7 +159,7 @@ pub enum K {
     Zero,
     /// The address of a function (type `Code`).
     FnAddr(FRef),
-    /// The address of a global (generated, or a runtime one like `duck_ops_int`).
+    /// The address of a global (generated, or a runtime one like `auk_ops_int`).
     GlobalAddr(GlobalId),
     RtGlobalAddr(String),
     /// A member of an aggregate (a place when the aggregate is a place).
@@ -355,7 +355,7 @@ pub struct Func {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Abi {
     /// Called only by generated code.
-    Duck,
+    Auk,
     /// Called by the runtime through a C function pointer (element ops, drops, thunks, tests,
     /// the entry point): the signature only has scalars and pointers.
     C,
@@ -388,12 +388,12 @@ pub struct Program {
     /// The entry point: `int f(int argc, char **argv)`.
     pub entry: Option<FuncId>,
     /// A key for each user function instance that stays the same across compiles of edited
-    /// source (its module, name and signature): `duck run --live` swaps bodies by it.
+    /// source (its module, name and signature): `auk run --live` swaps bodies by it.
     pub live_keys: std::collections::HashMap<FuncId, String>,
     /// Source locations (file, line, column) that `Stmt::Loc` refers to: set only when building
-    /// with debug info (`duck build -g`).
+    /// with debug info (`auk build -g`).
     pub locs: Vec<(String, u32, u32)>,
-    /// The Duck name of each function that holds a Duck body (`mod.f`, `mod.f.<fn:12>`,
+    /// The Auk name of each function that holds an Auk body (`mod.f`, `mod.f.<fn:12>`,
     /// `test "t"`): debug info names functions by it. Set with `locs`.
     pub names: std::collections::HashMap<FuncId, String>,
 }
@@ -498,7 +498,7 @@ impl Body {
 }
 
 /// `e` as a value of type `ty`: integer literals and zeros take the type; other expressions are
-/// converted only between distinct machine types (Duck types of the same representation are
+/// converted only between distinct machine types (Auk types of the same representation are
 /// interchangeable).
 pub fn retype(e: Ex, ty: &MTy) -> Ex {
     if &e.ty == ty {

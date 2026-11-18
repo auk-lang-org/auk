@@ -213,8 +213,8 @@ pub enum TypeDefKind {
     Enum {
         variants: Vec<VariantDef>,
     },
-    /// A runtime type declared with `extern type` in the prelude (`Err` is `DuckErr *`,
-    /// `net.Conn` is `DuckConn *`).
+    /// A runtime type declared with `extern type` in the prelude (`Err` is `AukErr *`,
+    /// `net.Conn` is `AukConn *`).
     Opaque {
         c_type: String,
     },

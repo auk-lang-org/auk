@@ -1,13 +1,13 @@
-//! DWARF debug info for native builds (`duck build -g`) through LLVM's DIBuilder: a line table
-//! that maps machine code back to Duck source lines, and a subprogram per Duck function (named by
-//! its Duck name, `prog.fact`), so lldb, gdb and editor front ends like CodeLLDB can set
+//! DWARF debug info for native builds (`auk build -g`) through LLVM's DIBuilder: a line table
+//! that maps machine code back to Auk source lines, and a subprogram per Auk function (named by
+//! its Auk name, `prog.fact`), so lldb, gdb and editor front ends like CodeLLDB can set
 //! `file:line` breakpoints, step by source line and show where they are.
 //!
 //! Lowering marks every statement with `Stmt::Loc` (an index into `Program::locs`); the code
-//! generator sets the builder's location from it. There is no DWARF language code for Duck, so
-//! the unit says C. Variables are not described: the instrumented debugger (`duck run --debug`,
-//! `duck debug`, `duck dap`) is the one that shows Duck values. On Mach-O the linker leaves DWARF
-//! in the object file, so `duck build` runs `dsymutil` to gather it into `<out>.dSYM`.
+//! generator sets the builder's location from it. There is no DWARF language code for Auk, so
+//! the unit says C. Variables are not described: the instrumented debugger (`auk run --debug`,
+//! `auk debug`, `auk dap`) is the one that shows Auk values. On Mach-O the linker leaves DWARF
+//! in the object file, so `auk build` runs `dsymutil` to gather it into `<out>.dSYM`.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -70,7 +70,7 @@ impl Debug {
             let main = prog.locs.iter().map(|l| &l.0).find(|f| Path::new(f).is_file()).cloned().unwrap_or_else(|| prog.locs[0].0.clone());
             let file = d.file(&main);
             d.main = file;
-            let producer = format!("duck {}", env!("CARGO_PKG_VERSION"));
+            let producer = format!("auk {}", env!("CARGO_PKG_VERSION"));
             LLVMDIBuilderCreateCompileUnit(
                 dib,
                 LLVMDWARFSourceLanguage::LLVMDWARFSourceLanguageC99,
@@ -111,14 +111,14 @@ impl Debug {
     }
 
     /// Attach a subprogram to function `fv` (MIR function `fi`); returns it and the location of
-    /// the function's first line (for its prologue). Every function gets one, so Duck code that
-    /// LLVM inlines into it keeps its lines: a Duck body is named by its Duck name (`prog.fact`)
+    /// the function's first line (for its prologue). Every function gets one, so Auk code that
+    /// LLVM inlines into it keeps its lines: an Auk body is named by its Auk name (`prog.fact`)
     /// at its first statement, a generated function (shims, element ops, ...) by its symbol,
     /// marked artificial, at line 0.
     pub fn subprogram(&mut self, fv: LLVMValueRef, prog: &Program, fi: usize) -> (LLVMMetadataRef, LLVMMetadataRef) {
         let f = &prog.funcs[fi];
-        let duck = prog.names.get(&(fi as u32)).and_then(|n| first_loc(&f.body).map(|l| (n, l)));
-        let (name, fm, line, col, flags) = match duck {
+        let auk = prog.names.get(&(fi as u32)).and_then(|n| first_loc(&f.body).map(|l| (n, l)));
+        let (name, fm, line, col, flags) = match auk {
             Some((n, l)) => {
                 let (file, line, col) = &prog.locs[l as usize];
                 (n.as_str(), self.file(file), *line, *col, LLVMDIFlagZero)

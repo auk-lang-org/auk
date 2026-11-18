@@ -19,33 +19,33 @@ use crate::types::{Builtin, ShapeId, Ty, TypeDefKind};
 /// What kind of program is being built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// `duck run` / `duck ir`: debug build (ensures checked), entry point `main`.
+    /// `auk run` / `auk ir`: debug build (ensures checked), entry point `main`.
     Run,
-    /// `duck build`: release build (ensures not checked).
+    /// `auk build`: release build (ensures not checked).
     Release,
-    /// `duck test`: debug build, entry point is the test runner.
+    /// `auk test`: debug build, entry point is the test runner.
     Test,
 }
 
-/// Execution-trace instrumentation (`duck run --trace`, `duck test --trace`). With `on` unset
+/// Execution-trace instrumentation (`auk run --trace`, `auk test --trace`). With `on` unset
 /// (every other build) the generated program is exactly what it would be without tracing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Trace {
     /// Wrap the traced functions, set call sites, and start the tracer in `main`.
     pub on: bool,
-    /// Trace the core library's Duck functions too (with `debug`: instrument them too).
+    /// Trace the core library's Auk functions too (with `debug`: instrument them too).
     pub core: bool,
-    /// Instrument for the debugger (`duck run --debug`; see `Debug`).
+    /// Instrument for the debugger (`auk run --debug`; see `Debug`).
     pub debug: bool,
-    /// Source locations for DWARF line tables (`duck build -g`).
+    /// Source locations for DWARF line tables (`auk build -g`).
     pub lines: bool,
 }
 
-/// Debugger instrumentation (`duck run --debug`). With `on` unset (every other build) the
-/// generated program is exactly what it would be without it. With it, every Duck function outside
+/// Debugger instrumentation (`auk run --debug`). With `on` unset (every other build) the
+/// generated program is exactly what it would be without it. With it, every Auk function outside
 /// core (with `core`, core's too) keeps a frame record on the thread's debugger stack (its
 /// function, current site and the address of each named local), and every statement first
-/// stores its site and calls `duck_dbg_hook` while `duck_dbg_armed` is set (runtime/src/dbg.rs).
+/// stores its site and calls `auk_dbg_hook` while `auk_dbg_armed` is set (runtime/src/dbg.rs).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Debug {
     pub on: bool,
@@ -121,7 +121,7 @@ impl CVal {
     }
 }
 
-/// A C identifier fragment from a Duck name.
+/// A C identifier fragment from an Auk name.
 pub fn sanitize(s: &str) -> String {
     s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect()
 }
@@ -161,7 +161,7 @@ pub struct Gen<'a> {
     pub trace: Trace,
     pub dbg: Debug,
     pub dbg_info: DbgInfo,
-    /// Emit `Stmt::Loc` at every statement (DWARF line tables, `duck build -g`).
+    /// Emit `Stmt::Loc` at every statement (DWARF line tables, `auk build -g`).
     pub lines: bool,
 }
 
@@ -312,7 +312,7 @@ impl<'a> Gen<'a> {
             BodyRef::Test(_) => (Vec::new(), MTy::D(self.err_ty()), Abi::C),
             _ => {
                 let ps = self.inst_params(i).into_iter().map(|(t, var)| if var { MTy::ptr(d(&t)) } else { d(&t) }).collect();
-                (ps, d(&self.inst_ret(i)), Abi::Duck)
+                (ps, d(&self.inst_ret(i)), Abi::Auk)
             }
         };
         let f = self.declare(format!("dk_f{i}_{what}"), params, ret, abi);
@@ -360,7 +360,7 @@ impl<'a> Gen<'a> {
         }
         let name = format!("dk_const{c}_{}", sanitize(&self.tp.consts[c].name));
         let ty = self.tp.consts[c].ty.clone();
-        let getter = self.declare(name.clone(), Vec::new(), d(&ty), Abi::Duck);
+        let getter = self.declare(name.clone(), Vec::new(), d(&ty), Abi::Auk);
         self.consts.insert(c, getter);
         let gv = self.global(format!("{name}_v"), d(&ty), None, false);
         if let Some(v) = self.imprints.get(&c).cloned() {
@@ -368,7 +368,7 @@ impl<'a> Gen<'a> {
             let mut b = Body::new();
             b.emit(Stmt::Ret(Some(self.global_ex(gv))));
             self.define(getter, b);
-            let init = self.declare(format!("{name}_init"), Vec::new(), MTy::Void, Abi::Duck);
+            let init = self.declare(format!("{name}_init"), Vec::new(), MTy::Void, Abi::Auk);
             let mut b = Body::new();
             let e = self.imprint_value(&ty, &v, &mut b);
             b.set(self.global_ex(gv), e);
@@ -384,27 +384,27 @@ impl<'a> Gen<'a> {
         // the imprint evaluator reports progress (to attribute a panic) and cycles
         if self.imprint_eval {
             b.open_if(Ex::bin(BOp::Eq, s.clone(), Ex::int_as(1, MTy::I32)));
-            b.do_(Ex::rt("duck__imprint_mark", vec![Ex::int_as(b'C' as i64, MTy::I32), Ex::i64(c as i64)], MTy::Void));
+            b.do_(Ex::rt("auk__imprint_mark", vec![Ex::int_as(b'C' as i64, MTy::I32), Ex::i64(c as i64)], MTy::Void));
             b.close();
         }
         b.open_if(Ex::bin(BOp::Eq, s.clone(), Ex::int_as(0, MTy::I32)));
         b.set(s.clone(), Ex::int_as(1, MTy::I32));
         if self.imprint_eval {
-            b.do_(Ex::rt("duck__imprint_mark", vec![Ex::int_as(b'B' as i64, MTy::I32), Ex::i64(c as i64)], MTy::Void));
+            b.do_(Ex::rt("auk__imprint_mark", vec![Ex::int_as(b'B' as i64, MTy::I32), Ex::i64(c as i64)], MTy::Void));
         }
         // computed outside any task's heap: the value outlives the task that computes it first
-        let heap = b.decl(Ex::rt("duck_heap_switch", vec![Ex::zero(MTy::void_ptr())], MTy::void_ptr()));
+        let heap = b.decl(Ex::rt("auk_heap_switch", vec![Ex::zero(MTy::void_ptr())], MTy::void_ptr()));
         let call = self.call(initf, vec![]);
         b.set(v.clone(), call);
-        b.do_(Ex::rt("duck_heap_switch", vec![heap], MTy::void_ptr()));
+        b.do_(Ex::rt("auk_heap_switch", vec![heap], MTy::void_ptr()));
         b.set(s.clone(), Ex::int_as(2, MTy::I32));
         if self.imprint_eval {
-            b.do_(Ex::rt("duck__imprint_mark", vec![Ex::int_as(b'E' as i64, MTy::I32), Ex::i64(c as i64)], MTy::Void));
+            b.do_(Ex::rt("auk__imprint_mark", vec![Ex::int_as(b'E' as i64, MTy::I32), Ex::i64(c as i64)], MTy::Void));
         }
         b.close();
         b.emit(Stmt::Ret(Some(v.clone())));
         self.define(getter, b);
-        let free = self.declare(format!("{name}_free"), Vec::new(), MTy::Void, Abi::Duck);
+        let free = self.declare(format!("{name}_free"), Vec::new(), MTy::Void, Abi::Auk);
         let mut b = Body::new();
         if let Some(r) = self.release(&ty, &v) {
             b.open_if(Ex::bin(BOp::Eq, s.clone(), Ex::int_as(2, MTy::I32)));
@@ -446,29 +446,29 @@ impl<'a> Gen<'a> {
                     _ => &[],
                 };
                 let ops = self.ops(et);
-                let a = b.decl(Ex::rt("duck_arr_new", vec![ops, Ex::int(xs.len() as i64)], d(t)));
+                let a = b.decl(Ex::rt("auk_arr_new", vec![ops, Ex::int(xs.len() as i64)], d(t)));
                 for x in xs {
                     let e = self.imprint_value(et, x, b);
                     let tmp = b.decl_as(d(et), e);
-                    b.do_(Ex::rt("duck_arr_push", vec![a.clone().addr(), tmp.addr()], MTy::Void));
+                    b.do_(Ex::rt("auk_arr_push", vec![a.clone().addr(), tmp.addr()], MTy::Void));
                 }
-                b.do_(Ex::rt("duck_make_immortal", vec![a.clone()], MTy::Void));
+                b.do_(Ex::rt("auk_make_immortal", vec![a.clone()], MTy::Void));
                 a
             }
             Ty::Map(kt, vt) => {
                 let (ko, vo) = (self.ops(kt), self.ops(vt));
-                let m = b.decl(Ex::rt("duck_map_new", vec![ko, vo], d(t)));
+                let m = b.decl(Ex::rt("auk_map_new", vec![ko, vo], d(t)));
                 if let CVal::Map(es) = v {
                     for (k, x) in es {
                         let kc = self.lit(k);
                         let kv = b.decl(kc);
                         let xc = self.imprint_value(vt, x, b);
                         let xv = b.decl_as(d(vt), xc);
-                        b.do_(Ex::rt("duck_map_set", vec![m.clone().addr(), kv.addr(), xv.addr()], MTy::Void));
+                        b.do_(Ex::rt("auk_map_set", vec![m.clone().addr(), kv.addr(), xv.addr()], MTy::Void));
                     }
                 }
                 // immortal only once filled (setting into an immortal map would copy it)
-                b.do_(Ex::rt("duck_make_immortal", vec![m.clone()], MTy::Void));
+                b.do_(Ex::rt("auk_make_immortal", vec![m.clone()], MTy::Void));
                 m
             }
             Ty::Opt(inner) => match v {
@@ -519,37 +519,37 @@ impl<'a> Gen<'a> {
     fn imprint_dvalue(&mut self, v: &CVal, b: &mut Body) -> Ex {
         let vt = d(&self.value_ty());
         match v {
-            CVal::Null => Ex::rt("duck_value_null", vec![], vt),
-            CVal::Bool(x) => Ex::rt("duck_value_bool", vec![Ex::bool(*x)], vt),
-            CVal::Int(n) => Ex::rt("duck_value_int", vec![Ex::int(*n)], vt),
-            CVal::Float(x) => Ex::rt("duck_value_float", vec![Ex::float(*x)], vt),
+            CVal::Null => Ex::rt("auk_value_null", vec![], vt),
+            CVal::Bool(x) => Ex::rt("auk_value_bool", vec![Ex::bool(*x)], vt),
+            CVal::Int(n) => Ex::rt("auk_value_int", vec![Ex::int(*n)], vt),
+            CVal::Float(x) => Ex::rt("auk_value_float", vec![Ex::float(*x)], vt),
             CVal::Str(s) => {
                 let l = self.lit(s);
-                Ex::rt("duck_value_str", vec![l], vt)
+                Ex::rt("auk_value_str", vec![l], vt)
             }
             CVal::List(xs) => {
                 let lt = Ty::list(self.value_ty());
-                let a = b.decl(Ex::rt("duck_value_list_new", vec![], d(&lt)));
+                let a = b.decl(Ex::rt("auk_value_list_new", vec![], d(&lt)));
                 for x in xs {
                     let e = self.imprint_dvalue(x, b);
                     let tmp = b.decl(e);
-                    b.do_(Ex::rt("duck_arr_push", vec![a.clone().addr(), tmp.addr()], MTy::Void));
+                    b.do_(Ex::rt("auk_arr_push", vec![a.clone().addr(), tmp.addr()], MTy::Void));
                 }
-                b.do_(Ex::rt("duck_make_immortal", vec![a.clone()], MTy::Void));
-                Ex::rt("duck_value_list", vec![a], vt)
+                b.do_(Ex::rt("auk_make_immortal", vec![a.clone()], MTy::Void));
+                Ex::rt("auk_value_list", vec![a], vt)
             }
             CVal::Map(es) => {
                 let mt = Ty::Map(Box::new(Ty::Str), Box::new(self.value_ty()));
-                let m = b.decl(Ex::rt("duck_value_map_new", vec![], d(&mt)));
+                let m = b.decl(Ex::rt("auk_value_map_new", vec![], d(&mt)));
                 for (k, x) in es {
                     let kc = self.lit(k);
                     let kv = b.decl(kc);
                     let xc = self.imprint_dvalue(x, b);
                     let xv = b.decl(xc);
-                    b.do_(Ex::rt("duck_map_set", vec![m.clone().addr(), kv.addr(), xv.addr()], MTy::Void));
+                    b.do_(Ex::rt("auk_map_set", vec![m.clone().addr(), kv.addr(), xv.addr()], MTy::Void));
                 }
-                b.do_(Ex::rt("duck_make_immortal", vec![m.clone()], MTy::Void));
-                Ex::rt("duck_value_map", vec![m], vt)
+                b.do_(Ex::rt("auk_make_immortal", vec![m.clone()], MTy::Void));
+                Ex::rt("auk_value_map", vec![m], vt)
             }
         }
     }
@@ -558,7 +558,7 @@ impl<'a> Gen<'a> {
     fn imprint_box(&mut self, t: &Ty, e: Ex, b: &mut Body) -> Ex {
         let bx = self.box_new(t, e);
         let o = b.decl(bx);
-        b.do_(Ex::rt("duck_make_immortal", vec![o.clone()], MTy::Void));
+        b.do_(Ex::rt("auk_make_immortal", vec![o.clone()], MTy::Void));
         o
     }
 
@@ -569,7 +569,7 @@ impl<'a> Gen<'a> {
 
     // ---- string literals ----
 
-    /// The global holding an immortal `DuckStr` for this text (a `str` value).
+    /// The global holding an immortal `AukStr` for this text (a `str` value).
     pub fn lit(&mut self, s: &str) -> Ex {
         if let Some(&g) = self.lits.get(s) {
             return self.global_ex(g);
@@ -595,7 +595,7 @@ impl<'a> Gen<'a> {
         if boxed { self.unbox(&ft, raw) } else { raw }
     }
 
-    /// The raw member of field `i` (a `DuckObj *` when boxed) and whether it is boxed.
+    /// The raw member of field `i` (a `AukObj *` when boxed) and whether it is boxed.
     pub fn field_raw(&mut self, t: &Ty, i: usize, v: &Ex) -> (Ex, bool) {
         let boxed = self.info.struct_layout(t)[i].1;
         (self.fld(v, Sel::F(i as u32)), boxed)
@@ -613,7 +613,7 @@ impl<'a> Gen<'a> {
         raw.cast(MTy::ptr(MTy::Agg(bt))).deref(MTy::Agg(bt)).field(Sel::F(1), d(t))
     }
 
-    /// The box cell type for a boxed value of type `t`: `{ DuckObj o; T v; }`, and its drop.
+    /// The box cell type for a boxed value of type `t`: `{ AukObj o; T v; }`, and its drop.
     pub fn box_ty(&mut self, t: &Ty) -> AggId {
         if let Some(&n) = self.memo.get(&("box", t.clone())) {
             return n;
@@ -641,14 +641,14 @@ impl<'a> Gen<'a> {
         a
     }
 
-    /// An expression boxing an owned value `v` of type `t` (an owned `DuckObj *`).
+    /// An expression boxing an owned value `v` of type `t` (an owned `AukObj *`).
     pub fn box_new(&mut self, t: &Ty, v: Ex) -> Ex {
         let f = self.helper("boxnew", t, vec![d(t)], MTy::obj_ptr(), |g, f| {
             let bt = g.box_ty(t);
             let drop = g.memo[&("boxdrop", t.clone())];
             let copy = g.memo[&("boxcopy", t.clone())];
             let (mut b, ps) = g.body_for(f);
-            let x = b.decl(Ex::rt("duck_obj_alloc", vec![Ex::size_of(MTy::Agg(bt)), Ex::fn_addr(drop), Ex::fn_addr(copy)], MTy::ptr(MTy::Agg(bt))));
+            let x = b.decl(Ex::rt("auk_obj_alloc", vec![Ex::size_of(MTy::Agg(bt)), Ex::fn_addr(drop), Ex::fn_addr(copy)], MTy::ptr(MTy::Agg(bt))));
             b.set(x.clone().deref(MTy::Agg(bt)).field(Sel::F(1), d(t)), ps[0].clone());
             b.emit(Stmt::Ret(Some(x.cast(MTy::obj_ptr()))));
             b
@@ -656,13 +656,13 @@ impl<'a> Gen<'a> {
         self.call(f, vec![v])
     }
 
-    /// `void f(DuckObj **p)`: make the box `*p` (holding a `t`) uniquely owned before a write
+    /// `void f(AukObj **p)`: make the box `*p` (holding a `t`) uniquely owned before a write
     /// through it, copying it when it is shared (or immortal): copy-on-write for boxed fields.
     pub fn box_unique(&mut self, t: &Ty) -> FuncId {
         self.helper("boxuniq", t, vec![MTy::ptr(MTy::obj_ptr())], MTy::Void, |g, f| {
             let (mut b, ps) = g.body_for(f);
             let p = ps[0].clone().deref(MTy::obj_ptr());
-            b.open_if(Ex::bin(BOp::Eq, Ex::rt("duck_refcount", vec![p.clone()], MTy::I64), Ex::i64(1)));
+            b.open_if(Ex::bin(BOp::Eq, Ex::rt("auk_refcount", vec![p.clone()], MTy::I64), Ex::i64(1)));
             b.emit(Stmt::Ret(None));
             b.close();
             let inner = g.unbox(t, p.clone());
@@ -672,7 +672,7 @@ impl<'a> Gen<'a> {
             }
             let mk = g.box_new(t, v);
             let n = b.decl(mk);
-            b.do_(Ex::rt("duck_release", vec![p.clone()], MTy::Void));
+            b.do_(Ex::rt("auk_release", vec![p.clone()], MTy::Void));
             b.set(p, n);
             b
         })
@@ -717,13 +717,13 @@ impl<'a> Gen<'a> {
         if !self.needs_rc(t) {
             return None;
         }
-        let ptr = |p: Ex| Stmt::Do(Ex::rt("duck_retain", vec![p], MTy::void_ptr()));
+        let ptr = |p: Ex| Stmt::Do(Ex::rt("auk_retain", vec![p], MTy::void_ptr()));
         Some(match t {
             Ty::Str | Ty::List(_) | Ty::Map(..) | Ty::Task(_) => ptr(v.clone()),
             Ty::Fn(..) => ptr(self.fld(v, Sel::F(1))),
             Ty::Any(_) => ptr(self.fld(v, Sel::F(0))),
             t if self.info.is_opaque(t) => ptr(v.clone()),
-            t if self.is_value(t) => Stmt::Do(Ex::rt("duck_value_retain", vec![v.clone()], MTy::Void)),
+            t if self.is_value(t) => Stmt::Do(Ex::rt("auk_value_retain", vec![v.clone()], MTy::Void)),
             _ => {
                 let f = self.rc_fns(t).0;
                 Stmt::Do(self.call(f, vec![v.clone()]))
@@ -736,13 +736,13 @@ impl<'a> Gen<'a> {
         if !self.needs_rc(t) {
             return None;
         }
-        let ptr = |p: Ex| Stmt::Do(Ex::rt("duck_release", vec![p], MTy::Void));
+        let ptr = |p: Ex| Stmt::Do(Ex::rt("auk_release", vec![p], MTy::Void));
         Some(match t {
             Ty::Str | Ty::List(_) | Ty::Map(..) | Ty::Task(_) => ptr(v.clone()),
             Ty::Fn(..) => ptr(self.fld(v, Sel::F(1))),
             Ty::Any(_) => ptr(self.fld(v, Sel::F(0))),
             t if self.info.is_opaque(t) => ptr(v.clone()),
-            t if self.is_value(t) => Stmt::Do(Ex::rt("duck_value_release", vec![v.clone()], MTy::Void)),
+            t if self.is_value(t) => Stmt::Do(Ex::rt("auk_value_release", vec![v.clone()], MTy::Void)),
             _ => {
                 let f = self.rc_fns(t).1;
                 Stmt::Do(self.call(f, vec![v.clone()]))
@@ -756,8 +756,8 @@ impl<'a> Gen<'a> {
             return (n, n + 1);
         }
         let k = self.fresh();
-        let inc = self.declare(format!("dk_rc{k}_retain"), vec![d(t)], MTy::Void, Abi::Duck);
-        let dec = self.declare(format!("dk_rc{k}_release"), vec![d(t)], MTy::Void, Abi::Duck);
+        let inc = self.declare(format!("dk_rc{k}_retain"), vec![d(t)], MTy::Void, Abi::Auk);
+        let dec = self.declare(format!("dk_rc{k}_release"), vec![d(t)], MTy::Void, Abi::Auk);
         self.memo.insert(("rc", t.clone()), inc);
         let (mut bi, pi) = self.body_for(inc);
         let (mut bd, pd) = self.body_for(dec);
@@ -772,8 +772,8 @@ impl<'a> Gen<'a> {
             }
         };
         let obj = |g: &mut Gen, s: Sel, bi: &mut Body, bd: &mut Body| {
-            bi.do_(Ex::rt("duck_retain", vec![g.fld(&vi, s)], MTy::void_ptr()));
-            bd.do_(Ex::rt("duck_release", vec![g.fld(&vd, s)], MTy::Void));
+            bi.do_(Ex::rt("auk_retain", vec![g.fld(&vi, s)], MTy::void_ptr()));
+            bd.do_(Ex::rt("auk_release", vec![g.fld(&vd, s)], MTy::Void));
         };
         match t {
             Ty::Tuple(ts) => {
@@ -869,13 +869,13 @@ impl<'a> Gen<'a> {
         }
         let rt = |s: &str, v: Ex| Ex::rt(s, vec![v], d(t));
         match t {
-            Ty::Str => rt("duck_str_copy", v),
-            Ty::List(_) => rt("duck_arr_copy_deep", v),
-            Ty::Map(..) => rt("duck_map_copy_deep", v),
-            Ty::Task(_) => rt("duck_retain", v),
-            t if self.info.is_opaque(t) && !self.is_err_ty(t) => rt("duck_retain", v),
-            t if self.is_value(t) => rt("duck_value_copy", v),
-            t if self.is_err_ty(t) => rt("duck_err_copy_deep", v),
+            Ty::Str => rt("auk_str_copy", v),
+            Ty::List(_) => rt("auk_arr_copy_deep", v),
+            Ty::Map(..) => rt("auk_map_copy_deep", v),
+            Ty::Task(_) => rt("auk_retain", v),
+            t if self.info.is_opaque(t) && !self.is_err_ty(t) => rt("auk_retain", v),
+            t if self.is_value(t) => rt("auk_value_copy", v),
+            t if self.is_err_ty(t) => rt("auk_err_copy_deep", v),
             _ => {
                 let f = self.copy_fn(t);
                 self.call(f, vec![v])
@@ -891,7 +891,7 @@ impl<'a> Gen<'a> {
             let src = ps[0].clone();
             let r = b.decl(src.clone());
             let obj = |g: &mut Gen, b: &mut Body, s: Sel| {
-                let c = Ex::rt("duck_obj_copy", vec![g.fld(&src, s)], MTy::obj_ptr());
+                let c = Ex::rt("auk_obj_copy", vec![g.fld(&src, s)], MTy::obj_ptr());
                 b.set(g.fld(&r, s), c);
             };
             let field = |g: &mut Gen, b: &mut Body, ty: &Ty, s: Sel| {
@@ -917,7 +917,7 @@ impl<'a> Gen<'a> {
                     b.open_if(g.fld(&src, Sel::F(0)));
                     field(g, &mut b, x, Sel::F(1));
                     b.else_();
-                    let c = Ex::rt("duck_err_copy_deep", vec![g.fld(&src, Sel::F(2))], MTy::void_ptr());
+                    let c = Ex::rt("auk_err_copy_deep", vec![g.fld(&src, Sel::F(2))], MTy::void_ptr());
                     b.set(g.fld(&r, Sel::F(2)), c);
                     b.close();
                 }
@@ -960,7 +960,7 @@ impl<'a> Gen<'a> {
     /// A generated helper function for (kind, type), created once: declared with `params` and
     /// `ret`, then `make(gen, f)` builds its body.
     pub fn helper(&mut self, kind: &'static str, t: &Ty, params: Vec<MTy>, ret: MTy, make: impl FnOnce(&mut Gen<'a>, FuncId) -> Body) -> FuncId {
-        self.helper_abi(kind, t, params, ret, Abi::Duck, make)
+        self.helper_abi(kind, t, params, ret, Abi::Auk, make)
     }
 
     pub fn helper_abi(&mut self, kind: &'static str, t: &Ty, params: Vec<MTy>, ret: MTy, abi: Abi, make: impl FnOnce(&mut Gen<'a>, FuncId) -> Body) -> FuncId {
@@ -993,21 +993,21 @@ impl<'a> Gen<'a> {
     pub fn ops(&mut self, t: &Ty) -> Ex {
         let rt = |s: &str| Ex::rt_global(s, MTy::Rt(Rt::ElemOps));
         match t {
-            Ty::Int => return rt("duck_ops_int"),
-            Ty::Float => return rt("duck_ops_float"),
-            Ty::Bool => return rt("duck_ops_bool"),
-            Ty::Char => return rt("duck_ops_char"),
+            Ty::Int => return rt("auk_ops_int"),
+            Ty::Float => return rt("auk_ops_float"),
+            Ty::Bool => return rt("auk_ops_bool"),
+            Ty::Char => return rt("auk_ops_char"),
             Ty::Str => {
                 if self.user_impl(Builtin::Show, t).is_none() {
-                    return rt("duck_ops_str");
+                    return rt("auk_ops_str");
                 }
             }
-            Ty::Never => return rt("duck_ops_unit"),
-            Ty::Tuple(ts) if ts.is_empty() => return rt("duck_ops_unit"),
-            Ty::Task(_) => return rt("duck_ops_task"),
-            Ty::Fn(..) => return rt("duck_ops_closure"),
-            t if self.is_value(t) => return rt("duck_ops_value"),
-            t if self.is_err_ty(t) => return rt("duck_ops_err"),
+            Ty::Never => return rt("auk_ops_unit"),
+            Ty::Tuple(ts) if ts.is_empty() => return rt("auk_ops_unit"),
+            Ty::Task(_) => return rt("auk_ops_task"),
+            Ty::Fn(..) => return rt("auk_ops_closure"),
+            t if self.is_value(t) => return rt("auk_ops_value"),
+            t if self.is_err_ty(t) => return rt("auk_ops_err"),
             _ => {}
         }
         if let Some(&g) = self.memo.get(&("ops", t.clone())) {
@@ -1105,7 +1105,7 @@ impl<'a> Gen<'a> {
 
     // ---- Show ----
 
-    /// `DuckStr *f(T)`: the top-level `Show` text of a value (owned result). None for types
+    /// `AukStr *f(T)`: the top-level `Show` text of a value (owned result). None for types
     /// without `Show`.
     pub fn show_fn(&mut self, t: &Ty) -> Option<FRef> {
         if let Some(f) = self.user_impl(Builtin::Show, t) {
@@ -1113,17 +1113,17 @@ impl<'a> Gen<'a> {
         }
         let rt = |s: &str| Some(FRef::Rt(s.to_string()));
         match t {
-            Ty::Int => rt("duck_str_from_int"),
-            Ty::Float => rt("duck_str_from_float"),
-            Ty::Bool => rt("duck_str_from_bool"),
-            Ty::Char => rt("duck_str_from_char"),
+            Ty::Int => rt("auk_str_from_int"),
+            Ty::Float => rt("auk_str_from_float"),
+            Ty::Bool => rt("auk_str_from_bool"),
+            Ty::Char => rt("auk_str_from_char"),
             Ty::Str => Some(FRef::Fn(self.helper("showstr", t, vec![d(t)], d(t), |g, f| {
                 let (mut b, ps) = g.body_for(f);
-                b.emit(Stmt::Ret(Some(Ex::rt("duck_retain", vec![ps[0].clone()], MTy::D(Ty::Str)))));
+                b.emit(Stmt::Ret(Some(Ex::rt("auk_retain", vec![ps[0].clone()], MTy::D(Ty::Str)))));
                 b
             }))),
-            t if self.is_value(t) => rt("duck_value_show"),
-            t if self.is_err_ty(t) => rt("duck_err_show"),
+            t if self.is_value(t) => rt("auk_value_show"),
+            t if self.is_err_ty(t) => rt("auk_err_show"),
             Ty::Fn(..) | Ty::Task(_) => None,
             t if self.info.is_opaque(t) => None,
             _ => {
@@ -1136,15 +1136,15 @@ impl<'a> Gen<'a> {
     /// The "debug" show used inside containers and derived shows: strings and chars quoted.
     pub fn dshow_fn(&mut self, t: &Ty) -> Option<FRef> {
         match t {
-            Ty::Str if self.user_impl(Builtin::Show, t).is_none() => Some(FRef::Rt("duck_str_quote".into())),
-            Ty::Char if self.user_impl(Builtin::Show, t).is_none() => Some(FRef::Rt("duck_char_quote".into())),
+            Ty::Str if self.user_impl(Builtin::Show, t).is_none() => Some(FRef::Rt("auk_str_quote".into())),
+            Ty::Char if self.user_impl(Builtin::Show, t).is_none() => Some(FRef::Rt("auk_char_quote".into())),
             _ => self.show_fn(t),
         }
     }
 
     /// Push a static text onto a string builder.
     pub fn sb_lit(&self, b: &mut Body, sb: &Ex, s: &str) {
-        b.do_(Ex::rt("duck_sb_bytes", vec![sb.clone().addr(), Ex::cstr(s), Ex::int(s.len() as i64)], MTy::Void));
+        b.do_(Ex::rt("auk_sb_bytes", vec![sb.clone().addr(), Ex::cstr(s), Ex::int(s.len() as i64)], MTy::Void));
     }
 
     fn derive_show(&mut self, t: &Ty, f: FuncId) -> Body {
@@ -1152,18 +1152,18 @@ impl<'a> Gen<'a> {
         let v = ps[0].clone();
         let str_t = MTy::D(Ty::Str);
         if let Ty::List(_) = t {
-            b.emit(Stmt::Ret(Some(Ex::rt("duck_arr_show", vec![v], str_t))));
+            b.emit(Stmt::Ret(Some(Ex::rt("auk_arr_show", vec![v], str_t))));
             return b;
         }
         if let Ty::Map(..) = t {
-            b.emit(Stmt::Ret(Some(Ex::rt("duck_map_show", vec![v], str_t))));
+            b.emit(Stmt::Ret(Some(Ex::rt("auk_map_show", vec![v], str_t))));
             return b;
         }
         let sb = b.decl(Ex::zero(MTy::Rt(Rt::StrBuf)));
         let field = |g: &mut Gen, b: &mut Body, ft: &Ty, e: Ex| match g.dshow_fn(ft) {
             Some(f) => {
                 let s = g.call_ref(&f, vec![e], MTy::D(Ty::Str));
-                b.do_(Ex::rt("duck_sb_str_own", vec![sb.clone().addr(), s], MTy::Void));
+                b.do_(Ex::rt("auk_sb_str_own", vec![sb.clone().addr(), s], MTy::Void));
             }
             None => {
                 let text = format!("<{}>", g.show_ty(ft).replace('"', ""));
@@ -1196,8 +1196,8 @@ impl<'a> Gen<'a> {
             Ty::Res(x, _) => {
                 b.open_if(self.fld(&v, Sel::F(0)).not());
                 self.sb_lit(&mut b, &sb, "err(");
-                let es = Ex::rt("duck_err_show", vec![self.fld(&v, Sel::F(2))], MTy::D(Ty::Str));
-                b.do_(Ex::rt("duck_sb_str_own", vec![sb.clone().addr(), es], MTy::Void));
+                let es = Ex::rt("auk_err_show", vec![self.fld(&v, Sel::F(2))], MTy::D(Ty::Str));
+                b.do_(Ex::rt("auk_sb_str_own", vec![sb.clone().addr(), es], MTy::Void));
                 self.sb_lit(&mut b, &sb, ")");
                 b.else_();
                 self.sb_lit(&mut b, &sb, "ok(");
@@ -1212,7 +1212,7 @@ impl<'a> Gen<'a> {
                     let vt = self.vt_struct(*s);
                     let m0 = self.fld(&v, Sel::F(1)).cast(MTy::ptr(MTy::Agg(vt))).deref(MTy::Agg(vt)).field(Sel::F(0), MTy::Code);
                     let call = Ex::new(K::Call(super::Callee::Indirect(Box::new(m0), vec![MTy::obj_ptr()]), vec![self.fld(&v, Sel::F(0))]), MTy::D(Ty::Str));
-                    b.do_(Ex::rt("duck_sb_str_own", vec![sb.clone().addr(), call], MTy::Void));
+                    b.do_(Ex::rt("auk_sb_str_own", vec![sb.clone().addr(), call], MTy::Void));
                 } else {
                     self.sb_lit(&mut b, &sb, &format!("<any {}>", sd.name));
                 }
@@ -1258,14 +1258,14 @@ impl<'a> Gen<'a> {
                 self.sb_lit(&mut b, &sb, &text);
             }
         }
-        b.emit(Stmt::Ret(Some(Ex::rt("duck_sb_finish", vec![sb.addr()], str_t))));
+        b.emit(Stmt::Ret(Some(Ex::rt("auk_sb_finish", vec![sb.addr()], str_t))));
         b
     }
 
     /// The debugger's children function of type `t` (type index `idx`): `void f(void *value,
     /// void *ctx)` reports each part of the value (a struct's fields, a tuple's or a variant's
     /// fields, an option's or a result's value, a list's elements, a map's entries) to the runtime
-    /// (`duck_dbg_kid`, runtime/src/dbg.rs) with its type index and address. None for a type
+    /// (`auk_dbg_kid`, runtime/src/dbg.rs) with its type index and address. None for a type
     /// without parts.
     pub fn dbg_kids_fn(&mut self, t: &Ty, idx: usize) -> Option<FuncId> {
         let has_parts = match t {
@@ -1288,7 +1288,7 @@ impl<'a> Gen<'a> {
         let kid = |g: &mut Gen, b: &mut Body, name: &str, ty: &Ty, e: Ex| {
             let tid = g.dbg_info.type_id(ty);
             let tmp = b.decl_as(d(ty), e);
-            b.do_(Ex::rt("duck_dbg_kid", vec![ctx.clone(), Ex::cstr(name), Ex::int_as(tid as i64, MTy::I64), tmp.addr().cast(MTy::void_ptr())], MTy::Void));
+            b.do_(Ex::rt("auk_dbg_kid", vec![ctx.clone(), Ex::cstr(name), Ex::int_as(tid as i64, MTy::I64), tmp.addr().cast(MTy::void_ptr())], MTy::Void));
         };
         match t {
             Ty::Tuple(ts) => {
@@ -1306,11 +1306,11 @@ impl<'a> Gen<'a> {
             Ty::List(x) => {
                 let tid = self.dbg_info.type_id(x);
                 let size = Ex::size_of(d(x)).cast(MTy::I64);
-                b.do_(Ex::rt("duck_dbg_kid_arr", vec![ctx.clone(), v.clone().cast(cv.clone()), Ex::int_as(tid as i64, MTy::I64), size], MTy::Void));
+                b.do_(Ex::rt("auk_dbg_kid_arr", vec![ctx.clone(), v.clone().cast(cv.clone()), Ex::int_as(tid as i64, MTy::I64), size], MTy::Void));
             }
             Ty::Map(_, x) => {
                 let tid = self.dbg_info.type_id(x);
-                b.do_(Ex::rt("duck_dbg_kid_map", vec![ctx.clone(), v.clone().cast(cv.clone()), Ex::int_as(tid as i64, MTy::I64)], MTy::Void));
+                b.do_(Ex::rt("auk_dbg_kid_map", vec![ctx.clone(), v.clone().cast(cv.clone()), Ex::int_as(tid as i64, MTy::I64)], MTy::Void));
             }
             Ty::Named(dd, args) if self.tp.defs.is_struct(*dd) => {
                 let s = self.tp.defs.subst_of(*dd, args);
@@ -1354,10 +1354,10 @@ impl<'a> Gen<'a> {
         match t {
             Ty::Fn(..) | Ty::Task(_) => return None,
             t if self.info.is_opaque(t) && !self.is_err_ty(t) => return None,
-            t if self.is_value(t) => return rt("duck_value_eq"),
-            Ty::Str => return rt("duck_str_eq"),
-            Ty::List(_) => return rt("duck_arr_eq"),
-            Ty::Map(..) => return rt("duck_map_eq"),
+            t if self.is_value(t) => return rt("auk_value_eq"),
+            Ty::Str => return rt("auk_str_eq"),
+            Ty::List(_) => return rt("auk_arr_eq"),
+            Ty::Map(..) => return rt("auk_map_eq"),
             _ => {}
         }
         if !self.can(t, Builtin::Eq, &mut HashSet::new()) {
@@ -1445,11 +1445,11 @@ impl<'a> Gen<'a> {
                 b.close();
                 let ma = self.fld(&x, Sel::F(2)).rt_field(RtF::ErrMsg);
                 let mb = self.fld(&y, Sel::F(2)).rt_field(RtF::ErrMsg);
-                b.emit(Stmt::Ret(Some(Ex::rt("duck_str_eq", vec![ma, mb], MTy::D(Ty::Bool)))));
+                b.emit(Stmt::Ret(Some(Ex::rt("auk_str_eq", vec![ma, mb], MTy::D(Ty::Bool)))));
             }
             t if self.is_err_ty(t) => {
                 let same = Ex::bin(BOp::Eq, x.clone(), y.clone());
-                let msg = Ex::rt("duck_str_eq", vec![x.rt_field(RtF::ErrMsg), y.rt_field(RtF::ErrMsg)], MTy::D(Ty::Bool));
+                let msg = Ex::rt("auk_str_eq", vec![x.rt_field(RtF::ErrMsg), y.rt_field(RtF::ErrMsg)], MTy::D(Ty::Bool));
                 b.emit(Stmt::Ret(Some(Ex::cond(same, Ex::bool(true), msg))));
             }
             Ty::Named(dd, args) if self.tp.defs.is_struct(*dd) => {
@@ -1500,14 +1500,14 @@ impl<'a> Gen<'a> {
     pub fn cmp_expr(&mut self, t: &Ty, a: Ex, b: Ex) -> Ex {
         let int = MTy::D(Ty::Int);
         match t {
-            Ty::Int => Ex::rt("duck_int_cmp", vec![a, b], MTy::I32).cast(int),
-            Ty::Float => Ex::rt("duck_float_cmp", vec![a, b], MTy::I32).cast(int),
+            Ty::Int => Ex::rt("auk_int_cmp", vec![a, b], MTy::I32).cast(int),
+            Ty::Float => Ex::rt("auk_float_cmp", vec![a, b], MTy::I32).cast(int),
             Ty::Char | Ty::Bool => {
                 let gt = Ex::bin(BOp::Gt, a.clone(), b.clone()).cast(int.clone());
                 let lt = Ex::bin(BOp::Lt, a, b).cast(int);
                 Ex::bin(BOp::Sub, gt, lt)
             }
-            Ty::Str => Ex::rt("duck_str_cmp", vec![a, b], MTy::I32).cast(int),
+            Ty::Str => Ex::rt("auk_str_cmp", vec![a, b], MTy::I32).cast(int),
             _ => match self.cmp_fn(t) {
                 Some(f) => self.call_ref(&f, vec![a, b], int),
                 None => Ex::int(0),
@@ -1529,7 +1529,7 @@ impl<'a> Gen<'a> {
                 let e = self.cmp_expr(t, x, y);
                 b.emit(Stmt::Ret(Some(e)));
             }
-            Ty::List(_) => b.emit(Stmt::Ret(Some(Ex::rt("duck_arr_cmp", vec![x, y], MTy::I32).cast(MTy::D(Ty::Int))))),
+            Ty::List(_) => b.emit(Stmt::Ret(Some(Ex::rt("auk_arr_cmp", vec![x, y], MTy::I32).cast(MTy::D(Ty::Int))))),
             Ty::Tuple(ts) => {
                 for (i, et) in ts.iter().enumerate() {
                     let s = Sel::F(i as u32);
@@ -1587,8 +1587,8 @@ impl<'a> Gen<'a> {
     /// `uint64_t f(T)` for map keys, or None.
     pub fn hash_fn(&mut self, t: &Ty) -> Option<FRef> {
         match t {
-            Ty::Str => return Some(FRef::Rt("duck_str_hash".into())),
-            Ty::List(_) => return Some(FRef::Rt("duck_arr_hash".into())),
+            Ty::Str => return Some(FRef::Rt("auk_str_hash".into())),
+            Ty::List(_) => return Some(FRef::Rt("auk_arr_hash".into())),
             Ty::Map(..) | Ty::Fn(..) | Ty::Task(_) | Ty::Any(_) => return None,
             _ => {}
         }
@@ -1601,9 +1601,9 @@ impl<'a> Gen<'a> {
 
     fn hash_expr(&mut self, t: &Ty, v: Ex) -> Ex {
         match t {
-            Ty::Int => Ex::rt("duck_hash_int", vec![v], MTy::U64),
-            Ty::Char | Ty::Bool => Ex::rt("duck_hash_int", vec![v.cast(MTy::D(Ty::Int))], MTy::U64),
-            Ty::Float => Ex::rt("duck_hash_float", vec![v], MTy::U64),
+            Ty::Int => Ex::rt("auk_hash_int", vec![v], MTy::U64),
+            Ty::Char | Ty::Bool => Ex::rt("auk_hash_int", vec![v.cast(MTy::D(Ty::Int))], MTy::U64),
+            Ty::Float => Ex::rt("auk_hash_float", vec![v], MTy::U64),
             Ty::Never => Ex::int_as(0, MTy::U64),
             Ty::Tuple(ts) if ts.is_empty() => Ex::int_as(0, MTy::U64),
             _ => match self.hash_fn(t) {
@@ -1618,14 +1618,14 @@ impl<'a> Gen<'a> {
         let v = ps[0].clone();
         let h = b.decl(Ex::int_as(7, MTy::U64));
         let comb = |b: &mut Body, e: Ex| {
-            b.set(h.clone(), Ex::rt("duck_hash_combine", vec![h.clone(), e], MTy::U64));
+            b.set(h.clone(), Ex::rt("auk_hash_combine", vec![h.clone(), e], MTy::U64));
         };
         match t {
             Ty::Int | Ty::Char | Ty::Bool | Ty::Float => {
                 let e = self.hash_expr(t, v);
                 b.set(h.clone(), e);
             }
-            t if self.is_value(t) => b.set(h.clone(), Ex::rt("duck_value_hash", vec![v.addr()], MTy::U64)),
+            t if self.is_value(t) => b.set(h.clone(), Ex::rt("auk_value_hash", vec![v.addr()], MTy::U64)),
             Ty::Tuple(ts) => {
                 for (i, et) in ts.iter().enumerate() {
                     let e = self.hash_expr(et, self.fld(&v, Sel::F(i as u32)));
@@ -1648,7 +1648,7 @@ impl<'a> Gen<'a> {
             }
             Ty::Named(..) => {
                 let layout = self.info.enum_layout(t);
-                b.set(h.clone(), Ex::rt("duck_hash_int", vec![self.fld(&v, Sel::Tag).cast(MTy::D(Ty::Int))], MTy::U64));
+                b.set(h.clone(), Ex::rt("auk_hash_int", vec![self.fld(&v, Sel::Tag).cast(MTy::D(Ty::Int))], MTy::U64));
                 for (vi, fs) in layout.iter().enumerate() {
                     if fs.is_empty() {
                         continue;
@@ -1670,7 +1670,7 @@ impl<'a> Gen<'a> {
 
     // ---- Data: to_value / from_value ----
 
-    /// `DuckValue f(T)` (owned result).
+    /// `AukValue f(T)` (owned result).
     pub fn tov_fn(&mut self, t: &Ty) -> FRef {
         if let Some(f) = self.user_impl(Builtin::Data, t) {
             return f;
@@ -1689,8 +1689,8 @@ impl<'a> Gen<'a> {
     /// Put an owned `Value` under `key` into the Value map `m` (then release it).
     fn map_put(&mut self, b: &mut Body, m: &Ex, key: &str, e: Ex) {
         let ev = b.decl(e);
-        b.do_(Ex::rt("duck_value_map_put", vec![m.clone().addr(), Ex::cstr(key), ev.clone()], MTy::Void));
-        b.do_(Ex::rt("duck_value_release", vec![ev], MTy::Void));
+        b.do_(Ex::rt("auk_value_map_put", vec![m.clone().addr(), Ex::cstr(key), ev.clone()], MTy::Void));
+        b.do_(Ex::rt("auk_value_release", vec![ev], MTy::Void));
     }
 
     fn derive_tov(&mut self, t: &Ty, f: FuncId) -> Body {
@@ -1704,71 +1704,71 @@ impl<'a> Gen<'a> {
         // wrap an owned container into a Value and release our reference
         let wrap = |b: &mut Body, ctor: &str, c: Ex| {
             let r = b.decl(Ex::rt(ctor, vec![c.clone()], vt.clone()));
-            b.do_(Ex::rt("duck_release", vec![c], MTy::Void));
+            b.do_(Ex::rt("auk_release", vec![c], MTy::Void));
             b.emit(Stmt::Ret(Some(r)));
         };
         match t {
-            Ty::Int => ret(&mut b, Ex::rt("duck_value_int", vec![v], vt.clone())),
-            Ty::Float => ret(&mut b, Ex::rt("duck_value_float", vec![v], vt.clone())),
-            Ty::Bool => ret(&mut b, Ex::rt("duck_value_bool", vec![v], vt.clone())),
-            Ty::Str => ret(&mut b, Ex::rt("duck_value_str", vec![v], vt.clone())),
+            Ty::Int => ret(&mut b, Ex::rt("auk_value_int", vec![v], vt.clone())),
+            Ty::Float => ret(&mut b, Ex::rt("auk_value_float", vec![v], vt.clone())),
+            Ty::Bool => ret(&mut b, Ex::rt("auk_value_bool", vec![v], vt.clone())),
+            Ty::Str => ret(&mut b, Ex::rt("auk_value_str", vec![v], vt.clone())),
             Ty::Char => {
-                let s = b.decl(Ex::rt("duck_str_from_char", vec![v], MTy::D(Ty::Str)));
-                wrap(&mut b, "duck_value_str", s);
+                let s = b.decl(Ex::rt("auk_str_from_char", vec![v], MTy::D(Ty::Str)));
+                wrap(&mut b, "auk_value_str", s);
             }
             t if self.is_value(t) => {
-                b.do_(Ex::rt("duck_value_retain", vec![v.clone()], MTy::Void));
+                b.do_(Ex::rt("auk_value_retain", vec![v.clone()], MTy::Void));
                 ret(&mut b, v);
             }
             Ty::List(x) => {
-                let xs = b.decl(Ex::rt("duck_value_list_new", vec![], d(&lty)));
+                let xs = b.decl(Ex::rt("auk_value_list_new", vec![], d(&lty)));
                 let i = b.decl(Ex::int(0));
                 b.open_loop(vec![Stmt::Set(i.clone(), Ex::bin(BOp::Add, i.clone(), Ex::int(1)))]);
-                b.open_if(Ex::bin(BOp::Ge, i.clone(), Ex::rt("duck_arr_len", vec![v.clone()], MTy::D(Ty::Int))));
+                b.open_if(Ex::bin(BOp::Ge, i.clone(), Ex::rt("auk_arr_len", vec![v.clone()], MTy::D(Ty::Int))));
                 b.emit(Stmt::Break);
                 b.close();
-                let el = Ex::rt("duck_arr_at", vec![v.clone(), i.clone(), Ex::null().cast(MTy::CStr)], MTy::void_ptr()).cast(MTy::ptr(d(x))).deref(d(x));
+                let el = Ex::rt("auk_arr_at", vec![v.clone(), i.clone(), Ex::null().cast(MTy::CStr)], MTy::void_ptr()).cast(MTy::ptr(d(x))).deref(d(x));
                 let e = self.tov_expr(x, el);
                 let ev = b.decl(e);
-                b.do_(Ex::rt("duck_arr_push", vec![xs.clone().addr(), ev.clone().addr()], MTy::Void));
-                b.do_(Ex::rt("duck_value_release", vec![ev], MTy::Void));
+                b.do_(Ex::rt("auk_arr_push", vec![xs.clone().addr(), ev.clone().addr()], MTy::Void));
+                b.do_(Ex::rt("auk_value_release", vec![ev], MTy::Void));
                 b.emit(Stmt::Continue);
                 b.close();
-                wrap(&mut b, "duck_value_list", xs);
+                wrap(&mut b, "auk_value_list", xs);
             }
             Ty::Map(_, x) => {
-                let m = b.decl(Ex::rt("duck_value_map_new", vec![], d(&mty)));
+                let m = b.decl(Ex::rt("auk_value_map_new", vec![], d(&mty)));
                 let it = b.decl(Ex::int(0));
                 let kp = b.decl(Ex::null());
                 let vp = b.decl(Ex::null());
                 b.open_loop(vec![]);
-                let next = Ex::rt("duck_map_next", vec![v.clone(), it.addr(), kp.clone().addr(), vp.clone().addr()], MTy::Bool);
+                let next = Ex::rt("auk_map_next", vec![v.clone(), it.addr(), kp.clone().addr(), vp.clone().addr()], MTy::Bool);
                 b.open_if(next.not());
                 b.emit(Stmt::Break);
                 b.close();
                 let e = self.tov_expr(x, vp.cast(MTy::ptr(d(x))).deref(d(x)));
                 let ev = b.decl(e);
-                b.do_(Ex::rt("duck_map_set", vec![m.clone().addr(), kp, ev.clone().addr()], MTy::Void));
-                b.do_(Ex::rt("duck_value_release", vec![ev], MTy::Void));
+                b.do_(Ex::rt("auk_map_set", vec![m.clone().addr(), kp, ev.clone().addr()], MTy::Void));
+                b.do_(Ex::rt("auk_value_release", vec![ev], MTy::Void));
                 b.close();
-                wrap(&mut b, "duck_value_map", m);
+                wrap(&mut b, "auk_value_map", m);
             }
             Ty::Opt(x) => {
                 b.open_if(self.fld(&v, Sel::F(0)).not());
-                b.emit(Stmt::Ret(Some(Ex::rt("duck_value_null", vec![], vt.clone()))));
+                b.emit(Stmt::Ret(Some(Ex::rt("auk_value_null", vec![], vt.clone()))));
                 b.close();
                 let e = self.tov_expr(x, self.fld(&v, Sel::F(1)));
                 ret(&mut b, e);
             }
             Ty::Named(dd, args) if self.tp.defs.is_struct(*dd) => {
                 let s = self.tp.defs.subst_of(*dd, args);
-                let m = b.decl(Ex::rt("duck_value_map_new", vec![], d(&mty)));
+                let m = b.decl(Ex::rt("auk_value_map_new", vec![], d(&mty)));
                 for (i, fd) in self.tp.defs.fields(*dd).to_vec().into_iter().enumerate() {
                     let x = self.field_get(t, i, &v);
                     let e = self.tov_expr(&fd.ty.subst(&s), x);
                     self.map_put(&mut b, &m, &fd.name, e);
                 }
-                wrap(&mut b, "duck_value_map", m);
+                wrap(&mut b, "auk_value_map", m);
             }
             Ty::Named(dd, _) if self.tp.defs.is_enum(*dd) => {
                 let vs = self.tp.defs.variants(*dd).to_vec();
@@ -1776,30 +1776,30 @@ impl<'a> Gen<'a> {
                 for (vi, var) in vs.iter().enumerate() {
                     b.open_if(self.variant_tag(t, vi, &v));
                     if var.fields.is_empty() {
-                        let s = b.decl(Ex::rt("duck_str_lit", vec![Ex::cstr(&var.name)], MTy::D(Ty::Str)));
-                        wrap(&mut b, "duck_value_str", s);
+                        let s = b.decl(Ex::rt("auk_str_lit", vec![Ex::cstr(&var.name)], MTy::D(Ty::Str)));
+                        wrap(&mut b, "auk_value_str", s);
                         b.close();
                         continue;
                     }
-                    let m = b.decl(Ex::rt("duck_value_map_new", vec![], d(&mty)));
-                    let s = b.decl(Ex::rt("duck_str_lit", vec![Ex::cstr(&var.name)], MTy::D(Ty::Str)));
-                    let tag = Ex::rt("duck_value_str", vec![s.clone()], vt.clone());
+                    let m = b.decl(Ex::rt("auk_value_map_new", vec![], d(&mty)));
+                    let s = b.decl(Ex::rt("auk_str_lit", vec![Ex::cstr(&var.name)], MTy::D(Ty::Str)));
+                    let tag = Ex::rt("auk_value_str", vec![s.clone()], vt.clone());
                     let tv = b.decl(tag);
-                    b.do_(Ex::rt("duck_release", vec![s], MTy::Void));
-                    b.do_(Ex::rt("duck_value_map_put", vec![m.clone().addr(), Ex::cstr("tag"), tv.clone()], MTy::Void));
-                    b.do_(Ex::rt("duck_value_release", vec![tv], MTy::Void));
+                    b.do_(Ex::rt("auk_release", vec![s], MTy::Void));
+                    b.do_(Ex::rt("auk_value_map_put", vec![m.clone().addr(), Ex::cstr("tag"), tv.clone()], MTy::Void));
+                    b.do_(Ex::rt("auk_value_release", vec![tv], MTy::Void));
                     for (fi, (fname, _)) in var.fields.iter().enumerate() {
                         let key = fname.clone().unwrap_or_else(|| fi.to_string());
                         let x = self.variant_field(t, vi, fi, &v);
                         let e = self.tov_expr(&layout[vi][fi].0, x);
                         self.map_put(&mut b, &m, &key, e);
                     }
-                    wrap(&mut b, "duck_value_map", m);
+                    wrap(&mut b, "auk_value_map", m);
                     b.close();
                 }
-                b.emit(Stmt::Ret(Some(Ex::rt("duck_value_null", vec![], vt.clone()))));
+                b.emit(Stmt::Ret(Some(Ex::rt("auk_value_null", vec![], vt.clone()))));
             }
-            _ => b.emit(Stmt::Ret(Some(Ex::rt("duck_value_null", vec![], vt.clone())))),
+            _ => b.emit(Stmt::Ret(Some(Ex::rt("auk_value_null", vec![], vt.clone())))),
         }
         b
     }
@@ -1834,9 +1834,9 @@ impl<'a> Gen<'a> {
         let is = |n: i64| Ex::bin(BOp::Eq, tag.clone(), Ex::int_as(n, MTy::I32));
         let mism = |want: &str| {
             let prefix = format!("from_value: expected {want} for `{what}`, got ");
-            Ex::rt("duck__err_with_tag", vec![Ex::cstr(&prefix), tag.clone()], et.clone())
+            Ex::rt("auk__err_with_tag", vec![Ex::cstr(&prefix), tag.clone()], et.clone())
         };
-        let msg = |s: &str| Ex::rt("duck_err_new_cstr", vec![Ex::cstr(s)], et.clone());
+        let msg = |s: &str| Ex::rt("auk_err_new_cstr", vec![Ex::cstr(s)], et.clone());
         let check = |b: &mut Body, cond: Ex, want: &str| {
             b.open_if(cond.not());
             b.emit(Stmt::Ret(Some(err(mism(want)))));
@@ -1863,20 +1863,20 @@ impl<'a> Gen<'a> {
             }
             Ty::Str => {
                 check(&mut b, is(4), "Str");
-                b.emit(Stmt::Ret(Some(ok(Ex::rt("duck_retain", vec![pay(4, Ty::Str)], MTy::D(Ty::Str))))));
+                b.emit(Stmt::Ret(Some(ok(Ex::rt("auk_retain", vec![pay(4, Ty::Str)], MTy::D(Ty::Str))))));
             }
             Ty::Char => {
                 let s = pay(4, Ty::Str);
-                let one = Ex::and(vec![is(4), Ex::bin(BOp::Eq, Ex::rt("duck_str_len", vec![s.clone()], MTy::D(Ty::Int)), Ex::int(1))]);
+                let one = Ex::and(vec![is(4), Ex::bin(BOp::Eq, Ex::rt("auk_str_len", vec![s.clone()], MTy::D(Ty::Int)), Ex::int(1))]);
                 check(&mut b, one, "a one-char Str");
-                b.emit(Stmt::Ret(Some(ok(Ex::rt("duck_str_char_at", vec![s, Ex::int(0), Ex::null().cast(MTy::CStr)], MTy::D(Ty::Char))))));
+                b.emit(Stmt::Ret(Some(ok(Ex::rt("auk_str_char_at", vec![s, Ex::int(0), Ex::null().cast(MTy::CStr)], MTy::D(Ty::Char))))));
             }
             Ty::Tuple(ts) if ts.is_empty() => {
                 check(&mut b, is(0), "Null");
                 b.emit(Stmt::Ret(Some(ok(Ex::unit()))));
             }
             t if self.is_value(t) => {
-                b.do_(Ex::rt("duck_value_retain", vec![v.clone()], MTy::Void));
+                b.do_(Ex::rt("auk_value_retain", vec![v.clone()], MTy::Void));
                 b.emit(Stmt::Ret(Some(ok(v.clone()))));
             }
             Ty::List(x) => {
@@ -1884,20 +1884,20 @@ impl<'a> Gen<'a> {
                 let ops = self.ops(x);
                 check(&mut b, is(5), "List");
                 let list = pay(5, vfield(5));
-                let out = b.decl(Ex::rt("duck_arr_new", vec![ops, Ex::rt("duck_arr_len", vec![list.clone()], MTy::D(Ty::Int))], d(t)));
+                let out = b.decl(Ex::rt("auk_arr_new", vec![ops, Ex::rt("auk_arr_len", vec![list.clone()], MTy::D(Ty::Int))], d(t)));
                 let i = b.decl(Ex::int(0));
                 b.open_loop(vec![Stmt::Set(i.clone(), Ex::bin(BOp::Add, i.clone(), Ex::int(1)))]);
-                b.open_if(Ex::bin(BOp::Ge, i.clone(), Ex::rt("duck_arr_len", vec![list.clone()], MTy::D(Ty::Int))));
+                b.open_if(Ex::bin(BOp::Ge, i.clone(), Ex::rt("auk_arr_len", vec![list.clone()], MTy::D(Ty::Int))));
                 b.emit(Stmt::Break);
                 b.close();
-                let e = Ex::rt("duck_arr_at", vec![list.clone(), i.clone(), Ex::null().cast(MTy::CStr)], MTy::void_ptr()).cast(MTy::ptr(d(&vty))).deref(d(&vty));
+                let e = Ex::rt("auk_arr_at", vec![list.clone(), i.clone(), Ex::null().cast(MTy::CStr)], MTy::void_ptr()).cast(MTy::ptr(d(&vty))).deref(d(&vty));
                 let xr = b.decl(self.call_ref(&conv, vec![e], d(&Ty::res((**x).clone(), self.err_ty()))));
                 b.open_if(self.fld(&xr, Sel::F(0)).not());
-                b.do_(Ex::rt("duck_release", vec![out.clone()], MTy::Void));
+                b.do_(Ex::rt("auk_release", vec![out.clone()], MTy::Void));
                 b.emit(Stmt::Ret(Some(err(self.fld(&xr, Sel::F(2))))));
                 b.close();
                 let xv = self.fld(&xr, Sel::F(1));
-                b.do_(Ex::rt("duck_arr_push", vec![out.clone().addr(), xv.clone().addr()], MTy::Void));
+                b.do_(Ex::rt("auk_arr_push", vec![out.clone().addr(), xv.clone().addr()], MTy::Void));
                 if let Some(rel) = self.release(x, &xv) {
                     b.emit(rel);
                 }
@@ -1910,22 +1910,22 @@ impl<'a> Gen<'a> {
                 let vops = self.ops(x);
                 check(&mut b, is(6), "Map");
                 let map = pay(6, vfield(6));
-                let out = b.decl(Ex::rt("duck_map_new", vec![Ex::rt_global("duck_ops_str", MTy::Rt(Rt::ElemOps)), vops], d(t)));
+                let out = b.decl(Ex::rt("auk_map_new", vec![Ex::rt_global("auk_ops_str", MTy::Rt(Rt::ElemOps)), vops], d(t)));
                 let it = b.decl(Ex::int(0));
                 let kp = b.decl(Ex::null());
                 let vp = b.decl(Ex::null());
                 b.open_loop(vec![]);
-                let next = Ex::rt("duck_map_next", vec![map, it.addr(), kp.clone().addr(), vp.clone().addr()], MTy::Bool);
+                let next = Ex::rt("auk_map_next", vec![map, it.addr(), kp.clone().addr(), vp.clone().addr()], MTy::Bool);
                 b.open_if(next.not());
                 b.emit(Stmt::Break);
                 b.close();
                 let xr = b.decl(self.call_ref(&conv, vec![vp.cast(MTy::ptr(d(&vty))).deref(d(&vty))], d(&Ty::res((**x).clone(), self.err_ty()))));
                 b.open_if(self.fld(&xr, Sel::F(0)).not());
-                b.do_(Ex::rt("duck_release", vec![out.clone()], MTy::Void));
+                b.do_(Ex::rt("auk_release", vec![out.clone()], MTy::Void));
                 b.emit(Stmt::Ret(Some(err(self.fld(&xr, Sel::F(2))))));
                 b.close();
                 let xv = self.fld(&xr, Sel::F(1));
-                b.do_(Ex::rt("duck_map_set", vec![out.clone().addr(), kp, xv.clone().addr()], MTy::Void));
+                b.do_(Ex::rt("auk_map_set", vec![out.clone().addr(), kp, xv.clone().addr()], MTy::Void));
                 if let Some(rel) = self.release(x, &xv) {
                     b.emit(rel);
                 }
@@ -1959,7 +1959,7 @@ impl<'a> Gen<'a> {
                     let key = self.lit(&fd.name);
                     let conv = self.fromv_fn(&ft);
                     b.open_if(Ex::bin(BOp::Eq, errv.clone(), Ex::zero(et.clone())));
-                    let fv = b.decl(Ex::rt("duck_map_find", vec![map.clone(), key.clone().addr()], MTy::void_ptr()).cast(MTy::ptr(d(&vty))));
+                    let fv = b.decl(Ex::rt("auk_map_find", vec![map.clone(), key.clone().addr()], MTy::void_ptr()).cast(MTy::ptr(d(&vty))));
                     b.open_if(Ex::bin(BOp::Eq, fv.clone(), Ex::zero(MTy::ptr(d(&vty)))));
                     if let Ty::Opt(_) = ft {
                         let z = self.field_put(t, i, Ex::zero(d(&ft)));
@@ -1970,8 +1970,8 @@ impl<'a> Gen<'a> {
                     b.else_();
                     let xr = b.decl(self.call_ref(&conv, vec![fv.deref(d(&vty))], d(&Ty::res(ft.clone(), self.err_ty()))));
                     b.open_if(self.fld(&xr, Sel::F(0)).not());
-                    b.set(errv.clone(), Ex::rt("duck_err_wrap", vec![key, self.fld(&xr, Sel::F(2))], et.clone()));
-                    b.do_(Ex::rt("duck_release", vec![self.fld(&xr, Sel::F(2))], MTy::Void));
+                    b.set(errv.clone(), Ex::rt("auk_err_wrap", vec![key, self.fld(&xr, Sel::F(2))], et.clone()));
+                    b.do_(Ex::rt("auk_release", vec![self.fld(&xr, Sel::F(2))], MTy::Void));
                     b.else_();
                     let put = self.field_put(t, i, self.fld(&xr, Sel::F(1)));
                     b.set(raw.clone(), put);
@@ -2006,7 +2006,7 @@ impl<'a> Gen<'a> {
                 b.else_();
                 b.open_if(is(6));
                 let tk = self.lit("tag");
-                let tvp = b.decl(Ex::rt("duck_map_find", vec![pay(6, vfield(6)), tk.addr()], MTy::void_ptr()).cast(MTy::ptr(d(&vty))));
+                let tvp = b.decl(Ex::rt("auk_map_find", vec![pay(6, vfield(6)), tk.addr()], MTy::void_ptr()).cast(MTy::ptr(d(&vty))));
                 let tvd = tvp.clone().deref(d(&vty));
                 let tv_is_str = Ex::bin(BOp::Eq, tvd.clone().field(Sel::Tag, MTy::I32), Ex::int_as(4, MTy::I32));
                 b.open_if(Ex::and(vec![Ex::bin(BOp::Ne, tvp.clone(), Ex::zero(MTy::ptr(d(&vty)))), tv_is_str]));
@@ -2018,7 +2018,7 @@ impl<'a> Gen<'a> {
                 b.emit(Stmt::Ret(Some(err(mism("a Str or a Map with a \"tag\"")))));
                 b.close();
                 for (vi, var) in vs.iter().enumerate() {
-                    b.open_if(Ex::rt("duck_str_eq_lit", vec![tagv.clone(), Ex::cstr(&var.name)], MTy::Bool));
+                    b.open_if(Ex::rt("auk_str_eq_lit", vec![tagv.clone(), Ex::cstr(&var.name)], MTy::Bool));
                     if var.fields.is_empty() {
                         let e = self.variant_new(t, vi, vec![]);
                         b.emit(Stmt::Ret(Some(ok(e))));
@@ -2033,7 +2033,7 @@ impl<'a> Gen<'a> {
                         let key = self.lit(&fname.clone().unwrap_or_else(|| fi.to_string()));
                         let conv = self.fromv_fn(&ft);
                         let a = b.decl(Ex::zero(d(&ft)));
-                        let fv = b.decl(Ex::rt("duck_map_find", vec![map.clone(), key.addr()], MTy::void_ptr()).cast(MTy::ptr(d(&vty))));
+                        let fv = b.decl(Ex::rt("auk_map_find", vec![map.clone(), key.addr()], MTy::void_ptr()).cast(MTy::ptr(d(&vty))));
                         let cleanup = |g: &mut Gen, b: &mut Body| {
                             for (pa, pty) in names.iter() {
                                 if let Some(rel) = g.release(pty, pa) {
@@ -2059,7 +2059,7 @@ impl<'a> Gen<'a> {
                     b.close();
                 }
                 let e = Ex::rt(
-                    "duck__err_concat",
+                    "auk__err_concat",
                     vec![Ex::cstr("from_value: unknown variant `"), tagv, Ex::cstr(&format!("` of `{what}`"))],
                     et.clone(),
                 );
@@ -2095,12 +2095,12 @@ impl<'a> Gen<'a> {
     /// Build `dk_init` (string literals, imprints, constants) and `dk_cleanup` (release the
     /// constants); returns them.
     pub fn init_and_cleanup(&mut self) -> (FuncId, FuncId) {
-        let init = self.declare("dk_init".into(), Vec::new(), MTy::Void, Abi::Duck);
+        let init = self.declare("dk_init".into(), Vec::new(), MTy::Void, Abi::Auk);
         let mut b = Body::new();
         for (s, g) in self.lit_order.clone() {
             let ge = self.global_ex(g);
-            b.set(ge.clone(), Ex::rt("duck_str_from_bytes", vec![Ex::new(K::CStr(s.as_bytes().to_vec()), MTy::CStr), Ex::int(s.len() as i64)], MTy::D(Ty::Str)));
-            b.do_(Ex::rt("duck_make_immortal", vec![ge], MTy::Void));
+            b.set(ge.clone(), Ex::rt("auk_str_from_bytes", vec![Ex::new(K::CStr(s.as_bytes().to_vec()), MTy::CStr), Ex::int(s.len() as i64)], MTy::D(Ty::Str)));
+            b.do_(Ex::rt("auk_make_immortal", vec![ge], MTy::Void));
         }
         for f in self.imprint_inits.clone() {
             b.do_(self.call(f, vec![]));
@@ -2119,7 +2119,7 @@ impl<'a> Gen<'a> {
         (init, cleanup)
     }
 
-    /// Is module `m` part of the root package (whose tests `duck test` runs)?
+    /// Is module `m` part of the root package (whose tests `auk test` runs)?
     pub fn in_root_pkg(&self, m: ModId) -> bool {
         let p = &self.tp.program;
         p.mods[m].pkg == p.mods[p.root].pkg
@@ -2152,7 +2152,7 @@ impl<'a> Gen<'a> {
         let tp = self.tp;
         match b {
             BodyRef::Fn(f) => {
-                let FnKind::Duck { item, .. } = &tp.fns[f].kind else { panic!("not a Duck function") };
+                let FnKind::Auk { item, .. } = &tp.fns[f].kind else { panic!("not an Auk function") };
                 (tp.fns[f].module, &tp.program.mods[tp.fns[f].module].ast.items[*item])
             }
             BodyRef::Test(t) => (tp.tests[t].module, &tp.program.mods[tp.tests[t].module].ast.items[tp.tests[t].item]),
@@ -2160,7 +2160,7 @@ impl<'a> Gen<'a> {
         }
     }
 
-    /// Record a hole for `duck build`'s refusal.
+    /// Record a hole for `auk build`'s refusal.
     pub fn note_hole(&mut self, loc: String, expected: String) {
         self.holes.push(format!("{loc}: unfilled hole (expected {expected})"));
     }

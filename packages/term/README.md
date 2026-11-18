@@ -9,7 +9,7 @@ Those use `env` to honour [`NO_COLOR`](https://no-color.org) and `FORCE_COLOR`, 
 
 **Effects:** `env` (only the four functions above). **Deps:** `text`.
 
-```duck
+```auk
 fn main(): int uses env {
   term.println(term.bold(term.green("✓")) + " build finished")   // plain text when piped
   term.println(term.paint("warning", term.style().bold().fg(term.Yellow)) + ": 2 unused")

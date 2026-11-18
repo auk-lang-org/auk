@@ -1,15 +1,15 @@
-# Packages quack needs
+# Packages raft needs
 
-What a real package ecosystem depends on, measured from the 50 most-downloaded Rust crates, and what that means for Duck's package manager, `quack`.
+What a real package ecosystem depends on, measured from the 50 most-downloaded Rust crates, and what that means for Auk's package manager, `raft`.
 
 ## 1. Summary
 
-- Half of Rust's top 50 (25 crates) is **Rust-specific plumbing**: proc-macro machinery (`syn`, `quote`), OS bindings (`libc`, `windows-*`), and internals of other crates. Duck needs none of it, because the compiler derives code itself and the C runtime talks to the OS.
+- Half of Rust's top 50 (25 crates) is **Rust-specific plumbing**: proc-macro machinery (`syn`, `quote`), OS bindings (`libc`, `windows-*`), and internals of other crates. Auk needs none of it, because the compiler derives code itself and the C runtime talks to the OS.
 - **17 more are covered already**: 12 by language or core features (ordered maps, `T!` errors, derived `Data`, `imprint`, async runtime) and 5 by existing packages (`json`, `regex`, `cli`).
 - The **8 real gaps** in the top 50 are base64, hashing (`digest`), logging, case conversion and string similarity, secure random bytes, server sockets and a byte type. Ranks 51–300 add the application libraries: time/dates, URLs, TOML, UUIDs, TLS, compression and HTTP servers.
 - **P0 packages (done, 0.1.0):** `encoding` (base64/hex/percent), `hash` (sha256/hmac/crc32/fnv), `datetime`, `url`, `toml`, `log`. See §5 for what shipped.
 - **P1:** `uuid`, an HTTP server inside `http`, `compress`, `num` (decimal), `text`, `yaml`, `glob`. `uuid`, `text`, `num`, `glob`, the `http` server, `compress` and `yaml` are done (0.1.0; see §5). **P2:** `crypto`, `term`, `sqlite`, `template`, `xml`, `binary`, `semver`, `prop`, `snap`.
-- **The biggest blockers are in core, not packages:** there is no TLS (so `https://` fails), no bitwise integer operators (needed for any hashing or encoding written in Duck), no byte type or binary file I/O, no `net.listen`, no stderr/stdin, and no directory listing.
+- **The biggest blockers are in core, not packages:** there is no TLS (so `https://` fails), no bitwise integer operators (needed for any hashing or encoding written in Auk), no byte type or binary file I/O, no `net.listen`, no stderr/stdin, and no directory listing.
 
 ## 2. Methodology
 
@@ -20,17 +20,17 @@ What a real package ecosystem depends on, measured from the 50 most-downloaded R
   - `GET /api/v1/crates/<name>` gave counts for 17 crates outside the top 300 (serde_yaml, zip, rusqlite, sqlx, rust_decimal, chrono-tz, proptest, insta, md-5, handlebars, tera, minijinja, similar, dirs, csv, quickcheck, serde_yml).
 - **No numbers are estimated.** Every download count below comes from those API responses, and none was unavailable (no "n/a" entries). A rank like "#103" means the crate's all-time rank.
 - **Caveat:** downloads count every CI build and every transitive dependency. They measure how deep a crate sits in dependency trees, not how often developers choose it. That is why plumbing crates dominate, and why I looked past rank 50 for application-level evidence.
-- **Verdicts** compare each crate's purpose with `docs/spec.md`, `docs/quack.md`, the five `packages/*/README.md` files, and the actual core prelude (`src/prelude/*.duck`, `runtime/src/core.rs`):
-  - 🟢 **Built into Duck**: a language or core feature makes it unnecessary.
+- **Verdicts** compare each crate's purpose with `docs/spec.md`, `docs/raft.md`, the five `packages/*/README.md` files, and the actual core prelude (`src/prelude/*.auk`, `runtime/src/core.rs`):
+  - 🟢 **Built into Auk**: a language or core feature makes it unnecessary.
   - 🔵 **Covered** by an existing package.
   - ⚪ **Not applicable**: Rust implementation plumbing.
-  - 🔴 **Gap**: Duck needs a new package or new core/runtime support.
+  - 🔴 **Gap**: Auk needs a new package or new core/runtime support.
 
 ## 3. The top 50 (all-time downloads)
 
 Tally: ⚪ 25 · 🟢 12 · 🔵 5 · 🔴 8.
 
-| # | crate | downloads | purpose | verdict | Duck equivalent / notes |
+| # | crate | downloads | purpose | verdict | Auk equivalent / notes |
 |---|---|---|---|---|---|
 | 1 | hashbrown | 2,898,552,276 | Fast hash map (std's HashMap backend) | 🟢 | `{K: V}` maps are built in (insertion-ordered) |
 | 2 | syn | 2,843,372,694 | Parses Rust source for proc macros | ⚪ | No proc macros; the compiler derives Show/Eq/Ord/Data itself |
@@ -38,7 +38,7 @@ Tally: ⚪ 25 · 🟢 12 · 🔵 5 · 🔴 8.
 | 4 | bitflags | 2,141,757,841 | Typed bit-flag sets | 🟢 | Field-less enum + `Set<T>` |
 | 5 | ~~**No stderr, stdin or exit code control**~~ *Resolved*, except `proc.exec` | log (#28), env_logger (#245), anstream (#144) | Done: `eprint(x)` (always allowed), `env.read_line(): str?`, `env.read_all(): str!`, `env.lines(): [str]` (stdin belongs to `env` with args and variables, so no new effect), and `proc.exit(code)`. Still open: `proc.exec(cmd, args, input): proc.Out!` with `{ code, stdout, stderr }`. |
 | 6 | ~~**Filesystem basics missing**~~ *Resolved*, except `home()` | tempfile (#100), walkdir (#170), glob (#195), same-file (#182), dirs (385,720,328) | Done: `fs.list(dir): [str]!` (sorted), `exists`, `is_dir`, `mkdir` (with parents), `remove`, `rename`, `append`, `temp_dir(): str!` (mkdtemp, mode 0700). `glob` and `snap` can now be thin packages, and `tempfile` needs no package. Still open: `home(): str?` (today `env.get("HOME")`). |
-| 7 | ~~**No secure random bytes**~~ *Resolved* | getrandom (#3), rand_core (#5), rand_chacha (#21) | Done: `rand.bytes(n): [int] uses rand` from the OS CSPRNG (`arc4random_buf` on macOS/BSD, `getrandom` or `/dev/urandom` on Linux), `rand.shuffle(xs): [T]`, `rand.choice(xs): T?` (in Duck, on `rand.int`), and `rand.seed(n)` for reproducible tests (seeds `int`/`float`/`shuffle`/`choice`, never `bytes`). |
+| 7 | ~~**No secure random bytes**~~ *Resolved* | getrandom (#3), rand_core (#5), rand_chacha (#21) | Done: `rand.bytes(n): [int] uses rand` from the OS CSPRNG (`arc4random_buf` on macOS/BSD, `getrandom` or `/dev/urandom` on Linux), `rand.shuffle(xs): [T]`, `rand.choice(xs): T?` (in Auk, on `rand.int`), and `rand.seed(n)` for reproducible tests (seeds `int`/`float`/`shuffle`/`choice`, never `bytes`). |
 | 8 | quote | 1,859,989,566 | Builds Rust tokens in proc macros | ⚪ | No proc macros |
 | 9 | proc-macro2 | 1,851,396,512 | Proc-macro token API | ⚪ | No proc macros |
 | 10 | base64 | 1,844,709,827 | Base64 encode/decode | 🔴 | New package `encoding` (P0) |
@@ -51,7 +51,7 @@ Tally: ⚪ 25 · 🟢 12 · 🔵 5 · 🔴 8.
 | 17 | memchr | 1,643,864,075 | SIMD byte search | ⚪ | Runtime implements `find`/`contains`/`split` |
 | 18 | regex-syntax | 1,627,023,753 | Regex parser (regex internals) | 🔵 | `regex` |
 | 19 | serde | 1,614,091,754 | Serialization framework | 🟢 | `Data` shape: derived `to_value`/`from_value` via `Value` |
-| 20 | unicode-ident | 1,605,744,992 | Unicode identifier tables for parsers | ⚪ | Used by syn; Duck's lexer owns this |
+| 20 | unicode-ident | 1,605,744,992 | Unicode identifier tables for parsers | ⚪ | Used by syn; Auk's lexer owns this |
 | 21 | rand_chacha | 1,586,184,880 | ChaCha CSPRNG (rand internals) | ⚪ | Algorithm detail; the need is covered by the secure `rand.bytes` gap |
 | 22 | itoa | 1,553,187,056 | Fast int-to-string | 🟢 | String interpolation / `str(n)` |
 | 23 | serde_derive | 1,530,785,554 | `#[derive(Serialize, Deserialize)]` | 🟢 | Compiler-derived `to_value`/`from_value` |
@@ -60,7 +60,7 @@ Tally: ⚪ 25 · 🟢 12 · 🔵 5 · 🔴 8.
 | 26 | autocfg | 1,480,271,027 | Detects compiler features in build scripts | ⚪ | No build scripts |
 | 27 | once_cell | 1,447,466,430 | Lazy/once-initialized values | 🟢 | Top-level `let` and `imprint` |
 | 28 | log | 1,446,099,389 | Logging facade | 🔴 | New package `log` (P0); needs core stderr |
-| 29 | cc | 1,431,177,156 | Compiles C code from build scripts | ⚪ | Duck already emits C; native code goes through `ffi` |
+| 29 | cc | 1,431,177,156 | Compiles C code from build scripts | ⚪ | Auk already emits C; native code goes through `ffi` |
 | 30 | regex-automata | 1,429,342,728 | Regex matching engines (regex internals) | 🔵 | `regex` (backtracking; a linear-time engine is P2) |
 | 31 | socket2 | 1,409,676,040 | Low-level socket options | 🔴 | Core gap: no `net.listen` (server sockets) |
 | 32 | smallvec | 1,378,250,485 | Inline small vectors | ⚪ | Refcounted copy-on-write values; no stack-vs-heap choice |
@@ -85,7 +85,7 @@ Tally: ⚪ 25 · 🟢 12 · 🔵 5 · 🔴 8.
 
 ### Categories
 
-| category | crates in top 50 | count | Duck status |
+| category | crates in top 50 | count | Auk status |
 |---|---|---|---|
 | Platform bindings | libc, windows-sys, rustix, linux-raw-sys, windows-targets, windows_* (×4) | 9 | ⚪ C runtime |
 | Macros / build | syn, quote, proc-macro2, unicode-ident, cfg-if, autocfg, cc | 7 | ⚪ compiler-owned derivation |
@@ -99,7 +99,7 @@ Tally: ⚪ 25 · 🟢 12 · 🔵 5 · 🔴 8.
 | CLI | clap | 1 | 🔵 cli |
 | Logging | log | 1 | 🔴 `log` |
 
-**What dominates:** 16 of 50 crates exist only to make Rust itself work (macros and OS bindings). Once you set those aside, the ecosystem's center of gravity is **data in and out** (serialization, encoding, text and regex), followed by **randomness**, **hashing** and **I/O plumbing**. Duck's design already removes the most-downloaded application layer (serde, thiserror, once_cell, indexmap), so its remaining needs are **formats and encodings** (base64, TOML, URLs, dates) and **bytes-level infrastructure** (hashing, TLS, compression).
+**What dominates:** 16 of 50 crates exist only to make Rust itself work (macros and OS bindings). Once you set those aside, the ecosystem's center of gravity is **data in and out** (serialization, encoding, text and regex), followed by **randomness**, **hashing** and **I/O plumbing**. Auk's design already removes the most-downloaded application layer (serde, thiserror, once_cell, indexmap), so its remaining needs are **formats and encodings** (base64, TOML, URLs, dates) and **bytes-level infrastructure** (hashing, TLS, compression).
 
 ### All-time vs. recent (last 90 days)
 
@@ -107,9 +107,9 @@ Tally: ⚪ 25 · 🟢 12 · 🔵 5 · 🔴 8.
 - **Dropped out:** `clap`, `strsim`, `ryu`, `mio`, `parking_lot(_core)`, and the per-target `windows_*` import libraries.
 - **What that means:** hashing (sha2) and TOML config are moving from leaf dependencies into the default stack, and HTTP types are now near-universal. That supports putting `hash`, `toml` and HTTP server work early. CLI parsing staying just outside the recent top 50 is noise, not a trend (`clap` is still #37 all-time).
 
-## 4. What Duck already covers
+## 4. What Auk already covers
 
-| Duck feature | replaces (all-time rank) |
+| Auk feature | replaces (all-time rank) |
 |---|---|
 | `T!`, `T!E`, `?`, `fail`, `"{e}"` | thiserror (#15), thiserror-impl (#14), anyhow (#65) |
 | derived `to_value`/`from_value` (`Data`), Show/Eq/Ord | serde (#19), serde_derive (#23), serde_core, derive_more (#267), strum (#168) |
@@ -126,13 +126,13 @@ Tally: ⚪ 25 · 🟢 12 · 🔵 5 · 🔴 8.
 | package `csv` | csv (278,915,649 downloads) |
 | package `http` (client and `http.server`) | reqwest (#130); `http://` and `https://` (core TLS); hyper/axum basics (#76, #269) |
 
-## 5. Packages quack needs
+## 5. Packages raft needs
 
 All signatures follow `docs/spec.md`. Bytes are `[int]` (0–255) as in core `net`, until core gets a bytes type (§6). Every package mirrors the `json` shape where it can (`parse`/`decode`/`encode`/`message`), so an AI that knows one package can predict the others.
 
 ### P0: needed by typical AI-written programs now (done: 0.1.0, in `packages/`)
 
-All six packages are in the registry (`quack add encoding`, and so on), declare `effects = []`, and pass their own `duck test` suites (also under `DUCK_LEAK_CHECK` and ASan/UBSan; `tests/packages_p0.rs` runs them and installs each one with quack). Each README has the full API. The sketches further down are the original proposals, kept for the evidence; this is what shipped and where it differs.
+All six packages are in the registry (`raft add encoding`, and so on), declare `effects = []`, and pass their own `auk test` suites (also under `AUK_LEAK_CHECK` and ASan/UBSan; `tests/packages_p0.rs` runs them and installs each one with raft). Each README has the full API. The sketches further down are the original proposals, kept for the evidence; this is what shipped and where it differs.
 
 | package | deps | shipped API (summary) | deviations from the sketch |
 |---|---|---|---|
@@ -169,7 +169,7 @@ pub fn hmac_sha256(key: [int], msg: [int]): [int]
 pub fn crc32(data: [int]): int
 pub fn same(a: [int], b: [int]): bool        // constant-time compare for MACs
 ```
-Also `sha512`, `sha1` and `md5`, plus incremental `Sha256` state with `update(h: var Sha256, data: [int])` and `finish`. *Why:* the digest family takes 3 of the top 50 plus a fast-rising `sha2`. It's needed for webhook signatures, API request signing, checksums and cache keys. quack's own lock checksum is SHA-256, which gives a ready test oracle. This package is not for password hashing (see `crypto`, P2).
+Also `sha512`, `sha1` and `md5`, plus incremental `Sha256` state with `update(h: var Sha256, data: [int])` and `finish`. *Why:* the digest family takes 3 of the top 50 plus a fast-rising `sha2`. It's needed for webhook signatures, API request signing, checksums and cache keys. raft's own lock checksum is SHA-256, which gives a ready test oracle. This package is not for password hashing (see `crypto`, P2).
 
 **`datetime`**: dates, times, durations, RFC 3339 and time zones. *Rust:* time (#84, 1,023,432,190), chrono (#103, 928,616,054), iana-time-zone (#150), httpdate (#199), chrono-tz (184,805,506). *Effects:* **none**: the caller passes the clock (`datetime.from_ms(time.now())`), and the IANA tz database is compiled in with `imprint` rather than read from `/usr/share/zoneinfo`. *Size:* L (calendar math plus tz data).
 ```
@@ -201,7 +201,7 @@ pub fn encode<T: Data>(x: T): str
 pub fn str(v: Value): str
 pub fn message(e: TomlErr): str              // "3:7: expected '='"
 ```
-TOML datetimes become `Str` in RFC 3339 form, because `Value` has no date variant. *Why:* TOML is the config format rising fastest in the recent list, and Duck's own `quack.toml` is TOML, so the format is both needed and familiar to users.
+TOML datetimes become `Str` in RFC 3339 form, because `Value` has no date variant. *Why:* TOML is the config format rising fastest in the recent list, and Auk's own `raft.toml` is TOML, so the format is both needed and familiar to users.
 
 **`log`**: leveled, structured logging to stderr. *Rust:* log (#28, 1,446,099,389), tracing (#94), tracing-core (#92), tracing-subscriber (#184), env_logger (#245). *Effects:* none, provided core adds `eprint` (always allowed, like `print`; see §6). *Size:* S.
 ```
@@ -211,11 +211,11 @@ pub fn info(l: Logger, msg: str)             // also debug/warn/error
 pub fn with(l: Logger, key: str, v: Value): Logger   // structured fields, like tracing spans
 pub fn json(l: Logger): Logger               // emit one JSON object per line
 ```
-`log.level(env.get("LOG") else "info")` parses a level from text. Timestamps are left to the log collector (journald, Docker), so the package needs no `time` effect. *Why:* `log` is the top-ranked application crate in the top 50 that Duck doesn't cover, and the tracing family adds four more crates in the top 250.
+`log.level(env.get("LOG") else "info")` parses a level from text. Timestamps are left to the log collector (journald, Docker), so the package needs no `time` effect. *Why:* `log` is the top-ranked application crate in the top 50 that Auk doesn't cover, and the tracing family adds four more crates in the top 250.
 
 ### P1: common
 
-**Done (0.1.0, in `packages/`): `uuid`, `text`, `num`, `glob`, the `http` server (`http.server`), `compress`, `yaml`.** Each passes its own `duck test` suite, also under `DUCK_LEAK_CHECK=1` and ASan/UBSan, and installs with `quack add`. Each README has the full API. The table summarizes what shipped and how it differs from the sketches below.
+**Done (0.1.0, in `packages/`): `uuid`, `text`, `num`, `glob`, the `http` server (`http.server`), `compress`, `yaml`.** Each passes its own `auk test` suite, also under `AUK_LEAK_CHECK=1` and ASan/UBSan, and installs with `raft add`. Each README has the full API. The table summarizes what shipped and how it differs from the sketches below.
 
 | package | effects | shipped API (summary) | deviations from the sketch |
 |---|---|---|---|
@@ -247,7 +247,7 @@ pub fn v7(ms: int): Uuid uses rand           // uuid.v7(time.now()): sortable ID
 pub fn parse(s: str): Uuid!
 pub fn show(u: Uuid): str                    // "{id}" interpolates it
 
-// http server: routing is Duck pattern matching, so no router macro is needed
+// http server: routing is Auk pattern matching, so no router macro is needed
 pub async fn serve(port: int, handle: (Req) => Resp!): ()! uses net
 pub fn text(status: int, body: str): Resp
 pub fn reply<T: Data>(status: int, x: T): Resp   // JSON body
@@ -271,11 +271,11 @@ pub fn shell_words(s: str): [str]!
 
 // glob
 pub fn matches(pattern: str, path: str): bool
-pub fn find(pattern: str): [str]! uses fs    // "src/**/*.duck"
+pub fn find(pattern: str): [str]! uses fs    // "src/**/*.auk"
 ```
 - **`uuid`** declares `rand` because v4 and v7 need entropy. It depends on the secure `rand.bytes` core gap (§6), since a PRNG-based v4 UUID can collide or be guessed.
 - **HTTP server**: put it in `http`, not a new package. The server and client share `http.wire` and already share the `net` effect. It's P1 only because it's blocked on `net.listen`; once that exists it is P0, since "build me an API" is a very common task for AI-written programs.
-- **`num`**: `float` is wrong for money, and invoices, prices and inventory (see `examples/bank.duck` and `examples/inventory.duck`) are common AI tasks.
+- **`num`**: `float` is wrong for money, and invoices, prices and inventory (see `examples/bank.auk` and `examples/inventory.auk`) are common AI tasks.
 - **`compress`** is also what `http` needs to accept `Content-Encoding: gzip`.
 
 ### P2: later
@@ -294,14 +294,14 @@ pub fn find(pattern: str): [str]! uses fs    // "src/**/*.duck"
 | `audio` | *Done (0.1.0).* Decode/encode WAV, AIFF/AIFC, AU and FLAC; resampling, filters, dynamics, EBU R128 loudness, ffmpeg-style `-af` graphs | symphonia, hound, claxon, rubato, dasp, ebur128 | none | L |
 | `graphics` | *Started (0.1.0).* Drawing into `pixels` frames. `graphics.font`: parse TrueType fonts, rasterize glyphs, draw and measure text | ab_glyph, fontdue, rusttype, ttf-parser | `fs` (loading only) | M |
 
-- **`crypto`**: write it as thin bindings over the same vetted C library the runtime links for TLS, not as pure Duck. Constant-time code and side-channel safety are hard to get right in a refcounted, bounds-checked language.
+- **`crypto`**: write it as thin bindings over the same vetted C library the runtime links for TLS, not as pure Auk. Constant-time code and side-channel safety are hard to get right in a refcounted, bounds-checked language.
 - **`semver`** ranks high (#59), but most of its downloads come from Rust build tooling (`rustc_version`, cargo plugins). AI-written apps rarely need it.
-- **`audio`** is pure Duck and checked against ffmpeg and libFLAC: every decoder is bit-exact with ffmpeg; the G.711 encoders, biquads, `tremolo`, `acompressor` and `agate` match ffmpeg's output; loudness matches its `ebur128`; FLAC output passes `flac -t` and compresses like `flac -5`/`-8`. Not yet: lossy codecs (MP3, AAC, Vorbis, Opus) and Ogg/MP4/Matroska containers. Needed core math (`sin cos tan asin acos atan atan2 exp ln log10 log2`, `float.pi`, and float bit conversions for binary formats), which is now in core.
-- **`graphics`** is pure Duck, made for `gui`. The glyph masks of `graphics.font` agree with Core Text's to within 1.3% of total coverage at 40 px (2.6–6.6% at 24 and 13 px), with glyphs at the same positions. Not yet: hinting, CFF outlines, complex shaping, line wrapping.
+- **`audio`** is pure Auk and checked against ffmpeg and libFLAC: every decoder is bit-exact with ffmpeg; the G.711 encoders, biquads, `tremolo`, `acompressor` and `agate` match ffmpeg's output; loudness matches its `ebur128`; FLAC output passes `flac -t` and compresses like `flac -5`/`-8`. Not yet: lossy codecs (MP3, AAC, Vorbis, Opus) and Ogg/MP4/Matroska containers. Needed core math (`sin cos tan asin acos atan atan2 exp ln log10 log2`, `float.pi`, and float bit conversions for binary formats), which is now in core.
+- **`graphics`** is pure Auk, made for `gui`. The glyph masks of `graphics.font` agree with Core Text's to within 1.3% of total coverage at 40 px (2.6–6.6% at 24 and 13 px), with glyphs at the same positions. Not yet: hinting, CFF outlines, complex shaping, line wrapping.
 - **`sqlite`** sits well below the top 300 in Rust because Rust's database users spread across many drivers. It's still a frequent need in small AI-written apps, so it's worth doing once `ffi` is mature.
 
 **Considered and not proposed:**
-- parser combinators (nom #134, winnow #67): Duck's string patterns (`"GET " + rest`), clause groups and tail calls cover hand-written parsers.
+- parser combinators (nom #134, winnow #67): Auk's string patterns (`"GET " + rest`), clause groups and tail calls cover hand-written parsers.
 - protobuf (prost #204): niche for typical AI-written programs.
 - `once_cell`/`lazy_static`: built in.
 - `rand_distr`-style distributions: `shuffle`/`choice` belong in core `rand`, and statistics distributions can wait.
@@ -315,21 +315,21 @@ Ordered by how much they block.
 | 1 | ~~**TLS**: `net.tls` returns "tls unavailable in this build", so `http.get("https://…")` fails~~ *Resolved* (client side) | rustls (#77), rustls-webpki (#108), webpki-roots (#120), tokio-rustls (#116), ring (#131), hyper-rustls (#160), openssl-probe (#191), rustls-native-certs (#221) | Done in the runtime (`runtime/src/tls.rs`) with rustls, verifying certificates against the bundled Mozilla roots (`webpki-roots`) and the host name. Verification is always on and a bad certificate is a clear Err. Still open: server TLS (`net.listen_tls`), and trusting roots installed only in the system store. |
 | 2 | ~~**No bitwise integer operators**~~ *Resolved*: `& \| ^ ~ << >>` are in the language (the P0 `encoding` and `hash` packages use them) | every hash, base64, CRC, UUID, compression and binary-format package needs them (base64 #10, digest #36, sha2 #58, crc32fast #141, byteorder #110) | Done: operators that bind tighter than comparisons (mixing them unparenthesized, as in `x & 1 == 0`, is error E0038); `<<` wraps like `+% -% *%`, and `>>` is arithmetic. |
 | 3 | **No byte type**: bytes are `[int]` (8 bytes per byte). *Binary file I/O is resolved: `fs.read_bytes`/`fs.write_bytes` are in core.* | bytes (#45), byteorder (#110), memchr (#17), zerocopy (recent #46) | Still to do: add a compact `bytes` core type that converts to and from `[int]`, so `compress`, `hash` and the `http` client (which today requires UTF-8 bodies) don't copy 8× the data. |
-| 4 | ~~**No server sockets**~~ *Resolved* | socket2 (#31), mio (#47), hyper (#76), axum (#269) | Done: `net.listen(host, port): net.Listener! uses net` (port 0 picks a free port; `port(l)` tells which), `accept(l): net.Conn!` (blocks only its task, so an `async fn` server runs alongside other tasks), `close(l)`; see `examples/echo.duck`. This unblocks the HTTP server package. |
+| 4 | ~~**No server sockets**~~ *Resolved* | socket2 (#31), mio (#47), hyper (#76), axum (#269) | Done: `net.listen(host, port): net.Listener! uses net` (port 0 picks a free port; `port(l)` tells which), `accept(l): net.Conn!` (blocks only its task, so an `async fn` server runs alongside other tasks), `close(l)`; see `examples/echo.auk`. This unblocks the HTTP server package. |
 | 5 | ~~**No stderr, stdin or exit code control**~~ *Resolved*, except `proc.exec` | log (#28), env_logger (#245), anstream (#144) | Done: `eprint(x)` (always allowed), `env.read_line(): str?`, `env.read_all(): str!`, `env.lines(): [str]` (stdin belongs to `env` with args and variables, so no new effect), and `proc.exit(code)`. Still open: `proc.exec(cmd, args, input): proc.Out!` with `{ code, stdout, stderr }`. |
 | 6 | ~~**Filesystem basics missing**~~ *Resolved*, except `home()` | tempfile (#100), walkdir (#170), glob (#195), same-file (#182), dirs (385,720,328) | Done: `fs.list(dir): [str]!` (sorted), `exists`, `is_dir`, `mkdir` (with parents), `remove`, `rename`, `append`, `temp_dir(): str!` (mkdtemp, mode 0700). `glob` and `snap` can now be thin packages, and `tempfile` needs no package. Still open: `home(): str?` (today `env.get("HOME")`). |
-| 7 | ~~**No secure random bytes**~~ *Resolved* | getrandom (#3), rand_core (#5), rand_chacha (#21) | Done: `rand.bytes(n): [int] uses rand` from the OS CSPRNG (`arc4random_buf` on macOS/BSD, `getrandom` or `/dev/urandom` on Linux), `rand.shuffle(xs): [T]`, `rand.choice(xs): T?` (in Duck, on `rand.int`), and `rand.seed(n)` for reproducible tests (seeds `int`/`float`/`shuffle`/`choice`, never `bytes`). |
+| 7 | ~~**No secure random bytes**~~ *Resolved* | getrandom (#3), rand_core (#5), rand_chacha (#21) | Done: `rand.bytes(n): [int] uses rand` from the OS CSPRNG (`arc4random_buf` on macOS/BSD, `getrandom` or `/dev/urandom` on Linux), `rand.shuffle(xs): [T]`, `rand.choice(xs): T?` (in Auk, on `rand.int`), and `rand.seed(n)` for reproducible tests (seeds `int`/`float`/`shuffle`/`choice`, never `bytes`). |
 | 8 | **Async coordination**: no channels, timeouts or select | tokio (#63), futures-* (#69–#96), tokio-util (#114), crossbeam-channel (#205), rayon (#225) | Add runtime-backed `chan()` with `send`/`recv`, `timeout(ms, fut)`, and an async `time.sleep`. The scheduler is the runtime's, so a package can't add these. Treat CPU parallelism (rayon) as a later runtime feature. |
-| 9 | ~~**Collection extras**~~ *Resolved*, except `sum_by` | itertools (#13) | Done, in Duck in the core prelude: `chunks(n)`, `windows(n)`, `flat_map(f)`, `group_by(key): {K: [T]}` (insertion-ordered) and `unique()` (first occurrence kept; hashes `Eq` values). Still open: `sum_by`. |
+| 9 | ~~**Collection extras**~~ *Resolved*, except `sum_by` | itertools (#13) | Done, in Auk in the core prelude: `chunks(n)`, `windows(n)`, `flat_map(f)`, `group_by(key): {K: [T]}` (insertion-ordered) and `unique()` (first occurrence kept; hashes `Eq` values). Still open: `sum_by`. |
 
 ## 7. Recommended build order
 
 Bitwise ops (gap 2) have landed; `fs.read_bytes`/`write_bytes` (gap 3) and `eprint` (gap 5) are in core now. TLS (gap 1) and `net.listen` (gap 4) are done, so `http` works over `https://`.
 
 1. **`encoding`** (S): the smallest package, the highest-ranked gap in the data (base64 #10), and the first real exercise of the new bitwise ops. `hash` (hex output) and `uuid` reuse it.
-2. **`hash`** (M): the digest family is rising fastest in the recent list. It unblocks webhooks, request signing and checksums, and quack's SHA-256 lock checksums give a ready test oracle.
+2. **`hash`** (M): the digest family is rising fastest in the recent list. It unblocks webhooks, request signing and checksums, and raft's SHA-256 lock checksums give a ready test oracle.
 3. **`datetime`** (L): two time crates in the top ~100, and timestamps appear in almost every data-handling program. It's pure by design (caller-supplied clock, imprinted tz data).
-4. **`toml`** (M): a config format that's climbing in recent downloads. It copies the `json` API, so it is quick to write and easy for AIs to use correctly, and Duck already uses TOML for `quack.toml`.
+4. **`toml`** (M): a config format that's climbing in recent downloads. It copies the `json` API, so it is quick to write and easy for AIs to use correctly, and Auk already uses TOML for `raft.toml`.
 5. **`log`** (S): the top uncovered application crate in the top 50 (#28). It's small once `eprint` exists.
 
 **Status:** all of P0 (steps 1–5 above, plus `url`) has shipped; see §5. `http.uri` now sits on `url`, and the **HTTP server** (`http.server`, on `net.listen`) has shipped. Of P1, `uuid` (on the new `rand.bytes`), `text`, `num`, `glob`, `compress` (with `zip`/`unzip`) and `yaml` have shipped too, so the P1 list is done. Every P0 package declares **no effects**. Among the P1 packages, only `uuid` (`rand`), the server (`net`) and `glob` (`fs`) need any.

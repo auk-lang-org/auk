@@ -1,4 +1,4 @@
-//! A small Wadler/Prettier-style document printer for `duck fmt`.
+//! A small Wadler/Prettier-style document printer for `auk fmt`.
 //!
 //! A `Doc` describes text with optional line breaks. A `Group` prints flat (every `Line` is a
 //! space, every `SoftLine` nothing) when it fits in the remaining width, and broken (every
@@ -7,7 +7,7 @@
 //! member-chain breaking and "break after `=`" without backtracking.
 
 /// Comments printed at the end of a line are prefixed with this marker, so a final pass can
-/// align runs of them; it never appears in Duck source.
+/// align runs of them; it never appears in Auk source.
 pub const SUFFIX_MARK: char = '\u{1}';
 
 #[derive(Debug, Clone)]

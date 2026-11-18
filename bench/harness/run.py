@@ -1,11 +1,11 @@
-"""Run the Duck accuracy benchmark.
+"""Run the Auk accuracy benchmark.
 
-    python3 -I bench/harness/run.py [--tasks 01_word_freq,...] [--conditions duck1,hatch,py1]
+    python3 -I bench/harness/run.py [--tasks 01_word_freq,...] [--conditions auk1,hatch,py1]
                                      [--jobs 6] [--out bench/runs/<name>] [--model claude-opus-5-5]
 
 Conditions:
-  duck1  one-shot Duck: spec + task + Duck stub + visible tests -> reply -> `duck check`, `duck test`
-  hatch  `duck hatch --tries 3` on given + stub + visible tests, then the hidden tests
+  auk1  one-shot Auk: spec + task + Auk stub + visible tests -> reply -> `auk check`, `auk test`
+  hatch  `auk hatch --tries 3` on given + stub + visible tests, then the hidden tests
   py1    one-shot Python: task + Python stub + visible tests -> reply -> syntax check, tests
 
 Scoring always uses given + solution + visible tests + hidden tests (tasks/*/tests.*).
@@ -27,19 +27,19 @@ from common import *  # noqa
 HARNESS = os.path.dirname(os.path.abspath(__file__))
 
 
-def run_duck1(t, d, spec):
-    prompt = make_prompt(t, "duck", spec)
+def run_auk1(t, d, spec):
+    prompt = make_prompt(t, "auk", spec)
     reply, meta = call_model(prompt, f"{d}/model")
     r = {"model": meta}
     if reply is None:
         r.update(error="no reply", check_ok=False, pass_=False)
         return r
-    sol = extract_code(reply, "duck")
-    write(f"{d}/solution.duck", sol)
-    write(f"{d}/program.duck", duck_program(t, sol))
-    c, out = duck_check(f"{d}/program.duck")
+    sol = extract_code(reply, "auk")
+    write(f"{d}/solution.auk", sol)
+    write(f"{d}/program.auk", auk_program(t, sol))
+    c, out = auk_check(f"{d}/program.auk")
     write(f"{d}/check.out", out)
-    c2, out2 = duck_test(f"{d}/program.duck")
+    c2, out2 = auk_test(f"{d}/program.auk")
     write(f"{d}/test.out", out2)
     r.update(check_ok=c == 0, pass_=c2 == 0)
     return r
@@ -64,13 +64,13 @@ def run_py1(t, d, spec):
 
 
 def run_hatch(t, d, spec, tries=3):
-    src = f"{d}/hatch.duck"
-    write(src, duck_hatch_file(t))
-    shutil.copy(src, f"{d}/hatch.before.duck")
+    src = f"{d}/hatch.auk"
+    write(src, auk_hatch_file(t))
+    shutil.copy(src, f"{d}/hatch.before.auk")
     env = dict(os.environ)
-    env["DUCK_HATCH_CMD"] = f"'{sys.executable}' -I '{HARNESS}/model_cmd.py' '{d}/calls'"
-    holes = len(re.findall(r"\?\?", t["duck_stub"]))
-    code, out = run([DUCK, "hatch", src, "--tries", str(tries)], cwd=d, env=env,
+    env["AUK_HATCH_CMD"] = f"'{sys.executable}' -I '{HARNESS}/model_cmd.py' '{d}/calls'"
+    holes = len(re.findall(r"\?\?", t["auk_stub"]))
+    code, out = run([AUK, "hatch", src, "--tries", str(tries)], cwd=d, env=env,
                     timeout=holes * tries * (common.CALL_TIMEOUT + 90) + 60)
     write(f"{d}/hatch.out", out)
     filled = [int(m) for m in re.findall(r"filled after (\d+) tr", out)]
@@ -80,24 +80,24 @@ def run_hatch(t, d, spec, tries=3):
          "tries_per_hole": filled, "calls": calls, "visible_ok": code == 0 and len(filled) == holes}
     # score the hatched file against the hidden tests
     hatched = read(src)
-    write(f"{d}/program.duck", join(hatched, t["duck_tests"]))
-    c, o = duck_check(f"{d}/program.duck")
+    write(f"{d}/program.auk", join(hatched, t["auk_tests"]))
+    c, o = auk_check(f"{d}/program.auk")
     write(f"{d}/check.out", o)
-    c2, o2 = duck_test(f"{d}/program.duck")
+    c2, o2 = auk_test(f"{d}/program.auk")
     write(f"{d}/test.out", o2)
     r.update(check_ok=c == 0, pass_=c2 == 0 and "??" not in hatched)
     # the code hatch wrote, for token counting: the hatched file minus given/visible parts
-    write(f"{d}/hatched.duck", hatched)
+    write(f"{d}/hatched.auk", hatched)
     return r
 
 
-RUNNERS = {"duck1": run_duck1, "hatch": run_hatch, "py1": run_py1}
+RUNNERS = {"auk1": run_auk1, "hatch": run_hatch, "py1": run_py1}
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tasks", default="")
-    ap.add_argument("--conditions", default="duck1,hatch,py1")
+    ap.add_argument("--conditions", default="auk1,hatch,py1")
     ap.add_argument("--jobs", type=int, default=6)
     ap.add_argument("--out", default="")
     ap.add_argument("--model", default=common.MODEL)
@@ -109,11 +109,11 @@ def main():
     out = os.path.abspath(a.out or os.path.join(BENCH, "runs", time.strftime("%Y%m%d-%H%M%S")))
     os.makedirs(out, exist_ok=True)
     spec = read(os.path.join(BENCH, "spec.md"))
-    # the spec in the one-shot prompt must be the one compiled into the duck binary (hatch uses that)
-    rc, bin_spec = run([DUCK, "spec"])
+    # the spec in the one-shot prompt must be the one compiled into the auk binary (hatch uses that)
+    rc, bin_spec = run([AUK, "spec"])
     if bin_spec.strip() != spec.strip():
-        print("warning: bench/spec.md differs from `duck spec`; the one-shot prompt uses bench/spec.md", file=sys.stderr)
-    info = {"model": a.model, "duck": DUCK, "duck_sha256": run(["shasum", "-a", "256", DUCK])[1].split()[0],
+        print("warning: bench/spec.md differs from `auk spec`; the one-shot prompt uses bench/spec.md", file=sys.stderr)
+    info = {"model": a.model, "auk": AUK, "auk_sha256": run(["shasum", "-a", "256", AUK])[1].split()[0],
             "spec_chars": len(spec), "conditions": conds, "tasks": tids, "started": time.strftime("%Y-%m-%d %H:%M:%S")}
     jobs = [(tid, c) for tid in tids for c in conds]
     results = {}

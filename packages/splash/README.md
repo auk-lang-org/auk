@@ -1,14 +1,14 @@
 # splash
 
 Live pages in the style of Phoenix LiveView. The server renders a view to HTML, and the page keeps
-itself current: new state, other visitors' actions and, under `duck run --live`, saved code all show
+itself current: new state, other visitors' actions and, under `auk run --live`, saved code all show
 up in open tabs within a moment. Buttons, forms and inputs send events to the server, and its
 answer updates the page at once. There's no reload and no flash, and the page is patched node by node, so
 focus, half-typed input and the scroll position all survive updates.
 
 **Effects:** `net` (for `serve`). Depends on `http`, `url` and `hash`.
 
-```duck
+```auk
 fn view(): str uses time = "<h1>It is {time.now()} ms</h1>"
 
 fn main(): int! uses net, time {
@@ -31,7 +31,7 @@ Mark elements in your view, and handle what comes back:
 <input type="checkbox" splash-change="done" value="7">      <!-- "7" when checked, "" when not -->
 ```
 
-```duck
+```auk
 fn handle(req: http.server.Req): http.Resp {
   match splash.event(req) {
     some(splash.Click("like", _)) => likes.send(Like)
@@ -79,7 +79,7 @@ Still escape what users typed before showing it (`escape`).
 
 ## CSS
 
-```duck
+```auk
 let CSS = splash.BASE_CSS + r"""
   body { background: #fdf6e3; }
   .like { font-size: 1.2em; }
@@ -88,7 +88,7 @@ let CSS = splash.BASE_CSS + r"""
 splash.reply_styled(req, "my site", CSS, view)
 ```
 
-The stylesheet is live, like the view. Under `duck run --live`, change a color and save, and open
+The stylesheet is live, like the view. Under `auk run --live`, change a color and save, and open
 tabs restyle at their next refresh with no reload. A refresh only gets the page back when the view
 *or* the CSS changed. Use a raw string (`r"""…"""`) for CSS, so its braces aren't read as
 interpolation. A `<style>` inside the view works too, but it's sent with every changed view.
@@ -97,10 +97,10 @@ interpolation. A `<style>` inside the view works too, but it's sent with every c
 
 With a hub, open pages don't wait for their next poll. A Server-Sent Events stream tells them to
 fetch the moment something changes: after any event, after `splash.changed(hub)` (for changes no
-event caused, such as timers or background jobs), and after each `duck run --live` reload.
+event caused, such as timers or background jobs), and after each `auk run --live` reload.
 Polling drops to a 5 s fallback.
 
-```duck
+```auk
 let hub = splash.hub()
 // kids: sup.child("hub", () => splash.run_hub(hub)), and a web child serving with serve_live:
 fn handle(req: http.server.Req, hub: splash.Hub): http.server.Reply {
@@ -124,7 +124,7 @@ State that belongs to one visitor (a cart, a draft, "your clicks") lives in a ta
 visitor's own, LiveView's model. You write it as three functions: where a session starts, how an
 event changes it, and how it looks.
 
-```duck
+```auk
 struct Mine { clicks: int }
 
 fn update(m: Mine, splash.Click("mine", _)): Mine = Mine { clicks: m.clicks + 1 }
@@ -153,14 +153,14 @@ fn main(): int! uses net, time {
   session is a task with its own heap. A panic in `update` or `view` starts that one session over
   from `init()`, and other visitors don't notice. Past `max` sessions, the least recently used one
   stops.
-- **With `duck run --live`**, changing the session state's shape (say, adding a field to `Mine`)
+- **With `auk run --live`**, changing the session state's shape (say, adding a field to `Mine`)
   restarts only the session tasks; everything else keeps running.
 
 ## Pages, linked stylesheets and static files
 
 A `Page` is everything about a page apart from its view: its title, CSS, links and refresh interval.
 
-```duck
+```auk
 fn read_static(name: str): str? uses fs = match fs.read("static/{name}") {
   ok(text) => some(text)
   err(_) => none
@@ -186,7 +186,7 @@ fn handle(req: http.server.Req): http.Resp uses fs {
 - **`asset(name, text)`** is the file's URL with a content hash (`?v=…`). Versioned URLs are cached
   for good. Because you build the page on every request, an edited file gets a new URL, and open
   pages switch to it at their next refresh. That's live CSS from a plain `.css` file, without
-  `duck run --live` even noticing.
+  `auk run --live` even noticing.
 - **Links are live too:** adding, dropping or re-versioning a link reaches open pages without a
   reload.
 
@@ -195,7 +195,7 @@ fn handle(req: http.server.Req): http.Resp uses fs {
 When a view changes, the page is patched node by node. Children with a `splash-key` (or an `id`)
 are matched by key wherever they moved; the rest are matched by position. Give list items keys:
 
-```duck
+```auk
 "<ul>{items.map(i => "<li splash-key=\"{i.id}\">{splash.escape(i.name)}</li>").join("")}</ul>"
 ```
 
@@ -206,7 +206,7 @@ an open `<details>` inside a row stays with its row.
 
 When a page and the server disagree, turn on logging and watch both sides:
 
-```duck
+```auk
 let log = splash.log_level(env.get("SPLASH_LOG") else "")    // "info" or "debug"
 let hub = splash.hub().with_log(log)
 let mine = splash.sessions().with_log(log)
@@ -261,4 +261,4 @@ Without a hub that's all polling. With one (see Push), pages also listen on a st
 moment the hub says so.
 
 See [`examples/live-site`](../../examples/live-site) for `splash` together with `sup` and
-`duck run --live`.
+`auk run --live`.

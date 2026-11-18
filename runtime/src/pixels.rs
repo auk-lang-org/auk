@@ -4,7 +4,7 @@
 //! A frame holds `w`×`h` colors 0xTTRRGGBB, rows top to bottom. The top byte is transparency:
 //! 0 is opaque (so a plain 0xRRGGBB is an opaque color) and 255 fully transparent; alpha is
 //! `255 - T`, straight (not premultiplied). A frame is a handle shared by reference count and
-//! copied before a write while shared, so it behaves like any Duck value. Rectangles are clipped
+//! copied before a write while shared, so it behaves like any Auk value. Rectangles are clipped
 //! to the frame, so drawing partly (or wholly) outside it is fine.
 
 use std::ffi::c_char;
@@ -14,9 +14,9 @@ use crate::*;
 
 const MAX_PIXELS: i64 = 1 << 28;
 
-unsafe fn alloc(w: i64, h: i64) -> *mut DuckFrame {
+unsafe fn alloc(w: i64, h: i64) -> *mut AukFrame {
     unsafe {
-        let f = crate::rc::duck__alloc(size_of::<DuckFrame>() + (w * h) as usize * 4, DUCK_K_FRAME) as *mut DuckFrame;
+        let f = crate::rc::auk__alloc(size_of::<AukFrame>() + (w * h) as usize * 4, AUK_K_FRAME) as *mut AukFrame;
         (*f).w = w;
         (*f).hgt = h;
         f
@@ -24,21 +24,21 @@ unsafe fn alloc(w: i64, h: i64) -> *mut DuckFrame {
 }
 
 /// A frame's pixels.
-pub unsafe fn pixels<'a>(f: *const DuckFrame) -> &'a [u32] {
+pub unsafe fn pixels<'a>(f: *const AukFrame) -> &'a [u32] {
     unsafe { std::slice::from_raw_parts((*f).data.as_ptr(), ((*f).w * (*f).hgt) as usize) }
 }
 
-/// Copies of shared frames at least this big are reported under `DUCK_GUI_TRACE=1`.
+/// Copies of shared frames at least this big are reported under `AUK_GUI_TRACE=1`.
 const REPORT_PIXELS: i64 = 256 * 1024;
 
-/// Report (under `DUCK_GUI_TRACE=1`) that a big shared frame was copied before a write: easy to
+/// Report (under `AUK_GUI_TRACE=1`) that a big shared frame was copied before a write: easy to
 /// cause by accident (`let before = frame` kept alive across a draw loop) and costly at window
 /// sizes. The first 20 are reported, then a count every 100.
 fn report_copy(w: i64, h: i64, loc: *const c_char, what: &str) {
     use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     static N: AtomicU64 = AtomicU64::new(0);
-    if w * h < REPORT_PIXELS || !*ON.get_or_init(|| std::env::var_os("DUCK_GUI_TRACE").is_some_and(|v| v == "1")) {
+    if w * h < REPORT_PIXELS || !*ON.get_or_init(|| std::env::var_os("AUK_GUI_TRACE").is_some_and(|v| v == "1")) {
         return;
     }
     let n = N.fetch_add(1, Relaxed) + 1;
@@ -55,7 +55,7 @@ fn report_copy(w: i64, h: i64, loc: *const c_char, what: &str) {
 }
 
 /// The frame in `*pf`, writable: copied first if anything else holds it.
-unsafe fn unique<'a>(pf: *mut *mut DuckFrame, loc: *const c_char, what: &str) -> (&'a mut [u32], i64, i64) {
+unsafe fn unique<'a>(pf: *mut *mut AukFrame, loc: *const c_char, what: &str) -> (&'a mut [u32], i64, i64) {
     unsafe {
         let f = *pf;
         let (w, h) = ((*f).w, (*f).hgt);
@@ -135,7 +135,7 @@ fn color(c: i64) -> u32 {
 
 /// A `w`×`h` frame filled with `color`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_frame_new(w: i64, h: i64, c: i64, loc: *const c_char) -> *mut DuckFrame {
+pub unsafe extern "C" fn auk_frame_new(w: i64, h: i64, c: i64, loc: *const c_char) -> *mut AukFrame {
     if w < 0 || h < 0 || w.checked_mul(h).is_none_or(|n| n > MAX_PIXELS) {
         panic_msg(loc, &format!("pixels.frame: size {w}x{h}"));
     }
@@ -150,7 +150,7 @@ pub unsafe extern "C" fn duck_frame_new(w: i64, h: i64, c: i64, loc: *const c_ch
 
 /// A `w`×`h` frame of the colors `px` (rows top to bottom).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_frame_from_list(w: i64, h: i64, px: *const DuckArr, loc: *const c_char) -> *mut DuckFrame {
+pub unsafe extern "C" fn auk_frame_from_list(w: i64, h: i64, px: *const AukArr, loc: *const c_char) -> *mut AukFrame {
     let n = if px.is_null() { 0 } else { unsafe { (*px).len } };
     if w < 0 || h < 0 || w.checked_mul(h) != Some(n) || n > MAX_PIXELS {
         panic_msg(loc, &format!("pixels.from_list: {n} colors is not {w}x{h}"));
@@ -167,11 +167,11 @@ pub unsafe extern "C" fn duck_frame_from_list(w: i64, h: i64, px: *const DuckArr
 
 /// The frame's colors as a list, rows top to bottom.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_frame_to_list(f: *const DuckFrame) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_frame_to_list(f: *const AukFrame) -> *mut AukArr {
     unsafe {
         let px = pixels(f);
-        let mut out = crate::arr::duck_arr_new(&crate::rc::duck_ops_int, px.len() as i64);
-        let d = crate::arr::duck_arr_make_unique(&mut out) as *mut i64;
+        let mut out = crate::arr::auk_arr_new(&crate::rc::auk_ops_int, px.len() as i64);
+        let d = crate::arr::auk_arr_make_unique(&mut out) as *mut i64;
         for (i, &p) in px.iter().enumerate() {
             *d.add(i) = p as i64;
         }
@@ -181,12 +181,12 @@ pub unsafe extern "C" fn duck_frame_to_list(f: *const DuckFrame) -> *mut DuckArr
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_frame_width(f: *const DuckFrame) -> i64 {
+pub unsafe extern "C" fn auk_frame_width(f: *const AukFrame) -> i64 {
     unsafe { (*f).w }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_frame_height(f: *const DuckFrame) -> i64 {
+pub unsafe extern "C" fn auk_frame_height(f: *const AukFrame) -> i64 {
     unsafe { (*f).hgt }
 }
 
@@ -198,7 +198,7 @@ fn check(x: i64, y: i64, w: i64, h: i64, loc: *const c_char, what: &str) {
 
 /// The color at (`x`, `y`).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_frame_get(f: *const DuckFrame, x: i64, y: i64, loc: *const c_char) -> i64 {
+pub unsafe extern "C" fn auk_frame_get(f: *const AukFrame, x: i64, y: i64, loc: *const c_char) -> i64 {
     unsafe {
         check(x, y, (*f).w, (*f).hgt, loc, "get");
         pixels(f)[(y * (*f).w + x) as usize] as i64
@@ -207,7 +207,7 @@ pub unsafe extern "C" fn duck_frame_get(f: *const DuckFrame, x: i64, y: i64, loc
 
 /// Set the color at (`x`, `y`).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_frame_set(pf: *mut *mut DuckFrame, x: i64, y: i64, c: i64, loc: *const c_char) {
+pub unsafe extern "C" fn auk_frame_set(pf: *mut *mut AukFrame, x: i64, y: i64, c: i64, loc: *const c_char) {
     unsafe {
         check(x, y, (**pf).w, (**pf).hgt, loc, "set");
         let (px, w, _) = unique(pf, loc, "set");
@@ -217,7 +217,7 @@ pub unsafe extern "C" fn duck_frame_set(pf: *mut *mut DuckFrame, x: i64, y: i64,
 
 /// Set a rectangle to `c` (transparency included).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_frame_fill(pf: *mut *mut DuckFrame, x: i64, y: i64, w: i64, h: i64, c: i64, loc: *const c_char) {
+pub unsafe extern "C" fn auk_frame_fill(pf: *mut *mut AukFrame, x: i64, y: i64, w: i64, h: i64, c: i64, loc: *const c_char) {
     unsafe {
         let Some(r) = clip(x, y, w, h, (**pf).w, (**pf).hgt) else { return };
         let (px, fw, _) = unique(pf, loc, "fill");
@@ -227,7 +227,7 @@ pub unsafe extern "C" fn duck_frame_fill(pf: *mut *mut DuckFrame, x: i64, y: i64
 
 /// Paint `c` over a rectangle, as transparent as `c` is.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_frame_blend(pf: *mut *mut DuckFrame, x: i64, y: i64, w: i64, h: i64, c: i64, loc: *const c_char) {
+pub unsafe extern "C" fn auk_frame_blend(pf: *mut *mut AukFrame, x: i64, y: i64, w: i64, h: i64, c: i64, loc: *const c_char) {
     let c = color(c);
     if c >> 24 == 255 {
         return;
@@ -270,7 +270,7 @@ fn clip2(x: i64, y: i64, (sw, sh): (i64, i64), sx: i64, sy: i64, w: i64, h: i64,
 
 /// Copy (or with `blend`, paint over) the `w`×`h` rectangle at (`sx`, `sy`) of `src` to (`x`, `y`).
 #[allow(clippy::too_many_arguments)]
-unsafe fn copy_rect(pf: *mut *mut DuckFrame, x: i64, y: i64, src: *const DuckFrame, sx: i64, sy: i64, w: i64, h: i64, blend: bool, loc: *const c_char) {
+unsafe fn copy_rect(pf: *mut *mut AukFrame, x: i64, y: i64, src: *const AukFrame, sx: i64, sy: i64, w: i64, h: i64, blend: bool, loc: *const c_char) {
     unsafe {
         let ssize = ((*src).w, (*src).hgt);
         let Some((ox, oy, x0, y0, x1, y1)) = clip2(x, y, ssize, sx, sy, w, h, ((**pf).w, (**pf).hgt)) else { return };
@@ -302,20 +302,20 @@ unsafe fn copy_rect(pf: *mut *mut DuckFrame, x: i64, y: i64, src: *const DuckFra
 
 /// Copy the `w`×`h` rectangle at (`sx`, `sy`) of `src` to (`x`, `y`).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_frame_blit(pf: *mut *mut DuckFrame, x: i64, y: i64, src: *const DuckFrame, sx: i64, sy: i64, w: i64, h: i64, loc: *const c_char) {
+pub unsafe extern "C" fn auk_frame_blit(pf: *mut *mut AukFrame, x: i64, y: i64, src: *const AukFrame, sx: i64, sy: i64, w: i64, h: i64, loc: *const c_char) {
     unsafe { copy_rect(pf, x, y, src, sx, sy, w, h, false, loc) }
 }
 
 /// Paint the `w`×`h` rectangle at (`sx`, `sy`) of `src` over (`x`, `y`), by its transparency.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_frame_composite(pf: *mut *mut DuckFrame, x: i64, y: i64, src: *const DuckFrame, sx: i64, sy: i64, w: i64, h: i64, loc: *const c_char) {
+pub unsafe extern "C" fn auk_frame_composite(pf: *mut *mut AukFrame, x: i64, y: i64, src: *const AukFrame, sx: i64, sy: i64, w: i64, h: i64, loc: *const c_char) {
     unsafe { copy_rect(pf, x, y, src, sx, sy, w, h, true, loc) }
 }
 
 /// Paint `c` through `mask` (coverage 0..255, `mw` per row) placed at (`x`, `y`): how text
 /// glyphs are drawn.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_frame_blit_mask(pf: *mut *mut DuckFrame, x: i64, y: i64, mask: *const DuckArr, mw: i64, c: i64, loc: *const c_char) {
+pub unsafe extern "C" fn auk_frame_blit_mask(pf: *mut *mut AukFrame, x: i64, y: i64, mask: *const AukArr, mw: i64, c: i64, loc: *const c_char) {
     if mw < 1 {
         panic_msg(loc, &format!("pixels.blit_mask: mask width {mw} (expected at least 1)"));
     }
@@ -409,15 +409,15 @@ mod bench {
     fn bench_frame_ops() {
         unsafe {
             let (w, h) = (2940i64, 1612i64);
-            let mut f = duck_frame_new(w, h, 0xffffff, std::ptr::null());
+            let mut f = auk_frame_new(w, h, 0xffffff, std::ptr::null());
             let t = std::time::Instant::now();
             for i in 0..50 {
-                duck_frame_fill(&mut f, 0, 0, w, h, 0x101010 * (i % 16), std::ptr::null());
+                auk_frame_fill(&mut f, 0, 0, w, h, 0x101010 * (i % 16), std::ptr::null());
             }
             eprintln!("fill {} µs", t.elapsed().as_micros() / 50);
             let t = std::time::Instant::now();
             for _ in 0..20 {
-                duck_frame_blend(&mut f, 0, 0, w, h, 0x80336699, std::ptr::null());
+                auk_frame_blend(&mut f, 0, 0, w, h, 0x80336699, std::ptr::null());
             }
             eprintln!("blend {} µs", t.elapsed().as_micros() / 20);
             let t = std::time::Instant::now();

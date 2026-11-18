@@ -14,9 +14,9 @@ use super::types::TyInfo;
 pub enum Opt {
     /// Nothing: compile as fast as possible (tests, imprints, the debugger, the REPL).
     None,
-    /// A few cheap passes (`duck run`).
+    /// A few cheap passes (`auk run`).
     Light,
-    /// The full optimizer (`duck run -O`).
+    /// The full optimizer (`auk run -O`).
     Full,
 }
 
@@ -35,7 +35,7 @@ pub fn jit_eval(prog: &Program, info: &TyInfo) -> Result<(*const u8, *const u8),
     llvm::jit_eval(prog, info)
 }
 
-/// A program for `duck run --live` (calls to `slots` go through the live table at `table`).
+/// A program for `auk run --live` (calls to `slots` go through the live table at `table`).
 pub fn jit_live(prog: &Program, info: &TyInfo, table: usize, slots: &HashMap<u32, usize>) -> Result<LiveJit, String> {
     llvm::jit_live(prog, info, table, slots)
 }
@@ -46,7 +46,7 @@ pub fn object(prog: &Program, info: &TyInfo, opt: bool) -> Result<Vec<u8>, Strin
     llvm::object(prog, info, opt)
 }
 
-/// The program's LLVM IR, as text (`duck ir --llvm`).
+/// The program's LLVM IR, as text (`auk ir --llvm`).
 pub fn llvm_ir(prog: &Program, info: &TyInfo) -> Result<String, String> {
     llvm::ir_text(prog, info)
 }

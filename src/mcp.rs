@@ -1,15 +1,15 @@
-//! `duck mcp`: a Model Context Protocol server over stdio, so AI agents (Claude Code and other
-//! MCP clients) get first-class Duck tools: the language reference, type-checking with fix-its,
+//! `auk mcp`: a Model Context Protocol server over stdio, so AI agents (Claude Code and other
+//! MCP clients) get first-class Auk tools: the language reference, type-checking with fix-its,
 //! running, testing, formatting, error explanations and typed holes.
 //!
 //! - **Framing**: newline-delimited JSON-RPC 2.0, one message per line (no `Content-Length`
-//!   headers, unlike `duck lsp`). Nothing but protocol messages is written to stdout.
+//!   headers, unlike `auk lsp`). Nothing but protocol messages is written to stdout.
 //! - **Handshake**: the initialize-based protocol (`initialize`, `notifications/initialized`,
 //!   `ping`, `tools/list`, `tools/call`), revisions 2024-11-05 through 2025-11-25. A requested
 //!   revision we know is echoed back; otherwise we answer with the newest one. Unknown methods
 //!   (including the stateless era's `server/discover`) get -32601, which is what dual-era clients
 //!   take as the cue to fall back to `initialize`.
-//! - **Tools** run the `duck` binary itself (`current_exe`) as a subprocess with the matching CLI
+//! - **Tools** run the `auk` binary itself (`current_exe`) as a subprocess with the matching CLI
 //!   command and return its output, so the server stays decoupled from the compiler's internals
 //!   and can never be wedged by a panic or an endless program. Subprocesses get a null stdin
 //!   (they must not read the protocol stream), a timeout, and their own process group so a
@@ -32,12 +32,12 @@ pub const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26
 /// Captured output per stream is cut off past this many bytes (agents' context is precious).
 const MAX_OUTPUT: usize = 100_000;
 
-const INSTRUCTIONS: &str = "Duck is a statically typed language compiled to native code. Call duck_spec first to \
-learn the language, then use duck_check after every edit: its diagnostics carry error codes (explain them with \
-duck_explain) and machine-applicable fixes.";
+const INSTRUCTIONS: &str = "Auk is a statically typed language compiled to native code. Call auk_spec first to \
+learn the language, then use auk_check after every edit: its diagnostics carry error codes (explain them with \
+auk_explain) and machine-applicable fixes.";
 
 /// Serve on stdin/stdout until stdin closes. Returns the process exit code. Tool calls run on
-/// their own threads (a long `duck_run` doesn't block `ping` or other calls); replies are written
+/// their own threads (a long `auk_run` doesn't block `ping` or other calls); replies are written
 /// whole, one per line, in completion order.
 pub fn run() -> i32 {
     let output = Arc::new(Mutex::new(io::stdout()));
@@ -115,7 +115,7 @@ fn initialize(params: &Json) -> Json {
     obj([
         ("protocolVersion", (*version).into()),
         ("capabilities", obj([("tools", obj([]))])),
-        ("serverInfo", obj([("name", "duck".into()), ("version", env!("CARGO_PKG_VERSION").into())])),
+        ("serverInfo", obj([("name", "auk".into()), ("version", env!("CARGO_PKG_VERSION").into())])),
         ("instructions", INSTRUCTIONS.into()),
     ])
 }
@@ -144,37 +144,37 @@ const PATH_OR_SOURCE: &str = "Give exactly one of `path` or `source`.";
 /// Every tool, with its JSON Schema input.
 pub fn tools() -> Vec<Json> {
     let path = |what: &str| prop("string", &format!("Path to {what} (absolute, or relative to the server's working directory)."));
-    let source = prop("string", "Duck source code to use instead of a file (checked as a standalone program in a temporary file).");
+    let source = prop("string", "Auk source code to use instead of a file (checked as a standalone program in a temporary file).");
     let timeout = |default: u32| prop("number", &format!("Kill the process after this many seconds (default {default}, max 600)."));
     let trace = |what: &str| prop("boolean", what);
     vec![
         tool(
-            "duck_spec",
-            "The Duck language reference: syntax, types, effects, the standard library and idioms. Call this first, \
-             before reading or writing any Duck code; Duck is not Rust, Go or Python and guessing syntax wastes turns.",
+            "auk_spec",
+            "The Auk language reference: syntax, types, effects, the standard library and idioms. Call this first, \
+             before reading or writing any Auk code; Auk is not Rust, Go or Python and guessing syntax wastes turns.",
             schema([], &[]),
         ),
         tool(
-            "duck_check",
+            "auk_check",
             &format!(
-                "Type-check Duck code without running it and return the diagnostics as JSON: \
+                "Type-check Auk code without running it and return the diagnostics as JSON: \
                  {{file, ok, diagnostics: [{{code, severity, line, col, end_line, end_col, message, notes, fixes}}]}}. \
                  Each fix is an edit (1-based line/col range plus replacement `text`) that resolves the error; apply it \
-                 when it matches your intent. Run duck_explain on any code you don't understand. A `path` is checked in \
-                 its project context (the nearest quack.toml, its modules and dependencies). {PATH_OR_SOURCE} Safe: \
+                 when it matches your intent. Run auk_explain on any code you don't understand. A `path` is checked in \
+                 its project context (the nearest raft.toml, its modules and dependencies). {PATH_OR_SOURCE} Safe: \
                  does not execute code."
             ),
-            schema([("path", path("a .duck file")), ("source", source.clone())], &[]),
+            schema([("path", path("a .auk file")), ("source", source.clone())], &[]),
         ),
         tool(
-            "duck_run",
-            "Compile and RUN a Duck program (this executes code on the user's machine, with their permissions). \
+            "auk_run",
+            "Compile and RUN an Auk program (this executes code on the user's machine, with their permissions). \
              Returns JSON {exit_code, stdout, stderr, timed_out}, plus `trace` with `trace: true`; compile errors \
-             appear in stderr with a non-zero exit code. The program gets no stdin. Prefer duck_check to find errors; \
+             appear in stderr with a non-zero exit code. The program gets no stdin. Prefer auk_check to find errors; \
              use this to see behaviour.",
             schema(
                 [
-                    ("path", path("the .duck file with `fn main`")),
+                    ("path", path("the .auk file with `fn main`")),
                     ("args", obj([("type", "array".into()), ("items", obj([("type", "string".into())])), ("description", "Command-line arguments for the program.".into())])),
                     ("timeout_seconds", timeout(30)),
                     (
@@ -183,7 +183,7 @@ pub fn tools() -> Vec<Json> {
                             "Record an execution trace: `trace` in the result is a list of events, {ev:\"call\", fn, loc, args, depth}, \
                              {ev:\"ret\", fn, value, depth}, {ev:\"err\", fn, error, depth}, {ev:\"peek\", loc, expr, value, depth}, \
                              {ev:\"panic\", msg, loc, depth}, ending with {ev:\"truncated\"} past 2,000 events. Values are shown \
-                             as Duck prints them, cut to 200 characters. Use it to see what actually happened instead of guessing.",
+                             as Auk prints them, cut to 200 characters. Use it to see what actually happened instead of guessing.",
                         ),
                     ),
                 ],
@@ -191,14 +191,14 @@ pub fn tools() -> Vec<Json> {
             ),
         ),
         tool(
-            "duck_test",
-            "Build and RUN the `test` blocks of a Duck file or project (this executes code on the user's machine). \
+            "auk_test",
+            "Build and RUN the `test` blocks of an Auk file or project (this executes code on the user's machine). \
              Returns the test report (one line per test, then `N passed, M failed`) and the exit code; isError is true \
              when any test fails or the build fails. With `trace: true`, each FAIL is followed by the last events of that \
              test's execution trace (JSON lines: calls with their arguments, returns, errors, peeks, the panic).",
             schema(
                 [
-                    ("path", path("a .duck file, or a project directory (with quack.toml)")),
+                    ("path", path("a .auk file, or a project directory (with raft.toml)")),
                     ("filter", prop("string", "Only run tests whose name contains this text.")),
                     ("timeout_seconds", timeout(120)),
                     ("trace", trace("Print the execution trace (the last events) of each failing test under its FAIL line.")),
@@ -207,9 +207,9 @@ pub fn tools() -> Vec<Json> {
             ),
         ),
         tool(
-            "duck_debug",
-            "Debug a Duck program: RUN it (this executes code on the user's machine) and stop at each breakpoint \
-             and at a panic, recording where it stopped, the local variables there (shown as Duck prints them) and \
+            "auk_debug",
+            "Debug an Auk program: RUN it (this executes code on the user's machine) and stop at each breakpoint \
+             and at a panic, recording where it stopped, the local variables there (shown as Auk prints them) and \
              the call stack. Returns JSON {stops: [{reason, fn, file, line, msg?, locals: {name: value}, stack}], \
              exit_code, stdout, stderr, note?, errors?}. `reason` is breakpoint, panic or timeout (still running when \
              the time ran out: where it was, e.g. an endless loop). Use it to see the actual values instead of \
@@ -217,13 +217,13 @@ pub fn tools() -> Vec<Json> {
              where its condition holds (`file:line if i == 99`).",
             schema(
                 [
-                    ("path", path("the .duck file with `fn main`")),
+                    ("path", path("the .auk file with `fn main`")),
                     (
                         "breakpoints",
                         obj([
                             ("type", "array".into()),
                             ("items", obj([("type", "string".into())])),
-                            ("description", "Where to stop: `file:line` (the next line with code) or a function name, optionally followed by ` if <Duck condition>` (e.g. `main.duck:12 if n > 3`).".into()),
+                            ("description", "Where to stop: `file:line` (the next line with code) or a function name, optionally followed by ` if <Auk condition>` (e.g. `main.auk:12 if n > 3`).".into()),
                         ]),
                     ),
                     (
@@ -231,7 +231,7 @@ pub fn tools() -> Vec<Json> {
                         obj([
                             ("type", "array".into()),
                             ("items", obj([("type", "string".into())])),
-                            ("description", "What to show at each stop instead of every local: names of locals, or Duck expressions evaluated there (`xs.len()`, `p.x * 2`, calls to the program's functions).".into()),
+                            ("description", "What to show at each stop instead of every local: names of locals, or Auk expressions evaluated there (`xs.len()`, `p.x * 2`, calls to the program's functions).".into()),
                         ]),
                     ),
                     ("catch", prop("string", "Stop on panics: `uncaught` (default), `all` (also inside `catch`) or `none`.")),
@@ -243,25 +243,25 @@ pub fn tools() -> Vec<Json> {
             ),
         ),
         tool(
-            "duck_fmt",
+            "auk_fmt",
             &format!(
-                "Format Duck code in the canonical style. With `source`, returns the formatted source and changes no \
+                "Format Auk code in the canonical style. With `source`, returns the formatted source and changes no \
                  files. With `path`, REWRITES that file in place and returns its new contents. {PATH_OR_SOURCE}"
             ),
-            schema([("path", path("a .duck file")), ("source", source)], &[]),
+            schema([("path", path("a .auk file")), ("source", source)], &[]),
         ),
         tool(
-            "duck_explain",
-            "Explain a Duck error code such as E0200: what went wrong, a wrong and a fixed example, and common causes. \
+            "auk_explain",
+            "Explain an Auk error code such as E0200: what went wrong, a wrong and a fixed example, and common causes. \
              Omit `code` to list every code with a one-line summary.",
             schema([("code", prop("string", "An error code like `E0200`."))], &[]),
         ),
         tool(
-            "duck_holes",
-            "List the typed holes (`??`) in a Duck file as JSON: where each hole is, the type it must have and the \
+            "auk_holes",
+            "List the typed holes (`??`) in an Auk file as JSON: where each hole is, the type it must have and the \
              names in scope that could fill it. Write `??` where you don't know the code yet, then use this to see \
              what fits. Safe: does not execute code.",
-            schema([("path", path("a .duck file"))], &["path"]),
+            schema([("path", path("a .auk file"))], &["path"]),
         ),
     ]
 }
@@ -288,14 +288,14 @@ fn call(params: &Json) -> Result<Json, String> {
         return Err("tools/call: `arguments` must be an object".into());
     }
     let result = match name {
-        "duck_spec" => run_tool(&["spec"], Duration::from_secs(60)).map(|o| Outcome { is_error: !o.success(), text: o.stdout }),
-        "duck_check" => check(args),
-        "duck_run" => run_program(args),
-        "duck_test" => test(args),
-        "duck_debug" => debug(args),
-        "duck_fmt" => format(args),
-        "duck_explain" => explain(args),
-        "duck_holes" => holes(args),
+        "auk_spec" => run_tool(&["spec"], Duration::from_secs(60)).map(|o| Outcome { is_error: !o.success(), text: o.stdout }),
+        "auk_check" => check(args),
+        "auk_run" => run_program(args),
+        "auk_test" => test(args),
+        "auk_debug" => debug(args),
+        "auk_fmt" => format(args),
+        "auk_explain" => explain(args),
+        "auk_holes" => holes(args),
         _ => return Err(format!("unknown tool: {name}")),
     };
     let out = result.unwrap_or_else(|e| Outcome { text: e, is_error: true });
@@ -347,7 +347,7 @@ fn bool_arg(args: &Json, key: &str) -> Result<bool, String> {
     }
 }
 
-/// The most trace events `duck_run` returns (agents' context is precious).
+/// The most trace events `auk_run` returns (agents' context is precious).
 const MCP_TRACE_LIMIT: &str = "2000";
 
 fn timeout_arg(args: &Json, default: u64) -> Result<Duration, String> {
@@ -368,14 +368,14 @@ impl TempSource {
     fn new(src: &str) -> Result<TempSource, String> {
         static N: AtomicU32 = AtomicU32::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
-        let dir = env::temp_dir().join(format!("duck-mcp-{}-{n}", std::process::id()));
-        let file = dir.join("main.duck");
+        let dir = env::temp_dir().join(format!("auk-mcp-{}-{n}", std::process::id()));
+        let file = dir.join("main.auk");
         fs::create_dir_all(&dir).and_then(|()| fs::write(&file, src)).map_err(|e| format!("cannot write a temporary file: {e}"))?;
         Ok(TempSource { dir, file })
     }
 
     fn path(&self) -> &str {
-        self.file.to_str().unwrap_or("main.duck")
+        self.file.to_str().unwrap_or("main.auk")
     }
 }
 
@@ -516,7 +516,7 @@ fn format(args: &Json) -> Result<Outcome, String> {
             if Path::new(&p).is_file() {
                 fs::read_to_string(&p).map_err(|e| format!("cannot read {p}: {e}")).and_then(ok)
             } else {
-                ok(format!("formatted every .duck file under {p}\n{}", out.stdout))
+                ok(format!("formatted every .auk file under {p}\n{}", out.stdout))
             }
         }
     }
@@ -532,11 +532,11 @@ fn explain(args: &Json) -> Result<Outcome, String> {
 
 fn holes(args: &Json) -> Result<Outcome, String> {
     let path = path_arg(args, "path")?;
-    // `duck holes` is newer than this server: find it (and whether it takes --json) in the usage
+    // `auk holes` is newer than this server: find it (and whether it takes --json) in the usage
     let usage = run_tool(&["help"], Duration::from_secs(60))?.stdout;
     let Some(line) = usage.lines().find(|l| l.trim_start().starts_with("holes")) else {
-        return Err("duck_holes is not available in this build of duck (there is no `duck holes` command); \
-                    rebuild duck from a newer source"
+        return Err("auk_holes is not available in this build of auk (there is no `auk holes` command); \
+                    rebuild auk from a newer source"
             .into());
     };
     let mut argv = vec!["holes", path.as_str()];
@@ -590,10 +590,10 @@ fn run_tool(args: &[&str], timeout: Duration) -> Result<Output, String> {
     run_tool_stdin(args, None, timeout)
 }
 
-/// Run `duck <args>` with optional stdin text, capturing output, killed (with everything it
+/// Run `auk <args>` with optional stdin text, capturing output, killed (with everything it
 /// spawned) after `timeout`.
 fn run_tool_stdin(args: &[&str], input: Option<&str>, timeout: Duration) -> Result<Output, String> {
-    let exe = env::current_exe().map_err(|e| format!("cannot find the duck executable: {e}"))?;
+    let exe = env::current_exe().map_err(|e| format!("cannot find the auk executable: {e}"))?;
     let mut cmd = Command::new(exe);
     cmd.args(args)
         .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
@@ -601,7 +601,7 @@ fn run_tool_stdin(args: &[&str], input: Option<&str>, timeout: Duration) -> Resu
         .stderr(Stdio::piped());
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
-    let mut child = cmd.spawn().map_err(|e| format!("cannot run duck {}: {e}", args.join(" ")))?;
+    let mut child = cmd.spawn().map_err(|e| format!("cannot run auk {}: {e}", args.join(" ")))?;
     if let (Some(text), Some(mut w)) = (input, child.stdin.take()) {
         let text = text.to_string();
         thread::spawn(move || {
@@ -632,7 +632,7 @@ fn run_tool_stdin(args: &[&str], input: Option<&str>, timeout: Duration) -> Resu
                 break (None, true);
             }
             Ok(None) => thread::sleep(Duration::from_millis(10)),
-            Err(e) => return Err(format!("waiting for duck: {e}")),
+            Err(e) => return Err(format!("waiting for auk: {e}")),
         }
     };
     // the pipes close when the last writer (maybe a grandchild) exits; don't wait forever for it
@@ -699,7 +699,7 @@ mod tests {
         assert_eq!(req(r#"{"jsonrpc":"2.0","id":2,"method":"nope"}"#).at(&["error", "code"]).as_i64(), Some(-32601));
         let r = req(r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nope"}}"#);
         assert_eq!(r.at(&["error", "code"]).as_i64(), Some(-32602));
-        let r = req(r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"duck_check","arguments":{}}}"#);
+        let r = req(r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"auk_check","arguments":{}}}"#);
         assert_eq!(r.at(&["result", "isError"]), &Json::Bool(true));
     }
 }

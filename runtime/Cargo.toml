@@ -1,8 +1,8 @@
 [package]
-name = "duck_rt"
+name = "auk_rt"
 version = "0.1.0"
 edition = "2024"
-description = "The Duck runtime (linked into JIT-compiled programs and into `duck build` executables)"
+description = "The Auk runtime (linked into JIT-compiled programs and into `auk build` executables)"
 
 [lib]
 path = "src/lib.rs"

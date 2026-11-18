@@ -1,4 +1,4 @@
-//! `duck lsp` end to end: spawn the server, speak framed JSON-RPC over its stdio, and check
+//! `auk lsp` end to end: spawn the server, speak framed JSON-RPC over its stdio, and check
 //! diagnostics, code actions, hover, go-to-definition, formatting, symbols and shutdown.
 
 #[allow(dead_code)]
@@ -46,7 +46,7 @@ fn read_frame(r: &mut impl BufRead) -> Option<String> {
 
 impl Client {
     fn start() -> Client {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_duck"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_auk"))
             .arg("lsp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -141,15 +141,15 @@ fn uri_of(p: &Path) -> String {
     out
 }
 
-/// A fresh project directory: `quack.toml`, `src/util.duck`, and `src/main.duck` (empty: the
+/// A fresh project directory: `raft.toml`, `src/util.auk`, and `src/main.auk` (empty: the
 /// editor's buffer is what counts).
 fn project(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("duck-lsp-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("auk-lsp-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join("src")).unwrap();
-    fs::write(dir.join("quack.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n").unwrap();
-    fs::write(dir.join("src/util.duck"), "/// Doubles n.\npub fn double(n: int): int = n * 2\n").unwrap();
-    fs::write(dir.join("src/main.duck"), "").unwrap();
+    fs::write(dir.join("raft.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n").unwrap();
+    fs::write(dir.join("src/util.auk"), "/// Doubles n.\npub fn double(n: int): int = n * 2\n").unwrap();
+    fs::write(dir.join("src/main.auk"), "").unwrap();
     dir.canonicalize().unwrap()
 }
 
@@ -184,7 +184,7 @@ fn main() {
 fn hover_value(c: &mut Client, uri: &str, line: u32, ch: u32) -> String {
     let h = c.request("textDocument/hover", doc_pos(uri, line, ch));
     let v = h.at(&["contents", "value"]).as_str().unwrap_or_else(|| panic!("no hover at {line}:{ch}: {h}")).to_string();
-    // links to files keep only the file name: `[util.duck:2](file:///tmp/…/util.duck#L2)` → `(util.duck#L2)`
+    // links to files keep only the file name: `[util.auk:2](file:///tmp/…/util.auk#L2)` → `(util.auk#L2)`
     let mut out = String::new();
     let mut rest = v.as_str();
     while let Some(i) = rest.find("](file://") {
@@ -200,7 +200,7 @@ fn hover_value(c: &mut Client, uri: &str, line: u32, ch: u32) -> String {
 #[test]
 fn lsp_session() {
     let dir = project("session");
-    let main = dir.join("src/main.duck");
+    let main = dir.join("src/main.auk");
     let uri = uri_of(&main);
     let mut c = Client::start();
 
@@ -212,11 +212,11 @@ fn lsp_session() {
         assert_eq!(caps.get(cap), &Json::Bool(true), "{cap}");
     }
     assert!(!caps.get("codeActionProvider").is_null());
-    assert_eq!(init.at(&["serverInfo", "name"]).as_str(), Some("duck"));
+    assert_eq!(init.at(&["serverInfo", "name"]).as_str(), Some("auk"));
     c.notify("initialized", obj([]));
 
-    // didOpen with two errors: the diagnostics, with UTF-16 ranges (the duck is two code units)
-    let item = obj([("uri", uri.as_str().into()), ("languageId", "duck".into()), ("version", 1i64.into()), ("text", BROKEN.into())]);
+    // didOpen with two errors: the diagnostics, with UTF-16 ranges (the auk is two code units)
+    let item = obj([("uri", uri.as_str().into()), ("languageId", "auk".into()), ("version", 1i64.into()), ("text", BROKEN.into())]);
     c.notify("textDocument/didOpen", obj([("textDocument", item)]));
     let ds = c.diagnostics(&uri);
     assert_eq!(ds.len(), 2, "{ds:?}");
@@ -247,10 +247,10 @@ fn lsp_session() {
     assert_eq!(c.request("textDocument/codeAction", params), Json::Arr(Vec::new()));
 
     // hover still works in the broken program, wherever the code type-checked
-    assert_eq!(hover_value(&mut c, &uri, 6, 7), "```duck\nlet total: int\n```");
-    assert_eq!(hover_value(&mut c, &uri, 6, 15), "```duck\nfn add(a: int, b: int): int\n```\n\nAdds two numbers.");
-    assert_eq!(hover_value(&mut c, &uri, 7, 7), "```duck\nlet pair: (str, int)\n```");
-    assert_eq!(hover_value(&mut c, &uri, 10, 33), "```duck\npub fn double(n: int): int\n```\n\nDefined in `app.util` (this package) — [util.duck:2](util.duck#L2)\n\nDoubles n.");
+    assert_eq!(hover_value(&mut c, &uri, 6, 7), "```auk\nlet total: int\n```");
+    assert_eq!(hover_value(&mut c, &uri, 6, 15), "```auk\nfn add(a: int, b: int): int\n```\n\nAdds two numbers.");
+    assert_eq!(hover_value(&mut c, &uri, 7, 7), "```auk\nlet pair: (str, int)\n```");
+    assert_eq!(hover_value(&mut c, &uri, 10, 33), "```auk\npub fn double(n: int): int\n```\n\nDefined in `app.util` (this package) — [util.auk:2](util.auk#L2)\n\nDoubles n.");
 
     // didChange fixing both errors: empty diagnostics
     let change = obj([
@@ -261,21 +261,21 @@ fn lsp_session() {
     assert_eq!(c.diagnostics(&uri), Vec::<Json>::new());
 
     // hover: a `let` binding, a use of it, a function call, a field, a parameter
-    assert_eq!(hover_value(&mut c, &uri, 6, 7), "```duck\nlet total: int\n```");
-    assert_eq!(hover_value(&mut c, &uri, 10, 11), "```duck\nlet total: int\n```");
-    assert_eq!(hover_value(&mut c, &uri, 6, 15), "```duck\nfn add(a: int, b: int): int\n```\n\nAdds two numbers.");
-    assert_eq!(hover_value(&mut c, &uri, 7, 7), "```duck\nlet pair: (str, int)\n```");
-    assert_eq!(hover_value(&mut c, &uri, 3, 9), "```duck\nvar n: int\n```");
-    assert_eq!(hover_value(&mut c, &uri, 10, 33), "```duck\npub fn double(n: int): int\n```\n\nDefined in `app.util` (this package) — [util.duck:2](util.duck#L2)\n\nDoubles n.");
+    assert_eq!(hover_value(&mut c, &uri, 6, 7), "```auk\nlet total: int\n```");
+    assert_eq!(hover_value(&mut c, &uri, 10, 11), "```auk\nlet total: int\n```");
+    assert_eq!(hover_value(&mut c, &uri, 6, 15), "```auk\nfn add(a: int, b: int): int\n```\n\nAdds two numbers.");
+    assert_eq!(hover_value(&mut c, &uri, 7, 7), "```auk\nlet pair: (str, int)\n```");
+    assert_eq!(hover_value(&mut c, &uri, 3, 9), "```auk\nvar n: int\n```");
+    assert_eq!(hover_value(&mut c, &uri, 10, 33), "```auk\npub fn double(n: int): int\n```\n\nDefined in `app.util` (this package) — [util.auk:2](util.auk#L2)\n\nDoubles n.");
     // the whole call expression `add(1, 2)`: its type
-    assert_eq!(hover_value(&mut c, &uri, 6, 23), "```duck\nint\n```");
+    assert_eq!(hover_value(&mut c, &uri, 6, 23), "```auk\nint\n```");
     // a core function: where it comes from, without a link (the prelude is compiled in)
     let h = hover_value(&mut c, &uri, 10, 3);
     assert!(h.contains("(core library)") && !h.contains("]("), "{h}");
     assert!(c.request("textDocument/hover", doc_pos(&uri, 4, 0)).is_null());
 
     // definition: a function in another module of the project, a local function, a local
-    let util = uri_of(&dir.join("src/util.duck"));
+    let util = uri_of(&dir.join("src/util.auk"));
     let def = c.request("textDocument/definition", doc_pos(&uri, 10, 33));
     assert_eq!(def, obj([("uri", util.as_str().into()), ("range", range(1, 7, 1, 13))]));
     let def = c.request("textDocument/definition", doc_pos(&uri, 6, 15));
@@ -324,14 +324,14 @@ fn lsp_session() {
 #[test]
 fn lsp_other_files_and_parse_errors() {
     let dir = project("other");
-    fs::write(dir.join("src/util.duck"), "pub fn double(n: int): int = n * \"2\"\n").unwrap();
-    let uri = uri_of(&dir.join("src/main.duck"));
-    let util = uri_of(&dir.join("src/util.duck"));
+    fs::write(dir.join("src/util.auk"), "pub fn double(n: int): int = n * \"2\"\n").unwrap();
+    let uri = uri_of(&dir.join("src/main.auk"));
+    let util = uri_of(&dir.join("src/util.auk"));
     let mut c = Client::start();
     c.request("initialize", obj([("capabilities", obj([]))]));
     c.notify("initialized", obj([]));
     let text = "fn main() {\n  print(\"{util.double(1)}\")\n}\n";
-    let item = obj([("uri", uri.as_str().into()), ("languageId", "duck".into()), ("version", 1i64.into()), ("text", text.into())]);
+    let item = obj([("uri", uri.as_str().into()), ("languageId", "auk".into()), ("version", 1i64.into()), ("text", text.into())]);
     c.notify("textDocument/didOpen", obj([("textDocument", item)]));
     assert_eq!(c.diagnostics(&uri), Vec::<Json>::new());
     let ds = c.diagnostics(&util);
@@ -351,7 +351,7 @@ fn lsp_other_files_and_parse_errors() {
     assert_eq!(ds.len(), 1, "{ds:?}");
     assert_eq!(ds[0].get("code").as_str(), Some("E0011"));
     assert_eq!(ds[0].get("range"), &range(1, 11, 1, 12));
-    // its fix-it removes the semicolon; util.duck's errors are cleared (no longer checked)
+    // its fix-it removes the semicolon; util.auk's errors are cleared (no longer checked)
     assert_eq!(c.diagnostics(&util), Vec::<Json>::new());
     let params = obj([("textDocument", obj([("uri", uri.as_str().into())])), ("range", range(1, 11, 1, 12)), ("context", obj([]))]);
     let actions = c.request("textDocument/codeAction", params);
@@ -366,14 +366,14 @@ fn lsp_other_files_and_parse_errors() {
 }
 
 /// Definitions and hovers for struct and enum types, fields and variants, in the file and in an
-/// installed dependency (`.quack/geo`).
+/// installed dependency (`.raft/geo`).
 #[test]
 fn lsp_types_fields_variants_and_deps() {
     let dir = project("deps");
-    fs::write(dir.join("quack.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[deps]\ngeo = \"^0.1\"\n").unwrap();
-    let geo_dir = dir.join(".quack/geo");
+    fs::write(dir.join("raft.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[deps]\ngeo = \"^0.1\"\n").unwrap();
+    let geo_dir = dir.join(".raft/geo");
     fs::create_dir_all(geo_dir.join("src")).unwrap();
-    fs::write(geo_dir.join("quack.toml"), "[package]\nname = \"geo\"\nversion = \"0.1.0\"\n").unwrap();
+    fs::write(geo_dir.join("raft.toml"), "[package]\nname = \"geo\"\nversion = \"0.1.0\"\n").unwrap();
     let lib = "/// A point.
 pub struct Point { x: float, y: float }
 
@@ -384,7 +384,7 @@ pub fn area(s: Shape): float = match s {
   Square(w) => w * w
 }
 ";
-    fs::write(geo_dir.join("src/lib.duck"), lib).unwrap();
+    fs::write(geo_dir.join("src/lib.auk"), lib).unwrap();
     let text = r#"struct Item { name: str, qty: int }
 
 fn total(xs: [Item]): int = xs.map(i => i.qty).sum()
@@ -401,11 +401,11 @@ fn main() {
   print([("a", 1)].first()?.1)
 }
 "#;
-    let uri = uri_of(&dir.join("src/main.duck"));
-    let geo = uri_of(&geo_dir.join("src/lib.duck"));
+    let uri = uri_of(&dir.join("src/main.auk"));
+    let geo = uri_of(&geo_dir.join("src/lib.auk"));
     let mut c = Client::start();
     c.request("initialize", obj([("capabilities", obj([]))]));
-    let item = obj([("uri", uri.as_str().into()), ("languageId", "duck".into()), ("version", 1i64.into()), ("text", text.into())]);
+    let item = obj([("uri", uri.as_str().into()), ("languageId", "auk".into()), ("version", 1i64.into()), ("text", text.into())]);
     c.notify("textDocument/didOpen", obj([("textDocument", item)]));
     assert_eq!(c.diagnostics(&uri), Vec::<Json>::new());
 
@@ -423,14 +423,14 @@ fn main() {
     assert_eq!(def(12, 35), there(5, 7, 5, 11), "dependency function");
     assert_eq!(def(12, 26), there(1, 19, 1, 20), "dependency field");
 
-    assert_eq!(hover_value(&mut c, &uri, 12, 26), "```duck\nx: float\n```\n\nDefined in `geo` (library `geo`) — [lib.duck:2](lib.duck#L2)");
-    assert_eq!(hover_value(&mut c, &uri, 6, 15), "```duck\npub struct Point\n```\n\nDefined in `geo` (library `geo`) — [lib.duck:2](lib.duck#L2)\n\nA point.");
-    assert_eq!(hover_value(&mut c, &uri, 9, 5), "```duck\nShape.Circle(r: float)\n```\n\nDefined in `geo` (library `geo`) — [lib.duck:4](lib.duck#L4)");
-    assert_eq!(hover_value(&mut c, &uri, 7, 21), "```duck\nShape.Circle(r: float)\n```\n\nDefined in `geo` (library `geo`) — [lib.duck:4](lib.duck#L4)");
-    assert_eq!(hover_value(&mut c, &uri, 2, 40), "```duck\nlet i: Item\n```");
-    assert_eq!(hover_value(&mut c, &uri, 12, 35), "```duck\npub fn area(s: Shape): float\n```\n\nDefined in `geo` (library `geo`) — [lib.duck:6](lib.duck#L6)");
-    assert_eq!(hover_value(&mut c, &uri, 12, 31), "```duck\nmodule geo\n```\n\nDefined in `geo` (library `geo`) — [lib.duck:1](lib.duck#L1)");
-    assert_eq!(hover_value(&mut c, &uri, 13, 28), "```duck\nint?\n```", "`?.1` of a tuple");
+    assert_eq!(hover_value(&mut c, &uri, 12, 26), "```auk\nx: float\n```\n\nDefined in `geo` (library `geo`) — [lib.auk:2](lib.auk#L2)");
+    assert_eq!(hover_value(&mut c, &uri, 6, 15), "```auk\npub struct Point\n```\n\nDefined in `geo` (library `geo`) — [lib.auk:2](lib.auk#L2)\n\nA point.");
+    assert_eq!(hover_value(&mut c, &uri, 9, 5), "```auk\nShape.Circle(r: float)\n```\n\nDefined in `geo` (library `geo`) — [lib.auk:4](lib.auk#L4)");
+    assert_eq!(hover_value(&mut c, &uri, 7, 21), "```auk\nShape.Circle(r: float)\n```\n\nDefined in `geo` (library `geo`) — [lib.auk:4](lib.auk#L4)");
+    assert_eq!(hover_value(&mut c, &uri, 2, 40), "```auk\nlet i: Item\n```");
+    assert_eq!(hover_value(&mut c, &uri, 12, 35), "```auk\npub fn area(s: Shape): float\n```\n\nDefined in `geo` (library `geo`) — [lib.auk:6](lib.auk#L6)");
+    assert_eq!(hover_value(&mut c, &uri, 12, 31), "```auk\nmodule geo\n```\n\nDefined in `geo` (library `geo`) — [lib.auk:1](lib.auk#L1)");
+    assert_eq!(hover_value(&mut c, &uri, 13, 28), "```auk\nint?\n```", "`?.1` of a tuple");
     assert!(c.request("textDocument/definition", doc_pos(&uri, 13, 28)).is_null(), "a tuple element has no definition");
 
     c.request("shutdown", Json::Null);
@@ -443,14 +443,14 @@ fn main() {
 fn lsp_hover_shows_units() {
     let dir = project("units");
     let text = "fn speed(d: float<m>, t: float<s>): float<m/s> = d / t\n\nfn main() {\n  let v = speed(3.0<m>, 2.0<s>)\n  print(\"{v}\")\n}\n";
-    let uri = uri_of(&dir.join("src/main.duck"));
+    let uri = uri_of(&dir.join("src/main.auk"));
     let mut c = Client::start();
     c.request("initialize", obj([("capabilities", obj([]))]));
-    let item = obj([("uri", uri.as_str().into()), ("languageId", "duck".into()), ("version", 1i64.into()), ("text", text.into())]);
+    let item = obj([("uri", uri.as_str().into()), ("languageId", "auk".into()), ("version", 1i64.into()), ("text", text.into())]);
     c.notify("textDocument/didOpen", obj([("textDocument", item)]));
     assert_eq!(c.diagnostics(&uri), Vec::<Json>::new());
-    assert_eq!(hover_value(&mut c, &uri, 3, 6), "```duck\nlet v: float<m/s>\n```");
-    assert_eq!(hover_value(&mut c, &uri, 3, 11), "```duck\nfn speed(d: float<m>, t: float<s>): float<m/s>\n```");
+    assert_eq!(hover_value(&mut c, &uri, 3, 6), "```auk\nlet v: float<m/s>\n```");
+    assert_eq!(hover_value(&mut c, &uri, 3, 11), "```auk\nfn speed(d: float<m>, t: float<s>): float<m/s>\n```");
     c.request("shutdown", Json::Null);
     c.notify("exit", Json::Null);
     assert_eq!(c.child.wait().unwrap().code(), Some(0));

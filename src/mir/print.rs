@@ -1,4 +1,4 @@
-//! `duck ir`: a MIR program printed as C-like text, one function after another (with the type
+//! `auk ir`: a MIR program printed as C-like text, one function after another (with the type
 //! definitions and globals it uses): every variable is declared at the top of its function,
 //! `Loop` is `for (;;)` with its latch after a continue label, runtime calls name the runtime's
 //! C symbols. (It reads as C against the runtime's ABI; nothing compiles it.)
@@ -66,7 +66,7 @@ pub fn print(p: &Program, info: &TyInfo) -> String {
             }
         }
     }
-    let mut out = String::from("/* duck ir: the program's MIR, printed as C-like text */\n\n");
+    let mut out = String::from("/* auk ir: the program's MIR, printed as C-like text */\n\n");
     out.push_str("/* ---- types ---- */\n");
     out.push_str(&pr.types);
     out.push_str("\n/* ---- prototypes ---- */\n");
@@ -101,17 +101,17 @@ impl Printer<'_, '_> {
             MTy::CStr => "const char *".into(),
             MTy::Code => "void *".into(),
             MTy::Ptr(x) => match &**x {
-                MTy::Rt(Rt::ElemOps) => "const DuckElemOps *".into(),
+                MTy::Rt(Rt::ElemOps) => "const AukElemOps *".into(),
                 x => {
                     let c = self.ct(x);
                     if c.ends_with('*') { format!("{c}*") } else { format!("{c} *") }
                 }
             },
             MTy::Rt(r) => match r {
-                Rt::StrBuf => "DuckStrBuf",
-                Rt::Obj => "DuckObj",
-                Rt::ElemOps => "DuckElemOps",
-                Rt::Task => "DuckTask",
+                Rt::StrBuf => "AukStrBuf",
+                Rt::Obj => "AukObj",
+                Rt::ElemOps => "AukElemOps",
+                Rt::Task => "AukTask",
             }
             .into(),
             MTy::Agg(a) => {
@@ -143,34 +143,34 @@ impl Printer<'_, '_> {
             Ty::Float => "double".into(),
             Ty::Bool => "bool".into(),
             Ty::Char => "uint32_t".into(),
-            Ty::Str => "DuckStr *".into(),
-            Ty::Never => "DuckUnit".into(),
-            Ty::Tuple(ts) if ts.is_empty() => "DuckUnit".into(),
-            Ty::List(_) => "DuckArr *".into(),
-            Ty::Map(..) => "DuckMap *".into(),
-            Ty::Fn(..) => "DuckClosure".into(),
-            Ty::Task(_) => "DuckTask *".into(),
-            t if info.is_value(t) => "DuckValue".into(),
+            Ty::Str => "AukStr *".into(),
+            Ty::Never => "AukUnit".into(),
+            Ty::Tuple(ts) if ts.is_empty() => "AukUnit".into(),
+            Ty::List(_) => "AukArr *".into(),
+            Ty::Map(..) => "AukMap *".into(),
+            Ty::Fn(..) => "AukClosure".into(),
+            Ty::Task(_) => "AukTask *".into(),
+            t if info.is_value(t) => "AukValue".into(),
             t if info.opaque_c(t).is_some() => info.opaque_c(t).unwrap().to_string(),
             Ty::Opt(inner) => match &**inner {
-                Ty::Int => "DuckOpt_int".into(),
-                Ty::Float => "DuckOpt_float".into(),
-                Ty::Bool => "DuckOpt_bool".into(),
-                Ty::Char => "DuckOpt_char".into(),
-                Ty::Str => "DuckOpt_str".into(),
-                Ty::List(_) => "DuckOpt_arr".into(),
-                x if info.is_value(x) => "DuckOpt_value".into(),
+                Ty::Int => "AukOpt_int".into(),
+                Ty::Float => "AukOpt_float".into(),
+                Ty::Bool => "AukOpt_bool".into(),
+                Ty::Char => "AukOpt_char".into(),
+                Ty::Str => "AukOpt_str".into(),
+                Ty::List(_) => "AukOpt_arr".into(),
+                x if info.is_value(x) => "AukOpt_value".into(),
                 _ => self.define(t),
             },
             Ty::Res(inner, _) => match &**inner {
-                Ty::Tuple(ts) if ts.is_empty() => "DuckRes_unit".into(),
-                Ty::Int => "DuckRes_int".into(),
-                Ty::Float => "DuckRes_float".into(),
-                Ty::Str => "DuckRes_str".into(),
-                Ty::List(_) => "DuckRes_arr".into(),
-                x if info.is_value(x) => "DuckRes_value".into(),
-                x if info.opaque_c(x) == Some("DuckConn *") => "DuckRes_conn".into(),
-                x if info.opaque_c(x) == Some("DuckListener *") => "DuckRes_listener".into(),
+                Ty::Tuple(ts) if ts.is_empty() => "AukRes_unit".into(),
+                Ty::Int => "AukRes_int".into(),
+                Ty::Float => "AukRes_float".into(),
+                Ty::Str => "AukRes_str".into(),
+                Ty::List(_) => "AukRes_arr".into(),
+                x if info.is_value(x) => "AukRes_value".into(),
+                x if info.opaque_c(x) == Some("AukConn *") => "AukRes_conn".into(),
+                x if info.opaque_c(x) == Some("AukListener *") => "AukRes_listener".into(),
                 _ => self.define(&Ty::res((**inner).clone(), Ty::unit())),
             },
             _ => self.define(t),
@@ -199,13 +199,13 @@ impl Printer<'_, '_> {
             Ty::Opt(inner) => {
                 let c = self.dt(inner);
                 let name = format!("DkOpt{k}");
-                let _ = writeln!(self.types, "/* {show} */\nDUCK_DEF_OPT({name}, {c});");
+                let _ = writeln!(self.types, "/* {show} */\nAUK_DEF_OPT({name}, {c});");
                 name
             }
             Ty::Res(inner, _) => {
                 let c = self.dt(inner);
                 let name = format!("DkRes{k}");
-                let _ = writeln!(self.types, "/* {show} */\nDUCK_DEF_RES({name}, {c});");
+                let _ = writeln!(self.types, "/* {show} */\nAUK_DEF_RES({name}, {c});");
                 name
             }
             Ty::Named(d, _) => {
@@ -215,11 +215,11 @@ impl Printer<'_, '_> {
                     TypeDefKind::Struct { .. } => {
                         let name = format!("DkS{k}_{dname}");
                         for (i, (ft, boxed)) in info.struct_layout(t).iter().enumerate() {
-                            let c = if *boxed { "DuckObj *".to_string() } else { self.dt(ft) };
+                            let c = if *boxed { "AukObj *".to_string() } else { self.dt(ft) };
                             let _ = writeln!(body, "    {c} f{i};");
                         }
                         if body.is_empty() {
-                            body.push_str("    DuckUnit dummy;\n");
+                            body.push_str("    AukUnit dummy;\n");
                         }
                         let _ = writeln!(self.types, "/* {show} */\ntypedef struct {name} {{\n{body}}} {name};");
                         name
@@ -233,7 +233,7 @@ impl Printer<'_, '_> {
                             }
                             let mut st = String::new();
                             for (fi, (ft, boxed)) in fs.iter().enumerate() {
-                                let c = if *boxed { "DuckObj *".to_string() } else { self.dt(ft) };
+                                let c = if *boxed { "AukObj *".to_string() } else { self.dt(ft) };
                                 let _ = write!(st, " {c} f{fi};");
                             }
                             let _ = writeln!(un, "        struct {{{st} }} v{vi};");
@@ -250,7 +250,7 @@ impl Printer<'_, '_> {
             }
             Ty::Any(_) => {
                 let name = format!("DkAny{k}");
-                let _ = writeln!(self.types, "typedef struct {name} {{\n    DuckObj *f0;\n    const void *f1;\n}} {name};");
+                let _ = writeln!(self.types, "typedef struct {name} {{\n    AukObj *f0;\n    const void *f1;\n}} {name};");
                 name
             }
             _ => panic!("c: can't define {}", info.show_ty(t)),

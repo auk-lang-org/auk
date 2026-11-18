@@ -1,4 +1,4 @@
-//! `duck mcp` end to end: spawn the server and speak newline-delimited JSON-RPC 2.0 over its
+//! `auk mcp` end to end: spawn the server and speak newline-delimited JSON-RPC 2.0 over its
 //! stdio, the way an AI agent's MCP client does.
 
 #[allow(dead_code)]
@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use json::{Json, obj};
 
-const TOOLS: &[&str] = &["duck_spec", "duck_check", "duck_run", "duck_test", "duck_debug", "duck_fmt", "duck_explain", "duck_holes"];
+const TOOLS: &[&str] = &["auk_spec", "auk_check", "auk_run", "auk_test", "auk_debug", "auk_fmt", "auk_explain", "auk_holes"];
 
 struct Client {
     child: Child,
@@ -30,19 +30,19 @@ impl Client {
         let r = c.request("initialize", obj([
             ("protocolVersion", "2025-11-25".into()),
             ("capabilities", obj([])),
-            ("clientInfo", obj([("name", "duck-tests".into()), ("version", "1".into())])),
+            ("clientInfo", obj([("name", "auk-tests".into()), ("version", "1".into())])),
         ]));
         let result = r.get("result");
         assert_eq!(result.get("protocolVersion").as_str(), Some("2025-11-25"), "{r}");
         assert!(matches!(result.at(&["capabilities", "tools"]), Json::Obj(_)), "{r}");
-        assert_eq!(result.at(&["serverInfo", "name"]).as_str(), Some("duck"));
+        assert_eq!(result.at(&["serverInfo", "name"]).as_str(), Some("auk"));
         assert!(result.at(&["serverInfo", "version"]).as_str().is_some_and(|v| !v.is_empty()));
         c.send(&obj([("jsonrpc", "2.0".into()), ("method", "notifications/initialized".into())]));
         c
     }
 
     fn spawn() -> Client {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_duck"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_auk"))
             .arg("mcp")
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .stdin(Stdio::piped())
@@ -76,7 +76,7 @@ impl Client {
 
     /// The next message: exactly one line of JSON.
     fn recv(&self) -> Json {
-        let line = self.rx.recv_timeout(Duration::from_secs(120)).expect("no reply from duck mcp");
+        let line = self.rx.recv_timeout(Duration::from_secs(120)).expect("no reply from auk mcp");
         assert!(!line.contains('\n'));
         json::parse(&line).unwrap_or_else(|e| panic!("not JSON ({e}): {line}"))
     }
@@ -137,7 +137,7 @@ fn initialize_and_list_tools() {
     // tools that execute code say so
     for t in tools {
         let name = t.get("name").as_str().unwrap();
-        if name == "duck_run" || name == "duck_test" {
+        if name == "auk_run" || name == "auk_test" {
             assert!(t.get("description").as_str().unwrap().contains("executes code"), "{name}");
         }
     }
@@ -147,7 +147,7 @@ fn initialize_and_list_tools() {
 fn check_source_with_a_type_error() {
     let mut c = Client::start();
     let src = "fn label(n: int): str = n\n\nfn main() {\n  print(label(1))\n}\n";
-    let (text, is_error) = c.call("duck_check", obj([("source", src.into())]));
+    let (text, is_error) = c.call("auk_check", obj([("source", src.into())]));
     assert!(!is_error, "{text}");
     let report = json::parse(&text).unwrap();
     assert_eq!(report.get("file").as_str(), Some("<source>"));
@@ -163,7 +163,7 @@ fn check_source_with_a_type_error() {
 #[test]
 fn check_a_clean_example() {
     let mut c = Client::start();
-    let (text, is_error) = c.call("duck_check", obj([("path", "examples/hello.duck".into())]));
+    let (text, is_error) = c.call("auk_check", obj([("path", "examples/hello.auk".into())]));
     assert!(!is_error, "{text}");
     let report = json::parse(&text).unwrap();
     assert_eq!(report.get("ok"), &Json::Bool(true), "{text}");
@@ -173,10 +173,10 @@ fn check_a_clean_example() {
 #[test]
 fn run_hello() {
     let mut c = Client::start();
-    let (text, is_error) = c.call("duck_run", obj([("path", "examples/hello.duck".into())]));
+    let (text, is_error) = c.call("auk_run", obj([("path", "examples/hello.auk".into())]));
     assert!(!is_error, "{text}");
     let r = json::parse(&text).unwrap();
-    assert_eq!(r.get("stdout").as_str(), Some("Hello from Duck!\n"));
+    assert_eq!(r.get("stdout").as_str(), Some("Hello from Auk!\n"));
     assert_eq!(r.get("stderr").as_str(), Some(""));
     assert_eq!(r.get("exit_code").as_i64(), Some(0));
     assert_eq!(r.get("timed_out"), &Json::Bool(false));
@@ -185,7 +185,7 @@ fn run_hello() {
 #[test]
 fn test_calc() {
     let mut c = Client::start();
-    let (text, is_error) = c.call("duck_test", obj([("path", "examples/calc.duck".into())]));
+    let (text, is_error) = c.call("auk_test", obj([("path", "examples/calc.auk".into())]));
     assert!(!is_error, "{text}");
     assert!(text.contains("passed, 0 failed"), "{text}");
 }
@@ -193,7 +193,7 @@ fn test_calc() {
 #[test]
 fn run_and_test_with_a_trace() {
     let mut c = Client::start();
-    let (text, is_error) = c.call("duck_run", obj([("path", "examples/fib.duck".into()), ("trace", Json::Bool(true))]));
+    let (text, is_error) = c.call("auk_run", obj([("path", "examples/fib.auk".into()), ("trace", Json::Bool(true))]));
     assert!(!is_error, "{text}");
     let r = json::parse(&text).unwrap();
     assert_eq!(r.get("stdout").as_str().unwrap().lines().count(), 10);
@@ -202,68 +202,68 @@ fn run_and_test_with_a_trace() {
     assert_eq!(events[0].get("fn").as_str(), Some("fib.main"));
     let first_fib = events.iter().find(|e| e.get("fn").as_str() == Some("fib.fib")).unwrap();
     assert_eq!(first_fib.get("args").as_arr()[0].as_str(), Some("0"));
-    assert_eq!(first_fib.get("loc").as_str(), Some("examples/fib.duck:9:11"));
+    assert_eq!(first_fib.get("loc").as_str(), Some("examples/fib.auk:9:11"));
     assert!(events.iter().all(|e| e.get("ev").as_str().is_some()));
     // without `trace` there is no trace
-    let (text, _) = c.call("duck_run", obj([("path", "examples/fib.duck".into())]));
+    let (text, _) = c.call("auk_run", obj([("path", "examples/fib.auk".into())]));
     assert!(json::parse(&text).unwrap().get("trace").is_null());
     // a failing test shows its trace
     let d = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("mcp-trace");
     std::fs::create_dir_all(&d).unwrap();
-    let f = d.join("t.duck");
+    let f = d.join("t.auk");
     std::fs::write(&f, "fn twice(n: int): int = n + n + 1\ntest \"twice\" { assert twice(2) == 4 }\n").unwrap();
     let path = f.display().to_string();
-    let (text, is_error) = c.call("duck_test", obj([("path", path.clone().into()), ("trace", Json::Bool(true))]));
+    let (text, is_error) = c.call("auk_test", obj([("path", path.clone().into()), ("trace", Json::Bool(true))]));
     assert!(is_error, "{text}");
     assert!(text.contains("FAIL twice"), "{text}");
     assert!(text.contains(r#"{"ev":"ret","fn":"t.twice","value":"5","depth":0}"#), "{text}");
-    let (text, _) = c.call("duck_test", obj([("path", path.into())]));
+    let (text, _) = c.call("auk_test", obj([("path", path.into())]));
     assert!(!text.contains(r#"{"ev":"#), "{text}");
 }
 
 #[test]
 fn explain_and_spec() {
     let mut c = Client::start();
-    let (text, is_error) = c.call("duck_explain", obj([("code", "E0400".into())]));
+    let (text, is_error) = c.call("auk_explain", obj([("code", "E0400".into())]));
     assert!(!is_error, "{text}");
     assert!(text.starts_with("E0400"), "{text}");
-    let (text, is_error) = c.call("duck_explain", obj([("code", "E9999".into())]));
+    let (text, is_error) = c.call("auk_explain", obj([("code", "E9999".into())]));
     assert!(is_error, "{text}");
-    assert!(text.contains("not a Duck error code"), "{text}");
-    let (text, is_error) = c.call("duck_spec", obj([]));
+    assert!(text.contains("not an Auk error code"), "{text}");
+    let (text, is_error) = c.call("auk_spec", obj([]));
     assert!(!is_error);
-    assert!(text.starts_with("# Duck"), "{}", &text[..text.len().min(100)]);
+    assert!(text.starts_with("# Auk"), "{}", &text[..text.len().min(100)]);
     assert!(text.len() > 1000);
 }
 
 #[test]
 fn fmt_messy_source() {
     let mut c = Client::start();
-    let (text, is_error) = c.call("duck_fmt", obj([("source", "fn main(){print( 1+2 )}".into())]));
+    let (text, is_error) = c.call("auk_fmt", obj([("source", "fn main(){print( 1+2 )}".into())]));
     assert!(!is_error, "{text}");
     assert_eq!(text, "fn main() { print(1 + 2) }\n");
     // a syntax error is reported against the source, not a temp file
-    let (text, is_error) = c.call("duck_fmt", obj([("source", "fn main( {".into())]));
+    let (text, is_error) = c.call("auk_fmt", obj([("source", "fn main( {".into())]));
     assert!(is_error, "{text}");
 }
 
 #[test]
 fn errors() {
     let mut c = Client::start();
-    for tool in ["duck_check", "duck_run", "duck_test", "duck_debug", "duck_fmt", "duck_holes"] {
-        let (text, is_error) = c.call(tool, obj([("path", "examples/no_such_file.duck".into())]));
+    for tool in ["auk_check", "auk_run", "auk_test", "auk_debug", "auk_fmt", "auk_holes"] {
+        let (text, is_error) = c.call(tool, obj([("path", "examples/no_such_file.auk".into())]));
         assert!(is_error, "{tool}: {text}");
         assert!(text.contains("no such file"), "{tool}: {text}");
     }
     // path and source together, or neither
-    let (text, is_error) = c.call("duck_check", obj([("path", "examples/hello.duck".into()), ("source", "".into())]));
+    let (text, is_error) = c.call("auk_check", obj([("path", "examples/hello.auk".into()), ("source", "".into())]));
     assert!(is_error && text.contains("exactly one"), "{text}");
-    let (_, is_error) = c.call("duck_check", obj([]));
+    let (_, is_error) = c.call("auk_check", obj([]));
     assert!(is_error);
     // protocol errors
     let r = c.request("no/such/method", obj([]));
     assert_eq!(r.at(&["error", "code"]).as_i64(), Some(-32601), "{r}");
-    let r = c.request("tools/call", obj([("name", "duck_nope".into()), ("arguments", obj([]))]));
+    let r = c.request("tools/call", obj([("name", "auk_nope".into()), ("arguments", obj([]))]));
     assert_eq!(r.at(&["error", "code"]).as_i64(), Some(-32602), "{r}");
     c.send(&Json::Str("not json-rpc".into()));
     assert_eq!(c.recv().at(&["error", "code"]).as_i64(), Some(-32600));
@@ -277,11 +277,11 @@ fn errors() {
 fn debug_reports_stops() {
     let mut c = Client::start();
     let args = obj([
-        ("path", "examples/fib.duck".into()),
-        ("breakpoints", Json::Arr(vec!["examples/fib.duck:5".into()])),
+        ("path", "examples/fib.auk".into()),
+        ("breakpoints", Json::Arr(vec!["examples/fib.auk:5".into()])),
         ("max_stops", 2i64.into()),
     ]);
-    let (text, is_error) = c.call("duck_debug", args);
+    let (text, is_error) = c.call("auk_debug", args);
     assert!(!is_error, "{text}");
     let r = json::parse(text.trim()).unwrap();
     let stops = r.get("stops").as_arr();
@@ -290,19 +290,19 @@ fn debug_reports_stops() {
     assert!(stops[0].at(&["locals", "n"]).as_str().is_some(), "{text}");
     assert!(r.get("note").as_str().is_some_and(|n| n.contains("max-stops")), "{text}");
     // a missing file is an error result
-    let (text, is_error) = c.call("duck_debug", obj([("path", "tests/fixtures/no_such.duck".into())]));
+    let (text, is_error) = c.call("auk_debug", obj([("path", "tests/fixtures/no_such.auk".into())]));
     assert!(is_error, "{text}");
 }
 
 #[test]
 fn holes_when_available() {
-    let has_holes = Command::new(env!("CARGO_BIN_EXE_duck"))
+    let has_holes = Command::new(env!("CARGO_BIN_EXE_auk"))
         .arg("help")
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim_start().starts_with("holes")))
         .unwrap();
     let mut c = Client::start();
-    let (text, is_error) = c.call("duck_holes", obj([("path", "examples/hello.duck".into())]));
+    let (text, is_error) = c.call("auk_holes", obj([("path", "examples/hello.auk".into())]));
     if has_holes {
         assert!(!is_error, "{text}");
         assert!(json::parse(text.trim()).is_ok(), "not JSON: {text}");
@@ -321,6 +321,6 @@ fn closing_stdin_exits() {
             thread::sleep(Duration::from_millis(25));
             c.child.try_wait().unwrap()
         })
-        .expect("duck mcp did not exit when stdin closed");
+        .expect("auk mcp did not exit when stdin closed");
     assert!(status.success());
 }

@@ -1,4 +1,4 @@
-//! `duck fmt` over every corpus file (`examples/*.duck` plus `packages/*/src/*.duck`): the
+//! `auk fmt` over every corpus file (`examples/*.auk` plus `packages/*/src/*.auk`): the
 //! output parses, the AST is unchanged, formatting is idempotent, no comment is lost, and the
 //! corpus itself is already in canonical form.
 
@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-fn duck(args: &[&str], stdin: Option<&str>) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_duck"))
+fn auk(args: &[&str], stdin: Option<&str>) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_auk"))
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -24,22 +24,22 @@ fn duck(args: &[&str], stdin: Option<&str>) -> Output {
     out
 }
 
-fn duck_files(dir: &Path) -> Vec<PathBuf> {
+fn auk_files(dir: &Path) -> Vec<PathBuf> {
     let mut paths: Vec<_> = fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|e| e == "duck"))
+        .filter(|p| p.extension().is_some_and(|e| e == "auk"))
         .collect();
     paths.sort();
     paths
 }
 
 fn corpus() -> Vec<PathBuf> {
-    let mut files = duck_files(Path::new("examples"));
+    let mut files = auk_files(Path::new("examples"));
     let mut pkgs: Vec<_> = fs::read_dir("packages").unwrap().map(|e| e.unwrap().path().join("src")).filter(|p| p.is_dir()).collect();
     pkgs.sort();
     for p in pkgs {
-        files.extend(duck_files(&p));
+        files.extend(auk_files(&p));
     }
     files
 }
@@ -47,22 +47,22 @@ fn corpus() -> Vec<PathBuf> {
 fn scratch(src: &str) -> PathBuf {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::SeqCst);
-    let path = std::env::temp_dir().join(format!("duck-fmt-{}-{n}.duck", std::process::id()));
+    let path = std::env::temp_dir().join(format!("auk-fmt-{}-{n}.auk", std::process::id()));
     fs::write(&path, src).unwrap();
     path
 }
 
-/// `duck fmt -`: the formatted text.
+/// `auk fmt -`: the formatted text.
 fn format(src: &str, name: &str) -> String {
-    let out = duck(&["fmt", "-"], Some(src));
-    assert!(out.status.success(), "duck fmt failed on {name}:\n{}", String::from_utf8_lossy(&out.stderr));
+    let out = auk(&["fmt", "-"], Some(src));
+    assert!(out.status.success(), "auk fmt failed on {name}:\n{}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8(out.stdout).unwrap()
 }
 
-/// `duck parse --ast` of a source text (spans and node ids are not in the dump).
+/// `auk parse --ast` of a source text (spans and node ids are not in the dump).
 fn ast(src: &str, name: &str) -> String {
     let path = scratch(src);
-    let out = duck(&["parse", "--ast", path.to_str().unwrap()], None);
+    let out = auk(&["parse", "--ast", path.to_str().unwrap()], None);
     let _ = fs::remove_file(&path);
     assert!(out.status.success(), "{name} does not parse:\n{}\n--- source ---\n{src}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8(out.stdout).unwrap()
@@ -191,7 +191,7 @@ fn corpus_formats_safely() {
     }
     println!("{} of {} corpus files are in canonical form", canonical.len(), files.len());
     // the corpus is kept fmt-clean
-    assert_eq!(canonical.len(), files.len(), "not fmt-clean: run `duck fmt examples packages`");
+    assert_eq!(canonical.len(), files.len(), "not fmt-clean: run `auk fmt examples packages`");
 }
 
 #[test]
@@ -200,14 +200,14 @@ fn check_mode_and_files() {
     let path = scratch(ugly);
     let p = path.to_str().unwrap();
     // --check lists the file, exits 1 and leaves it alone
-    let out = duck(&["fmt", "--check", p], None);
+    let out = auk(&["fmt", "--check", p], None);
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), p);
     assert_eq!(fs::read_to_string(&path).unwrap(), ugly);
     // fmt rewrites it in place; then --check is clean
-    assert!(duck(&["fmt", p], None).status.success());
+    assert!(auk(&["fmt", p], None).status.success());
     assert_eq!(fs::read_to_string(&path).unwrap(), "fn f(a: int): int = a + 1\n");
-    let out = duck(&["fmt", "--check", p], None);
+    let out = auk(&["fmt", "--check", p], None);
     assert_eq!(out.status.code(), Some(0));
     assert!(out.stdout.is_empty());
     let _ = fs::remove_file(&path);
@@ -217,14 +217,14 @@ fn check_mode_and_files() {
 fn parse_errors_leave_the_file_untouched() {
     let bad = "fn f() {\n  let x = 1;\n}\n";
     let path = scratch(bad);
-    let out = duck(&["fmt", path.to_str().unwrap()], None);
+    let out = auk(&["fmt", path.to_str().unwrap()], None);
     assert_eq!(out.status.code(), Some(1));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("E0011"), "expected the parse diagnostic, got:\n{err}");
     assert_eq!(fs::read_to_string(&path).unwrap(), bad);
     let _ = fs::remove_file(&path);
     // stdin too
-    let out = duck(&["fmt", "-"], Some(bad));
+    let out = auk(&["fmt", "-"], Some(bad));
     assert_eq!(out.status.code(), Some(1));
     assert!(out.stdout.is_empty());
 }

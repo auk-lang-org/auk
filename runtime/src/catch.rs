@@ -7,13 +7,13 @@ use std::cell::RefCell;
 use std::ffi::{c_int, c_void};
 use std::ptr::null_mut;
 
-use crate::task::DuckThunk;
+use crate::task::AukThunk;
 use crate::*;
 
 unsafe extern "C" {
-    fn duck__catch_run(f: DuckThunk, env: *mut c_void, out: *mut c_void) -> c_int;
-    fn duck__catch_active() -> c_int;
-    fn duck__catch_throw() -> !;
+    fn auk__catch_run(f: AukThunk, env: *mut c_void, out: *mut c_void) -> c_int;
+    fn auk__catch_active() -> c_int;
+    fn auk__catch_throw() -> !;
 }
 
 /// A recovered panic: its message and where it happened.
@@ -36,7 +36,7 @@ thread_local! {
 
 /// Does this thread have a recovery point?
 pub fn recoverable() -> bool {
-    unsafe { duck__catch_active() != 0 }
+    unsafe { auk__catch_active() != 0 }
 }
 
 /// Record the panic and jump to this thread's innermost recovery point (`recoverable()` must
@@ -44,14 +44,14 @@ pub fn recoverable() -> bool {
 pub fn throw(loc: &str, msg: &str) -> ! {
     let p = Panic { msg: msg.to_string(), loc: loc.to_string() };
     CAUGHT.with(|c| *c.borrow_mut() = Some(p));
-    unsafe { duck__catch_throw() }
+    unsafe { auk__catch_throw() }
 }
 
 /// Run `f(env, out)` under a recovery point: None if it finished, the panic if one jumped back.
-pub unsafe fn run(f: DuckThunk, env: *mut c_void, out: *mut c_void) -> Option<Panic> {
+pub unsafe fn run(f: AukThunk, env: *mut c_void, out: *mut c_void) -> Option<Panic> {
     let saved = crate::trace::save_state();
     let dbg = crate::dbg::save_state();
-    if unsafe { duck__catch_run(f, env, out) } == 0 {
+    if unsafe { auk__catch_run(f, env, out) } == 0 {
         return None;
     }
     crate::trace::restore_state(saved);
@@ -62,7 +62,7 @@ pub unsafe fn run(f: DuckThunk, env: *mut c_void, out: *mut c_void) -> Option<Pa
 /// `catch e`: run the thunk (it writes e's value to `out`); NULL when it finished, else the
 /// panic as a new (owned) Err and `out` untouched.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_catch(f: DuckThunk, env: *mut c_void, out: *mut c_void) -> *mut DuckErr {
+pub unsafe extern "C" fn auk_catch(f: AukThunk, env: *mut c_void, out: *mut c_void) -> *mut AukErr {
     match unsafe { run(f, env, out) } {
         None => null_mut(),
         // a cancelled task must end: pass the panic on to the next recovery point out (the

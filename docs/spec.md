@@ -1,4 +1,4 @@
-# Duck
+# Auk
 
 Statically typed and compiled to native code. Braces delimit blocks; no semicolons. A newline ends a statement unless the line ends with an operator, `=`, `=>`, `,` or an open bracket, or the next line starts with `.`, `|>`, `requires`, `ensures` or `{`. Comments: `//`, `/* */`, `///` doc.
 
@@ -126,7 +126,7 @@ let r = catch handle(req, &db)            // Resp!: a panic inside becomes an Er
 let x = catch { parse(s)? + xs[i] } else 0
 var ts: [Task<Resp!>] = [get(u1), get(u2)]
 let (i, r) = await any ts                 // first to finish; r: Resp!, a panic is an Err
-ts[1].cancel()                            // it panics "cancelled" at its next loop or blocking call; ts[0].done(): bool; reloads(): int counts `duck run --live` swaps
+ts[1].cancel()                            // it panics "cancelled" at its next loop or blocking call; ts[0].done(): bool; reloads(): int counts `auk run --live` swaps
 let c: Chan<Job> = chan()                 // c.send(j); c.recv(): Job? (none once closed); c.recv_for(ms); c.close(); for j in c
 ```
 An `async fn` call must be awaited, stored or returned; outside an `async fn`, `await` blocks. A task's panic is raised again at its `await`; a task that panics cancels the tasks it started. Tasks share nothing: arguments, results and messages are copied (so no `var` parameter on a started task), and a crashed task's memory is freed. `catch` may change the variables it uses; `return` can't leave it. Supervisors: package `sup`.
@@ -136,17 +136,17 @@ An `async fn` call must be awaited, stored or returned; outside an `async fn`, `
 fn isqrt(n: int): int
   requires n >= 0                  // checked in every build
   ensures result * result <= n     // checked in debug and test builds; old(x) = x on entry
-{ ?? }                             // a hole: type-checks, panics if reached, blocks `duck build`
+{ ?? }                             // a hole: type-checks, panics if reached, blocks `auk build`
 
 test "isqrt" { assert isqrt(17) == 4 }   // tests may use ? and fail(); an error fails the test
 peek x * 2         // prints [file:line] x * 2 = 84, returns the value
 imprint T = table()   // computed at compile time (pure fns only)
 ```
 `assert (a, b) == (1, 2)` checks the whole comparison.
-To see values without editing code: `duck debug -b f.duck:12 -p x,y f.duck` runs to each breakpoint (`file:line` or a function, `-b "f.duck:12 if n > 3"`) and panic and prints the locals and stack there; `-p`/`-e` take Duck expressions too (`-e "xs.len()"`; `--json`, `--timeout S`).
+To see values without editing code: `auk debug -b f.auk:12 -p x,y f.auk` runs to each breakpoint (`file:line` or a function, `-b "f.auk:12 if n > 3"`) and panic and prints the locals and stack there; `-p`/`-e` take Auk expressions too (`-e "xs.len()"`; `--json`, `--timeout S`).
 
 ## Modules, packages, program entry
-A file is a module, a folder a package; refer to anything by path, no imports: `geo.area(s)`, `json.parse(t)`. A local named like a project module or dependency is an error; one named like a core module shadows it (`core.env` still reaches core). `regex(p)` is `regex.regex(p)`. In a package its own name is its root (`http.Resp`). Add dependencies with `quack add http`.
+A file is a module, a folder a package; refer to anything by path, no imports: `geo.area(s)`, `json.parse(t)`. A local named like a project module or dependency is an error; one named like a core module shadows it (`core.env` still reaches core). `regex(p)` is `regex.regex(p)`. In a package its own name is its root (`http.Resp`). Add dependencies with `raft add http`.
 ```
 fn main(args: [str]): int! uses fs {    // the parameters and return type are optional
   run(args[1])?                          // an Err prints and exits with 1
@@ -160,4 +160,4 @@ fn main(args: [str]): int! uses fs {    // the parameters and return type are op
 Collections: `len push pop(): T? insert remove contains get first last min max: T? map filter flat_map reduce(init, f) find(pred): T? find_index: int? take skip take_while any all sum reverse chunks(n) windows(n) counts(): {T: int} group_by(key): {K: [T]} unique zip enum join(sep)` · `sort sort_by(key)`: stable sorted copies; tuples and lists compare element by element: `sort_by(p => (-p.n, p.name))` · maps: `remove(k): V? keys values entries`.
 Strings: `len split(sep = whitespace) trim lines starts_with ends_with replace find(sub): int? (char index) contains upper lower repeat(n) chars bytes` · chars: `is_digit is_alpha is_space upper lower` (ASCII) · `int.parse float.parse str.from_utf8`. Floats: `sqrt abs floor ceil round sin cos tan asin acos atan atan2(y, x) exp ln log10 log2`, `x.bits()`/`float.from_bits(n)` (and `bits32`/`from_bits32` for f32), `float.pi` `float.e`.
 `gui` (windows, in a separate window process; macOS so far): `open(title, w, h): int! present(win, f)! present_rect(win, f, x, y, w, h)! present_rects(win, f, [x, y, w, h, ...])! next_event(win, ms): gui.Event? width height scale close` · `pixels` (pure): `pixels.Frame`, 32-bit pixels `0xTTRRGGBB` where the top byte is transparency (0 opaque, so `0xRRGGBB` is opaque; `CLEAR` = `0xff000000`), copy-on-write like any value: `frame(w, h, color) from_list(w, h, px) to_list width height get set fill blend blit composite blit_mask argb(a, r, g, b) alpha(c)`.
-Prefer these to hand-written loops. Packages (quack): `json csv regex cli http encoding hash datetime url toml log uuid num text glob compress yaml xml sup splash audio graphics term template markdown`.
+Prefer these to hand-written loops. Packages (raft): `json csv regex cli http encoding hash datetime url toml log uuid num text glob compress yaml xml sup splash audio graphics term template markdown`.

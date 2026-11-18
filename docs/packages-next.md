@@ -1,9 +1,9 @@
 # Next packages
 
-Packages most Duck programs will want after the P0/P1 set in `docs/package-list.md`. Each one
-follows the existing conventions: pure Duck where possible, `parse`/`decode`/`encode`/`message`
+Packages most Auk programs will want after the P0/P1 set in `docs/package-list.md`. Each one
+follows the existing conventions: pure Auk where possible, `parse`/`decode`/`encode`/`message`
 naming, a typed error enum, a README with the full API, and `test` blocks that pass under
-`DUCK_LEAK_CHECK=1`.
+`AUK_LEAK_CHECK=1`.
 
 Status: ⬜ not started · 🟨 in progress · ✅ done (0.1.0) · ⛔ blocked
 
@@ -36,12 +36,12 @@ Status: ⬜ not started · 🟨 in progress · ✅ done (0.1.0) · ⛔ blocked
 | 13 | `msgpack` / `cbor` | compact binary `Value` encodings, same shape as `json` | `binary` | ⬜ |
 | 14 | `prop` | property-based testing with shrinking, deterministic seed | none | ⬜ |
 | 15 | `snap` | snapshot assertions with readable diffs | `text`; `fs` | ⬜ |
-| 16 | `semver` | versions, requirements, matching (share with `quack`) | none | ⬜ |
+| 16 | `semver` | versions, requirements, matching (share with `raft`) | none | ⬜ |
 
 ## Not now
 
 Postgres and Redis clients: large protocol work, and `sqlite` covers "I need a database" for the
-programs Duck targets.
+programs Auk targets.
 
 ## Log
 
@@ -63,7 +63,7 @@ Notes on what shipped and how it differs from the plan above go here, one entry 
 
 `ffi` exists only as an effect name. `extern fn` is allowed only in the core prelude (E0036), so a
 package can't bind `libsqlite3`. There are two ways forward: (a) a user-level FFI (an
-`extern fn` in packages that declare `effects = ["ffi"]`, plus a `[link]` section in quack.toml
+`extern fn` in packages that declare `effects = ["ffi"]`, plus a `[link]` section in raft.toml
 that passes `-l` flags to the linker), or (b) a core `sqlite` module in the runtime that links the system
 `libsqlite3`. (a) is the general fix and unblocks `crypto` too.
 

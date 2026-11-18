@@ -1,4 +1,4 @@
-//! The checker through `duck check`: the whole corpus checks clean (and its typed program
+//! The checker through `auk check`: the whole corpus checks clean (and its typed program
 //! satisfies codegen's invariants), and small programs get the exact diagnostic codes,
 //! messages and fix-its.
 
@@ -8,20 +8,20 @@ use std::process::{Command, Output};
 use std::sync::Once;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-fn duck(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_duck")).args(args).output().unwrap()
+fn auk(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_auk")).args(args).output().unwrap()
 }
 
-/// `quack install` in `dir`; a lock that no longer matches the registry (the in-repo packages are
+/// `raft install` in `dir`; a lock that no longer matches the registry (the in-repo packages are
 /// edited freely) is regenerated.
 fn install(dir: &str) {
-    let run = || Command::new(env!("CARGO_BIN_EXE_quack")).arg("install").current_dir(dir).output().unwrap();
+    let run = || Command::new(env!("CARGO_BIN_EXE_raft")).arg("install").current_dir(dir).output().unwrap();
     let out = run();
     if !out.status.success() {
-        let _ = fs::remove_file(Path::new(dir).join("quack.lock"));
-        let _ = fs::remove_dir_all(Path::new(dir).join(".quack"));
+        let _ = fs::remove_file(Path::new(dir).join("raft.lock"));
+        let _ = fs::remove_dir_all(Path::new(dir).join(".raft"));
         let out = run();
-        assert!(out.status.success(), "quack install in {dir} failed:\n{}", String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success(), "raft install in {dir} failed:\n{}", String::from_utf8_lossy(&out.stderr));
     }
 }
 
@@ -36,16 +36,16 @@ fn setup() {
     });
 }
 
-fn duck_files(dir: &Path) -> Vec<PathBuf> {
-    let mut paths: Vec<_> = fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "duck")).collect();
+fn auk_files(dir: &Path) -> Vec<PathBuf> {
+    let mut paths: Vec<_> = fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "auk")).collect();
     paths.sort();
     paths
 }
 
 /// Every example program, and every package checked from its root module.
 fn corpus_roots() -> Vec<PathBuf> {
-    let mut files = duck_files(Path::new("examples"));
-    let mut pkgs: Vec<_> = fs::read_dir("packages").unwrap().map(|e| e.unwrap().path().join("src/lib.duck")).filter(|p| p.is_file()).collect();
+    let mut files = auk_files(Path::new("examples"));
+    let mut pkgs: Vec<_> = fs::read_dir("packages").unwrap().map(|e| e.unwrap().path().join("src/lib.auk")).filter(|p| p.is_file()).collect();
     pkgs.sort();
     files.extend(pkgs);
     files
@@ -59,10 +59,10 @@ fn corpus_checks_clean() {
     let mut failed = Vec::new();
     for f in &files {
         let p = f.to_str().unwrap();
-        let out = duck(&["check", p, "--json"]);
+        let out = auk(&["check", p, "--json"]);
         let json = String::from_utf8_lossy(&out.stdout).to_string();
         if !out.status.success() || !json.contains(r#""ok":true,"diagnostics":[]"#) {
-            let text = String::from_utf8_lossy(&duck(&["check", p]).stderr).to_string();
+            let text = String::from_utf8_lossy(&auk(&["check", p]).stderr).to_string();
             failed.push(format!("{p}:\n{text}"));
         }
     }
@@ -70,13 +70,13 @@ fn corpus_checks_clean() {
 }
 
 /// The typed program of every corpus root has no inference variables or error types left, and
-/// every generic instance is concrete (`duck typed` runs `TypedProgram::validate`).
+/// every generic instance is concrete (`auk typed` runs `TypedProgram::validate`).
 #[test]
 fn corpus_typed_invariants() {
     setup();
     for f in corpus_roots() {
         let p = f.to_str().unwrap();
-        let out = duck(&["typed", p]);
+        let out = auk(&["typed", p]);
         let text = String::from_utf8_lossy(&out.stdout);
         assert!(out.status.success() && !text.contains("INVARIANT"), "{p}:\n{text}{}", String::from_utf8_lossy(&out.stderr));
         assert!(text.contains(" instances, "), "{p}: {text}");
@@ -86,7 +86,7 @@ fn corpus_typed_invariants() {
 #[test]
 fn shapes_monomorphize_per_type() {
     setup();
-    let out = duck(&["typed", "examples/inventory.duck"]);
+    let out = auk(&["typed", "examples/inventory.auk"]);
     let text = String::from_utf8_lossy(&out.stdout);
     // (core's own generics instantiate too; `sort` is a runtime extern, so `filter` stands for them)
     for want in ["examples.top<Item>", "examples.report<Item>", "examples.report<Order>", "core.filter<int>"] {
@@ -97,11 +97,11 @@ fn shapes_monomorphize_per_type() {
 
 // ---- small programs ----
 
-/// A fresh directory for one test program (no quack.toml, so core only).
+/// A fresh directory for one test program (no raft.toml, so core only).
 fn scratch() -> PathBuf {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!("duck-check-{}-{n}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("auk-check-{}-{n}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
@@ -122,7 +122,7 @@ struct D {
 /// Check `src` as a standalone file; the diagnostics in order.
 fn check(src: &str) -> Vec<D> {
     let dir = scratch();
-    let path = dir.join("t.duck");
+    let path = dir.join("t.auk");
     fs::write(&path, src).unwrap();
     let ds = check_path(&path);
     let _ = fs::remove_dir_all(&dir);
@@ -130,7 +130,7 @@ fn check(src: &str) -> Vec<D> {
 }
 
 fn check_path(path: &Path) -> Vec<D> {
-    let out = duck(&["check", path.to_str().unwrap(), "--json"]);
+    let out = auk(&["check", path.to_str().unwrap(), "--json"]);
     let json = String::from_utf8(out.stdout).unwrap();
     let v = Json::parse(&json);
     let ds = v.get("diagnostics").arr();
@@ -1033,7 +1033,7 @@ fn index_non_indexable() {
 
 // ---- modules, privacy, packages ----
 
-/// A project with `quack.toml` and the given `src/` files; returns its directory.
+/// A project with `raft.toml` and the given `src/` files; returns its directory.
 fn project(files: &[(&str, &str)], deps: &[&str]) -> PathBuf {
     let dir = scratch();
     let mut toml = String::from("[package]\nname = \"app\"\nversion = \"0.1.0\"\n");
@@ -1043,7 +1043,7 @@ fn project(files: &[(&str, &str)], deps: &[&str]) -> PathBuf {
             toml += &format!("{d} = \"^0.1\"\n");
         }
     }
-    fs::write(dir.join("quack.toml"), toml).unwrap();
+    fs::write(dir.join("raft.toml"), toml).unwrap();
     for (name, src) in files {
         let p = dir.join("src").join(name);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -1058,16 +1058,16 @@ const GEO: &str = "pub struct Circle { r: float }\npub enum Kind { Big, Small }\
 fn project_modules_and_paths() {
     let main = "pub fn helper(): int = 1\nfn main() {\n  let c = geo.Circle { r: 1.0 }\n  print(geo.area(c) + c.area())\n  print(geo.shapes.sides(geo.shapes.Tri))\n  let k: geo.Kind = geo.Big\n  print(k == geo.Kind.Small)\n  match k { Big => print(\"big\"), _ => {} }\n}\n";
     let shapes = "pub enum Poly { Tri, Quad }\npub fn sides(Tri): int = 3\npub fn sides(Quad): int = 4\n";
-    let dir = project(&[("main.duck", main), ("geo.duck", GEO), ("geo/shapes.duck", shapes)], &[]);
-    let ds = check_path(&dir.join("src/main.duck"));
+    let dir = project(&[("main.auk", main), ("geo.auk", GEO), ("geo/shapes.auk", shapes)], &[]);
+    let ds = check_path(&dir.join("src/main.auk"));
     assert!(ds.is_empty(), "{ds:#?}");
 }
 
 #[test]
 fn private_function_of_other_module() {
     let main = "pub fn helper(): int = 1\nfn main() { print(geo.secret()) }\n";
-    let dir = project(&[("main.duck", main), ("geo.duck", GEO)], &[]);
-    let ds = check_path(&dir.join("src/main.duck"));
+    let dir = project(&[("main.auk", main), ("geo.auk", GEO)], &[]);
+    let ds = check_path(&dir.join("src/main.auk"));
     assert_eq!(ds.len(), 1, "{ds:#?}");
     assert_eq!((ds[0].code.as_str(), ds[0].message.as_str()), ("E0120", "`secret` is private to module `app.geo`"));
 }
@@ -1076,10 +1076,10 @@ fn private_function_of_other_module() {
 fn private_field_type_hides_field() {
     let lib = "struct Hidden { x: int }\npub struct Pt { x: int, h: Hidden }\npub fn make(): Pt = Pt { x: 1, h: Hidden { x: 2 } }\n";
     let main = "fn main() {\n  let p = lib.make()\n  print(p.x)\n  print(p.h)\n}\n";
-    let dir = project(&[("main.duck", main), ("lib2.duck", &lib.replace("lib", "lib2"))], &[]);
+    let dir = project(&[("main.auk", main), ("lib2.auk", &lib.replace("lib", "lib2"))], &[]);
     let main2 = main.replace("lib.", "lib2.");
-    fs::write(dir.join("src/main.duck"), main2).unwrap();
-    let ds = check_path(&dir.join("src/main.duck"));
+    fs::write(dir.join("src/main.auk"), main2).unwrap();
+    let ds = check_path(&dir.join("src/main.auk"));
     assert_eq!(ds.len(), 1, "{ds:#?}");
     assert_eq!((ds[0].code.as_str(), ds[0].message.as_str()), ("E0121", "the field `h` of `Pt` is private to module `app.lib2`"));
     has_note(&ds[0], "its type is private to that module");
@@ -1087,21 +1087,21 @@ fn private_field_type_hides_field() {
 
 #[test]
 fn missing_dependency() {
-    let dir = project(&[("main.duck", "fn main() {}\n")], &["json"]);
-    let ds = check_path(&dir.join("src/main.duck"));
+    let dir = project(&[("main.auk", "fn main() {}\n")], &["json"]);
+    let ds = check_path(&dir.join("src/main.auk"));
     assert_eq!(ds.len(), 1, "{ds:#?}");
     assert_eq!((ds[0].code.as_str(), ds[0].message.as_str()), ("E0100", "dependency `json` of `app` is not installed"));
-    has_note(&ds[0], "quack install");
+    has_note(&ds[0], "raft install");
 }
 
 #[test]
 fn module_colliding_with_dependency() {
-    let dir = project(&[("main.duck", "fn main() {}\n"), ("json.duck", "pub fn x() = ()\n")], &["json"]);
-    let q = dir.join(".quack/json/src");
+    let dir = project(&[("main.auk", "fn main() {}\n"), ("json.auk", "pub fn x() = ()\n")], &["json"]);
+    let q = dir.join(".raft/json/src");
     fs::create_dir_all(&q).unwrap();
-    fs::write(q.join("lib.duck"), "pub fn parse(s: str): int = 1\n").unwrap();
-    fs::write(dir.join(".quack/json/quack.toml"), "[package]\nname = \"json\"\nversion = \"0.1.0\"\n").unwrap();
-    let ds = check_path(&dir.join("src/main.duck"));
+    fs::write(q.join("lib.auk"), "pub fn parse(s: str): int = 1\n").unwrap();
+    fs::write(dir.join(".raft/json/raft.toml"), "[package]\nname = \"json\"\nversion = \"0.1.0\"\n").unwrap();
+    let ds = check_path(&dir.join("src/main.auk"));
     assert_eq!(ds.len(), 1, "{ds:#?}");
     assert_eq!((ds[0].code.as_str(), ds[0].message.as_str()), ("E0101", "module `app.json` has the same name as the dependency `json`"));
 }
@@ -1112,14 +1112,14 @@ fn dependency_paths_and_name_rule() {
     // `regex(p)` means `regex.regex(p)`; dependency variants match unqualified by type
     let dir = project(
         &[(
-            "main.duck",
+            "main.auk",
             "fn main(): ()! {\n  let r = regex(\"a+\")?\n  print(r.find(\"baa\") else \"\")\n  match regex(\"(\") {\n    err(Unclosed(at, _)) => print(at)\n    _ => print(0)\n  }\n  let v = json.parse(\"[1]\")?\n  print(json.str(v))\n}\n",
         )],
         &["regex", "json"],
     );
-    let out = Command::new(env!("CARGO_BIN_EXE_quack")).arg("install").current_dir(&dir).output().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_raft")).arg("install").current_dir(&dir).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let ds = check_path(&dir.join("src/main.duck"));
+    let ds = check_path(&dir.join("src/main.auk"));
     assert!(ds.is_empty(), "{ds:#?}");
 }
 
@@ -1136,9 +1136,9 @@ fn main_signature() {
 #[test]
 fn text_output_renders_fixes() {
     let dir = scratch();
-    let path = dir.join("t.duck");
+    let path = dir.join("t.auk");
     fs::write(&path, "fn f(xs: var [int]) {}\nfn main() {\n  var a = [1]\n  f(a)\n}\n").unwrap();
-    let out = duck(&["check", path.to_str().unwrap()]);
+    let out = auk(&["check", path.to_str().unwrap()]);
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
     assert!(err.contains("error[E0310]: parameter `xs` of `f` is `var`, so the argument needs `&`"), "{err}");

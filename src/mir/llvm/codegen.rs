@@ -5,11 +5,11 @@
 //! scalars back into registers), except aggregate parameters that the function never writes:
 //! those are used in place through the incoming pointer. Aggregates are untyped memory: an
 //! aggregate is `[size x i8]`, members are reached with byte-offset GEPs (`Layouts::offset`), and
-//! copies are `llvm.memcpy` with a constant size. LLVM never sees a struct type for a Duck value,
+//! copies are `llvm.memcpy` with a constant size. LLVM never sees a struct type for an Auk value,
 //! so the C layout is decided only in `layout.rs`.
 //!
 //! # Calling conventions
-//! - `Abi::Duck` (called only by generated code): aggregates by pointer, an aggregate result
+//! - `Abi::Auk` (called only by generated code): aggregates by pointer, an aggregate result
 //!   through a leading `noalias` result pointer. An aggregate parameter the callee never writes
 //!   or takes the address of is marked `noalias readonly` and read in place; the caller then
 //!   passes a pointer to memory nothing else can reach during the call (an unaddressed local or a
@@ -34,16 +34,16 @@ use crate::types::Ty;
 
 /// Runtime functions that never return (marked `noreturn cold`).
 const NORETURN: &[&str] = &[
-    "duck_assert_fail",
-    "duck_ensures_fail",
-    "duck_hole",
-    "duck_panic_div_zero",
-    "duck_panic_overflow",
-    "duck_panic_str",
-    "duck_proc_exit",
-    "duck_requires_fail",
-    "duck_unwrap_err",
-    "duck_unwrap_none",
+    "auk_assert_fail",
+    "auk_ensures_fail",
+    "auk_hole",
+    "auk_panic_div_zero",
+    "auk_panic_overflow",
+    "auk_panic_str",
+    "auk_proc_exit",
+    "auk_requires_fail",
+    "auk_unwrap_err",
+    "auk_unwrap_none",
 ];
 
 fn c(s: &str) -> CString {
@@ -58,7 +58,7 @@ pub struct Exports {
     pub entry: String,
     /// Also export these functions by MIR name (JIT lookups: `dk_init`).
     pub names: Vec<String>,
-    /// Export every function (`duck run --live` looks them all up by name).
+    /// Export every function (`auk run --live` looks them all up by name).
     pub all: bool,
 }
 
@@ -91,15 +91,15 @@ pub struct Gen<'p, 'a> {
     rt_funcs: HashMap<String, LLVMValueRef>,
     rt_data: HashMap<String, LLVMValueRef>,
     cstrs: HashMap<Vec<u8>, LLVMValueRef>,
-    /// `duck run --live`: calls to these functions load their target from the live table.
+    /// `auk run --live`: calls to these functions load their target from the live table.
     live: Option<(usize, HashMap<u32, usize>)>,
-    /// Which aggregate parameters each Duck function reads in place (never written).
+    /// Which aggregate parameters each Auk function reads in place (never written).
     inplace: Vec<Vec<bool>>,
     /// Compile the hot runtime calls inline (`intrin.rs`; every level but O0).
     pub inline_rt: bool,
-    /// The element size of the `duck_arr_at` call being compiled, when its caller knows it.
+    /// The element size of the `auk_arr_at` call being compiled, when its caller knows it.
     elem_hint: Option<u32>,
-    /// Debug info (`duck build -g`), and the current function's subprogram.
+    /// Debug info (`auk build -g`), and the current function's subprogram.
     debug: Option<Debug>,
     sp: Option<LLVMMetadataRef>,
     // per function
@@ -309,7 +309,7 @@ impl<'p, 'a> Gen<'p, 'a> {
 
     /// A generated function's own signature: aggregates by pointer, a leading result pointer.
     /// `inplace`: which parameters are read in place (`noalias readonly`), if known.
-    fn duck_sig(&self, params: &[MTy], ret: &MTy, inplace: Option<&[bool]>) -> Sig {
+    fn auk_sig(&self, params: &[MTy], ret: &MTy, inplace: Option<&[bool]>) -> Sig {
         let mut ps = Vec::new();
         let mut attrs = Vec::new();
         let rt = if self.lay.is_agg(ret) {
@@ -339,7 +339,7 @@ impl<'p, 'a> Gen<'p, 'a> {
         let f = &self.prog.funcs[fi];
         let ps = Self::params_of(f);
         match f.abi {
-            Abi::Duck => (self.duck_sig(&ps, &f.ret, Some(&self.inplace[fi])), vec![], CPass::None),
+            Abi::Auk => (self.auk_sig(&ps, &f.ret, Some(&self.inplace[fi])), vec![], CPass::None),
             Abi::C => self.c_sig(&ps, &f.ret),
         }
     }
@@ -355,7 +355,7 @@ impl<'p, 'a> Gen<'p, 'a> {
             let mut set = vec![false; f.vars.len()];
             let mut addr = vec![false; f.vars.len()];
             writes(&f.body, &mut set, &mut addr);
-            let ip = f.params.iter().map(|&v| f.abi == Abi::Duck && self.lay.is_agg(&f.vars[v as usize]) && !set[v as usize] && !addr[v as usize]).collect();
+            let ip = f.params.iter().map(|&v| f.abi == Abi::Auk && self.lay.is_agg(&f.vars[v as usize]) && !set[v as usize] && !addr[v as usize]).collect();
             self.inplace.push(ip);
         }
         let fattrs = [self.enum_attr("nounwind"), unsafe { LLVMCreateStringAttribute(self.cx, c"frame-pointer".as_ptr(), 13, c"all".as_ptr(), 3) }];
@@ -490,7 +490,7 @@ impl<'p, 'a> Gen<'p, 'a> {
             let mut k = 0;
             let param = |k: u32| LLVMGetParam(fv, k);
             match f.abi {
-                Abi::Duck => {
+                Abi::Auk => {
                     if self.lay.is_agg(&f.ret) {
                         self.sret = Some(param(0));
                         k = 1;
@@ -679,7 +679,7 @@ impl<'p, 'a> Gen<'p, 'a> {
         b
     }
 
-    /// An i1 from a Duck bool (i8).
+    /// An i1 from an Auk bool (i8).
     fn truth(&self, v: LLVMValueRef) -> LLVMValueRef {
         unsafe {
             if LLVMTypeOf(v) == self.t_i1 {
@@ -968,9 +968,9 @@ impl<'p, 'a> Gen<'p, 'a> {
             K::Var(v) => self.vars[*v as usize],
             K::Global(g) => self.globals[*g as usize],
             K::Deref(p) => {
-                // `*(T *)duck_arr_at(xs, i, loc)`: the element size is T's
+                // `*(T *)auk_arr_at(xs, i, loc)`: the element size is T's
                 let inner = if let K::Cast(x) = &p.k { &**x } else { &**p };
-                if matches!(&inner.k, K::Call(Callee::Rt(s), _) if s == "duck_arr_at") {
+                if matches!(&inner.k, K::Call(Callee::Rt(s), _) if s == "auk_arr_at") {
                     self.elem_hint = Some(self.lay.lay(&e.ty).size);
                 }
                 let v = self.val(p);
@@ -1259,11 +1259,11 @@ impl<'p, 'a> Gen<'p, 'a> {
                     None => fv,
                 };
                 match func.abi {
-                    Abi::Duck => {
+                    Abi::Auk => {
                         let inplace = self.inplace[*f as usize].clone();
-                        let (mut vals, out) = self.duck_args(&ps, args, &func.ret, &inplace);
+                        let (mut vals, out) = self.auk_args(&ps, args, &func.ret, &inplace);
                         let call = self.build_call(&sig, target, &mut vals);
-                        self.duck_result(call, out, &func.ret)
+                        self.auk_result(call, out, &func.ret)
                     }
                     Abi::C => {
                         let (_, pp, rp) = self.c_sig(&ps, &func.ret);
@@ -1275,11 +1275,11 @@ impl<'p, 'a> Gen<'p, 'a> {
             }
             Callee::Indirect(code, ps) => {
                 let cv = self.val(code);
-                let sig = self.duck_sig(ps, ret, None);
+                let sig = self.auk_sig(ps, ret, None);
                 let none = vec![false; ps.len()];
-                let (mut vals, out) = self.duck_args(ps, args, ret, &none);
+                let (mut vals, out) = self.auk_args(ps, args, ret, &none);
                 let call = self.build_call(&sig, cv, &mut vals);
-                self.duck_result(call, out, ret)
+                self.auk_result(call, out, ret)
             }
             Callee::Rt(sym) => {
                 if let Some(v) = self.rt_inline(sym, args, ret) {
@@ -1318,7 +1318,7 @@ impl<'p, 'a> Gen<'p, 'a> {
 
     /// Arguments in the generated-function convention (and the result slot, if any). An
     /// in-place parameter gets memory nothing else can reach during the call.
-    fn duck_args(&mut self, ps: &[MTy], args: &[Ex], ret: &MTy, inplace: &[bool]) -> (Vec<LLVMValueRef>, Option<LLVMValueRef>) {
+    fn auk_args(&mut self, ps: &[MTy], args: &[Ex], ret: &MTy, inplace: &[bool]) -> (Vec<LLVMValueRef>, Option<LLVMValueRef>) {
         let mut vals = Vec::new();
         let out = if self.lay.is_agg(ret) {
             let a = self.temp(ret);
@@ -1358,7 +1358,7 @@ impl<'p, 'a> Gen<'p, 'a> {
         matches!(b.k, K::Var(v) if !self.addressed[v as usize])
     }
 
-    fn duck_result(&mut self, call: LLVMValueRef, out: Option<LLVMValueRef>, ret: &MTy) -> V {
+    fn auk_result(&mut self, call: LLVMValueRef, out: Option<LLVMValueRef>, ret: &MTy) -> V {
         if let Some(a) = out {
             return V::M(a);
         }

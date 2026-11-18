@@ -14,11 +14,11 @@ messages from untrusted users. For trusted input that should keep its HTML, pass
 
 **Effects:** none. **Deps:** none.
 
-```duck
+```auk
 fn main(): int {
-  print(markdown.html("# Duck\n\nA *small* language. See [the docs](https://duck.dev).\n\n- [x] fast\n- [ ] done"))
-  // <h1>Duck</h1>
-  // <p>A <em>small</em> language. See <a href="https://duck.dev">the docs</a>.</p>
+  print(markdown.html("# Auk\n\nA *small* language. See [the docs](https://auk.dev).\n\n- [x] fast\n- [ ] done"))
+  // <h1>Auk</h1>
+  // <p>A <em>small</em> language. See <a href="https://auk.dev">the docs</a>.</p>
   // <ul>
   // <li><input checked="" disabled="" type="checkbox" /> fast</li>
   // <li><input disabled="" type="checkbox" /> done</li>

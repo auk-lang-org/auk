@@ -1,19 +1,19 @@
 //! Patterns (exhaustiveness, reachability: E0400–E0403) and effects (E0410–E0415) through
-//! `duck check`: exact codes, messages, spans, notes and fix-its.
+//! `auk check`: exact codes, messages, spans, notes and fix-its.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-fn duck(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_duck")).args(args).output().unwrap()
+fn auk(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_auk")).args(args).output().unwrap()
 }
 
 fn scratch() -> PathBuf {
     static N: AtomicUsize = AtomicUsize::new(0);
     let n = N.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!("duck-check2-{}-{n}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("auk-check2-{}-{n}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
@@ -34,7 +34,7 @@ struct D {
 
 /// `check --json` on a file: the diagnostics, and whether the exit code was 0.
 fn check_path(path: &Path) -> (Vec<D>, bool) {
-    let out = duck(&["check", path.to_str().unwrap(), "--json"]);
+    let out = auk(&["check", path.to_str().unwrap(), "--json"]);
     let json = String::from_utf8(out.stdout).unwrap();
     let v = Json::parse(&json);
     let ds: Vec<D> = v
@@ -66,7 +66,7 @@ fn check_path(path: &Path) -> (Vec<D>, bool) {
 
 fn check(src: &str) -> Vec<D> {
     let dir = scratch();
-    let path = dir.join("t.duck");
+    let path = dir.join("t.auk");
     fs::write(&path, src).unwrap();
     let (ds, _) = check_path(&path);
     let _ = fs::remove_dir_all(&dir);
@@ -470,7 +470,7 @@ fn missing_effect_through_a_generic_instance() {
 #[test]
 fn unused_effect_is_a_warning() {
     let dir = scratch();
-    let path = dir.join("t.duck");
+    let path = dir.join("t.auk");
     fs::write(&path, "fn f(): int uses fs, net = 1\nfn main() uses fs, net { print(f()) }\n").unwrap();
     let (ds, ok) = check_path(&path);
     assert!(ok, "warnings must not fail the check");
@@ -479,10 +479,10 @@ fn unused_effect_is_a_warning() {
     assert_eq!((d.code.as_str(), d.severity.as_str()), ("E0411", "warning"));
     assert_eq!(d.message, "`f` declares the effects `fs`, `net` but doesn't use them");
     fix(d, (1, 12, 1, 25), "");
-    let out = duck(&["check", path.to_str().unwrap()]);
+    let out = auk(&["check", path.to_str().unwrap()]);
     assert!(out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("t.duck:1:18: warning[E0411]: `f` declares the effects `fs`, `net` but doesn't use them"), "{err}");
+    assert!(err.contains("t.auk:1:18: warning[E0411]: `f` declares the effects `fs`, `net` but doesn't use them"), "{err}");
     // removing one of several keeps the rest
     fs::write(&path, "fn f(): int uses fs, net = (fs.read(\"a\") else \"\").len()\nfn main() uses fs, net { print(f()) }\n").unwrap();
     let (ds, ok) = check_path(&path);
@@ -522,25 +522,25 @@ fn unknown_effect_name() {
 
 fn project(toml_effects: &str, main: &str) -> PathBuf {
     let dir = scratch();
-    fs::write(dir.join("quack.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\neffects = {toml_effects}\n")).unwrap();
+    fs::write(dir.join("raft.toml"), format!("[package]\nname = \"app\"\nversion = \"0.1.0\"\neffects = {toml_effects}\n")).unwrap();
     fs::create_dir_all(dir.join("src")).unwrap();
-    fs::write(dir.join("src/main.duck"), main).unwrap();
+    fs::write(dir.join("src/main.auk"), main).unwrap();
     dir
 }
 
 #[test]
 fn package_ceiling() {
     let dir = project("[\"net\"]", "fn load(p: str): str! uses fs, net {\n  var c = net.tcp(\"a\", 1)?\n  c.close()\n  fs.read(p)\n}\nfn main(): ()! uses net {\n  var c = net.tcp(\"b\", 2)?\n  c.close()\n}\n");
-    let (ds, ok) = check_path(&dir.join("src/main.duck"));
+    let (ds, ok) = check_path(&dir.join("src/main.auk"));
     assert!(!ok);
     assert_eq!(ds.len(), 1, "{ds:#?}");
     let d = &ds[0];
     assert_eq!((d.code.as_str(), d.message.as_str()), ("E0413", "`load` uses `fs`, but the package `app` allows only `net`"));
     at(d, 1, 28);
     has_note(d, "help: add \"fs\" to `effects` under [package] in");
-    has_note(d, "quack.toml");
+    has_note(d, "raft.toml");
     let dir = project("[]", "fn main() uses time { time.sleep(1) }\n");
-    let (ds, _) = check_path(&dir.join("src/main.duck"));
+    let (ds, _) = check_path(&dir.join("src/main.auk"));
     assert_eq!(ds.len(), 1, "{ds:#?}");
     assert_eq!(ds[0].message, "`main` uses `time`, but the package `app` allows no effects");
     // a standalone file has no ceiling
@@ -550,16 +550,16 @@ fn package_ceiling() {
 #[test]
 fn dependency_checked_against_its_own_manifest() {
     let dir = project("[\"fs\"]", "fn main() uses fs { print(dep.load()) }\n");
-    fs::write(dir.join("quack.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\neffects = [\"fs\"]\n\n[deps]\ndep = \"^0.1\"\n").unwrap();
-    let q = dir.join(".quack/dep");
+    fs::write(dir.join("raft.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\neffects = [\"fs\"]\n\n[deps]\ndep = \"^0.1\"\n").unwrap();
+    let q = dir.join(".raft/dep");
     fs::create_dir_all(q.join("src")).unwrap();
-    fs::write(q.join("quack.toml"), "[package]\nname = \"dep\"\nversion = \"0.1.0\"\neffects = []\n").unwrap();
-    fs::write(q.join("src/lib.duck"), "pub fn load(): str uses fs = fs.read(\"x\") else \"\"\n").unwrap();
-    let (ds, ok) = check_path(&dir.join("src/main.duck"));
+    fs::write(q.join("raft.toml"), "[package]\nname = \"dep\"\nversion = \"0.1.0\"\neffects = []\n").unwrap();
+    fs::write(q.join("src/lib.auk"), "pub fn load(): str uses fs = fs.read(\"x\") else \"\"\n").unwrap();
+    let (ds, ok) = check_path(&dir.join("src/main.auk"));
     assert!(!ok);
     assert_eq!(ds.len(), 1, "{ds:#?}");
     assert_eq!((ds[0].code.as_str(), ds[0].message.as_str()), ("E0413", "`load` uses `fs`, but the package `dep` allows no effects"));
-    assert!(ds[0].file.as_deref().is_some_and(|f| f.ends_with(".quack/dep/src/lib.duck")), "{:?}", ds[0].file);
+    assert!(ds[0].file.as_deref().is_some_and(|f| f.ends_with(".raft/dep/src/lib.auk")), "{:?}", ds[0].file);
 }
 
 // ---- a minimal JSON reader for the `check --json` report ----

@@ -1,4 +1,4 @@
-//! Effects checking (spec "Effects", quack.md "Effects at the package boundary").
+//! Effects checking (spec "Effects", raft.md "Effects at the package boundary").
 //!
 //! A function's effects are its declared `uses` (prelude externs declare theirs). Every call's
 //! callee effects must be among the caller's declared effects:
@@ -12,7 +12,7 @@
 //!   instance is called (with the call chain in a note).
 //!
 //! Also: declared but unused effects (E0411, a warning), impure `let`/`imprint` initializers
-//! (E0412), the package ceiling `[package] effects` of quack.toml (E0413, each package against
+//! (E0412), the package ceiling `[package] effects` of raft.toml (E0413, each package against
 //! its own manifest) and unknown effect names (E0414). Tests may use any effect; `print` and
 //! `peek` need none.
 
@@ -160,7 +160,7 @@ impl<'a> Cx<'a> {
         match b {
             BodyRef::Fn(f) => {
                 let info = &tp.fns[f];
-                let FnKind::Duck { item, clauses, header } = &info.kind else { return out };
+                let FnKind::Auk { item, clauses, header } = &info.kind else { return out };
                 let Item::Fn(g) = &tp.program.mods[info.module].ast.items[*item] else { return out };
                 let hdr = if *header { g.header.as_deref() } else { None };
                 for c in hdr.into_iter().chain(clauses.iter().map(|&i| &g.clauses[i])) {
@@ -275,7 +275,7 @@ impl<'a> Cx<'a> {
                 continue;
             }
             match b {
-                BodyRef::Fn(f) if matches!(self.tp.fns[f].kind, FnKind::Duck { .. }) => self.check_fn(f),
+                BodyRef::Fn(f) if matches!(self.tp.fns[f].kind, FnKind::Auk { .. }) => self.check_fn(f),
                 BodyRef::Const(c) => self.check_const(c),
                 _ => {}
             }
@@ -347,11 +347,11 @@ impl<'a> Cx<'a> {
                 } else {
                     format!("allows only {}", pkg.effects.iter().map(|e| format!("`{e}`")).collect::<Vec<_>>().join(", "))
                 };
-                let toml = pkg.dir.as_ref().map(|d| d.join("quack.toml").display().to_string()).unwrap_or_else(|| "quack.toml".into());
+                let toml = pkg.dir.as_ref().map(|d| d.join("raft.toml").display().to_string()).unwrap_or_else(|| "raft.toml".into());
                 self.emit(
                     m,
                     Diag::new("E0413", u.span, format!("`{}` uses `{}`, but the package `{}` {allowed}", info.name, u.name, pkg.name))
-                        .note("a package's quack.toml `[package] effects` is the most its code may use")
+                        .note("a package's raft.toml `[package] effects` is the most its code may use")
                         .note(format!("help: add \"{}\" to `effects` under [package] in {toml}", u.name)),
                 );
             }
@@ -385,7 +385,7 @@ impl<'a> Cx<'a> {
     /// The clause that carries a function's `uses` (its header line, or its first clause).
     fn first_clause(&self, info: &crate::typed::FnInfo) -> Option<&'a FnClause> {
         let tp = self.tp;
-        let FnKind::Duck { item, clauses, header } = &info.kind else { return None };
+        let FnKind::Auk { item, clauses, header } = &info.kind else { return None };
         let Item::Fn(g) = &tp.program.mods[info.module].ast.items[*item] else { return None };
         if *header { g.header.as_deref() } else { clauses.first().map(|&i| &g.clauses[i]) }
     }
@@ -466,7 +466,7 @@ impl<'a> Cx<'a> {
         } else {
             format!("`{name}` declares the effects {list} but doesn't use them")
         };
-        let mut d = Diag::new("E0411", unused[0].span, msg).note("declare only the effects a function needs, so callers and quack.toml stay accurate");
+        let mut d = Diag::new("E0411", unused[0].span, msg).note("declare only the effects a function needs, so callers and raft.toml stay accurate");
         // the E0410 above carries the one combined fix
         if missing.is_empty()
             && let Some(c) = first

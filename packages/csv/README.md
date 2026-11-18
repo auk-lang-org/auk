@@ -4,7 +4,7 @@ Reads and writes RFC 4180 CSV. It handles quoted fields, doubled quotes (`""`), 
 
 **Effects:** none.
 
-```duck
+```auk
 struct Item { name: str, qty: int, price: float }
 
 let rows = csv.parse("a,\"b,c\"\r\n1,\"say \"\"hi\"\"\"\r\n")?   // [["a", "b,c"], ["1", "say \"hi\""]]

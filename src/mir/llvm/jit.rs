@@ -1,6 +1,6 @@
 //! ORC LLJIT: one JIT instance per compiled program, with the runtime linked into this process
 //! as absolute symbols. ORC only links: the program arrives as an object file compiled by our own
-//! target machine (the same code generation as `duck build`), so nothing compiles lazily and no
+//! target machine (the same code generation as `auk build`), so nothing compiles lazily and no
 //! LLVM thread exists when `run`/`test` fork.
 
 use std::ffi::{CStr, CString};
@@ -60,7 +60,7 @@ impl Code {
             let mut g = std::ptr::null_mut();
             check(LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess(&mut g, LLVMOrcLLJITGetGlobalPrefix(j), None, std::ptr::null_mut()))?;
             LLVMOrcJITDylibAddGenerator(jd, g);
-            let buf = LLVMCreateMemoryBufferWithMemoryRangeCopy(obj.as_ptr().cast(), obj.len(), c"duck".as_ptr());
+            let buf = LLVMCreateMemoryBufferWithMemoryRangeCopy(obj.as_ptr().cast(), obj.len(), c"auk".as_ptr());
             check(LLVMOrcLLJITAddObjectFile(j, jd, buf))?;
             Ok(code)
         }

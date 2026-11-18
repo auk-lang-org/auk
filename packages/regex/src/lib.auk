@@ -1,0 +1,637 @@
+/// A backtracking regular-expression engine. Patterns are compiled to an AST
+/// once by `regex(p)`, then matched with an explicit backtracking stack, so
+/// long inputs never grow the call stack. All positions are char indexes.
+
+// ---- public types ----
+
+/// A compiled pattern. Build one with `regex(p)`.
+pub struct Regex { src: str, root: Node, ngroups: int }
+
+/// Why a pattern failed to compile. `at` is the 0-based char index in the pattern.
+pub enum RegexErr {
+  Unexpected(at: int, c: char),   // a stray `)`
+  Unclosed(at: int, open: char),  // `(` or `[` with no closing bracket
+  NothingToRepeat(at: int),       // a quantifier with nothing before it
+  BadRepeat(at: int),             // a malformed `{n,m}`, or m < n
+  BadRange(at: int),              // `[z-a]`, or a class escape used as a range end
+  BadEscape(at: int, c: char),    // `\q`
+  TrailingBackslash(at: int),     // the pattern ends in `\`
+  BadGroup(at: int),              // `(?` not followed by `:`
+}
+
+// ---- AST ----
+
+enum Kind { Digit, Word, Space }
+enum Item { Span(lo: char, hi: char), Cls(k: Kind, neg: bool) }
+enum CharSet { Lit(c: char), Dot, Class(items: [Item], neg: bool) }
+
+enum Node {
+  Empty,
+  One(set: CharSet),
+  Start,
+  End,
+  Cat(xs: [Node]),
+  Alt(a: Node, b: Node),
+  Group(n: int, body: Node),
+  Rep(body: Node, lo: int, hi: int?, lazy: bool),
+}
+
+// ---- compiling ----
+
+/// Compile `p`. Supports literals, `.`, `[a-z]`, `[^...]`, `\d \w \s \D \W \S`,
+/// escaped metacharacters, `^ $`, `( )`, `(?: )`, `|`, `* + ? {n} {n,} {n,m}`
+/// and lazy `*? +? ??`.
+pub fn regex(p: str): Regex!RegexErr {
+  var ps = P { cs: p.chars(), i: 0, groups: 0 }
+  let root = ps.parse_alt()?
+  if ps.more() { fail(Unexpected(ps.i, ps.cs[ps.i])) }
+  Regex { src: p, root, ngroups: ps.groups }
+}
+
+/// The pattern text a regex was compiled from.
+pub fn source(r: Regex): str = r.src
+
+/// The number of capturing groups (not counting group 0).
+pub fn group_count(r: Regex): int = r.ngroups
+
+/// Backslash-escape every metacharacter in `s`, so `regex(escape(s))` matches `s` literally.
+pub fn escape(s: str): str {
+  var out: [char] = []
+  for c in s.chars() {
+    if is_meta(c) { out.push('\\') }
+    out.push(c)
+  }
+  str(out)
+}
+
+/// The char index in the pattern where compilation failed.
+pub fn pos(e: RegexErr): int
+fn pos(Unexpected(at, _)): int = at
+fn pos(Unclosed(at, _)): int = at
+fn pos(NothingToRepeat(at)): int = at
+fn pos(BadRepeat(at)): int = at
+fn pos(BadRange(at)): int = at
+fn pos(BadEscape(at, _)): int = at
+fn pos(TrailingBackslash(at)): int = at
+fn pos(BadGroup(at)): int = at
+
+/// A one-line, human-readable description of a compile error.
+pub fn message(e: RegexErr): str
+fn message(Unexpected(at, c)): str = "regex: unexpected '{c}' at {at}"
+fn message(Unclosed(at, c)): str = "regex: '{c}' at {at} is never closed"
+fn message(NothingToRepeat(at)): str = "regex: quantifier at {at} has nothing to repeat"
+fn message(BadRepeat(at)): str = "regex: bad repeat count at {at}"
+fn message(BadRange(at)): str = "regex: bad class range at {at}"
+fn message(BadEscape(at, c)): str = "regex: unknown escape '\\{c}' at {at}"
+fn message(TrailingBackslash(at)): str = "regex: pattern ends with '\\' at {at}"
+fn message(BadGroup(at)): str = "regex: unsupported group syntax at {at} (only '(?:' is allowed)"
+
+// Parser state: the pattern's chars, the cursor, and the capture groups seen so far.
+struct P { cs: [char], i: int, groups: int }
+struct Bounds { lo: int, hi: int? }
+
+fn more(p: P): bool = p.i < p.cs.len()
+fn sees(p: P, c: char): bool = p.more() && p.cs[p.i] == c
+fn sees2(p: P, a: char, b: char): bool = p.sees(a) && p.i + 1 < p.cs.len() && p.cs[p.i + 1] == b
+
+fn is_quant(c: char): bool = c == '*' || c == '+' || c == '?' || c == '{'
+fn is_meta(c: char): bool = r".\^$|?*+()[]{}".contains(c)
+
+// alt := cat ('|' cat)*
+fn parse_alt(p: var P): Node!RegexErr {
+  var alts = [p.parse_cat()?]
+  while p.sees('|') {
+    p.i += 1
+    alts.push(p.parse_cat()?)
+  }
+  alt_of(alts)
+}
+
+// Fold right, so `a|b|c` is Alt(a, Alt(b, c)) and alternatives are tried left to right.
+fn alt_of([x]: [Node]): Node = x
+fn alt_of([x, ..t]: [Node]): Node = Alt(x, alt_of(t))
+fn alt_of([]): Node = Empty
+
+// cat := (atom quant?)*
+fn parse_cat(p: var P): Node!RegexErr {
+  var xs: [Node] = []
+  while p.more() && !p.sees('|') && !p.sees(')') {
+    let a = p.parse_atom()?
+    xs.push(p.parse_quant(a)?)
+  }
+  cat_of(xs)
+}
+
+fn cat_of([]): Node = Empty
+fn cat_of([x]: [Node]): Node = x
+fn cat_of(xs: [Node]): Node = Cat(xs)
+
+fn parse_atom(p: var P): Node!RegexErr {
+  let at = p.i
+  p.i += 1
+  atom(p.cs[at], at, &p)
+}
+
+// `at` is the index of `c`; the cursor is already past it.
+fn atom('.', _: int, _: var P): Node!RegexErr = One(Dot)
+fn atom('^', _: int, _: var P): Node!RegexErr = Start
+fn atom('$', _: int, _: var P): Node!RegexErr = End
+fn atom('(', at: int, p: var P): Node!RegexErr = p.parse_group(at)
+fn atom('[', at: int, p: var P): Node!RegexErr = p.parse_class(at)
+fn atom('\\', at: int, p: var P): Node!RegexErr = match p.read_escape(at)? {
+  Span(c, _) => One(Lit(c))
+  item => One(Class([item], false))
+}
+fn atom(c: char, at: int, _: var P): Node!RegexErr when is_quant(c) = fail(NothingToRepeat(at))
+fn atom(c: char, _: int, _: var P): Node!RegexErr = One(Lit(c))
+
+// After `(`; `at` is the index of the `(`.
+fn parse_group(p: var P, at: int): Node!RegexErr {
+  var n = 0
+  if p.sees2('?', ':') {
+    p.i += 2
+  } else if p.sees('?') {
+    fail(BadGroup(p.i))
+  } else {
+    p.groups += 1
+    n = p.groups
+  }
+  let body = p.parse_alt()?
+  if !p.sees(')') { fail(Unclosed(at, '(')) }
+  p.i += 1
+  if n == 0 { body } else { Group(n, body) }
+}
+
+// After `[`; `at` is the index of the `[`. A `]` first in the class is a literal.
+fn parse_class(p: var P, at: int): Node!RegexErr {
+  let neg = p.sees('^')
+  if neg { p.i += 1 }
+  var items: [Item] = []
+  var first = true
+  loop {
+    if !p.more() { fail(Unclosed(at, '[')) }
+    if p.sees(']') && !first {
+      p.i += 1
+      break
+    }
+    first = false
+    let start = p.i
+    let lo = p.class_item()?
+    if p.sees('-') && p.i + 1 < p.cs.len() && p.cs[p.i + 1] != ']' {
+      p.i += 1
+      let hi = p.class_item()?
+      match (lo, hi) {
+        (Span(a, _), Span(b, _)) when a <= b => items.push(Span(a, b))
+        _ => fail(BadRange(start))
+      }
+    } else {
+      items.push(lo)
+    }
+  }
+  One(Class(items, neg))
+}
+
+fn class_item(p: var P): Item!RegexErr {
+  let at = p.i
+  let c = p.cs[at]
+  p.i += 1
+  if c == '\\' { p.read_escape(at) } else { Span(c, c) }
+}
+
+// After `\`; `at` is the index of the backslash.
+fn read_escape(p: var P, at: int): Item!RegexErr {
+  if !p.more() { fail(TrailingBackslash(at)) }
+  let c = p.cs[p.i]
+  p.i += 1
+  esc_item(c, at)
+}
+
+fn esc_item('d', _: int): Item!RegexErr = Cls(Digit, false)
+fn esc_item('D', _: int): Item!RegexErr = Cls(Digit, true)
+fn esc_item('w', _: int): Item!RegexErr = Cls(Word, false)
+fn esc_item('W', _: int): Item!RegexErr = Cls(Word, true)
+fn esc_item('s', _: int): Item!RegexErr = Cls(Space, false)
+fn esc_item('S', _: int): Item!RegexErr = Cls(Space, true)
+fn esc_item('n', _: int): Item!RegexErr = Span('\n', '\n')
+fn esc_item('t', _: int): Item!RegexErr = Span('\t', '\t')
+fn esc_item('r', _: int): Item!RegexErr = Span('\r', '\r')
+fn esc_item(c: char, _: int): Item!RegexErr when is_meta(c) || c == '-' || c == '/' = Span(c, c)
+fn esc_item(c: char, at: int): Item!RegexErr = fail(BadEscape(at, c))
+
+fn parse_quant(p: var P, a: Node): Node!RegexErr {
+  if !p.more() || !is_quant(p.cs[p.i]) { return a }
+  let at = p.i
+  p.i += 1
+  let b = p.bounds(p.cs[at], at)?
+  let lazy = p.sees('?')
+  if lazy { p.i += 1 }
+  Rep(a, b.lo, b.hi, lazy)
+}
+
+// The cursor is past the quantifier char `q`, which sits at `at`.
+fn bounds(_: var P, '*', _: int): Bounds!RegexErr = Bounds { lo: 0, hi: none }
+fn bounds(_: var P, '+', _: int): Bounds!RegexErr = Bounds { lo: 1, hi: none }
+fn bounds(_: var P, '?', _: int): Bounds!RegexErr = Bounds { lo: 0, hi: 1 }
+fn bounds(p: var P, _: char, at: int): Bounds!RegexErr {  // `{n}`, `{n,}`, `{n,m}`
+  let lo = p.number() else fail(BadRepeat(at))
+  var hi: int? = lo
+  if p.sees(',') {
+    p.i += 1
+    hi = p.number()
+  }
+  if !p.sees('}') { fail(BadRepeat(at)) }
+  p.i += 1
+  match hi {
+    some(h) when h < lo => fail(BadRepeat(at))
+    _ => Bounds { lo, hi }
+  }
+}
+
+// A run of decimal digits at the cursor, or none if there are none.
+fn number(p: var P): int? {
+  let start = p.i
+  while p.more() && p.cs[p.i].is_digit() { p.i += 1 }
+  if p.i == start { return none }
+  let n = int.parse(str(p.cs[start..p.i])) else return none
+  n
+}
+
+// ---- matching ----
+
+// A continuation: work still to do on the current path.
+enum K { Do(n: Node), Close(g: int, start: int), Moved(start: int) }
+
+// One path through the pattern. `k` is a stack (top = last) of what is left to
+// match; `caps` holds a start/end pair per group, -1 when unset.
+struct Th { k: [K], i: int, caps: [int] }
+
+fn unset(ngroups: int): [int] {
+  var caps: [int] = []
+  for _ in 0..=ngroups {
+    caps.push(-1)
+    caps.push(-1)
+  }
+  caps
+}
+
+// Match `r` anchored at `start`. Returns the capture spans, group 0 first.
+fn exec(r: Regex, s: [char], start: int): [int]? {
+  var stack = [Th { k: [Do(r.root)], i: start, caps: unset(r.ngroups) }]
+  while stack.len() > 0 {
+    var t = stack.pop()!
+    let ok = loop {
+      let job = t.k.pop() else break true
+      if !step(job, &t, s, &stack) { break false }
+    }
+    if ok {
+      t.caps[0] = start
+      t.caps[1] = t.i
+      return t.caps
+    }
+  }
+  none
+}
+
+/// Run one continuation on `t`. Choice points push the not-taken branch onto
+/// `stack`; returns false when this path fails.
+fn step(job: K, t: var Th, s: [char], stack: var [Th]): bool
+fn step(Do(Empty), _: var Th, _: [char], _: var [Th]): bool = true
+fn step(Do(One(set)), t: var Th, s: [char], _: var [Th]): bool {
+  if t.i >= s.len() || !set.has(s[t.i]) { return false }
+  t.i += 1
+  true
+}
+fn step(Do(Start), t: var Th, _: [char], _: var [Th]): bool = t.i == 0
+fn step(Do(End), t: var Th, s: [char], _: var [Th]): bool = t.i == s.len()
+fn step(Do(Cat(xs)), t: var Th, _: [char], _: var [Th]): bool {
+  for j in 0..xs.len() { t.k.push(Do(xs[xs.len() - 1 - j])) }
+  true
+}
+fn step(Do(Alt(a, b)), t: var Th, _: [char], stack: var [Th]): bool {
+  var other = t
+  other.k.push(Do(b))
+  stack.push(other)
+  t.k.push(Do(a))
+  true
+}
+fn step(Do(Group(n, body)), t: var Th, _: [char], _: var [Th]): bool {
+  t.k.push(Close(n, t.i))
+  t.k.push(Do(body))
+  true
+}
+fn step(Do(Rep(a, lo, hi, lazy)), t: var Th, _: [char], _: var [Th]): bool when lo > 0 {
+  t.k.push(Do(Rep(a, lo - 1, dec(hi), lazy)))
+  t.k.push(Do(a))
+  true
+}
+fn step(Do(Rep(_, _, some(0), _)), _: var Th, _: [char], _: var [Th]): bool = true
+fn step(Do(Rep(a, _, hi, lazy)), t: var Th, _: [char], stack: var [Th]): bool {
+  // One more optional iteration; Moved stops an iteration that consumed nothing,
+  // so `(a*)*` cannot loop forever.
+  var again = t
+  again.k.push(Do(Rep(a, 0, dec(hi), lazy)))
+  again.k.push(Moved(t.i))
+  again.k.push(Do(a))
+  if lazy {
+    stack.push(again)
+  } else {
+    stack.push(t)
+    t = again
+  }
+  true
+}
+fn step(Close(g, start), t: var Th, _: [char], _: var [Th]): bool {
+  t.caps[2 * g] = start
+  t.caps[2 * g + 1] = t.i
+  true
+}
+fn step(Moved(start), t: var Th, _: [char], _: var [Th]): bool = t.i > start
+
+fn dec(hi: int?): int?
+fn dec(some(n)): int? = n - 1
+fn dec(none): int? = none
+
+fn has(Lit(c), x: char): bool = x == c
+fn has(Dot, x: char): bool = x != '\n'
+fn has(Class(items, neg), x: char): bool = items.any(it => it.covers(x)) != neg
+
+fn covers(Span(lo, hi), x: char): bool = x >= lo && x <= hi
+fn covers(Cls(k, neg), x: char): bool = kind_has(k, x) != neg
+
+fn kind_has(Digit, c: char): bool = c >= '0' && c <= '9'
+fn kind_has(Word, c: char): bool =
+  (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+fn kind_has(Space, c: char): bool = " \t\n\r".contains(c)
+
+// Leftmost match starting at or after `at`.
+fn search(r: Regex, cs: [char], at: int): [int]? {
+  for st in at..=cs.len() {
+    let m = exec(r, cs, st) else continue
+    return m
+  }
+  none
+}
+
+// Every non-overlapping match, left to right. After an empty match the scan
+// moves on one char so it always makes progress.
+fn spans(r: Regex, cs: [char]): [[int]] {
+  var out: [[int]] = []
+  var at = 0
+  while at <= cs.len() {
+    let m = search(r, cs, at) else break
+    out.push(m)
+    at = if m[1] > m[0] { m[1] } else { m[1] + 1 }
+  }
+  out
+}
+
+fn sub(cs: [char], a: int, b: int): str = str(cs[a..b])
+
+fn group(m: [int], cs: [char], g: int): str? {
+  if g < 0 || 2 * g + 1 >= m.len() || m[2 * g] < 0 { return none }
+  sub(cs, m[2 * g], m[2 * g + 1])
+}
+
+// ---- public matching API ----
+
+/// The leftmost match in `s`, or none.
+pub fn find(r: Regex, s: str): str? {
+  let cs = s.chars()
+  let m = search(r, cs, 0) else return none
+  sub(cs, m[0], m[1])
+}
+
+/// Every non-overlapping match in `s`, left to right.
+pub fn find_all(r: Regex, s: str): [str] {
+  let cs = s.chars()
+  spans(r, cs).map(m => sub(cs, m[0], m[1]))
+}
+
+/// True if `r` matches anywhere in `s`.
+pub fn is_match(r: Regex, s: str): bool = search(r, s.chars(), 0) is some(_)
+
+/// The groups of the leftmost match: index 0 is the whole match, then one entry
+/// per `( )` group (none if that group took no part). None if nothing matches.
+pub fn captures(r: Regex, s: str): [str?]? {
+  let cs = s.chars()
+  let m = search(r, cs, 0) else return none
+  var out: [str?] = []
+  for g in 0..=r.ngroups { out.push(group(m, cs, g)) }
+  out
+}
+
+/// Replace every match with `with`, where `$0`..`$99` insert a group (empty if
+/// unset or out of range) and `$$` inserts a `$`.
+pub fn replace(r: Regex, s: str, with: str): str {
+  let cs = s.chars()
+  let tpl = with.chars()
+  var out: [char] = []
+  var last = 0
+  for m in spans(r, cs) {
+    out += cs[last..m[0]]
+    out += expand(tpl, m, cs)
+    last = m[1]
+  }
+  out += cs.skip(last)
+  str(out)
+}
+
+fn expand(tpl: [char], m: [int], cs: [char]): [char] {
+  var out: [char] = []
+  var i = 0
+  while i < tpl.len() {
+    let c = tpl[i]
+    i += 1
+    if c != '$' || i >= tpl.len() {
+      out.push(c)
+      continue
+    }
+    if tpl[i] == '$' {
+      out.push('$')
+      i += 1
+      continue
+    }
+    let start = i
+    while i < tpl.len() && tpl[i].is_digit() && i - start < 2 { i += 1 }
+    if i == start {
+      out.push('$')
+      continue
+    }
+    let g = int.parse(str(tpl[start..i])) else 0
+    let v = group(m, cs, g) else ""
+    out += v.chars()
+  }
+  out
+}
+
+/// Split `s` around every match. An empty match splits between chars but never
+/// at either end or right after another match, so `regex("").split("ab")` is `["a", "b"]`.
+pub fn split(r: Regex, s: str): [str] {
+  let cs = s.chars()
+  var out: [str] = []
+  var last = 0
+  for m in spans(r, cs) {
+    if m[0] == m[1] && (m[0] == last || m[0] == cs.len()) { continue }
+    out.push(sub(cs, last, m[0]))
+    last = m[1]
+  }
+  out.push(sub(cs, last, cs.len()))
+  out
+}
+
+// ---- tests ----
+
+test "literals and dot" {
+  assert (regex("abc")?).find("xxabcxx") is some("abc")
+  assert (regex("abc")?).find("ab") is none
+  assert (regex("a.c")?).find("a-c") is some("a-c")
+  assert (regex("a.c")?).find("a\nc") is none
+  assert (regex("")?).find("xyz") is some("")
+  assert (regex("é+")?).find("caféé!") is some("éé")
+  assert (regex(r"]}")?).find(r"x]}") is some(r"]}")
+}
+
+test "classes" {
+  assert (regex("[a-c]+")?).find("xxbcaz") is some("bca")
+  assert (regex("[^0-9]+")?).find("12ab3") is some("ab")
+  assert (regex(r"[\d_]+")?).find("ab1_2c") is some("1_2")
+  assert (regex("[]a]+")?).find("x]a]y") is some("]a]")
+  assert (regex("[a-]+")?).find("b-a-c") is some("-a-")
+  assert (regex(r"[^\s]+")?).find("  hi there") is some("hi")
+  assert (regex("[.]")?).find("a.b") is some(".")
+}
+
+test "escapes" {
+  let digits = regex(r"\d+")?
+  assert digits.find_all("a1b22c333") == ["1", "22", "333"]
+  assert (regex(r"\w+")?).find_all("hi, you_2!") == ["hi", "you_2"]
+  assert (regex(r"\D+")?).find("12ab34") is some("ab")
+  assert (regex(r"\W")?).find_all("a,b;c") == [",", ";"]
+  assert (regex(r"\S+")?).find_all("  x yz ") == ["x", "yz"]
+  assert (regex(r"\s+")?).replace("a \t b\nc", " ") == "a b c"
+  assert (regex(r"a\.b")?).is_match("a.b")
+  assert !(regex(r"a\.b")?).is_match("axb")
+  assert (regex(r"a\\b")?).find("xa\\by") is some("a\\b")
+  assert (regex(r"\(\*\)")?).find("f(*)") is some("(*)")
+  assert (regex(r"\t")?).is_match("a\tb")
+}
+
+test "anchors" {
+  assert (regex("^ab")?).is_match("abc")
+  assert !(regex("^ab")?).is_match("cab")
+  assert (regex("ab$")?).is_match("cab")
+  assert !(regex("ab$")?).is_match("abc")
+  assert (regex("^$")?).is_match("")
+  assert (regex("^a|b$")?).find_all("ab") == ["a", "b"]
+}
+
+test "alternation is leftmost-first" {
+  assert (regex("cat|dog")?).find_all("dog cat cow") == ["dog", "cat"]
+  assert (regex("a|ab")?).find("ab") is some("a")
+  assert (regex("ab|a")?).find("ab") is some("ab")
+  assert (regex("x(a|)y")?).find("xy") is some("xy")
+}
+
+test "greedy quantifiers" {
+  assert (regex("a+")?).find("baaac") is some("aaa")
+  assert (regex("ba*")?).find("baaac") is some("baaa")
+  assert (regex("ba*")?).find("bc") is some("b")
+  assert (regex("colou?r")?).find_all("color colour") == ["color", "colour"]
+  assert (regex(r"a{2}")?).find("aaaa") is some("aa")
+  assert (regex(r"a{2,}")?).find("aaaa") is some("aaaa")
+  assert (regex(r"a{1,3}")?).find("aaaa") is some("aaa")
+  assert (regex(r"a{0}b")?).find("aab") is some("b")
+  assert (regex(r"^a{2,3}$")?).is_match("aaa")
+  assert !(regex(r"^a{2,3}$")?).is_match("aaaa")
+  assert (regex("<.+>")?).find("<a><b>") is some("<a><b>")
+  assert (regex(r"(ab)+")?).find("xababa") is some("abab")
+}
+
+test "lazy quantifiers" {
+  assert (regex("<.+?>")?).find("<a><b>") is some("<a>")
+  assert (regex("<.*?>")?).find_all("<a><bc>") == ["<a>", "<bc>"]
+  assert (regex("a*?")?).find("aaa") is some("")
+  assert (regex("a+?")?).find("aaa") is some("a")
+  assert (regex("ba??")?).find("ba") is some("b")
+  assert (regex(r"a{2,}?")?).find("aaaa") is some("aa")
+  assert (regex("a.*?c")?).find("abcbc") is some("abc")
+}
+
+test "backtracking" {
+  assert (regex("a.*b")?).find("xaxxbxxbx") is some("axxbxxb")
+  assert (regex(r"(a|ab)(c|bcd)(d*)")?).find("abcd") is some("abcd")
+  assert (regex(r"^(\d+)(\d)$")?).captures("1234") is some([some("1234"), some("123"), some("4")])
+  assert (regex("(a*)*b")?).find("aaac") is none
+  assert (regex("(a*)*b")?).find("aab") is some("aab")
+  assert (regex("(a|)*x")?).find("aax") is some("aax")
+}
+
+test "captures" {
+  let r = regex(r"(\w+)@(\w+)\.com")?
+  assert r.captures("mail ann@auk.com now") is some([some("ann@auk.com"), some("ann"), some("auk")])
+  assert r.captures("nothing here") is none
+  assert (regex(r"(\d+)-(\d+)?")?).captures("10-") is some([some("10-"), some("10"), none])
+  assert (regex(r"(?:ab)+(c)")?).captures("ababc") is some([some("ababc"), some("c")])
+  assert (regex(r"(a)|(b)")?).captures("b") is some([some("b"), none, some("b")])
+  assert (regex(r"(?:(a)|b)+")?).captures("ab") is some([some("ab"), some("a")])
+  assert (regex("((a)(b))")?).group_count() == 3
+  assert (regex("(?:a)")?).group_count() == 0
+}
+
+test "find_all with empty matches" {
+  assert (regex("a*")?).find_all("baa") == ["", "aa", ""]
+  assert (regex("x")?).find_all("") == []
+  assert (regex("")?).find_all("ab") == ["", "", ""]
+}
+
+test "replace" {
+  let r = regex(r"(\w+)@(\w+)")?
+  assert r.replace("ann@auk bob@goose", "$2:$1") == "auk:ann goose:bob"
+  assert r.replace("ann@auk", "[$0]") == "[ann@auk]"
+  assert r.replace("ann@auk", "$9|$$|$x|$") == "|$|$x|$"
+  assert (regex(r"\d")?).replace("a1b2", "#") == "a#b#"
+  assert (regex("z")?).replace("abc", "!") == "abc"
+  assert (regex("")?).replace("ab", "-") == "-a-b-"
+}
+
+test "split" {
+  assert (regex(r"\s*,\s*")?).split("a , b,c") == ["a", "b", "c"]
+  assert (regex(",")?).split("a,,b") == ["a", "", "b"]
+  assert (regex(",")?).split(",a,") == ["", "a", ""]
+  assert (regex("x")?).split("") == [""]
+  assert (regex("")?).split("abc") == ["a", "b", "c"]
+  assert (regex("x*")?).split("axxb") == ["a", "b"]
+}
+
+test "escape" {
+  let s = r"1+1=2? (yes) [a] {b} ^$ \ | ."
+  assert (regex(escape(s))?).find("so " + s + "!") == some(s)
+  assert escape("a.b") == r"a\.b"
+}
+
+test "compile errors carry the position" {
+  assert regex("a(b") is err(Unclosed(1, '('))
+  assert regex("a)") is err(Unexpected(1, ')'))
+  assert regex("x[abc") is err(Unclosed(1, '['))
+  assert regex("*a") is err(NothingToRepeat(0))
+  assert regex("a**") is err(NothingToRepeat(2))
+  assert regex("a|+") is err(NothingToRepeat(2))
+  assert regex("(?a)") is err(BadGroup(1))
+  assert regex(r"a{3,1}") is err(BadRepeat(1))
+  assert regex(r"a{x}") is err(BadRepeat(1))
+  assert regex(r"a{2") is err(BadRepeat(1))
+  assert regex(r"{2}") is err(NothingToRepeat(0))
+  assert regex("[z-a]") is err(BadRange(1))
+  assert regex(r"[\d-z]") is err(BadRange(1))
+  assert regex(r"a\q") is err(BadEscape(1, 'q'))
+  assert regex("ab\\") is err(TrailingBackslash(2))
+  assert regex("[a\\") is err(TrailingBackslash(2))
+}
+
+test "error helpers" {
+  assert regex("ab(") is err(Unclosed(2, '('))
+  let e = Unclosed(2, '(')
+  assert e.pos() == 2
+  assert e.message() == "regex: '(' at 2 is never closed"
+  assert BadEscape(4, 'q').message() == "regex: unknown escape '\\q' at 4"
+}

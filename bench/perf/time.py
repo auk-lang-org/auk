@@ -11,12 +11,12 @@ def run(exe, arg):
         if p.returncode: return None, 0, p.stderr.strip()[-200:]
     r = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss  # bytes on macOS; max so far
     return best, r, p.stdout.strip()
-print(f"| bench | size | rust -O | rust +overflow | duck | duck/rust | duck/rust+oc | output match |")
+print(f"| bench | size | rust -O | rust +overflow | auk | auk/rust | auk/rust+oc | output match |")
 print("|---|---|---|---|---|---|---|---|")
 for b in (sys.argv[1:] or SIZES):
     n = SIZES[b]
     r, _, ro = run(f"{here}/out/{b}.rs", n)
     oc, _, _ = run(f"{here}/out/{b}.rsoc", n)
-    d, _, do = run(f"{here}/out/{b}.duck", n)
+    d, _, do = run(f"{here}/out/{b}.auk", n)
     if d is None: print(f"| {b} | {n} | {r:.3f}s | {oc:.3f}s | FAILED: {do} | | | |"); continue
     print(f"| {b} | {n:,} | {r:.3f}s | {oc:.3f}s | {d:.3f}s | **{d/r:.2f}x** | {d/oc:.2f}x | {'yes' if do==ro else 'NO'} |", flush=True)

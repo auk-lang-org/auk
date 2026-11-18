@@ -1,8 +1,8 @@
-//! `duck lsp`: a Language Server Protocol server over stdio (JSON-RPC with `Content-Length`
+//! `auk lsp`: a Language Server Protocol server over stdio (JSON-RPC with `Content-Length`
 //! framing), built on the compiler front end.
 //!
 //! - **Diagnostics**: every open/change/save re-runs resolve + check on the in-memory text, in
-//!   the file's project context (the nearest `quack.toml`, its `src/` modules and `.quack/`
+//!   the file's project context (the nearest `raft.toml`, its `src/` modules and `.raft/`
 //!   dependencies, read from disk), and publishes the errors with code, range and notes (as
 //!   related information). Errors in other files of the program are published to those files.
 //! - **Code actions**: each diagnostic's fix-its become one quick fix (a `WorkspaceEdit`).
@@ -12,9 +12,9 @@
 //! - **Go to definition**: locals, constants, functions (the first clause of a clause group),
 //!   structs, enums, shapes, variants and fields, across modules and dependencies. When the
 //!   program doesn't type-check, names and paths are looked up syntactically in the module tree.
-//! - **Formatting** (`duck fmt`) and **document symbols**.
+//! - **Formatting** (`auk fmt`) and **document symbols**.
 //!
-//! Positions: Duck spans are 1-based lines and 1-based columns counted in chars; LSP positions
+//! Positions: Auk spans are 1-based lines and 1-based columns counted in chars; LSP positions
 //! are 0-based lines and 0-based UTF-16 code-unit offsets. `to_lsp` / `from_lsp` convert.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -41,7 +41,7 @@ pub fn run() -> i32 {
             Ok(Some(b)) => b,
             Ok(None) => return 1, // the client went away without `exit`
             Err(e) => {
-                eprintln!("duck lsp: {e}");
+                eprintln!("auk lsp: {e}");
                 return 1;
             }
         };
@@ -157,7 +157,7 @@ fn json_pos(j: &Json) -> (u32, u32) {
     (j.get("line").as_i64().unwrap_or(0) as u32, j.get("character").as_i64().unwrap_or(0) as u32)
 }
 
-/// `file:///a/b%20c.duck` -> `/a/b c.duck`.
+/// `file:///a/b%20c.auk` -> `/a/b c.auk`.
 pub fn uri_to_path(uri: &str) -> PathBuf {
     let raw = uri.strip_prefix("file://").unwrap_or(uri);
     let bytes = raw.as_bytes();
@@ -257,7 +257,7 @@ fn analyze(path: &Path, text: &str) -> (Model, Vec<FileDiag>) {
         }
     };
     catch_unwind(AssertUnwindSafe(run)).unwrap_or_else(|_| {
-        eprintln!("duck lsp: the checker panicked on {}", path.display());
+        eprintln!("auk lsp: the checker panicked on {}", path.display());
         (Model::default(), Vec::new())
     })
 }
@@ -496,7 +496,7 @@ fn initialize_result() -> Json {
                 ("codeActionProvider", obj([("codeActionKinds", Json::Arr(vec!["quickfix".into()]))])),
             ]),
         ),
-        ("serverInfo", obj([("name", "duck".into()), ("version", env!("CARGO_PKG_VERSION").into())])),
+        ("serverInfo", obj([("name", "auk".into()), ("version", env!("CARGO_PKG_VERSION").into())])),
     ])
 }
 
@@ -529,7 +529,7 @@ fn diagnostic(uri: &str, src: &str, d: &Diag) -> Json {
         ("range".to_string(), r.clone()),
         ("severity".to_string(), 1u32.into()),
         ("code".to_string(), d.code.into()),
-        ("source".to_string(), "duck".into()),
+        ("source".to_string(), "auk".into()),
         ("message".to_string(), d.message.as_str().into()),
     ];
     if !d.notes.is_empty() {
@@ -1137,7 +1137,7 @@ fn hover(doc: &Doc, pos: (u32, u32)) -> Option<Json> {
     let m = tp.program.focus;
     let hit = find(&tp.program, m, pos)?;
     let (code, docs) = hover_text(tp, m, hit)?;
-    let mut value = format!("```duck\n{code}\n```");
+    let mut value = format!("```auk\n{code}\n```");
     if let Some(o) = hover_origin(tp, m, hit).and_then(|loc| origin_text(&tp.program, m, loc)) {
         value += "\n\n";
         value += &o;
@@ -1166,7 +1166,7 @@ fn hover_origin(tp: &TypedProgram, m: ModId, hit: Hit) -> Option<Loc> {
     }
 }
 
-/// "Defined in `core.list` (core library)", "Defined in `audio.out` (library `audio`) — [out.duck:12](…)";
+/// "Defined in `core.list` (core library)", "Defined in `audio.out` (library `audio`) — [out.auk:12](…)";
 /// nothing for what is defined in the file itself.
 fn origin_text(prog: &Program, m: ModId, (dm, span): Loc) -> Option<String> {
     if dm == m {
@@ -1359,7 +1359,7 @@ fn hover_text(tp: &TypedProgram, m: ModId, hit: Hit) -> Option<(String, Option<S
         Hit::FnDecl(item, clause) => {
             let f = tp.fns.iter().position(|f| {
                 f.module == m
-                    && matches!(&f.kind, FnKind::Duck { item: i, clauses, header } if *i == item && match clause {
+                    && matches!(&f.kind, FnKind::Auk { item: i, clauses, header } if *i == item && match clause {
                         Some(ci) => clauses.contains(&ci),
                         None => *header,
                     })
@@ -1384,7 +1384,7 @@ mod tests {
         let col_x = 1 + "let s = \"é🦆".chars().count() as u32; // char column of `x`
         assert_eq!(to_lsp(src, 2, col_x), (1, 12));
         assert_eq!(from_lsp(src, 1, 12), (2, col_x));
-        assert_eq!(to_lsp(src, 2, col_x - 1), (1, 10)); // the duck
+        assert_eq!(to_lsp(src, 2, col_x - 1), (1, 10)); // the auk
         assert_eq!(from_lsp(src, 1, 11), (2, col_x - 1)); // inside the surrogate pair
         // past the end of a line, and the empty last line
         assert_eq!(to_lsp(src, 1, 13), (0, 12));
@@ -1403,9 +1403,9 @@ mod tests {
 
     #[test]
     fn uris() {
-        assert_eq!(uri_to_path("file:///tmp/a%20b/c.duck"), PathBuf::from("/tmp/a b/c.duck"));
-        assert_eq!(path_to_uri("/tmp/a b/é.duck"), "file:///tmp/a%20b/%C3%A9.duck");
-        assert_eq!(uri_to_path(&path_to_uri("/x/é y.duck")), PathBuf::from("/x/é y.duck"));
+        assert_eq!(uri_to_path("file:///tmp/a%20b/c.auk"), PathBuf::from("/tmp/a b/c.auk"));
+        assert_eq!(path_to_uri("/tmp/a b/é.auk"), "file:///tmp/a%20b/%C3%A9.auk");
+        assert_eq!(uri_to_path(&path_to_uri("/x/é y.auk")), PathBuf::from("/x/é y.auk"));
     }
 
     #[test]

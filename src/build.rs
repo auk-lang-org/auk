@@ -2,10 +2,10 @@
 //! `run`, `build`, `ir` and `test` commands.
 //!
 //! `run` and `test` compile in memory (the JIT) and run the program in this process (tests and
-//! imprints in forked children); the runtime is the `duck_rt` library linked into the compiler.
+//! imprints in forked children); the runtime is the `auk_rt` library linked into the compiler.
 //! Debug builds (`run`, `test`, `ir`) check `ensures`; `build` is a release build (optimized, no
 //! `ensures`) that refuses a program with holes: it writes an object file and links it with the
-//! embedded runtime library (`libduck_rt.a`) using the system linker (`cc`; `DUCK_LINKER`
+//! embedded runtime library (`libauk_rt.a`) using the system linker (`cc`; `AUK_LINKER`
 //! overrides it).
 
 use std::collections::HashMap;
@@ -23,9 +23,9 @@ use super::diag::Diag;
 use super::resolve::ModId;
 use super::typed::{BodyRef, ConstId, TypedProgram};
 
-/// The runtime (`runtime/`, the Rust crate `duck_rt`) as a static library, built by the cargo
+/// The runtime (`runtime/`, the Rust crate `auk_rt`) as a static library, built by the cargo
 /// build script and linked into every program.
-pub const RUNTIME_LIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libduck_rt.a"));
+pub const RUNTIME_LIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libauk_rt.a"));
 
 /// Libraries the runtime needs besides libc and libm (what Rust's std links on each platform).
 pub const LINK_LIBS: &[&str] = if cfg!(target_os = "macos") {
@@ -76,7 +76,7 @@ pub fn generate(tp: &TypedProgram, mode: Mode, trace: Trace) -> Result<Generated
     // the tracer starts before the constants are initialized (their initializers are traced too)
     let trace_init = |b: &mut Body, tests: bool| {
         if trace.on {
-            b.do_(Ex::rt("duck_trace_init", vec![Ex::new(mir::K::Int(tests as i64), MTy::Bool)], MTy::Void));
+            b.do_(Ex::rt("auk_trace_init", vec![Ex::new(mir::K::Int(tests as i64), MTy::Bool)], MTy::Void));
         }
     };
     let ntests = tests.len();
@@ -86,13 +86,13 @@ pub fn generate(tp: &TypedProgram, mode: Mode, trace: Trace) -> Result<Generated
             trace_init(&mut b, true);
             for (t, i) in &tests {
                 let f = g.inst_fn(*i);
-                tail.push(Stmt::Do(Ex::rt("duck_test_register", vec![Ex::cstr(&tp.tests[*t].name), Ex::fn_addr(f)], MTy::Void)));
+                tail.push(Stmt::Do(Ex::rt("auk_test_register", vec![Ex::cstr(&tp.tests[*t].name), Ex::fn_addr(f)], MTy::Void)));
             }
-            tail.push(Stmt::Ret(Some(Ex::rt("duck_test_main", vec![ps[0].clone(), ps[1].clone()], i32.clone()))));
+            tail.push(Stmt::Ret(Some(Ex::rt("auk_test_main", vec![ps[0].clone(), ps[1].clone()], i32.clone()))));
         }
         _ => {
             let Some(mi) = &tp.main else {
-                return Err(format!("error: no `main` function found in `{}` (add `fn main()`; `duck test` runs its tests)\n", tp.program.mods[tp.program.root].file));
+                return Err(format!("error: no `main` function found in `{}` (add `fn main()`; `auk test` runs its tests)\n", tp.program.mods[tp.program.root].file));
             };
             let inst = tp
                 .instances
@@ -122,18 +122,18 @@ pub fn generate(tp: &TypedProgram, mode: Mode, trace: Trace) -> Result<Generated
             }
             g.define(shim, sb);
             trace_init(&mut b, false);
-            tail.push(Stmt::Ret(Some(Ex::rt("duck_main_wrapper", vec![ps[0].clone(), ps[1].clone(), Ex::fn_addr(shim)], i32.clone()))));
+            tail.push(Stmt::Ret(Some(Ex::rt("auk_main_wrapper", vec![ps[0].clone(), ps[1].clone(), Ex::fn_addr(shim)], i32.clone()))));
         }
     }
     drain(&mut g);
     if g.dbg.on {
         let (info, shows, kids) = dbg_tables(&mut g);
         let addr = |gl| Ex::new(mir::K::GlobalAddr(gl), MTy::void_ptr());
-        b.do_(Ex::rt("duck_dbg_init", vec![Ex::cstr(&info), addr(shows), addr(kids)], MTy::Void));
+        b.do_(Ex::rt("auk_dbg_init", vec![Ex::cstr(&info), addr(shows), addr(kids)], MTy::Void));
     }
     let (init, cleanup) = g.init_and_cleanup();
     b.do_(g.call(init, vec![]));
-    b.do_(Ex::rt("duck_set_cleanup", vec![Ex::fn_addr(cleanup)], MTy::Void));
+    b.do_(Ex::rt("auk_set_cleanup", vec![Ex::fn_addr(cleanup)], MTy::Void));
     for s in tail {
         b.emit(s);
     }
@@ -152,9 +152,9 @@ fn emit(g: &mut Gen, i: usize) {
     mir::lower::emit_instance(g, i);
 }
 
-/// The debugger's tables (`--debug`): the debug info as text for `duck_dbg_init` (runtime/src/dbg.rs
+/// The debugger's tables (`--debug`): the debug info as text for `auk_dbg_init` (runtime/src/dbg.rs
 /// parses it), and a constant array of show functions, one per type of a named local
-/// (`DuckStr *show(void *value)`). Showing a type can instantiate more (instrumented) code, so
+/// (`AukStr *show(void *value)`). Showing a type can instantiate more (instrumented) code, so
 /// this runs to a fixpoint.
 fn dbg_tables(g: &mut Gen) -> (String, mir::GlobalId, mir::GlobalId) {
     let mut fns = Vec::new();
@@ -168,7 +168,7 @@ fn dbg_tables(g: &mut Gen) -> (String, mir::GlobalId, mir::GlobalId) {
             Some(sf) => g.call_ref(&sf, vec![v], MTy::D(Ty::Str)),
             None => {
                 let text = format!("<{}>", g.show_ty(&t));
-                Ex::rt("duck_str_from_bytes", vec![Ex::cstr(&text), Ex::int(text.len() as i64)], MTy::D(Ty::Str))
+                Ex::rt("auk_str_from_bytes", vec![Ex::cstr(&text), Ex::int(text.len() as i64)], MTy::D(Ty::Str))
             }
         };
         b.emit(Stmt::Ret(Some(s)));
@@ -254,7 +254,7 @@ pub fn eval_imprints(tp: &TypedProgram) -> Result<HashMap<ConstId, CVal>, String
     }
     drain(&mut g);
     let (init, _) = g.init_and_cleanup();
-    let bad = Ex::rt("duck__imprint_open", vec![ps[0].clone(), ps[1].clone()], MTy::Bool).not();
+    let bad = Ex::rt("auk__imprint_open", vec![ps[0].clone(), ps[1].clone()], MTy::Bool).not();
     b.open_if(bad);
     b.emit(Stmt::Ret(Some(Ex::int_as(2, MTy::I32))));
     b.close();
@@ -263,10 +263,10 @@ pub fn eval_imprints(tp: &TypedProgram) -> Result<HashMap<ConstId, CVal>, String
     for (c, getter, tov) in values {
         let v = g.call(getter, vec![]);
         let tv = b.decl(g.call_ref(&tov, vec![v], vt.clone()));
-        b.do_(Ex::rt("duck__imprint_value", vec![Ex::i64(c as i64), tv.clone().addr()], MTy::Void));
-        b.do_(Ex::rt("duck_value_release", vec![tv], MTy::Void));
+        b.do_(Ex::rt("auk__imprint_value", vec![Ex::i64(c as i64), tv.clone().addr()], MTy::Void));
+        b.do_(Ex::rt("auk_value_release", vec![tv], MTy::Void));
     }
-    b.do_(Ex::rt("duck__imprint_close", vec![], MTy::Void));
+    b.do_(Ex::rt("auk__imprint_close", vec![], MTy::Void));
     b.emit(Stmt::Ret(Some(Ex::int_as(0, MTy::I32))));
     g.define(entry, b);
     g.prog.entry = Some(entry);
@@ -336,7 +336,7 @@ fn imprint_results(tp: &TypedProgram, records: &Path, code: Option<i32>, stderr:
     }
     if code != Some(0) || (0..tp.consts.len()).any(|c| tp.consts[c].imprint && !values.contains_key(&c)) {
         let status = code.map_or("killed by a signal".to_string(), |c| format!("exit status {c}"));
-        return Err(format!("error: computing the imprints failed ({status}); this is a duck compiler bug:\n{stderr}"));
+        return Err(format!("error: computing the imprints failed ({status}); this is an auk compiler bug:\n{stderr}"));
     }
     Ok(values)
 }
@@ -432,24 +432,24 @@ static BUILD_N: AtomicUsize = AtomicUsize::new(0);
 /// A fresh scratch directory for one build.
 fn scratch() -> Result<PathBuf, String> {
     let n = BUILD_N.fetch_add(1, Ordering::Relaxed);
-    let d = env::temp_dir().join(format!("duck-build-{}-{n}", std::process::id()));
+    let d = env::temp_dir().join(format!("auk-build-{}-{n}", std::process::id()));
     let _ = fs::remove_dir_all(&d);
     fs::create_dir_all(&d).map_err(|e| format!("error: cannot create {}: {e}\n", d.display()))?;
     Ok(d)
 }
 
-/// The exit status of `duck __jit` when the program doesn't compile.
+/// The exit status of `auk __jit` when the program doesn't compile.
 pub const JIT_BUILD_FAILED: i32 = 125;
 
-/// `duck __jit run|test [--trace-core] <file> [args...]`: compile and run in this process (the
+/// `auk __jit run|test [--trace-core] <file> [args...]`: compile and run in this process (the
 /// trace destination comes from the environment). For drivers that need the program in a
-/// child process of its own: flat test directories, `duck hatch`, `duck pond`.
+/// child process of its own: flat test directories, `auk hatch`, `auk dive`.
 pub fn jit_cli(args: &[String]) -> i32 {
     let (mode, rest) = match args.split_first() {
         Some((m, rest)) if m == "run" => (Mode::Run, rest),
         Some((m, rest)) if m == "test" => (Mode::Test, rest),
         _ => {
-            eprintln!("usage: duck __jit run|test [--trace-core] <file> [args...]");
+            eprintln!("usage: auk __jit run|test [--trace-core] <file> [args...]");
             return 2;
         }
     };
@@ -458,8 +458,8 @@ pub fn jit_cli(args: &[String]) -> i32 {
         _ => (false, rest),
     };
     let Some((file, args)) = rest.split_first() else { return 2 };
-    let on = env::var_os("DUCK_TRACE").is_some();
-    let debug = env::var_os("DUCK_DEBUG").is_some();
+    let on = env::var_os("AUK_TRACE").is_some();
+    let debug = env::var_os("AUK_DEBUG").is_some();
     match jit_run(Path::new(file), args, mode, Trace { on, core, debug, lines: false }, false) {
         Ok(code) => exit_now(code),
         Err(e) => {
@@ -469,30 +469,30 @@ pub fn jit_cli(args: &[String]) -> i32 {
     }
 }
 
-/// `duck build`: compile `path` (a release build: optimized, no `ensures`, no holes allowed)
+/// `auk build`: compile `path` (a release build: optimized, no `ensures`, no holes allowed)
 /// to an object file with LLVM and link it with the runtime library into `out`. The
-/// linker is the system C compiler driver (`cc`; `DUCK_LINKER` overrides it).
-/// `duck build`: `debuginfo` (`-g`) adds DWARF line tables (on macOS, in `<out>.dSYM`).
+/// linker is the system C compiler driver (`cc`; `AUK_LINKER` overrides it).
+/// `auk build`: `debuginfo` (`-g`) adds DWARF line tables (on macOS, in `<out>.dSYM`).
 pub fn build_native(path: &Path, out: &Path, debuginfo: bool) -> Result<(), String> {
     let tp = check(path)?;
     let g = generate(&tp, Mode::Release, Trace { lines: debuginfo, ..Trace::default() })?;
     if !g.holes.is_empty() {
-        let mut s = format!("error: `{}` still has {} unfilled hole(s); `duck build` needs a complete program\n", path.display(), g.holes.len());
+        let mut s = format!("error: `{}` still has {} unfilled hole(s); `auk build` needs a complete program\n", path.display(), g.holes.len());
         for h in &g.holes {
             let _ = writeln!(s, "  {h}");
         }
-        s.push_str("  (fill them in, or use `duck run` / `duck test`, which allow holes)\n");
+        s.push_str("  (fill them in, or use `auk run` / `auk test`, which allow holes)\n");
         return Err(s);
     }
     let info = TyInfo::new(&tp);
-    let obj = mir::backend::object(&g.prog, &info, true).map_err(|e| format!("error: code generation failed (this is a duck compiler bug): {e}\n"))?;
+    let obj = mir::backend::object(&g.prog, &info, true).map_err(|e| format!("error: code generation failed (this is an auk compiler bug): {e}\n"))?;
     let dir = scratch()?;
     let res = (|| {
         let o = dir.join("prog.o");
         fs::write(&o, obj).map_err(|e| format!("error: cannot write {}: {e}\n", o.display()))?;
-        let lib = dir.join("libduck_rt.a");
+        let lib = dir.join("libauk_rt.a");
         fs::write(&lib, RUNTIME_LIB).map_err(|e| format!("error: cannot write the runtime library: {e}\n"))?;
-        let linker = env::var("DUCK_LINKER").unwrap_or_else(|_| "cc".into());
+        let linker = env::var("AUK_LINKER").unwrap_or_else(|_| "cc".into());
         let output = Command::new(&linker)
             .arg(&o)
             .arg(&lib)
@@ -519,7 +519,7 @@ pub fn build_native(path: &Path, out: &Path, debuginfo: bool) -> Result<(), Stri
 }
 
 /// Compile `path` in memory and run it in this process with `args` (`argv[0]` is the file);
-/// returns its exit code. `full_opt`: `duck run -O` (a run otherwise gets light optimizations;
+/// returns its exit code. `full_opt`: `auk run -O` (a run otherwise gets light optimizations;
 /// tests and debugger builds none).
 pub fn jit_run(path: &Path, args: &[String], mode: Mode, trace: Trace, full_opt: bool) -> Result<i32, String> {
     let tp = check(path)?;
@@ -563,24 +563,24 @@ pub fn check(path: &Path) -> Result<TypedProgram, String> {
     })
 }
 
-/// The root file `duck test <dir>` builds: the project's `src/lib.duck` or `src/main.duck`.
+/// The root file `auk test <dir>` builds: the project's `src/lib.auk` or `src/main.auk`.
 fn project_root(dir: &Path) -> Result<PathBuf, String> {
-    let proj = super::resolve::find_project(dir).ok_or_else(|| format!("error: {} is not inside a project (no quack.toml)\n", dir.display()))?;
-    for f in ["src/lib.duck", "src/main.duck"] {
+    let proj = super::resolve::find_project(dir).ok_or_else(|| format!("error: {} is not inside a project (no raft.toml)\n", dir.display()))?;
+    for f in ["src/lib.auk", "src/main.auk"] {
         if proj.join(f).is_file() {
             return Ok(proj.join(f));
         }
     }
-    Err(format!("error: the project {} has no src/lib.duck or src/main.duck\n", proj.display()))
+    Err(format!("error: the project {} has no src/lib.auk or src/main.auk\n", proj.display()))
 }
 
-/// The top-level `.duck` files of `dir` that contain `test` blocks, sorted. A file that does not
+/// The top-level `.auk` files of `dir` that contain `test` blocks, sorted. A file that does not
 /// parse is included when a line of it starts with `test ` (its build then reports the errors).
 fn flat_test_files(dir: &Path) -> Vec<PathBuf> {
     let Ok(rd) = fs::read_dir(dir) else { return Vec::new() };
     let mut files: Vec<PathBuf> = rd
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "duck"))
+        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "auk"))
         .filter(|p| {
             let src = fs::read_to_string(p).unwrap_or_default();
             match super::parser::parse(&src) {
@@ -593,7 +593,7 @@ fn flat_test_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// Execution-trace options of `duck run|test|ir` (`--trace=json|<path>`, `--trace-limit N`,
+/// Execution-trace options of `auk run|test|ir` (`--trace=json|<path>`, `--trace-limit N`,
 /// `--trace-core`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TraceOpts {
@@ -606,7 +606,7 @@ pub struct TraceOpts {
     pub core: bool,
     /// `--debug`: instrument the program for the debugger (runtime/src/dbg.rs).
     pub debug: bool,
-    /// `-O` (`duck run`): the full optimizer.
+    /// `-O` (`auk run`): the full optimizer.
     pub opt: bool,
 }
 
@@ -622,26 +622,26 @@ impl TraceOpts {
         let Some(d) = dest.or(self.dest.as_deref()) else { return };
         // SAFETY: the compiler is single-threaded when it starts the program
         unsafe {
-            env::set_var("DUCK_TRACE", d);
+            env::set_var("AUK_TRACE", d);
             match self.limit {
-                Some(n) => env::set_var("DUCK_TRACE_LIMIT", n.to_string()),
-                None => env::remove_var("DUCK_TRACE_LIMIT"),
+                Some(n) => env::set_var("AUK_TRACE_LIMIT", n.to_string()),
+                None => env::remove_var("AUK_TRACE_LIMIT"),
             }
         }
     }
 
     pub fn apply(&self, cmd: &mut Command, dest: Option<&str>) {
         let Some(d) = dest.or(self.dest.as_deref()) else { return };
-        cmd.env("DUCK_TRACE", d);
+        cmd.env("AUK_TRACE", d);
         match self.limit {
-            Some(n) => cmd.env("DUCK_TRACE_LIMIT", n.to_string()),
-            None => cmd.env_remove("DUCK_TRACE_LIMIT"),
+            Some(n) => cmd.env("AUK_TRACE_LIMIT", n.to_string()),
+            None => cmd.env_remove("AUK_TRACE_LIMIT"),
         };
     }
 }
 
 /// Split the trace flags off `args`: anywhere in them, or (`leading`) only before the first
-/// other argument (`duck run`'s program arguments may look like flags).
+/// other argument (`auk run`'s program arguments may look like flags).
 pub fn trace_flags(args: &[String], leading: bool) -> Result<(TraceOpts, Vec<String>), String> {
     let mut o = TraceOpts::default();
     let mut rest = Vec::new();
@@ -682,7 +682,7 @@ pub fn trace_flags(args: &[String], leading: bool) -> Result<(TraceOpts, Vec<Str
     Ok((o, rest))
 }
 
-/// The trace directory of `duck test --trace=<dir>` (created), or `-`.
+/// The trace directory of `auk test --trace=<dir>` (created), or `-`.
 fn test_trace_dest(trace: &TraceOpts, sub: Option<&str>) -> Result<Option<String>, String> {
     match trace.dest.as_deref() {
         None => Ok(None),
@@ -698,7 +698,7 @@ fn test_trace_dest(trace: &TraceOpts, sub: Option<&str>) -> Result<Option<String
     }
 }
 
-/// `duck test <dir>` on a flat directory: run each file's tests under a header, then print the
+/// `auk test <dir>` on a flat directory: run each file's tests under a header, then print the
 /// combined counts. Fails if any test fails or any file does not build. With `--trace=<dir>`,
 /// each file's tests write their traces to `<dir>/<file stem>/`.
 fn test_files(files: &[PathBuf], filter: Option<&str>, trace: &TraceOpts) -> i32 {
@@ -716,7 +716,7 @@ fn test_files(files: &[PathBuf], filter: Option<&str>, trace: &TraceOpts) -> i32
             }
         };
         // each file is its own program, in a process of its own
-        let mut cmd = Command::new(env::current_exe().unwrap_or_else(|_| "duck".into()));
+        let mut cmd = Command::new(env::current_exe().unwrap_or_else(|_| "auk".into()));
         cmd.arg("__jit").arg("test").args(trace.core.then_some("--trace-core")).arg(f);
         cmd.args(filter).stderr(std::process::Stdio::inherit());
         trace.apply(&mut cmd, dest.as_deref());
@@ -757,7 +757,7 @@ fn test_files(files: &[PathBuf], filter: Option<&str>, trace: &TraceOpts) -> i32
     if failed > 0 || broken > 0 { 1 } else { 0 }
 }
 
-/// `duck run|build|ir|test ...`. Returns the exit code.
+/// `auk run|build|ir|test ...`. Returns the exit code.
 pub fn cli(cmd: &str, args: &[String]) -> i32 {
     if cmd == "run" && args.first().is_some_and(|a| a == "--live") {
         return crate::live::cli(&args[1..]);
@@ -788,7 +788,7 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
                 [p] => (PathBuf::from(p), None),
                 [p, f] => (PathBuf::from(p), Some(f.clone())),
                 _ => {
-                    eprintln!("usage: duck test [--trace=json|<dir>] [--trace-limit N] [--trace-core] [file|dir] [filter]");
+                    eprintln!("usage: auk test [--trace=json|<dir>] [--trace-limit N] [--trace-core] [file|dir] [filter]");
                     return 2;
                 }
             };
@@ -818,7 +818,7 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
             }
         }
         "run" | "build" | "ir" => {
-            // `duck ir --llvm`: the LLVM IR instead of the MIR
+            // `auk ir --llvm`: the LLVM IR instead of the MIR
             let llvm_ir = cmd == "ir" && args.first().is_some_and(|a| a == "--llvm");
             let args = if llvm_ir { &args[1..] } else { &args[..] };
             let [file, rest @ ..] = args else {
@@ -827,7 +827,7 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
                     "ir" => "[--llvm] [--trace=json|<file>] [--trace-core] ",
                     _ => "[--trace=json|<file>] [--trace-limit N] [--trace-core] ",
                 };
-                eprintln!("usage: duck {cmd} {flags}<file.duck>");
+                eprintln!("usage: auk {cmd} {flags}<file.auk>");
                 return 2;
             };
             let path = Path::new(file);
@@ -857,7 +857,7 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
                         [] => path.with_extension(""),
                         [flag, out] if flag == "-o" => PathBuf::from(out),
                         _ => {
-                            eprintln!("usage: duck build [-g] <file.duck> [-o out]");
+                            eprintln!("usage: auk build [-g] <file.auk> [-o out]");
                             return 2;
                         }
                     };
@@ -875,6 +875,6 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
                 }
             }
         }
-        _ => unreachable!("duck {cmd} is not a build command"),
+        _ => unreachable!("auk {cmd} is not a build command"),
     }
 }

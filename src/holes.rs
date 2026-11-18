@@ -1,20 +1,20 @@
-//! `duck holes <file> [--json]`: a brief for every `??` hole in a program — what an AI agent (or
-//! `duck hatch`) needs to fill it.
+//! `auk holes <file> [--json]`: a brief for every `??` hole in a program — what an AI agent (or
+//! `auk hatch`) needs to fill it.
 //!
 //! The holes are those of the root file and of the other modules of its project (dependencies and
 //! core are not searched), root file first, then the project's modules in load order, each in
-//! source order. They are numbered from 1; `duck hatch --hole N` uses the same numbering. The
+//! source order. They are numbered from 1; `auk hatch --hole N` uses the same numbering. The
 //! program must type-check (holes are allowed); with type errors the brief is still printed from
 //! the partial program (types that couldn't be inferred show as `?`) and the exit code is 1.
 //!
 //! # JSON schema (`--json`, stable)
 //! ```text
 //! {
-//!   "file": "hatch.duck",            // the root file, as given
+//!   "file": "hatch.auk",            // the root file, as given
 //!   "ok": true,                      // the program type-checks (holes allowed)
 //!   "holes": [{
 //!     "index": 1,                    // 1-based, in the order described above
-//!     "file": "hatch.duck",          // the file the hole is in
+//!     "file": "hatch.auk",          // the file the hole is in
 //!     "line": 6, "col": 3, "end_line": 6, "end_col": 5,   // 1-based; end_col exclusive (chars)
 //!     "expected": "float",           // the type the hole must have
 //!     "context": "fn median",        // "fn <name>", "test \"<name>\"", "let <name>" or "imprint <name>"
@@ -27,7 +27,7 @@
 //!       "ensures": []
 //!     },
 //!     "scope": [{"name": "xs", "type": "[float]", "mutable": false}],  // visible locals, outermost first
-//!     "tests": [{"name": "median", "file": "hatch.duck", "line": 21, "source": "test \"median\" {...}"}],
+//!     "tests": [{"name": "median", "file": "hatch.auk", "line": 21, "source": "test \"median\" {...}"}],
 //!     "module_fns": [{"name": "dedup", "signature": "fn dedup(xs: [int]): [int]"}],  // the module's other functions
 //!     "module_types": [{"name": "DurErr", "source": "enum DurErr { ... }"}]      // its structs, enums and shapes
 //!   }]
@@ -143,7 +143,7 @@ pub fn discover(tp: &TypedProgram) -> Vec<Hole> {
                                 .fns
                                 .iter()
                                 .enumerate()
-                                .filter(|(_, f)| f.module == m && matches!(&f.kind, super::typed::FnKind::Duck { item, .. } if *item == i))
+                                .filter(|(_, f)| f.module == m && matches!(&f.kind, super::typed::FnKind::Auk { item, .. } if *item == i))
                                 .map(|(fid, _)| fid)
                                 .collect();
                             out.push(make(tp, m, id, w, format!("fn {}", g.name), Some(function), callers(tp, &mods, &fids), Some(i)));
@@ -545,7 +545,7 @@ fn kids(e: &Expr) -> Vec<&Expr> {
 
 // ---- output ----
 
-/// The human-readable brief of one hole (also the brief in `duck hatch`'s prompt).
+/// The human-readable brief of one hole (also the brief in `auk hatch`'s prompt).
 pub fn brief_text(h: &Hole) -> String {
     let mut s = format!("hole {} at {}:{}:{} in {}\n", h.index, h.file, h.span.line, h.span.col, h.context);
     s += &format!("  expected type: {}\n", h.expected);
@@ -655,14 +655,14 @@ pub fn print_diags(diags: &[FileDiag]) {
     }
 }
 
-/// `duck holes <file> [--json]`. Returns the exit code.
+/// `auk holes <file> [--json]`. Returns the exit code.
 pub fn run(args: &[String]) -> i32 {
     let (path, json) = match args {
         [p] => (p, false),
         [p, f] if f == "--json" => (p, true),
         [f, p] if f == "--json" => (p, true),
         _ => {
-            eprintln!("usage: duck holes <file> [--json]");
+            eprintln!("usage: auk holes <file> [--json]");
             return 2;
         }
     };

@@ -1,6 +1,6 @@
-//! `duck dap`: a Debug Adapter Protocol server on stdin/stdout, for VS Code and other editors.
+//! `auk dap`: a Debug Adapter Protocol server on stdin/stdout, for VS Code and other editors.
 //!
-//! It launches the program with `duck run --debug` (src/debug.rs `launch`, output streamed as
+//! It launches the program with `auk run --debug` (src/debug.rs `launch`, output streamed as
 //! `output` events) and translates DAP requests into debug engine commands
 //! (runtime/src/dbg.rs). Supported: launch (program, args, cwd, stopOnEntry), line and function
 //! breakpoints, panics as exception breakpoints (`uncaught`, `all`), threads, stack traces,
@@ -87,7 +87,7 @@ pub fn run() -> i32 {
             "launch" => {
                 let a = req.get("arguments");
                 let Some(program) = a.get("program").as_str() else {
-                    d.respond(&req, false, None, Some("launch: `program` (a .duck file) is required"));
+                    d.respond(&req, false, None, Some("launch: `program` (a .auk file) is required"));
                     continue;
                 };
                 if let Some(cwd) = a.get("cwd").as_str()
@@ -470,7 +470,7 @@ impl Dap {
         obj([("name", x.get("name").clone()), ("value", x.get("value").clone()), ("type", x.get("type").clone()), ("variablesReference", r.into())])
     }
 
-    /// A local or a path into it (expandable), else any Duck expression, evaluated in the frame
+    /// A local or a path into it (expandable), else any Auk expression, evaluated in the frame
     /// (an assignment `x = 5` changes a `var` local).
     fn evaluate(&mut self, a: &Json) -> Result<Json, String> {
         if !self.stopped {

@@ -3,7 +3,7 @@
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{self, null_mut};
 
-use crate::rc::{duck__alloc, duck__free_obj, duck__xmalloc, duck__xrealloc, duck_refcount, duck_release};
+use crate::rc::{auk__alloc, auk__free_obj, auk__xmalloc, auk__xrealloc, auk_refcount, auk_release};
 use crate::*;
 
 /// An index slot: 0 is empty; a removed entry's slot is `TOMB`; any other is
@@ -29,12 +29,12 @@ fn live(x: u64) -> bool {
 
 /// The key of entry `i`.
 #[inline]
-pub(crate) unsafe fn key(m: *const DuckMap, i: i64) -> *mut u8 {
+pub(crate) unsafe fn key(m: *const AukMap, i: i64) -> *mut u8 {
     unsafe { (*m).entries.add((i * (*m).stride) as usize) }
 }
 /// The value of entry `i`.
 #[inline]
-pub(crate) unsafe fn val(m: *const DuckMap, i: i64) -> *mut u8 {
+pub(crate) unsafe fn val(m: *const AukMap, i: i64) -> *mut u8 {
     unsafe { (*m).entries.add((i * (*m).stride + (*m).voff) as usize) }
 }
 
@@ -49,7 +49,7 @@ struct Tmp {
 }
 impl Tmp {
     unsafe fn new(sz: usize) -> Tmp {
-        let heap = if sz <= 256 { null_mut() } else { unsafe { duck__xmalloc(sz) as *mut u8 } };
+        let heap = if sz <= 256 { null_mut() } else { unsafe { auk__xmalloc(sz) as *mut u8 } };
         Tmp { stack: [0; 256], heap }
     }
     fn ptr(&mut self) -> *mut u8 {
@@ -66,23 +66,23 @@ impl Drop for Tmp {
 
 // An accessor (once `static inline` in C), exported for the generated code.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_map_len(m: *const DuckMap) -> i64 {
+pub unsafe extern "C" fn auk_map_len(m: *const AukMap) -> i64 {
     if m.is_null() { 0 } else { unsafe { (*m).len } }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_map_new(kops: *const DuckElemOps, vops: *const DuckElemOps) -> *mut DuckMap {
+pub unsafe extern "C" fn auk_map_new(kops: *const AukElemOps, vops: *const AukElemOps) -> *mut AukMap {
     unsafe {
         if kops.is_null() || vops.is_null() {
-            panic_rt("duck_map_new: missing ops");
+            panic_rt("auk_map_new: missing ops");
         }
         if (*kops).hash.is_none() || (*kops).eq.is_none() {
-            panic_rt("duck_map_new: key type needs hash and eq");
+            panic_rt("auk_map_new: key type needs hash and eq");
         }
-        let m = duck__alloc(size_of::<DuckMap>(), DUCK_K_MAP) as *mut DuckMap;
+        let m = auk__alloc(size_of::<AukMap>(), AUK_K_MAP) as *mut AukMap;
         (*m).kops = kops;
         (*m).vops = vops;
-        // every Duck value's alignment is at most 8: the value starts at the key's size rounded up
+        // every Auk value's alignment is at most 8: the value starts at the key's size rounded up
         let r8 = |n: usize| n.div_ceil(8) as i64 * 8;
         (*m).voff = r8((*kops).size);
         (*m).stride = ((*m).voff + r8((*vops).size)).max(8);
@@ -90,7 +90,7 @@ pub unsafe extern "C" fn duck_map_new(kops: *const DuckElemOps, vops: *const Duc
     }
 }
 
-pub unsafe fn duck__map_free(m: *mut DuckMap) {
+pub unsafe fn auk__map_free(m: *mut AukMap) {
     unsafe {
         for i in 0..(*m).n {
             if *(*m).dead.add(i as usize) {
@@ -107,15 +107,15 @@ pub unsafe fn duck__map_free(m: *mut DuckMap) {
         libc::free((*m).hashes.cast());
         libc::free((*m).dead.cast());
         libc::free((*m).index.cast());
-        duck__free_obj(m.cast());
+        auk__free_obj(m.cast());
     }
 }
 
-unsafe fn rebuild_index(m: *mut DuckMap, icap: i64) {
+unsafe fn rebuild_index(m: *mut AukMap, icap: i64) {
     unsafe {
         libc::free((*m).index.cast());
         (*m).icap = icap;
-        (*m).index = duck__xmalloc(icap as usize * size_of::<u64>()) as *mut u64;
+        (*m).index = auk__xmalloc(icap as usize * size_of::<u64>()) as *mut u64;
         ptr::write_bytes((*m).index, 0, icap as usize);
         let mask = icap as u64 - 1;
         for e in 0..(*m).n {
@@ -133,7 +133,7 @@ unsafe fn rebuild_index(m: *mut DuckMap, icap: i64) {
 }
 
 /// Drop dead entries (keeps order). The caller rebuilds the index.
-unsafe fn compact(m: *mut DuckMap) {
+unsafe fn compact(m: *mut AukMap) {
     unsafe {
         let mut k: i64 = 0;
         let stride = (*m).stride as usize;
@@ -152,15 +152,15 @@ unsafe fn compact(m: *mut DuckMap) {
     }
 }
 
-unsafe fn set_cap(m: *mut DuckMap, cap: i64) {
+unsafe fn set_cap(m: *mut AukMap, cap: i64) {
     unsafe {
         if cap > MAX_ENTRIES {
             panic_rt("a map can't hold more than 4294967293 entries");
         }
         let cap_u = cap as usize;
-        (*m).entries = duck__xrealloc((*m).entries.cast(), cap_u * (*m).stride as usize) as *mut u8;
-        (*m).hashes = duck__xrealloc((*m).hashes.cast(), cap_u * size_of::<u64>()) as *mut u64;
-        (*m).dead = duck__xrealloc((*m).dead.cast(), cap_u * size_of::<bool>()) as *mut bool;
+        (*m).entries = auk__xrealloc((*m).entries.cast(), cap_u * (*m).stride as usize) as *mut u8;
+        (*m).hashes = auk__xrealloc((*m).hashes.cast(), cap_u * size_of::<u64>()) as *mut u64;
+        (*m).dead = auk__xrealloc((*m).dead.cast(), cap_u * size_of::<bool>()) as *mut bool;
         (*m).cap = cap;
     }
 }
@@ -174,7 +174,7 @@ fn icap_for(cap: i64) -> i64 {
 }
 
 /// Returns the index slot holding key, or -1.
-unsafe fn find_slot(m: *const DuckMap, k: *const c_void, h: u64) -> i64 {
+unsafe fn find_slot(m: *const AukMap, k: *const c_void, h: u64) -> i64 {
     unsafe {
         if m.is_null() || (*m).icap == 0 {
             return -1;
@@ -197,7 +197,7 @@ unsafe fn find_slot(m: *const DuckMap, k: *const c_void, h: u64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_map_find(m: *const DuckMap, k: *const c_void) -> *mut c_void {
+pub unsafe extern "C" fn auk_map_find(m: *const AukMap, k: *const c_void) -> *mut c_void {
     unsafe {
         if m.is_null() {
             return null_mut();
@@ -208,15 +208,15 @@ pub unsafe extern "C" fn duck_map_find(m: *const DuckMap, k: *const c_void) -> *
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_map_at(m: *const DuckMap, k: *const c_void, loc: *const c_char) -> *mut c_void {
+pub unsafe extern "C" fn auk_map_at(m: *const AukMap, k: *const c_void, loc: *const c_char) -> *mut c_void {
     unsafe {
-        let v = duck_map_find(m, k);
+        let v = auk_map_find(m, k);
         if v.is_null() {
             let ks = match if m.is_null() { None } else { (*(*m).kops).show } {
                 Some(show) => show(k),
-                None => crate::str::duck_str_lit(c"?".as_ptr()),
+                None => crate::str::auk_str_lit(c"?".as_ptr()),
             };
-            // `%s` of duck_str_cstr(k): stops at the first NUL byte.
+            // `%s` of auk_str_cstr(k): stops at the first NUL byte.
             let text = if ks.is_null() {
                 String::new()
             } else {
@@ -229,9 +229,9 @@ pub unsafe extern "C" fn duck_map_at(m: *const DuckMap, k: *const c_void, loc: *
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_map_get_opt(m: *const DuckMap, k: *const c_void, out: *mut c_void) -> bool {
+pub unsafe extern "C" fn auk_map_get_opt(m: *const AukMap, k: *const c_void, out: *mut c_void) -> bool {
     unsafe {
-        let v = duck_map_find(m, k);
+        let v = auk_map_find(m, k);
         if v.is_null() {
             return false;
         }
@@ -244,14 +244,14 @@ pub unsafe extern "C" fn duck_map_get_opt(m: *const DuckMap, k: *const c_void, o
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_map_contains(m: *const DuckMap, k: *const c_void) -> bool {
-    unsafe { !duck_map_find(m, k).is_null() }
+pub unsafe extern "C" fn auk_map_contains(m: *const AukMap, k: *const c_void) -> bool {
+    unsafe { !auk_map_find(m, k).is_null() }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_map_copy(m: *const DuckMap) -> *mut DuckMap {
+pub unsafe extern "C" fn auk_map_copy(m: *const AukMap) -> *mut AukMap {
     unsafe {
-        let c = duck_map_new((*m).kops, (*m).vops);
+        let c = auk_map_new((*m).kops, (*m).vops);
         if (*m).len != 0 {
             set_cap(c, (*m).len);
             let stride = (*m).stride as usize;
@@ -279,19 +279,19 @@ pub unsafe extern "C" fn duck_map_copy(m: *const DuckMap) -> *mut DuckMap {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_map_make_unique(pm: *mut *mut DuckMap) -> *mut c_void {
+pub unsafe extern "C" fn auk_map_make_unique(pm: *mut *mut AukMap) -> *mut c_void {
     unsafe {
         let m = *pm;
-        if duck_refcount(m.cast()) != 1 {
-            *pm = duck_map_copy(m);
-            duck_release(m.cast());
+        if auk_refcount(m.cast()) != 1 {
+            *pm = auk_map_copy(m);
+            auk_release(m.cast());
         }
         (*pm).cast()
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_map_set(pm: *mut *mut DuckMap, k_in: *const c_void, v_in: *const c_void) {
+pub unsafe extern "C" fn auk_map_set(pm: *mut *mut AukMap, k_in: *const c_void, v_in: *const c_void) {
     unsafe {
         let m0 = *pm;
         // Hold copies of key/val (retained) before COW: they may live in *pm.
@@ -305,7 +305,7 @@ pub unsafe extern "C" fn duck_map_set(pm: *mut *mut DuckMap, k_in: *const c_void
         if let Some(r) = (*(*m0).vops).retain {
             r(v.cast());
         }
-        duck_map_make_unique(pm);
+        auk_map_make_unique(pm);
         let m = *pm;
         let h = ((*(*m).kops).hash.unwrap_unchecked())(k.cast());
         let s = find_slot(m, k.cast(), h);
@@ -348,9 +348,9 @@ pub unsafe extern "C" fn duck_map_set(pm: *mut *mut DuckMap, k_in: *const c_void
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_map_remove(pm: *mut *mut DuckMap, k_in: *const c_void, out: *mut c_void) -> bool {
+pub unsafe extern "C" fn auk_map_remove(pm: *mut *mut AukMap, k_in: *const c_void, out: *mut c_void) -> bool {
     unsafe {
-        if !duck_map_contains(*pm, k_in) {
+        if !auk_map_contains(*pm, k_in) {
             return false;
         }
         let ks = (*(**pm).kops).size;
@@ -360,7 +360,7 @@ pub unsafe extern "C" fn duck_map_remove(pm: *mut *mut DuckMap, k_in: *const c_v
         if let Some(r) = (*(**pm).kops).retain {
             r(k.cast());
         }
-        duck_map_make_unique(pm);
+        auk_map_make_unique(pm);
         let m = *pm;
         let s = find_slot(m, k.cast(), ((*(*m).kops).hash.unwrap_unchecked())(k.cast()));
         let e = entry_of(*(*m).index.add(s as usize));
@@ -387,8 +387,8 @@ pub unsafe extern "C" fn duck_map_remove(pm: *mut *mut DuckMap, k_in: *const c_v
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_map_next(
-    m: *const DuckMap,
+pub unsafe extern "C" fn auk_map_next(
+    m: *const AukMap,
     it: *mut i64,
     k: *mut *mut c_void,
     v: *mut *mut c_void,
@@ -416,38 +416,38 @@ pub unsafe extern "C" fn duck_map_next(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_map_keys(m: *const DuckMap) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_map_keys(m: *const AukMap) -> *mut AukArr {
     unsafe {
-        let mut a = crate::arr::duck_arr_new((*m).kops, (*m).len);
+        let mut a = crate::arr::auk_arr_new((*m).kops, (*m).len);
         let mut it: i64 = 0;
         let mut k: *mut c_void = null_mut();
-        while duck_map_next(m, &mut it, &mut k, null_mut()) {
-            crate::arr::duck_arr_push(&mut a, k);
+        while auk_map_next(m, &mut it, &mut k, null_mut()) {
+            crate::arr::auk_arr_push(&mut a, k);
         }
         a
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_map_values(m: *const DuckMap) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_map_values(m: *const AukMap) -> *mut AukArr {
     unsafe {
-        let mut a = crate::arr::duck_arr_new((*m).vops, (*m).len);
+        let mut a = crate::arr::auk_arr_new((*m).vops, (*m).len);
         let mut it: i64 = 0;
         let mut v: *mut c_void = null_mut();
-        while duck_map_next(m, &mut it, null_mut(), &mut v) {
-            crate::arr::duck_arr_push(&mut a, v);
+        while auk_map_next(m, &mut it, null_mut(), &mut v) {
+            crate::arr::auk_arr_push(&mut a, v);
         }
         a
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_map_eq(a: *const DuckMap, b: *const DuckMap) -> bool {
+pub unsafe extern "C" fn auk_map_eq(a: *const AukMap, b: *const AukMap) -> bool {
     unsafe {
         if a == b {
             return true;
         }
-        if duck_map_len(a) != duck_map_len(b) {
+        if auk_map_len(a) != auk_map_len(b) {
             return false;
         }
         if a.is_null() || b.is_null() {
@@ -456,8 +456,8 @@ pub unsafe extern "C" fn duck_map_eq(a: *const DuckMap, b: *const DuckMap) -> bo
         let mut it: i64 = 0;
         let mut k: *mut c_void = null_mut();
         let mut v: *mut c_void = null_mut();
-        while duck_map_next(a, &mut it, &mut k, &mut v) {
-            let w = duck_map_find(b, k);
+        while auk_map_next(a, &mut it, &mut k, &mut v) {
+            let w = auk_map_find(b, k);
             if w.is_null() {
                 return false;
             }
@@ -471,27 +471,27 @@ pub unsafe extern "C" fn duck_map_eq(a: *const DuckMap, b: *const DuckMap) -> bo
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_map_show(m: *const DuckMap) -> *mut DuckStr {
-    use crate::str::{duck_sb_char, duck_sb_finish, duck_sb_lit, duck_sb_str_own};
+pub unsafe extern "C" fn auk_map_show(m: *const AukMap) -> *mut AukStr {
+    use crate::str::{auk_sb_char, auk_sb_finish, auk_sb_lit, auk_sb_str_own};
     unsafe {
-        let mut b = DuckStrBuf::INIT;
-        duck_sb_char(&mut b, '{' as u32);
+        let mut b = AukStrBuf::INIT;
+        auk_sb_char(&mut b, '{' as u32);
         let mut it: i64 = 0;
         let mut k: *mut c_void = null_mut();
         let mut v: *mut c_void = null_mut();
         let mut first = true;
-        while !crate::trace::show_exhausted() && duck_map_next(m, &mut it, &mut k, &mut v) {
+        while !crate::trace::show_exhausted() && auk_map_next(m, &mut it, &mut k, &mut v) {
             if !first {
-                duck_sb_lit(&mut b, c", ".as_ptr());
+                auk_sb_lit(&mut b, c", ".as_ptr());
             }
             first = false;
             let kshow = (*(*m).kops).show.expect("key type has no show");
-            duck_sb_str_own(&mut b, kshow(k));
-            duck_sb_lit(&mut b, c": ".as_ptr());
+            auk_sb_str_own(&mut b, kshow(k));
+            auk_sb_lit(&mut b, c": ".as_ptr());
             let vshow = (*(*m).vops).show.expect("value type has no show");
-            duck_sb_str_own(&mut b, vshow(v));
+            auk_sb_str_own(&mut b, vshow(v));
         }
-        duck_sb_char(&mut b, '}' as u32);
-        duck_sb_finish(&mut b)
+        auk_sb_char(&mut b, '}' as u32);
+        auk_sb_finish(&mut b)
     }
 }

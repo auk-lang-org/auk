@@ -28,7 +28,7 @@ pub enum Item {
     Let(ConstDef),
     /// `imprint X = e`: evaluated at compile time.
     Imprint(ConstDef),
-    /// Prelude only: `extern type Err = "DuckErr *"`, an opaque type implemented by the runtime.
+    /// Prelude only: `extern type Err = "AukErr *"`, an opaque type implemented by the runtime.
     ExternType(ExternTypeDef),
 }
 
@@ -100,7 +100,7 @@ pub enum FnBody {
     /// `= expr`
     Expr(Box<Expr>),
     Block(Block),
-    /// Prelude only: `extern fn len(s: str): int = "duck_str_len"`. The symbol names a C function
+    /// Prelude only: `extern fn len(s: str): int = "auk_str_len"`. The symbol names a C function
     /// in the runtime, or a compiler intrinsic when it starts with `@` (see `typed::Intrinsic`).
     Extern(String),
 }
@@ -488,7 +488,7 @@ impl BinOp {
     }
 }
 
-// ---- debug dump: an S-expression rendering used by `duck parse --ast` and tests ----
+// ---- debug dump: an S-expression rendering used by `auk parse --ast` and tests ----
 
 impl Module {
     pub fn dump(&self) -> String {

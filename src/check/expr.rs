@@ -866,6 +866,8 @@ impl Checker {
         let mut d = Diag::new("E0102", span, format!("unknown {what} `{n}`"));
         if let Some(TypeItem::Def(_)) = self.items[m].types.get(n) {
             d = d.note(format!("`{n}` is a type; build a value with `{n} {{ ... }}`"));
+        } else if self.binding.iter().any(|b| b == n) {
+            d = d.note(format!("a closure can't refer to `{n}`, the name it is being bound to; write a top-level `fn {n}` to recurse"));
         } else if n == "old" {
             d = d.note("`old(e)` is only available in `ensures`");
         } else if n == "result" {
@@ -873,7 +875,7 @@ impl Checker {
         } else if let Some(s) = similar(n, &cands) {
             d = d.note(format!("did you mean `{s}`?")).fix(span, s);
         } else if self.prog.first_segment(m, n).is_none() && call {
-            d = d.note("functions of other modules and packages are called by path, e.g. `json.parse(s)`; dependencies are listed in quack.toml");
+            d = d.note("functions of other modules and packages are called by path, e.g. `json.parse(s)`; dependencies are listed in raft.toml");
         }
         self.err(d);
         Ty::Error
@@ -1944,7 +1946,7 @@ impl Checker {
                     } else if self.is_captured(l) {
                         self.err(
                             Diag::new("E0323", e.span, format!("a closure can't change `{n}`, a variable it captures"))
-                                .note("closures capture by value; return the new value from the closure instead"),
+                                .note("closures capture by value, so the change would be lost; use a `for` loop, or `reduce` to build the result"),
                         );
                     }
                 }
@@ -3280,10 +3282,20 @@ impl Checker {
         let before = self.tables[m].locals.len();
         let kw = Span { end_line: e.span.line, end_col: e.span.col + 3, ..e.span };
         let Some(arm) = els else {
+            let bound = match (&pat.kind, &value.kind) {
+                (PatKind::Bind(n), K::Closure { .. }) => Some(n.clone()),
+                _ => None,
+            };
+            if let Some(n) = &bound {
+                self.binding.push(n.clone());
+            }
             let t = match &ann_ty {
                 Some(t) => self.check(value, t),
                 None => self.infer(value, None),
             };
+            if bound.is_some() {
+                self.binding.pop();
+            }
             self.check_unawaited_let(value, &t);
             let mut seen = HashMap::new();
             self.pattern(pat, &t, mutable, &mut seen);

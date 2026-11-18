@@ -14,7 +14,7 @@ use crate::*;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const CHUNK: usize = 4096;
 
-unsafe fn float_slice<'a>(a: *const DuckArr) -> &'a [f64] {
+unsafe fn float_slice<'a>(a: *const AukArr) -> &'a [f64] {
     if a.is_null() || unsafe { (*a).len } == 0 {
         &[]
     } else {
@@ -37,29 +37,29 @@ fn sleep_ms(ms: i64) {
 /// return once they have been heard. An Err if the arguments are invalid or no output device can
 /// be opened.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_audio_out_play(samples: *const DuckArr, channels: i64, rate: i64, loc: *const c_char) -> DuckRes_unit {
+pub unsafe extern "C" fn auk_audio_out_play(samples: *const AukArr, channels: i64, rate: i64, loc: *const c_char) -> AukRes_unit {
     let xs = unsafe { float_slice(samples) };
     if !(1..=32).contains(&channels) {
-        return DuckRes::err(err_msg(&format!("audio_out.play: {channels} channels (expected 1 to 32)")));
+        return AukRes::err(err_msg(&format!("audio_out.play: {channels} channels (expected 1 to 32)")));
     }
     if !(1..=768_000).contains(&rate) {
-        return DuckRes::err(err_msg(&format!("audio_out.play: sample rate {rate} (expected 1 to 768000)")));
+        return AukRes::err(err_msg(&format!("audio_out.play: sample rate {rate} (expected 1 to 768000)")));
     }
     if xs.len() % channels as usize != 0 {
-        return DuckRes::err(err_msg(&format!(
+        return AukRes::err(err_msg(&format!(
             "audio_out.play: {} samples is not a whole number of {channels}-channel frames",
             xs.len()
         )));
     }
     if xs.is_empty() {
-        return DuckRes::ok(0);
+        return AukRes::ok(0);
     }
     match unsafe { play(xs, channels as usize, rate as u32) } {
         Ok(()) => {
             crate::task::check_cancel(loc);
-            DuckRes::ok(0)
+            AukRes::ok(0)
         }
-        Err(e) => DuckRes::err(err_msg(&format!("audio_out.play: {e}"))),
+        Err(e) => AukRes::err(err_msg(&format!("audio_out.play: {e}"))),
     }
 }
 
@@ -287,7 +287,7 @@ mod sys {
         let spec = SampleSpec { format: FLOAT32, rate, channels: nch as u8 };
         let mut e: c_int = 0;
         let s = unsafe {
-            (a.new)(std::ptr::null(), c"duck".as_ptr(), PLAYBACK, std::ptr::null(), c"audio_out".as_ptr(), &spec, std::ptr::null(), std::ptr::null(), &mut e)
+            (a.new)(std::ptr::null(), c"auk".as_ptr(), PLAYBACK, std::ptr::null(), c"audio_out".as_ptr(), &spec, std::ptr::null(), std::ptr::null(), &mut e)
         };
         if s.is_null() {
             return Err(format!("no output device ({})", text(e)));

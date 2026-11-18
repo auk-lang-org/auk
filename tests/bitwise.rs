@@ -1,15 +1,15 @@
 //! Bitwise operators on `int` (`& | ^ ~ << >>` and their `&=`-style assignments): truth tables,
-//! precedence and compound assignment in tests/fixtures/bitwise.duck, SHA-256 written in Duck
-//! in tests/fixtures/sha256.duck (both under the leak checker), shift-range panics, and the
+//! precedence and compound assignment in tests/fixtures/bitwise.auk, SHA-256 written in Auk
+//! in tests/fixtures/sha256.auk (both under the leak checker), shift-range panics, and the
 //! checker's and parser's diagnostics with their fix-its.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::{env, fs};
 
-fn duck_cmd() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_duck"));
-    c.env("DUCK_LEAK_CHECK", "1");
+fn auk_cmd() -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_auk"));
+    c.env("AUK_LEAK_CHECK", "1");
     c
 }
 
@@ -20,14 +20,14 @@ fn text(o: &Output) -> (String, String) {
 fn scratch(name: &str, src: &str) -> PathBuf {
     let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bitwise");
     fs::create_dir_all(&d).unwrap();
-    let p = d.join(format!("{name}.duck"));
+    let p = d.join(format!("{name}.auk"));
     fs::write(&p, src).unwrap();
     p
 }
 
 #[test]
 fn operators_pass_their_tests() {
-    let o = duck_cmd().args(["test", "tests/fixtures/bitwise.duck"]).output().unwrap();
+    let o = auk_cmd().args(["test", "tests/fixtures/bitwise.auk"]).output().unwrap();
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}\n{err}");
     assert_eq!(
@@ -38,8 +38,8 @@ fn operators_pass_their_tests() {
 }
 
 #[test]
-fn sha256_in_duck_matches_the_known_digests() {
-    let o = duck_cmd().args(["test", "tests/fixtures/sha256.duck"]).output().unwrap();
+fn sha256_in_auk_matches_the_known_digests() {
+    let o = auk_cmd().args(["test", "tests/fixtures/sha256.auk"]).output().unwrap();
     let (out, err) = text(&o);
     assert!(o.status.success(), "{out}\n{err}");
     assert_eq!(
@@ -51,7 +51,7 @@ fn sha256_in_duck_matches_the_known_digests() {
 
 #[test]
 fn fixtures_are_fmt_clean() {
-    let o = duck_cmd().args(["fmt", "--check", "tests/fixtures/bitwise.duck", "tests/fixtures/sha256.duck"]).output().unwrap();
+    let o = auk_cmd().args(["fmt", "--check", "tests/fixtures/bitwise.auk", "tests/fixtures/sha256.auk"]).output().unwrap();
     assert!(o.status.success(), "{:?}", text(&o));
 }
 
@@ -65,24 +65,24 @@ fn shift_amounts_outside_0_to_63_panic() {
         ("shl_eq", "{\n    var x = 1\n    x <<= n\n    x\n  }", "65"),
     ] {
         let src = format!("fn main(args: [str]) {{\n  let n = int.parse(\"{n}\")!\n  print({expr})\n}}\n");
-        let o = duck_cmd().arg("run").arg(scratch(name, &src)).output().unwrap();
+        let o = auk_cmd().arg("run").arg(scratch(name, &src)).output().unwrap();
         let (out, err) = text(&o);
         assert_eq!(o.status.code(), Some(101), "{name}: {out}\n{err}");
         assert!(err.starts_with(&format!("panic: shift amount {n} is outside 0..63\n")), "{name}: {err}");
-        assert!(err.contains(&format!("{name}.duck:")), "{name}: the panic points at the shift: {err}");
+        assert!(err.contains(&format!("{name}.auk:")), "{name}: the panic points at the shift: {err}");
     }
     // 0 and 63 are fine
     let src = "fn main() {\n  let n = int.parse(\"63\")!\n  print(\"{1 << n} {-1 >> n} {5 << 0} {5 >> 0}\")\n}\n";
-    let o = duck_cmd().arg("run").arg(scratch("edges", src)).output().unwrap();
+    let o = auk_cmd().arg("run").arg(scratch("edges", src)).output().unwrap();
     let (out, err) = text(&o);
     assert!(o.status.success(), "{err}");
     assert_eq!(out, "-9223372036854775808 -1 5 5\n");
 }
 
-/// `duck check --json` on `src`.
+/// `auk check --json` on `src`.
 fn check(name: &str, src: &str) -> String {
     let p = scratch(name, src);
-    let o = duck_cmd().arg("check").arg(&p).arg("--json").output().unwrap();
+    let o = auk_cmd().arg("check").arg(&p).arg("--json").output().unwrap();
     text(&o).0
 }
 

@@ -21,7 +21,7 @@ pub fn parse(src: &str) -> Result<Module, Vec<Diag>> {
     parse_with(src, false)
 }
 
-/// Parse a core prelude file (`src/prelude/*.duck`). The prelude may also use the
+/// Parse a core prelude file (`src/prelude/*.auk`). The prelude may also use the
 /// prelude-only forms `extern fn f(..): T = "c_symbol"` and `extern type T = "CType"`, and may
 /// name functions with keywords (`fn enum(..)`, for `xs.enum()`).
 pub fn parse_prelude(src: &str) -> Result<Module, Vec<Diag>> {
@@ -395,7 +395,7 @@ impl Parser {
             t => {
                 let mut d = self.expected("E0024", "an item (`fn`, `struct`, `enum`, `shape`, `test`, `let` or `imprint`)");
                 if matches!(t, Tok::Ident(n) if n == "import" || n == "use") {
-                    d = d.note("Duck has no imports: refer to anything by its path, e.g. `json.parse(s)`; dependencies go in quack.toml");
+                    d = d.note("Auk has no imports: refer to anything by its path, e.g. `json.parse(s)`; dependencies go in raft.toml");
                 } else if !public {
                     d = d.note("statements and expressions belong inside a function; a program starts at `fn main`");
                 }
@@ -409,7 +409,7 @@ impl Parser {
         let kw = self.span();
         if !self.prelude {
             return Err(Diag::new("E0036", kw, "`extern` declarations are only allowed in the core prelude")
-                .note("Duck code calls the runtime through the core library; there is no FFI syntax in user code"));
+                .note("Auk code calls the runtime through the core library; there is no FFI syntax in user code"));
         }
         self.bump();
         if matches!(self.peek(), Tok::Ident(n) if n == "type") {
@@ -1069,7 +1069,7 @@ impl Parser {
     }
 
     /// A comparison operand that is a bare `&`, `|` or `^`: C reads `x & 1 == 0` as
-    /// `x & (1 == 0)`, so Duck asks for parentheses whichever way it is meant.
+    /// `x & (1 == 0)`, so Auk asks for parentheses whichever way it is meant.
     fn check_bitwise_operand(&self, e: &Expr) -> PResult<()> {
         let ExprKind::Binary { op, .. } = &e.kind else { return Ok(()) };
         if !is_bitwise(*op) || self.parened.contains(&e.id) {
@@ -1077,7 +1077,7 @@ impl Parser {
         }
         let (open, close) = (Span { end_line: e.span.line, end_col: e.span.col, ..e.span }, e.span.after());
         Err(Diag::new("E0038", e.span, format!("`{}` mixed with a comparison needs parentheses", op.symbol()))
-            .note("C reads `x & 1 == 0` as `x & (1 == 0)`; Duck makes you write which one you mean")
+            .note("C reads `x & 1 == 0` as `x & (1 == 0)`; Auk makes you write which one you mean")
             .note("add parentheses around the bitwise operation")
             .fix(open, "(")
             .fix(close, ")"))
@@ -1612,7 +1612,7 @@ mod tests {
     use super::*;
 
     fn module(src: &str) -> Module {
-        parse(src).unwrap_or_else(|ds| panic!("{}", ds.iter().map(|d| d.render("t.duck", src)).collect::<String>()))
+        parse(src).unwrap_or_else(|ds| panic!("{}", ds.iter().map(|d| d.render("t.auk", src)).collect::<String>()))
     }
 
     fn dump(src: &str) -> String {

@@ -4,7 +4,7 @@ Dates, times and instants on the proleptic Gregorian calendar, with UTC and fixe
 
 **Effects:** none. The package never reads the clock; pass it in with `datetime.from_unix_ms(time.now())` (which needs `uses time` in *your* code).
 
-```duck
+```auk
 fn main(): int! uses time {
   let now = datetime.from_unix_ms(time.now())
   let due = datetime.parse("2024-02-29T13:05:09.120+05:30")?

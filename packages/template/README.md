@@ -14,7 +14,7 @@ A `{% %}` tag or `{# #}` comment that is alone on its line removes the whole lin
 
 **Effects:** none. **Deps:** none.
 
-```duck
+```auk
 struct Item { name: str, price: float }
 struct Page { title: str, items: [Item], user: str? }
 
@@ -32,18 +32,18 @@ fn main(): int! {
       {% endfor %}
     </ul>
     """)?
-  let p = Page { title: "Shop <Duck>", items: [Item { name: "Rubber duck", price: 3.5 }], user: some("ann") }
+  let p = Page { title: "Shop <Auk>", items: [Item { name: "Rubber auk", price: 3.5 }], user: some("ann") }
   print(template.render(page, p)?)
-  // <h1>Shop &lt;Duck&gt;</h1>
+  // <h1>Shop &lt;Auk&gt;</h1>
   // <p>Welcome back, ann</p>
   // <ul>
-  //   <li>1. Rubber duck: $3.5</li>
+  //   <li>1. Rubber auk: $3.5</li>
   // </ul>
   0
 }
 ```
 
-Write templates as raw strings (`r"..."`, `r"""..."""`). In an ordinary Duck string, `{` starts interpolation.
+Write templates as raw strings (`r"..."`, `r"""..."""`). In an ordinary Auk string, `{` starts interpolation.
 
 ## API
 
@@ -60,9 +60,9 @@ Write templates as raw strings (`r"..."`, `r"""..."""`). In an ordinary Duck str
 - Access: `user.name`, `xs[0]`, `xs.0`, `xs[-1]`, `m["key"]`, `s[0]`.
 - Operators, loosest first: `or`, `and`, `not`, then one comparison (`== != < <= > >= in`, `not in`), then `+ -`, then `* / %`, then unary `-`, then postfix (`.`, `[]`, `| filter`).
 - Filters bind tightest: `-3 | abs` is `-(3 | abs)`.
-- `and`/`or` return an operand, so `{{ name or "anonymous" }}` works. `==` compares ints and floats by value. Int `/` truncates, as in Duck. `+` also joins strings and lists.
+- `and`/`or` return an operand, so `{{ name or "anonymous" }}` works. `==` compares ints and floats by value. Int `/` truncates, as in Auk. `+` also joins strings and lists.
 - Truthiness: `none`, `false`, `0`, `0.0`, `""`, `[]` and `{}` are false.
-- Output: strings print as they are, `none` prints as nothing, numbers and bools as Duck prints them, and lists and maps as JSON.
+- Output: strings print as they are, `none` prints as nothing, numbers and bools as Auk prints them, and lists and maps as JSON.
 - `loop` inside a `for` has `index` (from 1), `index0`, `first`, `last` and `length`.
 - Iterating a map gives its keys with one loop variable and key and value with two. Iterating `none` gives nothing.
 - `set` assigns in the innermost scope. Each loop has its own scope, so a `set` inside a loop doesn't leak out of it.

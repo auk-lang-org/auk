@@ -27,7 +27,7 @@ use codegen::{Exports, Gen};
 pub enum Level {
     /// Nothing (fastest to compile): tests, imprints, debugger evaluations.
     O0,
-    /// A few cheap passes (`duck run`).
+    /// A few cheap passes (`auk run`).
     Light,
     O2,
     O3,
@@ -89,8 +89,8 @@ fn target_machine(level: Level) -> Result<LLVMTargetMachineRef, String> {
         }
         let cpu = LLVMGetHostCPUName();
         let features = LLVMGetHostCPUFeatures();
-        // DUCK_LLVM_CODEGEN=0..3 overrides the code generator's level (tuning)
-        let cg = match std::env::var("DUCK_LLVM_CODEGEN").ok().as_deref() {
+        // AUK_LLVM_CODEGEN=0..3 overrides the code generator's level (tuning)
+        let cg = match std::env::var("AUK_LLVM_CODEGEN").ok().as_deref() {
             Some("0") => Level::O0,
             Some("1") => Level::Light,
             Some("2") => Level::O2,
@@ -122,13 +122,13 @@ struct Built {
 }
 
 /// Translate, verify and optimize `prog`. `link_runtime`: link the runtime's inlinable functions
-/// into the module first (`rtlink.rs`; `duck build` only: it costs compile time).
+/// into the module first (`rtlink.rs`; `auk build` only: it costs compile time).
 fn build(prog: &Program, info: &TyInfo, ex: &Exports, live: Option<(usize, HashMap<u32, usize>)>, level: Level, link_runtime: bool) -> Result<Built, String> {
     let tm = target_machine(level)?;
     unsafe {
         let cx = LLVMContextCreate();
         let m = {
-            let mut g = Gen::new(cx, "duck", prog, info, live);
+            let mut g = Gen::new(cx, "auk", prog, info, live);
             g.inline_rt = level != Level::O0;
             g.program(ex)?;
             g.m
@@ -139,23 +139,23 @@ fn build(prog: &Program, info: &TyInfo, ex: &Exports, live: Option<(usize, HashM
         let dl = LLVMCreateTargetDataLayout(tm);
         LLVMSetModuleDataLayout(m, dl);
         llvm_sys::target::LLVMDisposeTargetData(dl);
-        // DUCK_NO_RT_INLINE=1: without the runtime's bitcode (to compare)
-        if link_runtime && std::env::var_os("DUCK_NO_RT_INLINE").is_none() && !rtlink::link(cx, m) {
+        // AUK_NO_RT_INLINE=1: without the runtime's bitcode (to compare)
+        if link_runtime && std::env::var_os("AUK_NO_RT_INLINE").is_none() && !rtlink::link(cx, m) {
             eprintln!("note: the runtime's bitcode can't be used with this LLVM; runtime calls won't be inlined");
         }
-        if cfg!(debug_assertions) || std::env::var_os("DUCK_VERIFY").is_some() {
+        if cfg!(debug_assertions) || std::env::var_os("AUK_VERIFY").is_some() {
             let mut msg = std::ptr::null_mut();
             if LLVMVerifyModule(m, LLVMVerifierFailureAction::LLVMReturnStatusAction, &mut msg) != 0 {
                 let why = message(msg);
-                let ir = if std::env::var_os("DUCK_VERIFY").is_some() { message(LLVMPrintModuleToString(m)) } else { String::new() };
+                let ir = if std::env::var_os("AUK_VERIFY").is_some() { message(LLVMPrintModuleToString(m)) } else { String::new() };
                 LLVMDisposeModule(m);
                 LLVMContextDispose(cx);
                 LLVMDisposeTargetMachine(tm);
                 return Err(format!("invalid LLVM IR: {why}{ir}"));
             }
         }
-        // DUCK_LLVM_PASSES overrides the pass pipeline (tuning; empty: none)
-        let custom = std::env::var("DUCK_LLVM_PASSES").ok();
+        // AUK_LLVM_PASSES overrides the pass pipeline (tuning; empty: none)
+        let custom = std::env::var("AUK_LLVM_PASSES").ok();
         let passes = match &custom {
             Some(p) if p.is_empty() => None,
             Some(p) => Some(p.as_str()),
@@ -195,7 +195,7 @@ pub fn jit_eval(prog: &Program, info: &TyInfo) -> Result<(*const u8, *const u8),
     Ok((entry, init))
 }
 
-/// A program for `duck run --live`: calls to the functions in `slots` go through the live table
+/// A program for `auk run --live`: calls to the functions in `slots` go through the live table
 /// at `table` (8-byte code pointers).
 pub fn jit_live(prog: &Program, info: &TyInfo, table: usize, slots: &HashMap<u32, usize>) -> Result<LiveJit, String> {
     let ex = Exports { entry: "dk_entry".into(), names: Vec::new(), all: true };
@@ -238,7 +238,7 @@ fn emit(b: Built) -> Result<Vec<u8>, String> {
     }
 }
 
-/// The program's LLVM IR, unoptimized, as text (`duck ir --llvm`).
+/// The program's LLVM IR, unoptimized, as text (`auk ir --llvm`).
 pub fn ir_text(prog: &Program, info: &TyInfo) -> Result<String, String> {
     let b = build(prog, info, &exports("main"), None, Level::O0, false)?;
     unsafe {

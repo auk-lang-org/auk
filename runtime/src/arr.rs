@@ -3,17 +3,17 @@
 use std::ffi::{c_char, c_int, c_void};
 use std::ptr::{self, null, null_mut};
 
-use crate::rc::{duck__alloc, duck__free_obj, duck__xmalloc, duck__xrealloc, duck_refcount, duck_release, duck_retain};
+use crate::rc::{auk__alloc, auk__free_obj, auk__xmalloc, auk__xrealloc, auk_refcount, auk_release, auk_retain};
 use crate::*;
 
 /// `ELEM(a, i)`: address of element i.
 #[inline]
-unsafe fn elem(a: *const DuckArr, i: i64) -> *mut u8 {
+unsafe fn elem(a: *const AukArr, i: i64) -> *mut u8 {
     unsafe { (*a).data.add(i as usize * (*(*a).ops).size) }
 }
 
 #[inline]
-unsafe fn retain_elem(ops: *const DuckElemOps, e: *mut c_void) {
+unsafe fn retain_elem(ops: *const AukElemOps, e: *mut c_void) {
     unsafe {
         if let Some(r) = (*ops).retain {
             r(e)
@@ -21,7 +21,7 @@ unsafe fn retain_elem(ops: *const DuckElemOps, e: *mut c_void) {
     }
 }
 #[inline]
-unsafe fn release_elem(ops: *const DuckElemOps, e: *mut c_void) {
+unsafe fn release_elem(ops: *const AukElemOps, e: *mut c_void) {
     unsafe {
         if let Some(r) = (*ops).release {
             r(e)
@@ -36,7 +36,7 @@ struct Tmp {
 }
 impl Tmp {
     unsafe fn new(sz: usize) -> Tmp {
-        let heap = if sz <= 256 { null_mut() } else { unsafe { duck__xmalloc(sz) as *mut u8 } };
+        let heap = if sz <= 256 { null_mut() } else { unsafe { auk__xmalloc(sz) as *mut u8 } };
         Tmp { stack: [0; 256], heap }
     }
     fn ptr(&mut self) -> *mut u8 {
@@ -53,24 +53,24 @@ impl Drop for Tmp {
 
 // Accessors (once `static inline` in C), exported for the generated code.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_len(a: *const DuckArr) -> i64 {
+pub unsafe extern "C" fn auk_arr_len(a: *const AukArr) -> i64 {
     if a.is_null() { 0 } else { unsafe { (*a).len } }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_data(a: *const DuckArr) -> *const c_void {
+pub unsafe extern "C" fn auk_arr_data(a: *const AukArr) -> *const c_void {
     if a.is_null() { null() } else { unsafe { (*a).data as *const c_void } }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_new(ops: *const DuckElemOps, cap: i64) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_arr_new(ops: *const AukElemOps, cap: i64) -> *mut AukArr {
     if ops.is_null() {
-        panic_msg_rt("duck_arr_new: missing element ops");
+        panic_msg_rt("auk_arr_new: missing element ops");
     }
     unsafe {
-        let a = duck__alloc(size_of::<DuckArr>(), DUCK_K_ARR) as *mut DuckArr;
+        let a = auk__alloc(size_of::<AukArr>(), AUK_K_ARR) as *mut AukArr;
         (*a).ops = ops;
         (*a).cap = if cap > 0 { cap } else { 0 };
-        (*a).data = if (*a).cap != 0 { duck__xmalloc((*a).cap as usize * (*ops).size) as *mut u8 } else { null_mut() };
+        (*a).data = if (*a).cap != 0 { auk__xmalloc((*a).cap as usize * (*ops).size) as *mut u8 } else { null_mut() };
         a
     }
 }
@@ -80,9 +80,9 @@ fn panic_msg_rt(msg: &str) -> ! {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_from(ops: *const DuckElemOps, elems: *const c_void, n: i64) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_arr_from(ops: *const AukElemOps, elems: *const c_void, n: i64) -> *mut AukArr {
     unsafe {
-        let a = duck_arr_new(ops, n);
+        let a = auk_arr_new(ops, n);
         if n != 0 {
             ptr::copy_nonoverlapping(elems as *const u8, (*a).data, n as usize * (*ops).size);
         }
@@ -96,10 +96,10 @@ pub unsafe extern "C" fn duck_arr_from(ops: *const DuckElemOps, elems: *const c_
     }
 }
 
-pub unsafe fn duck__arr_free(a: *mut DuckArr) {
+pub unsafe fn auk__arr_free(a: *mut AukArr) {
     unsafe {
         if !(*a).base.is_null() {
-            duck_release((*a).base.cast());
+            auk_release((*a).base.cast());
         } else {
             if let Some(r) = (*(*a).ops).release {
                 for i in 0..(*a).len {
@@ -108,7 +108,7 @@ pub unsafe fn duck__arr_free(a: *mut DuckArr) {
             }
             libc::free((*a).data.cast());
         }
-        duck__free_obj(a.cast());
+        auk__free_obj(a.cast());
     }
 }
 
@@ -117,9 +117,9 @@ fn oob(loc: *const c_char, i: i64, len: i64) -> ! {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_at(a: *const DuckArr, i: i64, loc: *const c_char) -> *mut c_void {
+pub unsafe extern "C" fn auk_arr_at(a: *const AukArr, i: i64, loc: *const c_char) -> *mut c_void {
     unsafe {
-        let n = duck_arr_len(a);
+        let n = auk_arr_len(a);
         if i < 0 || i >= n {
             oob(loc, i, n);
         }
@@ -128,9 +128,9 @@ pub unsafe extern "C" fn duck_arr_at(a: *const DuckArr, i: i64, loc: *const c_ch
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_get_opt(a: *const DuckArr, i: i64, out: *mut c_void) -> bool {
+pub unsafe extern "C" fn auk_arr_get_opt(a: *const AukArr, i: i64, out: *mut c_void) -> bool {
     unsafe {
-        if i < 0 || i >= duck_arr_len(a) {
+        if i < 0 || i >= auk_arr_len(a) {
             return false;
         }
         ptr::copy_nonoverlapping(elem(a, i), out as *mut u8, (*(*a).ops).size);
@@ -140,12 +140,12 @@ pub unsafe extern "C" fn duck_arr_get_opt(a: *const DuckArr, i: i64, out: *mut c
 }
 
 /// A fresh owner copy of a with capacity >= cap.
-unsafe fn copy_with_cap(a: *const DuckArr, mut cap: i64) -> *mut DuckArr {
+unsafe fn copy_with_cap(a: *const AukArr, mut cap: i64) -> *mut AukArr {
     unsafe {
         if cap < (*a).len {
             cap = (*a).len;
         }
-        let c = duck_arr_new((*a).ops, cap);
+        let c = auk_arr_new((*a).ops, cap);
         if (*a).len != 0 {
             ptr::copy_nonoverlapping((*a).data, (*c).data, (*a).len as usize * (*(*a).ops).size);
         }
@@ -159,11 +159,11 @@ unsafe fn copy_with_cap(a: *const DuckArr, mut cap: i64) -> *mut DuckArr {
     }
 }
 
-unsafe fn is_unique(a: *const DuckArr) -> bool {
-    unsafe { (*a).base.is_null() && duck_refcount(a.cast()) == 1 }
+unsafe fn is_unique(a: *const AukArr) -> bool {
+    unsafe { (*a).base.is_null() && auk_refcount(a.cast()) == 1 }
 }
 
-unsafe fn ensure_unique_cap(pa: *mut *mut DuckArr, need: i64) {
+unsafe fn ensure_unique_cap(pa: *mut *mut AukArr, need: i64) {
     unsafe {
         let a = *pa;
         if a.is_null() {
@@ -172,7 +172,7 @@ unsafe fn ensure_unique_cap(pa: *mut *mut DuckArr, need: i64) {
         if !is_unique(a) {
             let cap = if need > (*a).len { need } else { (*a).len };
             let c = copy_with_cap(a, cap);
-            duck_release(a.cast());
+            auk_release(a.cast());
             *pa = c;
             return;
         }
@@ -181,14 +181,14 @@ unsafe fn ensure_unique_cap(pa: *mut *mut DuckArr, need: i64) {
             while cap < need {
                 cap *= 2;
             }
-            (*a).data = duck__xrealloc((*a).data.cast(), cap as usize * (*(*a).ops).size) as *mut u8;
+            (*a).data = auk__xrealloc((*a).data.cast(), cap as usize * (*(*a).ops).size) as *mut u8;
             (*a).cap = cap;
         }
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_make_unique(pa: *mut *mut DuckArr) -> *mut c_void {
+pub unsafe extern "C" fn auk_arr_make_unique(pa: *mut *mut AukArr) -> *mut c_void {
     unsafe {
         ensure_unique_cap(pa, (**pa).len);
         (**pa).data.cast()
@@ -196,9 +196,9 @@ pub unsafe extern "C" fn duck_arr_make_unique(pa: *mut *mut DuckArr) -> *mut c_v
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_set(pa: *mut *mut DuckArr, i: i64, e: *const c_void, loc: *const c_char) {
+pub unsafe extern "C" fn auk_arr_set(pa: *mut *mut AukArr, i: i64, e: *const c_void, loc: *const c_char) {
     unsafe {
-        let n = duck_arr_len(*pa);
+        let n = auk_arr_len(*pa);
         if i < 0 || i >= n {
             oob(loc, i, n);
         }
@@ -216,7 +216,7 @@ pub unsafe extern "C" fn duck_arr_set(pa: *mut *mut DuckArr, i: i64, e: *const c
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_push(pa: *mut *mut DuckArr, e: *const c_void) {
+pub unsafe extern "C" fn auk_arr_push(pa: *mut *mut AukArr, e: *const c_void) {
     unsafe {
         let mut a = *pa;
         let sz = (*(*a).ops).size;
@@ -233,9 +233,9 @@ pub unsafe extern "C" fn duck_arr_push(pa: *mut *mut DuckArr, e: *const c_void) 
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_pop(pa: *mut *mut DuckArr, out: *mut c_void) -> bool {
+pub unsafe extern "C" fn auk_arr_pop(pa: *mut *mut AukArr, out: *mut c_void) -> bool {
     unsafe {
-        if duck_arr_len(*pa) == 0 {
+        if auk_arr_len(*pa) == 0 {
             return false;
         }
         ensure_unique_cap(pa, (**pa).len);
@@ -251,9 +251,9 @@ pub unsafe extern "C" fn duck_arr_pop(pa: *mut *mut DuckArr, out: *mut c_void) -
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_insert(pa: *mut *mut DuckArr, i: i64, e: *const c_void, loc: *const c_char) {
+pub unsafe extern "C" fn auk_arr_insert(pa: *mut *mut AukArr, i: i64, e: *const c_void, loc: *const c_char) {
     unsafe {
-        let n = duck_arr_len(*pa);
+        let n = auk_arr_len(*pa);
         if i < 0 || i > n {
             oob(loc, i, n);
         }
@@ -271,9 +271,9 @@ pub unsafe extern "C" fn duck_arr_insert(pa: *mut *mut DuckArr, i: i64, e: *cons
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_remove(pa: *mut *mut DuckArr, i: i64, out: *mut c_void, loc: *const c_char) {
+pub unsafe extern "C" fn auk_arr_remove(pa: *mut *mut AukArr, i: i64, out: *mut c_void, loc: *const c_char) {
     unsafe {
-        let n = duck_arr_len(*pa);
+        let n = auk_arr_len(*pa);
         if i < 0 || i >= n {
             oob(loc, i, n);
         }
@@ -291,12 +291,12 @@ pub unsafe extern "C" fn duck_arr_remove(pa: *mut *mut DuckArr, i: i64, out: *mu
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_clear(pa: *mut *mut DuckArr) {
+pub unsafe extern "C" fn auk_arr_clear(pa: *mut *mut AukArr) {
     unsafe {
         let a = *pa;
         if !is_unique(a) {
-            *pa = duck_arr_new((*a).ops, 0);
-            duck_release(a.cast());
+            *pa = auk_arr_new((*a).ops, 0);
+            auk_release(a.cast());
             return;
         }
         if let Some(r) = (*(*a).ops).release {
@@ -309,19 +309,19 @@ pub unsafe extern "C" fn duck_arr_clear(pa: *mut *mut DuckArr) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_slice(a: *mut DuckArr, lo: i64, hi: i64, loc: *const c_char) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_arr_slice(a: *mut AukArr, lo: i64, hi: i64, loc: *const c_char) -> *mut AukArr {
     unsafe {
-        let n = duck_arr_len(a);
+        let n = auk_arr_len(a);
         if lo < 0 || hi < lo || hi > n {
             rt_panic!(loc, "slice {}..{} out of range for length {}", lo, hi, n);
         }
         if lo == 0 && hi == n {
-            return duck_retain(a.cast()).cast();
+            return auk_retain(a.cast()).cast();
         }
         let root = if !(*a).base.is_null() { (*a).base } else { a };
-        let v = duck__alloc(size_of::<DuckArr>(), DUCK_K_ARR) as *mut DuckArr;
+        let v = auk__alloc(size_of::<AukArr>(), AUK_K_ARR) as *mut AukArr;
         (*v).ops = (*a).ops;
-        (*v).base = duck_retain(root.cast()).cast();
+        (*v).base = auk_retain(root.cast()).cast();
         (*v).data = elem(a, lo);
         (*v).len = hi - lo;
         (*v).cap = (*v).len;
@@ -330,49 +330,49 @@ pub unsafe extern "C" fn duck_arr_slice(a: *mut DuckArr, lo: i64, hi: i64, loc: 
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_take(a: *mut DuckArr, mut n: i64) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_arr_take(a: *mut AukArr, mut n: i64) -> *mut AukArr {
     unsafe {
-        let len = duck_arr_len(a);
+        let len = auk_arr_len(a);
         if n < 0 {
             n = 0;
         }
-        duck_arr_slice(a, 0, if n < len { n } else { len }, null())
+        auk_arr_slice(a, 0, if n < len { n } else { len }, null())
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_skip(a: *mut DuckArr, mut n: i64) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_arr_skip(a: *mut AukArr, mut n: i64) -> *mut AukArr {
     unsafe {
-        let len = duck_arr_len(a);
+        let len = auk_arr_len(a);
         if n < 0 {
             n = 0;
         }
-        duck_arr_slice(a, if n < len { n } else { len }, len, null())
+        auk_arr_slice(a, if n < len { n } else { len }, len, null())
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_copy(a: *const DuckArr) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_arr_copy(a: *const AukArr) -> *mut AukArr {
     unsafe { copy_with_cap(a, (*a).len) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_concat(a: *const DuckArr, b: *const DuckArr) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_arr_concat(a: *const AukArr, b: *const AukArr) -> *mut AukArr {
     unsafe {
-        let mut c = copy_with_cap(a, (*a).len + duck_arr_len(b));
-        duck_arr_extend(&mut c, b);
+        let mut c = copy_with_cap(a, (*a).len + auk_arr_len(b));
+        auk_arr_extend(&mut c, b);
         c
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_extend(pa: *mut *mut DuckArr, b: *const DuckArr) {
+pub unsafe extern "C" fn auk_arr_extend(pa: *mut *mut AukArr, b: *const AukArr) {
     unsafe {
-        let bn = duck_arr_len(b);
+        let bn = auk_arr_len(b);
         if bn == 0 {
             return;
         }
-        let keep = duck_retain(b as *mut c_void); // b may be *pa
+        let keep = auk_retain(b as *mut c_void); // b may be *pa
         ensure_unique_cap(pa, (**pa).len + bn);
         let a = *pa;
         ptr::copy_nonoverlapping((*b).data, elem(a, (*a).len), bn as usize * (*(*a).ops).size);
@@ -382,11 +382,11 @@ pub unsafe extern "C" fn duck_arr_extend(pa: *mut *mut DuckArr, b: *const DuckAr
             }
         }
         (*a).len += bn;
-        duck_release(keep);
+        auk_release(keep);
     }
 }
 
-unsafe fn reverse_in_place(a: *mut DuckArr) {
+unsafe fn reverse_in_place(a: *mut AukArr) {
     unsafe {
         let sz = (*(*a).ops).size;
         let mut tmp = Tmp::new(sz);
@@ -403,18 +403,18 @@ unsafe fn reverse_in_place(a: *mut DuckArr) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_reversed(a: *const DuckArr) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_arr_reversed(a: *const AukArr) -> *mut AukArr {
     unsafe {
-        let c = duck_arr_copy(a);
+        let c = auk_arr_copy(a);
         reverse_in_place(c);
         c
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_reverse(pa: *mut *mut DuckArr) {
+pub unsafe extern "C" fn auk_arr_reverse(pa: *mut *mut AukArr) {
     unsafe {
-        duck_arr_make_unique(pa);
+        auk_arr_make_unique(pa);
         reverse_in_place(*pa);
     }
 }
@@ -479,43 +479,43 @@ unsafe fn merge_sort(d: *mut u8, tmp: *mut u8, n: i64, c: &SortCtx) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_sort_with(pa: *mut *mut DuckArr, cmp: SortCmpFn, ctx: *mut c_void) {
+pub unsafe extern "C" fn auk_arr_sort_with(pa: *mut *mut AukArr, cmp: SortCmpFn, ctx: *mut c_void) {
     unsafe {
-        duck_arr_make_unique(pa);
+        auk_arr_make_unique(pa);
         let a = *pa;
         if (*a).len < 2 {
             return;
         }
         let c = SortCtx { cmp, ctx, sz: (*(*a).ops).size };
-        let tmp = duck__xmalloc((*a).len as usize * c.sz) as *mut u8;
+        let tmp = auk__xmalloc((*a).len as usize * c.sz) as *mut u8;
         merge_sort((*a).data, tmp, (*a).len, &c);
         libc::free(tmp.cast());
     }
 }
 
 /// Sort `*pa` in place (made unique first), stable, by the elements' `cmp` (their element ops:
-/// the same comparison as Duck's `<`, derived or user-written). Ints and floats are sorted as
+/// the same comparison as Auk's `<`, derived or user-written). Ints and floats are sorted as
 /// values; other elements through a permutation of their indexes, moved only once it is done, so
 /// a user `cmp` that panics leaves the list as it was.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_sort(pa: *mut *mut DuckArr) {
+pub unsafe extern "C" fn auk_arr_sort(pa: *mut *mut AukArr) {
     unsafe {
         let ops = (**pa).ops;
         let Some(cmp) = (*ops).cmp else { panic_msg_rt("sort: element type has no cmp") };
-        duck_arr_make_unique(pa);
+        auk_arr_make_unique(pa);
         let a = *pa;
         let n = (*a).len as usize;
         if n < 2 {
             return;
         }
-        if ptr::eq(ops, &crate::rc::duck_ops_int) {
+        if ptr::eq(ops, &crate::rc::auk_ops_int) {
             // equal ints are indistinguishable: an unstable sort is a stable one
             std::slice::from_raw_parts_mut((*a).data as *mut i64, n).sort_unstable();
             return;
         }
-        if ptr::eq(ops, &crate::rc::duck_ops_float) {
+        if ptr::eq(ops, &crate::rc::auk_ops_float) {
             // 0.0 and -0.0 compare equal but print differently: keep their order
-            std::slice::from_raw_parts_mut((*a).data as *mut f64, n).sort_by(|x, y| crate::rc::duck_float_cmp(*x, *y).cmp(&0));
+            std::slice::from_raw_parts_mut((*a).data as *mut f64, n).sort_by(|x, y| crate::rc::auk_float_cmp(*x, *y).cmp(&0));
             return;
         }
         let size = (*ops).size;
@@ -531,10 +531,10 @@ pub unsafe extern "C" fn duck_arr_sort(pa: *mut *mut DuckArr) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_sorted(a: *const DuckArr) -> *mut DuckArr {
+pub unsafe extern "C" fn auk_arr_sorted(a: *const AukArr) -> *mut AukArr {
     unsafe {
-        let mut c = duck_arr_copy(a);
-        duck_arr_sort(&mut c);
+        let mut c = auk_arr_copy(a);
+        auk_arr_sort(&mut c);
         c
     }
 }
@@ -542,31 +542,31 @@ pub unsafe extern "C" fn duck_arr_sorted(a: *const DuckArr) -> *mut DuckArr {
 // ---- queries ----------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_index_of(a: *const DuckArr, e: *const c_void) -> DuckOpt_int {
+pub unsafe extern "C" fn auk_arr_index_of(a: *const AukArr, e: *const c_void) -> AukOpt_int {
     unsafe {
-        for i in 0..duck_arr_len(a) {
+        for i in 0..auk_arr_len(a) {
             let Some(eq) = (*(*a).ops).eq else { panic_msg_rt("contains: element type has no eq") };
             if eq(elem(a, i).cast(), e) {
-                return DuckOpt::some(i);
+                return AukOpt::some(i);
             }
         }
-        DuckOpt::none()
+        AukOpt::none()
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_contains(a: *const DuckArr, e: *const c_void) -> bool {
-    unsafe { duck_arr_index_of(a, e).some }
+pub unsafe extern "C" fn auk_arr_contains(a: *const AukArr, e: *const c_void) -> bool {
+    unsafe { auk_arr_index_of(a, e).some }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_eq(a: *const DuckArr, b: *const DuckArr) -> bool {
+pub unsafe extern "C" fn auk_arr_eq(a: *const AukArr, b: *const AukArr) -> bool {
     unsafe {
         if a == b {
             return true;
         }
-        let n = duck_arr_len(a);
-        if n != duck_arr_len(b) {
+        let n = auk_arr_len(a);
+        if n != auk_arr_len(b) {
             return false;
         }
         for i in 0..n {
@@ -580,9 +580,9 @@ pub unsafe extern "C" fn duck_arr_eq(a: *const DuckArr, b: *const DuckArr) -> bo
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_cmp(a: *const DuckArr, b: *const DuckArr) -> c_int {
+pub unsafe extern "C" fn auk_arr_cmp(a: *const AukArr, b: *const AukArr) -> c_int {
     unsafe {
-        let (na, nb) = (duck_arr_len(a), duck_arr_len(b));
+        let (na, nb) = (auk_arr_len(a), auk_arr_len(b));
         let mut i = 0;
         while i < na && i < nb {
             let cmp = (*(*a).ops).cmp.expect("element type has no cmp");
@@ -597,78 +597,78 @@ pub unsafe extern "C" fn duck_arr_cmp(a: *const DuckArr, b: *const DuckArr) -> c
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_hash(a: *const DuckArr) -> u64 {
+pub unsafe extern "C" fn auk_arr_hash(a: *const AukArr) -> u64 {
     unsafe {
         let mut h: u64 = 0x1234;
-        for i in 0..duck_arr_len(a) {
+        for i in 0..auk_arr_len(a) {
             let hash = (*(*a).ops).hash.expect("element type has no hash");
-            h = crate::rc::duck_hash_combine(h, hash(elem(a, i).cast()));
+            h = crate::rc::auk_hash_combine(h, hash(elem(a, i).cast()));
         }
         h
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_show(a: *const DuckArr) -> *mut DuckStr {
-    use crate::str::{duck_sb_char, duck_sb_finish, duck_sb_lit, duck_sb_str_own};
+pub unsafe extern "C" fn auk_arr_show(a: *const AukArr) -> *mut AukStr {
+    use crate::str::{auk_sb_char, auk_sb_finish, auk_sb_lit, auk_sb_str_own};
     unsafe {
-        let mut b = DuckStrBuf::INIT;
-        duck_sb_char(&mut b, '[' as u32);
+        let mut b = AukStrBuf::INIT;
+        auk_sb_char(&mut b, '[' as u32);
         let mut i = 0;
-        while i < duck_arr_len(a) && !crate::trace::show_exhausted() {
+        while i < auk_arr_len(a) && !crate::trace::show_exhausted() {
             if i != 0 {
-                duck_sb_lit(&mut b, c", ".as_ptr());
+                auk_sb_lit(&mut b, c", ".as_ptr());
             }
             let Some(show) = (*(*a).ops).show else { panic_msg_rt("show: element type has no show") };
-            duck_sb_str_own(&mut b, show(elem(a, i).cast()));
+            auk_sb_str_own(&mut b, show(elem(a, i).cast()));
             i += 1;
         }
-        duck_sb_char(&mut b, ']' as u32);
-        duck_sb_finish(&mut b)
+        auk_sb_char(&mut b, ']' as u32);
+        auk_sb_finish(&mut b)
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_join(a: *const DuckArr, sep: *const DuckStr) -> *mut DuckStr {
-    use crate::str::{duck_sb_char, duck_sb_finish, duck_sb_str, duck_sb_str_own};
+pub unsafe extern "C" fn auk_arr_join(a: *const AukArr, sep: *const AukStr) -> *mut AukStr {
+    use crate::str::{auk_sb_char, auk_sb_finish, auk_sb_str, auk_sb_str_own};
     unsafe {
-        let mut b = DuckStrBuf::INIT;
-        for i in 0..duck_arr_len(a) {
+        let mut b = AukStrBuf::INIT;
+        for i in 0..auk_arr_len(a) {
             if i != 0 {
-                duck_sb_str(&mut b, sep);
+                auk_sb_str(&mut b, sep);
             }
             let ops = (*a).ops;
-            if ptr::eq(ops, &crate::rc::duck_ops_str) {
-                duck_sb_str(&mut b, *(elem(a, i) as *const *const DuckStr));
-            } else if ptr::eq(ops, &crate::rc::duck_ops_char) {
-                duck_sb_char(&mut b, *(elem(a, i) as *const u32));
+            if ptr::eq(ops, &crate::rc::auk_ops_str) {
+                auk_sb_str(&mut b, *(elem(a, i) as *const *const AukStr));
+            } else if ptr::eq(ops, &crate::rc::auk_ops_char) {
+                auk_sb_char(&mut b, *(elem(a, i) as *const u32));
             } else {
                 let show = (*ops).show.expect("element type has no show");
-                duck_sb_str_own(&mut b, show(elem(a, i).cast()));
+                auk_sb_str_own(&mut b, show(elem(a, i).cast()));
             }
         }
-        duck_sb_finish(&mut b)
+        auk_sb_finish(&mut b)
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_sum_int(a: *const DuckArr, loc: *const c_char) -> i64 {
+pub unsafe extern "C" fn auk_arr_sum_int(a: *const AukArr, loc: *const c_char) -> i64 {
     unsafe {
         let mut s: i64 = 0;
-        let d = duck_arr_data(a) as *const i64;
-        for i in 0..duck_arr_len(a) {
-            s = crate::rc::duck_add(s, *d.add(i as usize), loc);
+        let d = auk_arr_data(a) as *const i64;
+        for i in 0..auk_arr_len(a) {
+            s = crate::rc::auk_add(s, *d.add(i as usize), loc);
         }
         s
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_arr_sum_float(a: *const DuckArr) -> f64 {
+pub unsafe extern "C" fn auk_arr_sum_float(a: *const AukArr) -> f64 {
     unsafe {
         let mut s = 0.0;
-        let d = duck_arr_data(a) as *const f64;
-        for i in 0..duck_arr_len(a) {
+        let d = auk_arr_data(a) as *const f64;
+        for i in 0..auk_arr_len(a) {
             s += *d.add(i as usize);
         }
         s

@@ -225,6 +225,9 @@ pub(crate) struct Checker {
     const_state: Vec<ConstState>,
     /// The body stack (a constant may be checked lazily while another body is in progress).
     pub cxs: Vec<BodyCx>,
+    /// The names `let` statements are binding while their values are checked (innermost last), so
+    /// a closure that calls its own `let` name gets a clear E0102.
+    pub binding: Vec<String>,
     /// Per body: the nodes whose targets monomorphization resolves.
     pub body_nodes: HashMap<BodyRef, BodyNodes>,
     pub main: Option<MainInfo>,
@@ -322,6 +325,7 @@ impl Checker {
             b: Builtins::default(),
             const_state: Vec::new(),
             cxs: Vec::new(),
+            binding: Vec::new(),
             body_nodes: HashMap::new(),
             main: None,
             instances: Vec::new(),
@@ -818,7 +822,7 @@ impl Checker {
                     } else if name == "string" || name == "String" {
                         d = d.note("the string type is `str`").fix(t.span, "str");
                     } else if name == "i64" || name == "f64" {
-                        d = d.note("Duck's numeric types are `int` and `float`");
+                        d = d.note("Auk's numeric types are `int` and `float`");
                     }
                     self.err_in(m, d);
                     return Ty::Error;
@@ -1176,7 +1180,7 @@ impl Checker {
                 };
                 FnKind::Extern { symbol, loc, item }
             }
-            None => FnKind::Duck { item, clauses, header },
+            None => FnKind::Auk { item, clauses, header },
         };
         let id = self.fns.len();
         self.fns.push(FnInfo {
@@ -1249,7 +1253,7 @@ impl Checker {
             self.ensure_const(c);
         }
         for f in 0..self.fns.len() {
-            if matches!(self.fns[f].kind, FnKind::Duck { .. }) {
+            if matches!(self.fns[f].kind, FnKind::Auk { .. }) {
                 self.check_fn(f);
             }
         }
@@ -1343,7 +1347,7 @@ impl Checker {
 
     fn check_fn(&mut self, f: FnId) {
         let info = self.fns[f].clone();
-        let FnKind::Duck { item, clauses, header } = &info.kind else { return };
+        let FnKind::Auk { item, clauses, header } = &info.kind else { return };
         let m = info.module;
         let Item::Fn(group) = self.prog.mods[m].ast.items[*item].clone() else { unreachable!() };
         let mut gs = GenScope::default();

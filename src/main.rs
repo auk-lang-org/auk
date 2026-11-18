@@ -1,4 +1,4 @@
-//! The `duck` command: the Duck compiler (lexer → parser → resolve → check → patterns/effects →
+//! The `auk` command: the Auk compiler (lexer → parser → resolve → check → patterns/effects →
 //! MIR → LLVM, JIT or object file + the embedded runtime), its formatter, REPL, language
 //! server and docs.
 
@@ -28,7 +28,7 @@ mod patterns;
 mod repl;
 mod resolve;
 mod token;
-// Parts of the typed program are only read by tests and `duck typed`.
+// Parts of the typed program are only read by tests and `auk typed`.
 #[allow(dead_code)]
 mod typed;
 #[allow(dead_code)]
@@ -39,11 +39,11 @@ use std::path::Path;
 use std::process::exit;
 use std::{env, fs};
 
-/// The compact language reference handed to AI coders (`duck spec`).
+/// The compact language reference handed to AI coders (`auk spec`).
 const SPEC: &str = include_str!("../docs/spec.md");
 
 const USAGE: &str = "\
-usage: duck <command> [args]
+usage: auk <command> [args]
 
 commands:
   run [-O] [--trace=json|<file>] <file> [args...]
@@ -52,7 +52,7 @@ commands:
                            as JSON lines; json = stderr)
   run --debug <file> [args...]
                            build with debugger hooks; a front end attaches through
-                           DUCK_DEBUG=<unix socket> (see docs/compiler.md, Debugger)
+                           AUK_DEBUG=<unix socket> (see docs/compiler.md, Debugger)
   debug [--break <file:line|fn>]... [--print a,b] [--json] <file> [args...]
                            debug the program: an interactive prompt on a terminal;
                            otherwise (or --json/--batch) run to each breakpoint and
@@ -71,23 +71,23 @@ commands:
                            --trace=<dir>: one <test>.jsonl trace per test)
   --trace-limit N          (run/test) stop a trace after N events (default 10000)
   --trace-core             (run/test) trace core library functions too
-  fmt [--check] <path>...  format .duck files in place (`-` = stdin to stdout)
+  fmt [--check] <path>...  format .auk files in place (`-` = stdin to stdout)
   holes <file> [--json]    brief every `??` hole: expected type, scope, contracts, tests
   hatch <file> [--hole N] [--tries 3] [--dry-run]
-                           fill holes with an AI model, checked and tested (DUCK_HATCH_CMD)
+                           fill holes with an AI model, checked and tested (AUK_HATCH_CMD)
   explain [E0xxx]          explain an error code (with no code: list every code)
-  pond [--quiet]           the interactive REPL (--quiet: no banner or prompts)
+  dive [--quiet]           the interactive REPL (--quiet: no banner or prompts)
   lsp                      run the language server (LSP over stdio)
   mcp                      run the MCP server for AI agents (tools over stdio)
   ir [--llvm] <file>       print the program's MIR (--llvm: its LLVM IR)
   spec                     print the compact language reference
 
-packages are managed by `quack` (see docs/quack.md).
+packages are managed by `raft` (see docs/raft.md).
 
 environment:
-  DUCK_LEAK_CHECK=1        `run`/`test` programs fail if runtime objects leak
-  DUCK_LINKER              the linker `build` uses (default: cc)
-  DUCK_HATCH_CMD           the model command `hatch` runs, prompt on stdin (default: claude -p)";
+  AUK_LEAK_CHECK=1        `run`/`test` programs fail if runtime objects leak
+  AUK_LINKER              the linker `build` uses (default: cc)
+  AUK_HATCH_CMD           the model command `hatch` runs, prompt on stdin (default: claude -p)";
 
 fn usage() -> ! {
     eprintln!("{USAGE}");
@@ -96,8 +96,8 @@ fn usage() -> ! {
 
 fn main() {
     // started by a `gui.open` in a program run by this command, to own its windows
-    if env::var_os("DUCK_GUI_HOST").is_some() {
-        std::process::exit(duck_rt::gui_host::host_main());
+    if env::var_os("AUK_GUI_HOST").is_some() {
+        std::process::exit(auk_rt::gui_host::host_main());
     }
     let args: Vec<String> = env::args().skip(1).collect();
     let Some((cmd, rest)) = args.split_first() else { usage() };
@@ -107,7 +107,7 @@ fn main() {
             0
         }
         "explain" => explain::run(rest),
-        "pond" => repl::run(rest),
+        "dive" => repl::run(rest),
         "lsp" => lsp::run(),
         "mcp" => mcp::run(),
         "fmt" => fmt::run(rest),
@@ -134,7 +134,7 @@ fn main() {
     exit(code)
 }
 
-/// `duck check`: load the module tree (project, dependencies, core) and type-check it. Returns
+/// `auk check`: load the module tree (project, dependencies, core) and type-check it. Returns
 /// the exit code. Warnings (E0411) are reported but don't fail the check.
 fn check_file(path: &str, json: bool) -> i32 {
     let src = match std::fs::read_to_string(path) {
@@ -159,7 +159,7 @@ fn check_file(path: &str, json: bool) -> i32 {
     if diags.iter().all(|d| d.diag.is_warning()) { 0 } else { 1 }
 }
 
-/// `duck parse [--ast | --json] <file>`: a hidden debug command that parses one file and prints
+/// `auk parse [--ast | --json] <file>`: a hidden debug command that parses one file and prints
 /// `ok`, an S-expression dump of the AST, or the diagnostics. Returns the exit code.
 fn parse_file(args: &[String]) -> i32 {
     let (mode, path) = match args {
@@ -190,7 +190,7 @@ fn parse_file(args: &[String]) -> i32 {
     0
 }
 
-/// `duck typed <file>`: a hidden debug command that type-checks and prints a summary of the typed
+/// `auk typed <file>`: a hidden debug command that type-checks and prints a summary of the typed
 /// program (signatures, generic instances) plus any invariant violations.
 fn typed_file(args: &[String]) -> i32 {
     let [path] = args else { usage() };

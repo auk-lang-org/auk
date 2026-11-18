@@ -4,10 +4,10 @@ URLs and URI references (RFC 3986): parse, format, resolve a reference against a
 
 **Effects:** none. Depends on `encoding` (no effects).
 
-```duck
-let u = url.parse("https://api.example.com/v1/search?q=duck+lang&page=2")?
+```auk
+let u = url.parse("https://api.example.com/v1/search?q=auk+lang&page=2")?
 print(u.host else "")                        // api.example.com
-print(u.param("q") else "")                  // duck lang
+print(u.param("q") else "")                  // auk lang
 let next = url.resolve(u, "../v2/items?id=7")?
 print("{next}")                              // https://api.example.com/v2/items?id=7
 let q = u.with_params([("q", "a&b"), ("page", "3")])

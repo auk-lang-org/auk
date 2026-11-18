@@ -1,0 +1,74 @@
+// Times the stages of a frame in a real window: drawing with `pixels`, drawing text, and showing
+// frames with `gui.present`/`present_rect`. Prints one line per stage and closes itself.
+//
+//   auk run examples/gui_bench.auk          (or `auk build` it for compiled-code numbers)
+
+fn us(t0: int, t1: int, n: int): str {
+  let v = (t1 - t0) * 1000 / n
+  if v >= 10000 { "{v / 1000} ms" } else { "{v} µs" }
+}
+
+fn main(): int! uses gui, fs, time {
+  let win = gui.open("auk: bench", 1600, 1000)?
+  // let the window settle at its real size
+  loop {
+    match gui.next_event(win, 300) {
+      none => break
+      _ => {}
+    }
+  }
+  let w = gui.width(win)
+  let h = gui.height(win)
+  let s = gui.scale(win)
+  print("frame {w}x{h} ({w * h / 1000} k pixels), scale {s}")
+  var px = pixels.frame(w, h, 0xffffff)
+  var t = time.now()
+  for i in 0..50 { px.fill(0, 0, w, h, 0x101010 * (i % 16)) }
+  print("pixels.fill, whole frame:      {us(t, time.now(), 50)}")
+  t = time.now()
+  for _ in 0..20 { px.blend(0, 0, w, h, 0x80336699) }
+  print("pixels.blend, whole frame:     {us(t, time.now(), 20)}")
+  t = time.now()
+  for _ in 0..50 { gui.present(win, px)? }
+  print("present, whole frame:          {us(t, time.now(), 50)}")
+  t = time.now()
+  for i in 0..2000 {
+    gui.present_rect(win, px, (i * 7) % (w - 48), (i * 3) % (h - 48), 48, 48)?
+  }
+  print("present_rect, 48x48:           {us(t, time.now(), 2000)}")
+  t = time.now()
+  for i in 0..500 { gui.present_rect(win, px, 0, (i * 9) % (h - 60), w, 60)? }
+  print("present_rect, a {w}x60 strip: {us(t, time.now(), 500)}")
+  let sans = graphics.font.system_sans()?
+  var face = graphics.font.face(sans, 15.0 * s)
+  let line = "The quick brown fox jumps over the lazy dog, 0123456789 times; AVATAR WAVE."
+  let _ = face.draw(&px, 0, 0, line, 0)  // fill the glyph cache
+  let lh = face.line_height()
+  let lines = h / lh
+  t = time.now()
+  for _ in 0..10 {
+    for i in 0..lines { let _ = face.draw(&px, 10, i * lh, line, 0x202020) }
+  }
+  print("text, {lines} lines of {line.len()} chars: {us(t, time.now(), 10)}")
+  t = time.now()
+  for i in 0..10 {
+    px.fill(0, 0, w, h, 0xf6f4ef)
+    for j in 0..lines { let _ = face.draw(&px, 10, j * lh, line, 0x202020) }
+    gui.present(win, px)?
+  }
+  print("full UI frame (fill + text + present): {us(t, time.now(), 10)}")
+  // the same screen on a canvas, then a keystroke's worth of change: one line redrawn and shown
+  var c = graphics.canvas.canvas(w, h, 0xf6f4ef)
+  for j in 0..lines { let _ = c.text(&face, 10, j * lh, line, 0x202020) }
+  c.show(win)?
+  t = time.now()
+  for i in 0..200 {
+    let y = (i % lines) * lh
+    c.fill(0, y, w, lh, 0xffffff)
+    let _ = c.text(&face, 10, y, line, 0x202020)
+    c.show(win)?
+  }
+  print("canvas, one line redrawn + shown:     {us(t, time.now(), 200)}")
+  gui.close(win)
+  0
+}

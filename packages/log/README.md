@@ -1,10 +1,10 @@
 # log
 
-Leveled, structured logging to stderr, as [logfmt](https://brandur.org/logfmt) or JSON lines. There is no global logger (Duck has no global mutable state): build a `Logger` value and pass it around, or keep one in a module-level `let`. Loggers are values, so `with` returns a new logger and never changes the old one.
+Leveled, structured logging to stderr, as [logfmt](https://brandur.org/logfmt) or JSON lines. There is no global logger (Auk has no global mutable state): build a `Logger` value and pass it around, or keep one in a module-level `let`. Loggers are values, so `with` returns a new logger and never changes the old one.
 
 **Effects:** none (`eprint` is always allowed). Depends on `json` (no effects). Lines carry no timestamp, since reading the clock needs `uses time`; most log collectors add one, or add a field yourself with `.with("ts", time.now())`.
 
-```duck
+```auk
 fn main(): int! uses env {
   let lv = log.level(env.get("LOG") else "info")?
   let l = log.new(lv).with("svc", "api")

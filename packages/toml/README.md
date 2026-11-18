@@ -4,7 +4,7 @@ Converts TOML 1.0 text to and from the core `Value` tree, and to and from your o
 
 **Effects:** none. **Dependencies:** none.
 
-```duck
+```auk
 struct Server { host: str, port: int }
 struct Config { title: str, debug: bool, server: Server }
 

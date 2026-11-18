@@ -1,18 +1,18 @@
-//! Execution traces (`duck run --trace`, `duck test --trace`): a JSON Lines log of every traced
+//! Execution traces (`auk run --trace`, `auk test --trace`): a JSON Lines log of every traced
 //! function call and return, error, `peek` and panic.
 //!
 //! Only programs compiled with tracing call into this module (the compiler wraps each traced
-//! function in a `duck_trace_begin`/`duck_trace_call`/`duck_trace_exit`/`duck_trace_ret` shim and
-//! makes `main` call `duck_trace_init`); every other program only pays for the `duck_trace_live`
-//! test in `duck_peek` and `duck_panic`.
+//! function in a `auk_trace_begin`/`auk_trace_call`/`auk_trace_exit`/`auk_trace_ret` shim and
+//! makes `main` call `auk_trace_init`); every other program only pays for the `auk_trace_live`
+//! test in `auk_peek` and `auk_panic`.
 //!
-//! Configuration (environment, read by `duck_trace_init`):
-//!   DUCK_TRACE=<file> | -    run: the event stream's file, `-` = stderr.
+//! Configuration (environment, read by `auk_trace_init`):
+//!   AUK_TRACE=<file> | -    run: the event stream's file, `-` = stderr.
 //!                            test: a directory (one `<test name>.jsonl` per test), or `-`:
-//!                            each test keeps its last DUCK_TRACE_TAIL events in memory and the
+//!                            each test keeps its last AUK_TRACE_TAIL events in memory and the
 //!                            runner prints them under the test's FAIL line.
-//!   DUCK_TRACE_LIMIT=<n>     events written before a final {"ev":"truncated"} (default 10000).
-//!   DUCK_TRACE_TAIL=<n>      events kept for a failing test in `-` mode (default 20).
+//!   AUK_TRACE_LIMIT=<n>     events written before a final {"ev":"truncated"} (default 10000).
+//!   AUK_TRACE_TAIL=<n>      events kept for a failing test in `-` mode (default 20).
 //!
 //! Output is buffered here (not in a FILE) so a crash handler can still write it out with
 //! write(2): a SIGSEGV from a stack overflow ends the trace with {"ev":"signal"}.
@@ -20,24 +20,24 @@
 //! The process-wide state lives in `static mut`s guarded by `LOCK` (a pthread mutex, as in C) so
 //! the signal handler can read it without locking, best effort, exactly like the C version.
 
-use crate::{DuckErr, DuckStr, c_stderr, cbytes, cstr, fwrite_bytes};
+use crate::{AukErr, AukStr, c_stderr, cbytes, cstr, fwrite_bytes};
 use std::cell::{Cell, RefCell};
 use std::ffi::{CString, c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
-/// Is tracing on? Read by generated code and by `duck_peek`/`duck_panic` (same layout as C `bool`).
+/// Is tracing on? Read by generated code and by `auk_peek`/`auk_panic` (same layout as C `bool`).
 #[unsafe(no_mangle)]
-pub static duck_trace_live: AtomicBool = AtomicBool::new(false);
+pub static auk_trace_live: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
-    /// The call site of the next traced call (C: `_Thread_local const char *duck_trace_site`).
+    /// The call site of the next traced call (C: `_Thread_local const char *auk_trace_site`).
     static TRACE_SITE: Cell<*const c_char> = const { Cell::new(std::ptr::null()) };
-    /// C: `_Thread_local int64_t duck__show_left = -1`.
+    /// C: `_Thread_local int64_t auk__show_left = -1`.
     static SHOW_LEFT: Cell<i64> = const { Cell::new(-1) };
     static DEPTH: Cell<i64> = const { Cell::new(0) };
-    /// > 0 while the tracer itself runs Duck code (a user `show`): nothing is traced.
+    /// > 0 while the tracer itself runs Auk code (a user `show`): nothing is traced.
     static MUTE: Cell<c_int> = const { Cell::new(0) };
-    /// The call site of the call being traced (taken from duck_trace_site by duck_trace_begin).
+    /// The call site of the call being traced (taken from auk_trace_site by auk_trace_begin).
     static SITE: Cell<*const c_char> = const { Cell::new(std::ptr::null()) };
     /// Each thread's event buffer: taken by new_line, given back by emit.
     static SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -46,21 +46,21 @@ thread_local! {
 /// The storage of this thread's trace site (the call site of the next traced call): generated
 /// code stores the location through this pointer.
 #[unsafe(no_mangle)]
-pub extern "C" fn duck__trace_site_slot() -> *mut *const c_char {
+pub extern "C" fn auk__trace_site_slot() -> *mut *const c_char {
     TRACE_SITE.with(|c| c.as_ptr())
 }
 
 fn live() -> bool {
-    duck_trace_live.load(Relaxed)
+    auk_trace_live.load(Relaxed)
 }
 
-/// `duck__show_exhausted` (duck_internal.h).
+/// `auk__show_exhausted` (auk_internal.h).
 #[inline]
 pub fn show_exhausted() -> bool {
     (live() || crate::dbg::showing()) && SHOW_LEFT.with(|c| c.get()) == 0
 }
 
-/// `duck__show_take` (duck_internal.h): count n appended bytes against the budget; false = drop them.
+/// `auk__show_take` (auk_internal.h): count n appended bytes against the budget; false = drop them.
 #[inline]
 pub fn show_take(n: i64) -> bool {
     if !live() && !crate::dbg::showing() {
@@ -79,12 +79,12 @@ pub fn show_take(n: i64) -> bool {
     })
 }
 
-/// The current `duck__show_left` of this thread.
+/// The current `auk__show_left` of this thread.
 pub fn show_left() -> i64 {
     SHOW_LEFT.with(|c| c.get())
 }
 
-/// Set `duck__show_left` (-1 = no budget).
+/// Set `auk__show_left` (-1 = no budget).
 pub fn set_show_left(v: i64) {
     SHOW_LEFT.with(|c| c.set(v));
 }
@@ -204,7 +204,7 @@ unsafe fn put_cjson(l: &mut Line, s: *const c_char) {
     put_json(l, unsafe { cbytes(s) }, 0, false);
 }
 
-unsafe fn put_value(l: &mut Line, s: *const DuckStr) {
+unsafe fn put_value(l: &mut Line, s: *const AukStr) {
     let b = unsafe { crate::sbytes(s) };
     // a show that used up its budget was cut short even if it is under VALUE_MAX chars
     put_json(l, b, VALUE_MAX, b.len() as i64 >= SHOW_BUDGET);
@@ -264,7 +264,7 @@ fn emit_ev(mut l: Line, last: bool) {
                 let lim = LIMIT;
                 let b = format!("{{\"ev\":\"truncated\",\"limit\":{lim}}}\n");
                 out_bytes_locked(b.as_bytes());
-                duck_trace_live.store(false, Relaxed);
+                auk_trace_live.store(false, Relaxed);
             }
             if OUT_UNBUFFERED {
                 out_flush_locked();
@@ -273,7 +273,7 @@ fn emit_ev(mut l: Line, last: bool) {
             let k = (COUNT % TAIL_N) as usize;
             let n = l.len();
             if *RING_CAP.add(k) < n {
-                *RING.add(k) = crate::rc::duck__xrealloc((*RING.add(k)).cast(), n).cast();
+                *RING.add(k) = crate::rc::auk__xrealloc((*RING.add(k)).cast(), n).cast();
                 *RING_CAP.add(k) = n;
             }
             std::ptr::copy_nonoverlapping(l.as_ptr(), *RING.add(k), n);
@@ -391,7 +391,7 @@ fn env_int(name: &std::ffi::CStr, dflt: i64) -> i64 {
 }
 
 extern "C" fn flush_at_exit() {
-    unsafe { duck__trace_flush() };
+    unsafe { auk__trace_flush() };
 }
 
 fn errno() -> c_int {
@@ -414,21 +414,21 @@ fn start_stream(fd: c_int, unbuffered: bool) {
         MODE = T_STREAM;
         COUNT = 0;
     }
-    duck_trace_live.store(true, Relaxed);
+    auk_trace_live.store(true, Relaxed);
     install_handlers();
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_trace_init(tests: bool) {
+pub unsafe extern "C" fn auk_trace_init(tests: bool) {
     unsafe {
         CONFIGURED = true;
         TEST_BINARY = tests;
-        CFG = libc::getenv(c"DUCK_TRACE".as_ptr());
+        CFG = libc::getenv(c"AUK_TRACE".as_ptr());
         if !CFG.is_null() && *CFG == 0 {
             CFG = std::ptr::null();
         }
-        LIMIT = env_int(c"DUCK_TRACE_LIMIT", 10000);
-        TAIL_N = env_int(c"DUCK_TRACE_TAIL", 20);
+        LIMIT = env_int(c"AUK_TRACE_LIMIT", 10000);
+        TAIL_N = env_int(c"AUK_TRACE_TAIL", 20);
         if tests || CFG.is_null() {
             return;
         }
@@ -439,18 +439,18 @@ pub unsafe extern "C" fn duck_trace_init(tests: bool) {
         let fd = libc::open(CFG, libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC, 0o644 as libc::c_uint);
         if fd < 0 {
             let e = errno();
-            fwrite_bytes(c_stderr(), format!("duck: cannot write the trace to {}: {}\n", cstr(CFG), strerror(e)).as_bytes());
+            fwrite_bytes(c_stderr(), format!("auk: cannot write the trace to {}: {}\n", cstr(CFG), strerror(e)).as_bytes());
             return;
         }
         start_stream(fd, false);
     }
 }
 
-pub unsafe fn duck__trace_tail_mode() -> bool {
+pub unsafe fn auk__trace_tail_mode() -> bool {
     unsafe { CONFIGURED && TEST_BINARY && !CFG.is_null() && cbytes(CFG) == b"-" }
 }
 
-pub unsafe fn duck__trace_dir() -> *const c_char {
+pub unsafe fn auk__trace_dir() -> *const c_char {
     unsafe {
         if CONFIGURED && TEST_BINARY && !CFG.is_null() && cbytes(CFG) != b"-" { CFG } else { std::ptr::null() }
     }
@@ -468,7 +468,7 @@ unsafe fn test_file(dir: *const c_char, name: *const c_char) -> CString {
     CString::new(p).expect("no NUL in a C string")
 }
 
-pub unsafe fn duck__trace_test_begin(name: *const c_char, tail_path: *const c_char) {
+pub unsafe fn auk__trace_test_begin(name: *const c_char, tail_path: *const c_char) {
     unsafe {
         if !CONFIGURED || !TEST_BINARY || CFG.is_null() {
             return;
@@ -480,12 +480,12 @@ pub unsafe fn duck__trace_test_begin(name: *const c_char, tail_path: *const c_ch
             }
             OUT_FD = fd;
             let n = TAIL_N as usize;
-            RING = crate::rc::duck__xcalloc(n, size_of::<*mut u8>()).cast();
-            RING_LEN = crate::rc::duck__xcalloc(n, size_of::<usize>()).cast();
-            RING_CAP = crate::rc::duck__xcalloc(n, size_of::<usize>()).cast();
+            RING = crate::rc::auk__xcalloc(n, size_of::<*mut u8>()).cast();
+            RING_LEN = crate::rc::auk__xcalloc(n, size_of::<usize>()).cast();
+            RING_CAP = crate::rc::auk__xcalloc(n, size_of::<usize>()).cast();
             MODE = T_TAIL;
             COUNT = 0;
-            duck_trace_live.store(true, Relaxed);
+            auk_trace_live.store(true, Relaxed);
             install_handlers();
             return;
         }
@@ -496,7 +496,7 @@ pub unsafe fn duck__trace_test_begin(name: *const c_char, tail_path: *const c_ch
             let e = errno();
             fwrite_bytes(
                 c_stderr(),
-                format!("duck: cannot write the trace to {}: {}\n", String::from_utf8_lossy(path.as_bytes()), strerror(e)).as_bytes(),
+                format!("auk: cannot write the trace to {}: {}\n", String::from_utf8_lossy(path.as_bytes()), strerror(e)).as_bytes(),
             );
         }
         drop(path);
@@ -508,7 +508,7 @@ pub unsafe fn duck__trace_test_begin(name: *const c_char, tail_path: *const c_ch
 
 /// After the test's child exited: its outcome as the trace's last event. In directory mode it is
 /// appended to the test's file; in tail mode the caller prints the file (when the test failed).
-pub unsafe fn duck__trace_test_end(name: *const c_char, ok: bool, tail_path: *const c_char) {
+pub unsafe fn auk__trace_test_end(name: *const c_char, ok: bool, tail_path: *const c_char) {
     unsafe {
         let path = if tail_path.is_null() { Some(test_file(CFG, name)) } else { None };
         let p = match &path {
@@ -531,7 +531,7 @@ pub unsafe fn duck__trace_test_end(name: *const c_char, ok: bool, tail_path: *co
     }
 }
 
-pub unsafe fn duck__trace_flush() {
+pub unsafe fn auk__trace_flush() {
     unsafe {
         if MODE == T_OFF {
             return;
@@ -545,7 +545,7 @@ pub unsafe fn duck__trace_flush() {
 // ---- events -------------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_trace_begin() -> bool {
+pub unsafe extern "C" fn auk_trace_begin() -> bool {
     if !live() || MUTE.with(|m| m.get()) != 0 {
         return false;
     }
@@ -556,7 +556,7 @@ pub unsafe extern "C" fn duck_trace_begin() -> bool {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_trace_call(fn_: *const c_char, loc: *const c_char, n: c_int, args: *mut *mut DuckStr) {
+pub unsafe extern "C" fn auk_trace_call(fn_: *const c_char, loc: *const c_char, n: c_int, args: *mut *mut AukStr) {
     set_show_left(-1);
     let mut l = new_line();
     head(&mut l, "call");
@@ -574,7 +574,7 @@ pub unsafe extern "C" fn duck_trace_call(fn_: *const c_char, loc: *const c_char,
         unsafe {
             let a = *args.add(i);
             put_value(&mut l, a);
-            crate::rc::duck_release(a.cast::<c_void>());
+            crate::rc::auk_release(a.cast::<c_void>());
         }
     }
     put(&mut l, b"]");
@@ -586,7 +586,7 @@ pub unsafe extern "C" fn duck_trace_call(fn_: *const c_char, loc: *const c_char,
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_trace_exit() -> bool {
+pub unsafe extern "C" fn auk_trace_exit() -> bool {
     DEPTH.with(|d| d.set(d.get() - 1));
     if !live() || MUTE.with(|m| m.get()) != 0 {
         return false;
@@ -597,7 +597,7 @@ pub unsafe extern "C" fn duck_trace_exit() -> bool {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_trace_ret(fn_: *const c_char, shown: *mut DuckStr) {
+pub unsafe extern "C" fn auk_trace_ret(fn_: *const c_char, shown: *mut AukStr) {
     set_show_left(-1);
     let mut l = new_line();
     head(&mut l, "ret");
@@ -607,7 +607,7 @@ pub unsafe extern "C" fn duck_trace_ret(fn_: *const c_char, shown: *mut DuckStr)
     if !shown.is_null() {
         unsafe {
             put_value(&mut l, shown);
-            crate::rc::duck_release(shown.cast::<c_void>());
+            crate::rc::auk_release(shown.cast::<c_void>());
         }
     } else {
         put(&mut l, b"\"()\"");
@@ -618,8 +618,8 @@ pub unsafe extern "C" fn duck_trace_ret(fn_: *const c_char, shown: *mut DuckStr)
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_trace_err(fn_: *const c_char, e: *const DuckErr) {
-    let s = unsafe { crate::err::duck_err_show(e as *mut DuckErr) };
+pub unsafe extern "C" fn auk_trace_err(fn_: *const c_char, e: *const AukErr) {
+    let s = unsafe { crate::err::auk_err_show(e as *mut AukErr) };
     set_show_left(-1);
     let mut l = new_line();
     head(&mut l, "err");
@@ -628,14 +628,14 @@ pub unsafe extern "C" fn duck_trace_err(fn_: *const c_char, e: *const DuckErr) {
     field(&mut l, "error");
     unsafe {
         put_value(&mut l, s);
-        crate::rc::duck_release(s.cast::<c_void>());
+        crate::rc::auk_release(s.cast::<c_void>());
     }
     end_depth(&mut l, DEPTH.with(|d| d.get()));
     emit(l);
     MUTE.with(|m| m.set(m.get() - 1));
 }
 
-pub unsafe fn duck__trace_peek(loc: *const c_char, src_text: *const c_char, shown: *const DuckStr) {
+pub unsafe fn auk__trace_peek(loc: *const c_char, src_text: *const c_char, shown: *const AukStr) {
     if !live() || MUTE.with(|m| m.get()) != 0 {
         return;
     }
@@ -655,7 +655,7 @@ pub unsafe fn duck__trace_peek(loc: *const c_char, src_text: *const c_char, show
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 /// `caught`: the panic jumps to a recovery point (`catch`, a task thread) instead of ending the
 /// process; the event gets `"caught":true`.
-pub fn duck__trace_panic(loc: *const c_char, msg: &str, caught: bool) {
+pub fn auk__trace_panic(loc: *const c_char, msg: &str, caught: bool) {
     if unsafe { MODE } == T_OFF {
         return;
     }
@@ -679,7 +679,7 @@ pub fn duck__trace_panic(loc: *const c_char, msg: &str, caught: bool) {
         end_depth(&mut l, DEPTH.with(|d| d.get()));
         emit_ev(l, true);
     }
-    unsafe { duck__trace_flush() };
+    unsafe { auk__trace_flush() };
 }
 
 /// This thread's call depth and mute count, saved at a recovery point (`catch`, a task) and put

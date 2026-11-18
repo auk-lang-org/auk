@@ -1,22 +1,22 @@
-//! The debugger engine (`duck run --debug`): breakpoints, stepping, pausing, stack and locals.
+//! The debugger engine (`auk run --debug`): breakpoints, stepping, pausing, stack and locals.
 //!
-//! Only programs compiled with `--debug` call into this module. Every instrumented Duck function
-//! keeps a frame record (`Frame`) on its stack: `duck_dbg_enter`/`duck_dbg_leave` link it into
+//! Only programs compiled with `--debug` call into this module. Every instrumented Auk function
+//! keeps a frame record (`Frame`) on its stack: `auk_dbg_enter`/`auk_dbg_leave` link it into
 //! the thread's debugger stack, each named local's address is stored in its slot when the local
-//! is bound, and each statement stores its site id in `site` and calls `duck_dbg_hook` while
-//! `duck_dbg_armed` is set. `main` calls `duck_dbg_init` with the debug info (sites, functions,
+//! is bound, and each statement stores its site id in `site` and calls `auk_dbg_hook` while
+//! `auk_dbg_armed` is set. `main` calls `auk_dbg_init` with the debug info (sites, functions,
 //! locals, types) and a table of show functions, one per local type.
 //!
-//! A front end (`duck debug`, `duck dap`) attaches through a Unix socket named by `DUCK_DEBUG`:
-//! the program connects, sends `{"ev":"ready"}` and waits for `run`. Without `DUCK_DEBUG` the
-//! program runs as usual (`duck_dbg_armed` stays 0).
+//! A front end (`auk debug`, `auk dap`) attaches through a Unix socket named by `AUK_DEBUG`:
+//! the program connects, sends `{"ev":"ready"}` and waits for `run`. Without `AUK_DEBUG` the
+//! program runs as usual (`auk_dbg_armed` stays 0).
 //!
 //! # Protocol
 //! Commands are text lines, optionally prefixed with `@<seq> ` (echoed as `"seq":N` in the reply):
 //!   run                         start the program (after setting breakpoints)
 //!   break <file>:<line>         line breakpoint (moves to the next line with code)
 //!   break <function>            function breakpoint (`f`, or `mod.f`)
-//!   break <place> if <cond>     only where the Duck expression `cond` is true
+//!   break <place> if <cond>     only where the Auk expression `cond` is true
 //!   delete [id]                 remove one breakpoint, or all
 //!   catch all|uncaught|none     stop on panics (default `uncaught`: not under a recovery point)
 //!   pause                       stop every thread at its next statement
@@ -27,13 +27,13 @@
 //!   vars [frame] [thread]       the frame's locals in scope, shown
 //!   threads                     every thread with its innermost frame
 //!   kids <frame> <thread> <local> [i...]   the parts of a local (or of part i, j...)
-//!   eval <frame> <thread> <expr>           a Duck expression's value there (an assignment
+//!   eval <frame> <thread> <expr>           an Auk expression's value there (an assignment
 //!                               `x = v` changes a `var` local; src/dbg_eval.rs compiles it)
 //! Events are JSON lines: `ready`, `ok`, `error`, `break`, `stopped`, `stack`, `vars`, `kids`,
 //! `value`, `threads`, `exited`. When one thread stops, every other thread stops at its next statement
 //! (all-stop); a thread blocked in a call (sleep, recv, I/O) stops when it returns.
 
-use crate::{DuckStr, ShowFn, cstr, sbytes};
+use crate::{AukStr, ShowFn, cstr, sbytes};
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::ffi::{c_char, c_void};
@@ -42,10 +42,10 @@ use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering::*};
 use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 
-/// Non-zero while the debugger wants to see statements: generated code calls `duck_dbg_hook`
+/// Non-zero while the debugger wants to see statements: generated code calls `auk_dbg_hook`
 /// only then.
 #[unsafe(no_mangle)]
-pub static duck_dbg_armed: AtomicI64 = AtomicI64::new(0);
+pub static auk_dbg_armed: AtomicI64 = AtomicI64::new(0);
 
 /// A frame record, as generated code lays it out: `{fn, parent, site, slot...}`.
 #[repr(C)]
@@ -56,7 +56,7 @@ pub struct Frame {
     slots: [*mut c_void; 0],
 }
 
-/// `void kids(void *value, void *ctx)`: reports each part through `duck_dbg_kid`.
+/// `void kids(void *value, void *ctx)`: reports each part through `auk_dbg_kid`.
 type KidsFn = unsafe extern "C" fn(*mut c_void, *mut c_void);
 
 struct Site {
@@ -96,7 +96,7 @@ thread_local! {
     static TOP: Cell<*mut Frame> = const { Cell::new(std::ptr::null_mut()) };
     static DEPTH: Cell<i64> = const { Cell::new(0) };
     static TID: Cell<i64> = const { Cell::new(0) };
-    /// Set while this thread runs the debugger (showing values runs Duck code: no stops).
+    /// Set while this thread runs the debugger (showing values runs Auk code: no stops).
     static BUSY: Cell<bool> = const { Cell::new(false) };
     static STEP: Cell<Step> = const { Cell::new(Step { kind: StepKind::None, epoch: 0, depth: 0, line: 0, site: 0 }) };
     static REG: Registration = const { Registration(Cell::new(false)) };
@@ -130,7 +130,7 @@ enum CatchMode {
 struct Bp {
     id: i64,
     sites: Vec<u32>,
-    /// Stop only where this Duck expression is true.
+    /// Stop only where this Auk expression is true.
     cond: Option<String>,
 }
 
@@ -182,10 +182,10 @@ fn wait(g: MutexGuard<'static, State>) -> MutexGuard<'static, State> {
     CV.wait(g).unwrap_or_else(|e| e.into_inner())
 }
 
-/// Recompute `duck_dbg_armed` from the state.
+/// Recompute `auk_dbg_armed` from the state.
 fn rearm(s: &State) {
     let on = !s.running || s.stopped || s.pause_req || s.stepping || !s.bps.is_empty();
-    duck_dbg_armed.store(on as i64, SeqCst);
+    auk_dbg_armed.store(on as i64, SeqCst);
 }
 
 /// Removes the thread from the debugger's list when it ends.
@@ -217,7 +217,7 @@ fn tid() -> i64 {
 // ---- generated code's entry points --------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_dbg_enter(f: *mut Frame) {
+pub unsafe extern "C" fn auk_dbg_enter(f: *mut Frame) {
     if TID.with(|t| t.get()) == 0 && ATTACHED.load(Relaxed) {
         tid();
     }
@@ -226,14 +226,14 @@ pub unsafe extern "C" fn duck_dbg_enter(f: *mut Frame) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_dbg_leave(f: *mut Frame) {
+pub unsafe extern "C" fn auk_dbg_leave(f: *mut Frame) {
     TOP.with(|t| t.set(unsafe { (*f).parent }));
     DEPTH.with(|d| d.set(d.get() - 1));
 }
 
 /// A statement of an instrumented function, while armed: stop here?
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_dbg_hook(f: *mut Frame) {
+pub unsafe extern "C" fn auk_dbg_hook(f: *mut Frame) {
     if !ATTACHED.load(Relaxed) || BUSY.with(|b| b.get()) {
         return;
     }
@@ -253,7 +253,7 @@ pub unsafe extern "C" fn duck_dbg_hook(f: *mut Frame) {
         s.pause_req = false;
         "pause"
     } else if info.bp.get(site as usize).is_some_and(|b| b.load(Relaxed) > 0) {
-        // conditions: evaluated here, without the lock (they run Duck code)
+        // conditions: evaluated here, without the lock (they run Auk code)
         let conds: Vec<Option<String>> = s.bps.iter().filter(|b| b.sites.contains(&(site as u32))).map(|b| b.cond.clone()).collect();
         drop(s);
         let mut hit = false;
@@ -302,17 +302,17 @@ pub unsafe extern "C" fn duck_dbg_hook(f: *mut Frame) {
     stop(s, me, reason, extra);
 }
 
-// ---- evaluating Duck expressions --------------------------------------------------------
+// ---- evaluating Auk expressions --------------------------------------------------------
 
 /// What the compiler hands back for an expression at a site: a function of the addresses of
 /// the locals it uses (in `slots` order) that returns the value shown, and its type.
 pub struct Compiled {
-    pub run: unsafe extern "C" fn(*const *mut c_void) -> *mut DuckStr,
+    pub run: unsafe extern "C" fn(*const *mut c_void) -> *mut AukStr,
     pub slots: Vec<u32>,
     pub ty: String,
 }
 
-/// The compiler's side (src/dbg_eval.rs, in the same process for `duck run --debug`): compile
+/// The compiler's side (src/dbg_eval.rs, in the same process for `auk run --debug`): compile
 /// `expr` at `site` of debug function `func`.
 pub type EvalHook = fn(func: u32, site: u32, expr: &str) -> Result<Compiled, String>;
 
@@ -325,7 +325,7 @@ pub fn set_eval_hook(h: EvalHook) {
     let _ = EVAL_HOOK.set(h);
 }
 
-/// Evaluate a Duck expression in frame `f`: (value shown, type).
+/// Evaluate an Auk expression in frame `f`: (value shown, type).
 fn eval_at(f: *mut Frame, expr: &str) -> Result<(String, String), String> {
     let hook = EVAL_HOOK.get().ok_or("this program can't evaluate expressions")?;
     let (func, site) = unsafe { ((*f).func as u32, (*f).site as u32) };
@@ -349,18 +349,18 @@ fn eval_at(f: *mut Frame, expr: &str) -> Result<(String, String), String> {
         args.push(p);
     }
     struct Env {
-        run: unsafe extern "C" fn(*const *mut c_void) -> *mut DuckStr,
+        run: unsafe extern "C" fn(*const *mut c_void) -> *mut AukStr,
         args: *const *mut c_void,
     }
     unsafe extern "C" fn tramp(env: *mut c_void, out: *mut c_void) {
         let e = unsafe { &*(env as *const Env) };
-        unsafe { *(out as *mut *mut DuckStr) = (e.run)(e.args) };
+        unsafe { *(out as *mut *mut AukStr) = (e.run)(e.args) };
     }
     let mut env = Env { run: c.run, args: args.as_ptr() };
-    let mut out: *mut DuckStr = std::ptr::null_mut();
+    let mut out: *mut AukStr = std::ptr::null_mut();
     let left = crate::trace::show_left();
     crate::trace::set_show_left(1024);
-    let r = unsafe { crate::catch::run(tramp, (&mut env as *mut Env).cast(), (&mut out as *mut *mut DuckStr).cast()) };
+    let r = unsafe { crate::catch::run(tramp, (&mut env as *mut Env).cast(), (&mut out as *mut *mut AukStr).cast()) };
     crate::trace::set_show_left(left);
     if let Some(p) = r {
         return Err(format!("panic: {}", p.msg));
@@ -764,14 +764,14 @@ unsafe fn kid(ctx: *mut c_void, name: &dyn Fn() -> String, ty: u32, p: *mut c_vo
 
 /// Generated children functions report a named part.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_dbg_kid(ctx: *mut c_void, name: *const c_char, ty: i64, p: *mut c_void) {
+pub unsafe extern "C" fn auk_dbg_kid(ctx: *mut c_void, name: *const c_char, ty: i64, p: *mut c_void) {
     unsafe { kid(ctx, &|| cstr(name).to_string(), ty as u32, p) }
 }
 
 /// The elements of a list (`elem` bytes each).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_dbg_kid_arr(ctx: *mut c_void, a: *mut c_void, ty: i64, elem: i64) {
-    let a = a as *const crate::DuckArr;
+pub unsafe extern "C" fn auk_dbg_kid_arr(ctx: *mut c_void, a: *mut c_void, ty: i64, elem: i64) {
+    let a = a as *const crate::AukArr;
     if a.is_null() {
         return;
     }
@@ -801,13 +801,13 @@ pub unsafe extern "C" fn duck_dbg_kid_arr(ctx: *mut c_void, a: *mut c_void, ty: 
 
 /// The entries of a map: each value, named by its key shown.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_dbg_kid_map(ctx: *mut c_void, m: *mut c_void, ty: i64) {
-    let m = m as *const crate::DuckMap;
+pub unsafe extern "C" fn auk_dbg_kid_map(ctx: *mut c_void, m: *mut c_void, ty: i64) {
+    let m = m as *const crate::AukMap;
     if m.is_null() {
         return;
     }
     let (mut it, mut k, mut v): (i64, *mut c_void, *mut c_void) = (0, std::ptr::null_mut(), std::ptr::null_mut());
-    while unsafe { crate::map::duck_map_next(m, &mut it, &mut k, &mut v) } {
+    while unsafe { crate::map::auk_map_next(m, &mut it, &mut k, &mut v) } {
         let key = k;
         let name = || unsafe {
             match (*(*m).kops).show {
@@ -830,7 +830,7 @@ fn show(info: &Info, ty: u32, p: *mut c_void) -> String {
     let f = unsafe { *info.shows.add(ty as usize) };
     let left = crate::trace::show_left();
     crate::trace::set_show_left(MAX as i64 + 24);
-    let s: *mut DuckStr = unsafe { f(p) };
+    let s: *mut AukStr = unsafe { f(p) };
     crate::trace::set_show_left(left);
     let mut out = String::from_utf8_lossy(unsafe { sbytes(s) }).into_owned();
     unsafe { crate::rc::release(s) };
@@ -1069,7 +1069,7 @@ fn reader(conn: UnixStream) {
     s.pause_req = false;
     s.stepping = false;
     s.epoch += 1;
-    duck_dbg_armed.store(0, SeqCst);
+    auk_dbg_armed.store(0, SeqCst);
     CV.notify_all();
 }
 
@@ -1080,14 +1080,14 @@ extern "C" fn at_exit() {
 }
 
 /// Start the debugger (generated `main`, before anything else runs): attach to the front end
-/// named by `DUCK_DEBUG` and wait for `run`.
+/// named by `AUK_DEBUG` and wait for `run`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn duck_dbg_init(text: *const c_char, shows: *const ShowFn, kids: *const Option<KidsFn>) {
-    let Some(path) = std::env::var_os("DUCK_DEBUG") else { return };
+pub unsafe extern "C" fn auk_dbg_init(text: *const c_char, shows: *const ShowFn, kids: *const Option<KidsFn>) {
+    let Some(path) = std::env::var_os("AUK_DEBUG") else { return };
     let conn = match UnixStream::connect(&path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("duck: debugger at {}: {e}", path.to_string_lossy());
+            eprintln!("auk: debugger at {}: {e}", path.to_string_lossy());
             return;
         }
     };

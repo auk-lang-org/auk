@@ -3,8 +3,8 @@
 //! the slow or failing path. A failing path calls the *same* runtime function with the same
 //! arguments (which then panics), so messages and edge cases are exactly the runtime's.
 //!
-//! Layouts used here (runtime/src/lib.rs): `DuckHeader { rc: i64 @0, kind: u32 @8 }`,
-//! `DuckArr { h @0, ops @16, len @24, cap @32, data @40, base @48 }`, `DuckElemOps { size @0 }`.
+//! Layouts used here (runtime/src/lib.rs): `AukHeader { rc: i64 @0, kind: u32 @8 }`,
+//! `AukArr { h @0, ops @16, len @24, cap @32, data @40, base @48 }`, `AukElemOps { size @0 }`.
 //! Handle kinds (`heap::is_handle`): 6..=10.
 
 use llvm_sys::core::*;
@@ -31,10 +31,10 @@ impl Gen<'_, '_> {
         }
         let int = |e: &Ex| matches!(e.ty, MTy::D(crate::types::Ty::Int) | MTy::I64);
         Some(match (sym, args) {
-            ("duck_add" | "duck_sub" | "duck_mul", [a, b, _]) if int(a) && int(b) => {
+            ("auk_add" | "auk_sub" | "auk_mul", [a, b, _]) if int(a) && int(b) => {
                 let op = match sym {
-                    "duck_add" => "llvm.sadd.with.overflow",
-                    "duck_sub" => "llvm.ssub.with.overflow",
+                    "auk_add" => "llvm.sadd.with.overflow",
+                    "auk_sub" => "llvm.ssub.with.overflow",
                     _ => "llvm.smul.with.overflow",
                 };
                 let vals = self.eval_args(args);
@@ -47,14 +47,14 @@ impl Gen<'_, '_> {
                     V::S(LLVMBuildExtractValue(self.b, r, 0, NONAME))
                 }
             }
-            ("duck_div" | "duck_mod", [a, b, _]) if int(a) && int(b) => {
+            ("auk_div" | "auk_mod", [a, b, _]) if int(a) && int(b) => {
                 let vals = self.eval_args(args);
                 let (x, y) = (vals[0], vals[1]);
                 unsafe {
                     let zero = LLVMConstInt(self.t_i64, 0, 0);
                     let m1 = LLVMConstInt(self.t_i64, u64::MAX, 1);
                     let by0 = LLVMBuildICmp(self.b, LLVMIntPredicate::LLVMIntEQ, y, zero, NONAME);
-                    if sym == "duck_div" {
+                    if sym == "auk_div" {
                         // also MIN / -1 overflows
                         let min = LLVMConstInt(self.t_i64, i64::MIN as u64, 1);
                         let xm = LLVMBuildICmp(self.b, LLVMIntPredicate::LLVMIntEQ, x, min, NONAME);
@@ -72,21 +72,21 @@ impl Gen<'_, '_> {
                     }
                 }
             }
-            ("duck_shl" | "duck_shr", [a, b, _]) if int(a) && int(b) => {
+            ("auk_shl" | "auk_shr", [a, b, _]) if int(a) && int(b) => {
                 let vals = self.eval_args(args);
                 unsafe {
                     let bad = LLVMBuildICmp(self.b, LLVMIntPredicate::LLVMIntUGT, vals[1], LLVMConstInt(self.t_i64, 63, 0), NONAME);
                     self.fail_if(bad, sym, args, &vals, ret);
-                    V::S(if sym == "duck_shl" { LLVMBuildShl(self.b, vals[0], vals[1], NONAME) } else { LLVMBuildAShr(self.b, vals[0], vals[1], NONAME) })
+                    V::S(if sym == "auk_shl" { LLVMBuildShl(self.b, vals[0], vals[1], NONAME) } else { LLVMBuildAShr(self.b, vals[0], vals[1], NONAME) })
                 }
             }
             // exact float operations (bit-identical to Rust's f64 methods in the runtime)
-            ("duck_fsqrt" | "duck_fabs" | "duck_ffloor" | "duck_fceil" | "duck_fround", [_]) => {
+            ("auk_fsqrt" | "auk_fabs" | "auk_ffloor" | "auk_fceil" | "auk_fround", [_]) => {
                 let name = match sym {
-                    "duck_fsqrt" => "llvm.sqrt",
-                    "duck_fabs" => "llvm.fabs",
-                    "duck_ffloor" => "llvm.floor",
-                    "duck_fceil" => "llvm.ceil",
+                    "auk_fsqrt" => "llvm.sqrt",
+                    "auk_fabs" => "llvm.fabs",
+                    "auk_ffloor" => "llvm.floor",
+                    "auk_fceil" => "llvm.ceil",
                     _ => "llvm.round",
                 };
                 let vals = self.eval_args(args);
@@ -94,11 +94,11 @@ impl Gen<'_, '_> {
                 let mut a = [vals[0]];
                 V::S(unsafe { LLVMBuildCall2(self.b, ft, f, a.as_mut_ptr(), 1, NONAME) })
             }
-            ("duck_arr_len", [_]) => {
+            ("auk_arr_len", [_]) => {
                 let vals = self.eval_args(args);
                 V::S(self.arr_len(vals[0]))
             }
-            ("duck_arr_at", [_, i, _]) if int(i) => {
+            ("auk_arr_at", [_, i, _]) if int(i) => {
                 let size = self.elem_hint.take();
                 let vals = self.eval_args(args);
                 let (a, i) = (vals[0], vals[1]);
@@ -116,7 +116,7 @@ impl Gen<'_, '_> {
                     V::S(self.elem_addr(a, i, size))
                 }
             }
-            ("duck_arr_set", [_, i, e, _]) if int(i) => {
+            ("auk_arr_set", [_, i, e, _]) if int(i) => {
                 let (s, size) = self.plain_elem(e)?;
                 let vals = self.eval_args(args);
                 let (pa, i, ep) = (vals[0], vals[1], vals[2]);
@@ -135,7 +135,7 @@ impl Gen<'_, '_> {
                     V::None
                 }
             }
-            ("duck_arr_push", [_, e]) => {
+            ("auk_arr_push", [_, e]) => {
                 let (s, size) = self.plain_elem(e)?;
                 let vals = self.eval_args(args);
                 let (pa, ep) = (vals[0], vals[1]);
@@ -157,13 +157,13 @@ impl Gen<'_, '_> {
                     V::None
                 }
             }
-            ("duck_retain", [_]) => {
+            ("auk_retain", [_]) => {
                 let vals = self.eval_args(args);
                 let p = vals[0];
                 self.rc_update(p, true, args, &vals, ret);
                 V::S(p)
             }
-            ("duck_release", [_]) => {
+            ("auk_release", [_]) => {
                 let vals = self.eval_args(args);
                 self.rc_update(vals[0], false, args, &vals, ret);
                 V::None
@@ -254,7 +254,7 @@ impl Gen<'_, '_> {
         self.build_call(&sig, f, &mut vs)
     }
 
-    /// `duck_arr_len`: a list's length (0 for NULL).
+    /// `auk_arr_len`: a list's length (0 for NULL).
     fn arr_len(&mut self, a: LLVMValueRef) -> LLVMValueRef {
         unsafe {
             let nonnull = LLVMBuildIsNotNull(self.b, a, NONAME);
@@ -284,11 +284,11 @@ impl Gen<'_, '_> {
         }
     }
 
-    /// `duck_retain(p)` / `duck_release(p)` inline: nothing for NULL and immortal objects (a
+    /// `auk_retain(p)` / `auk_release(p)` inline: nothing for NULL and immortal objects (a
     /// negative count), the runtime for handles (their heap keeps a ledger), an atomic add or
     /// subtract otherwise; the last release frees the object through the runtime.
     fn rc_update(&mut self, p: LLVMValueRef, retain: bool, args: &[Ex], vals: &[LLVMValueRef], ret: &MTy) {
-        let sym = if retain { "duck_retain" } else { "duck_release" };
+        let sym = if retain { "auk_retain" } else { "auk_release" };
         unsafe {
             let done = self.new_block(c"rc.done");
             let check = self.new_block(c"rc.check");
@@ -325,7 +325,7 @@ impl Gen<'_, '_> {
                 LLVMBuildFence(self.b, LLVMAtomicOrdering::LLVMAtomicOrderingAcquire, 0, NONAME);
                 let ps = [MTy::void_ptr()];
                 let (sig, _, _) = self.c_sig(&ps, &MTy::Void);
-                let f = self.rt_func("duck__free_last", &sig);
+                let f = self.rt_func("auk__free_last", &sig);
                 let mut a = [p];
                 self.build_call(&sig, f, &mut a);
                 self.br(done);
