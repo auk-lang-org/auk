@@ -31,7 +31,7 @@ STEPS="${*:-cargo runtime pilot golden bench runner}"
 step_cargo() { cargo test --release --no-fail-fast; }
 # real-host TLS tests reach badssl.com, which times out now and then: off unless asked for
 step_runtime() { AUK_NET_TESTS="${AUK_NET_TESTS:-0}" sh runtime/c/test/run.sh; }
-step_pilot() { scripts/gen_error_pages.sh --check && scripts/diff_tokens.sh && scripts/diff_ast.sh && scripts/diff_resolve.sh && scripts/diff_check.sh && scripts/diff_check_text.sh && scripts/diff_holes.sh && scripts/diff_typed.sh && scripts/diff_fmt.sh && scripts/diff_ir.sh && scripts/diff_raft.sh && scripts/diff_hatch.sh && scripts/diff_dive.sh && scripts/diff_live.sh --no-build && scripts/diff_debug.sh --no-build; }
+step_pilot() { scripts/gen_error_pages.sh --check && scripts/diff_tokens.sh && scripts/diff_ast.sh && scripts/diff_resolve.sh && scripts/diff_check.sh && scripts/diff_check_text.sh && scripts/diff_holes.sh && scripts/diff_typed.sh && scripts/diff_parse_typed.sh && scripts/diff_fmt.sh && scripts/diff_ir.sh && scripts/diff_raft.sh && scripts/diff_hatch.sh && scripts/diff_dive.sh && scripts/diff_live.sh --no-build && scripts/diff_debug.sh --no-build; }
 step_backend() { scripts/diff_mir.sh && scripts/run_backend.sh; }
 step_vscode() { scripts/vscode_e2e.sh; }
 step_bootstrap() { scripts/bootstrap.sh --no-build --perf; }
