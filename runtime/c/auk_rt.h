@@ -738,6 +738,42 @@ AUK_API void auk__imprint_close(void);
 AUK_API void auk__imprint_mark(int tag, int64_t c);
 AUK_API void auk__imprint_value(int64_t c, const AukValue *v);
 
+/* ---- dbg.c: the debugger engine ---------------------------------------------------------- */
+
+/* A frame record, as generated code lays it out. */
+typedef struct AukFrame {
+    int64_t func;
+    struct AukFrame *parent;
+    int64_t site;
+    void *slots[];
+} AukFrame;
+
+/* An expression compiled for the debugger (src/dbg_eval.rs): a function of the addresses of
+ * the locals it uses (in slots order) that returns the value shown, and its type. */
+typedef struct AukDbgCompiled {
+    AukStr *(*run)(void *const *slots);
+    uint32_t *slots;
+    int64_t nslots;
+    char *ty;
+} AukDbgCompiled;
+
+/* Compile expr at site of debug function func: true with *out, or false with *err (malloc'd
+ * strings and arrays, kept). */
+typedef bool (*AukDbgEvalHook)(uint32_t func, uint32_t site, const char *expr, AukDbgCompiled *out, char **err);
+
+AUK_API extern _Atomic int64_t auk_dbg_armed;
+AUK_API void auk_dbg_set_eval_hook(AukDbgEvalHook h);
+AUK_API void auk_dbg_enter(AukFrame *f);
+AUK_API void auk_dbg_leave(AukFrame *f);
+AUK_API void auk_dbg_hook(AukFrame *f);
+AUK_API void auk_dbg_kid(void *ctx, const char *name, int64_t ty, void *p);
+AUK_API void auk_dbg_kid_arr(void *ctx, void *list, int64_t ty, int64_t elem);
+AUK_API void auk_dbg_kid_map(void *ctx, void *map, int64_t ty);
+AUK_API void auk_dbg_init(const char *text, const AukShowFn *shows, const void *kids);
+void auk__dbg_on_panic(const char *loc, const char *msg, size_t n, bool caught);
+void auk__dbg_save(void **top, int64_t *depth);
+void auk__dbg_restore(void *top, int64_t depth);
+
 /* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
 
 
@@ -747,14 +783,8 @@ AukRes_unit auk__tls_write(void *tls, const uint8_t *buf, int64_t n);
 void auk__tls_free(void *tls);
 
 
-/* The debugger's per-thread state at a recovery point (dbg.rs). */
-void auk__dbg_save(void **top, int64_t *depth);
-void auk__dbg_restore(void *top, int64_t depth);
-
 /* The window process's entry (gui_host.rs). */
 int auk__gui_host_main(void);
 
-/* The debugger hears about panics (dbg.rs). */
-void auk__dbg_on_panic(const char *loc, const char *msg, size_t n, bool caught);
 
 #endif
