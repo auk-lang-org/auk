@@ -29,6 +29,7 @@ typedef struct TestCase {
 
 /* The tables (one per file, ended by {NULL, NULL}). */
 extern const TestCase arr_tests[];
+extern const TestCase conc_tests[];
 extern const TestCase core_tests[];
 extern const TestCase io_tests[];
 extern const TestCase map_tests[];

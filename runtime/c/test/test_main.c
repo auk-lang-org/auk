@@ -158,6 +158,11 @@ int child(ChildFn f, void *ctx, char **out) {
     int status = 0;
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
     }
+    /* a sanitizer report in a child (which _exits, so it can't change its exit code) fails
+     * the test that made it */
+    if (strstr(buf, "WARNING: ThreadSanitizer") != NULL || strstr(buf, "ERROR: AddressSanitizer") != NULL ||
+        strstr(buf, "runtime error:") != NULL)
+        t_fail(__FILE__, __LINE__, "sanitizer report in a child process:\n%s", buf);
     return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
 }
 
@@ -270,7 +275,7 @@ static void run_one(const TestCase *t) {
 
 int main(int argc, char **argv) {
     const char *filter = argc > 1 ? argv[1] : NULL;
-    const TestCase *groups[] = {arr_tests, core_tests, io_tests, map_tests, net_tests_list, str_tests};
+    const TestCase *groups[] = {arr_tests, core_tests, io_tests, map_tests, net_tests_list, str_tests, conc_tests};
     for (size_t g = 0; g < sizeof groups / sizeof groups[0]; g++) {
         for (const TestCase *t = groups[g]; t->name != NULL; t++) {
             if (filter != NULL && strstr(t->name, filter) == NULL) continue;

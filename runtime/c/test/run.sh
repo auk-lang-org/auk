@@ -11,6 +11,8 @@
 # ASAN=1 builds with AddressSanitizer and UBSan. CC overrides the compiler; by default it is
 # Homebrew's clang (/opt/homebrew/opt/llvm@23/bin/clang) when present, else cc. Under ASAN=1
 # the Homebrew clang is used only if it has the sanitizer runtimes; otherwise Apple's cc.
+# TSAN=1 builds with ThreadSanitizer instead (the concurrency tests in test_conc.c are what it
+# is for: `TSAN=1 sh runtime/c/test/run.sh conc`).
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -34,8 +36,14 @@ Darwin)
 esac
 
 san=""
+if [ "${ASAN:-0}" = 1 ] && [ "${TSAN:-0}" = 1 ]; then
+    echo "ASAN=1 and TSAN=1 can't be combined" >&2
+    exit 2
+fi
 if [ "${ASAN:-0}" = 1 ]; then
     san="-fsanitize=address,undefined -fno-omit-frame-pointer"
+elif [ "${TSAN:-0}" = 1 ]; then
+    san="-fsanitize=thread -fno-omit-frame-pointer"
 fi
 
 # Pick the compiler: does $1 build and link a program with the sanitizer flags?
@@ -52,7 +60,7 @@ if [ -z "${CC:-}" ]; then
     fi
 fi
 
-echo "building with $CC${san:+ (ASAN)} in $build"
+echo "building with $CC${san:+ ($san)} in $build"
 objs=""
 for src in "$rt"/*.c; do
     obj="$build/rt_$(basename "$src" .c).o"
@@ -66,7 +74,14 @@ for src in "$here"/*.c; do
 done
 $CC $san $objs $libs -o "$build/auk_rt_tests"
 
-if [ -n "$san" ]; then
+if [ "${TSAN:-0}" = 1 ]; then
+    # Tests fork children that start threads (child(), the trace and debugger tests), and by
+    # then the parent has threads of its own (Network.framework's, after the tls tests).
+    # ThreadSanitizer refuses that unless told otherwise; the children only use what they
+    # create themselves. A report makes the run fail (exit 66), in a child as in the parent.
+    TSAN_OPTIONS=${TSAN_OPTIONS:-die_after_fork=0:halt_on_error=0:second_deadlock_stack=1}
+    export TSAN_OPTIONS
+elif [ -n "$san" ]; then
     # LeakSanitizer stays on (where the platform has it), minus leaks that are not the
     # runtime's: one-time caches of macOS's own frameworks (Network.framework, used by tls.c,
     # and what it pulls in), and the string immortal_and_leak_check makes immortal on purpose.
