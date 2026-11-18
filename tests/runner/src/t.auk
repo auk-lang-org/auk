@@ -68,9 +68,9 @@ pub fn auk_bin(): str uses env, ffi = env.get("AUK_BIN") else abs("target/releas
 pub fn raft_bin(): str uses env, ffi = env.get("RAFT_BIN") else abs("target/release/raft")
 
 /// What a binary from `$AUK_BIN` lacks when `$AUK_BIN_LACKS` is unset: the commands the
-/// self-hosted port's driver doesn't have yet (`debug`, `dap`, `dive`, `run --live`, the hidden
-/// `parse` and `typed`; tests/auk_bin/mod.rs has the same list for the Rust tests).
-pub let PORT_LACKS = "parse,typed"
+/// self-hosted port's driver doesn't have yet: nothing since the hidden `parse` and `typed`, the
+/// last ones, were ported (tests/auk_bin/mod.rs has the same list for the Rust tests).
+pub let PORT_LACKS = ""
 
 /// Whether the binary lacks `cmd` (only a binary from `$AUK_BIN` can); if so, say which test
 /// skips what.

@@ -428,11 +428,15 @@ numbers: [pilot-report.md](pilot-report.md), "Phase 4".
       builds its candidates with itself), same flags, output and exit codes. Imprints run in a
       forked JIT child (`drive.eval_imprints`). `debug`, `dap`, `dive` and `run --live` came in
       Phase 5. `scripts/diff_driver.sh`: 53 cases (usage errors, traces, `-O`, `build -o -g`,
-      imprint panics, test filters, flat directories, the leak checker), 0 differ.
+      imprint panics, test filters, flat directories, the leak checker), 0 differ. The hidden
+      `parse [--ast|--json]` and `typed` came last (`cli.parse_file`/`typed_file`,
+      `ast_dump.auk` = `Module::dump`, `typed.dump`/`validate`; the port's own typed dump is
+      only `auk dump typed` now): `scripts/diff_parse_typed.sh`, 0 differ over the corpus.
 - [x] Diff gate: `scripts/golden.sh --compare` with stage 2: tokens, ast, check, fmt 997 files,
       ir 213, run 46 entries, 0 differ. `tests/*.rs` against stage 2 (`AUK_BIN`): 505 pass, 0
       fail (the count includes tests that return early because they need `debug`, `live`,
-      `parse` or `typed`, which the port lacks: `PORT_LACKS` in `tests/auk_bin/mod.rs`).
+      `parse` or `typed`, which the port then lacked: `PORT_LACKS` in `tests/auk_bin/mod.rs`,
+      empty since every command is ported).
       `bench/perf`: all 7 executables byte-identical to the Rust `auk`'s.
 - [x] **Bootstrap fixed point** (`scripts/bootstrap.sh [--perf]`; `check.sh bootstrap`): stage 1
       (built by Rust), stage 2 and stage 3 are all bit-identical (5.17 MB).
@@ -559,7 +563,8 @@ Port onto the Auk compiler, each with its existing tests passing:
         ignored in the runner and reset in children; unix sockets for `AUK_DEBUG`.
       - `t.auk`: `t.check`/`t.fail`, `t.skip_if_lacks(cmd, what)` and `t.lacks` (the
         `auk_bin::lacks` mechanism: `$AUK_BIN_LACKS`, default for an `$AUK_BIN` binary what
-        the port lacks: `parse,typed` since the Phase 5 ports), `t.scratch` (under `target/test-tmp/<pid>`, removed
+        the port lacks: nothing since `parse` and `typed` were ported), `t.scratch` (under
+        `target/test-tmp/<pid>`, removed
         after a green run) and `t.temp` (`$TMPDIR`), `t.install` (raft install, stale lock
         regenerated). JSON through `json.auk`, copied from compiler/src (as raft copies
         `paths.auk`; so is `paths.auk`).
@@ -582,7 +587,8 @@ Port onto the Auk compiler, each with its existing tests passing:
       race-free; check2/shadow read `check --json` with `json.auk` (a `null` reads as missing).
       Found on the way: `core.fail(msg)` (core qualified) makes an Err whose message is empty
       (Rust auk and port alike), and `auk fmt` changes compiler/src/json.auk (not fmt-clean).
-      Gaps: none; still to come when the commands are ported: the 27 skips. `tests/*.rs` stay
+      Gaps: none. With `parse` and `typed` ported (the last commands), the port: 357 pass,
+      0 skip, 0 fail, as the Rust `auk`. `tests/*.rs` stay
       until Phase 6 deletes them (the coverage check keeps the two in step).
 - [x] VS Code extension (`editors/vscode`) still works against the new `lsp`/`dap`:
       `scripts/vscode_e2e.sh [<auk>...]` (check.sh step `vscode`, not by default: it opens a VS Code
