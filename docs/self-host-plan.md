@@ -287,9 +287,9 @@ step diffed against the golden corpus before the next starts:
   - `resolve.auk`: `Program { pkgs, mods, root, focus, core_pkg, core_root }`, `Module { pkg,
     path, file, src, ast, children }`, `Package`, `first_segment`/`child`/`name`/`is_core`,
     `load`/`load_source`/`load_in_package`/`source_of`, `parse_manifest`. Everything that reads
-    files takes a `Sources` (prelude texts, `with_sources` overrides, the OS): the prelude is read
-    from `src/prelude/` at start-up (`$AUK_PRELUDE_DIR`, or found upward from the binary) because
-    Auk can't embed files; see the gap below. Rust's `BTreeMap` iteration is `sorted_keys(m)`.
+    files takes a `Sources` (prelude texts, `with_sources` overrides, the OS): the prelude texts
+    are compiled in (`embedded.prelude()`, one `#embed` per file; read from `src/prelude/` at
+    start-up until Phase 4). Rust's `BTreeMap` iteration is `sorted_keys(m)`.
   - `visit.auk`: `visit_item_exprs`/`visit_expr` (check.rs) push every expression, pre-order,
     onto a `var [ast.Expr]`; `as_path` (check/expr.rs).
   - `paths.auk`: `std::path` on `str` (`join`, `parent`, `file_stem`, `extension`, component
@@ -352,13 +352,14 @@ step diffed against the golden corpus before the next starts:
       `mir/printer.auk`); the lowering is `mir/progen.auk`, `mir/lower.auk`,
       `mir/lower/pat.auk`, `mir/lower/ffi.auk` and `mir/build.auk` (build.rs's `generate`, the
       debugger tables, the imprint helper and its records). `compiler ir [--release] [-g]
-      [--trace=..] [--debug] <file>` prints what `auk ir` prints. Imprints run a helper program,
-      which needs the back end: until the port runs it itself, `AUK_IMPRINT_RECORDS=<f> auk ir`
-      leaves the helper's records (and `<f>.status`: exit code, stderr) for `compiler ir
-      --imprints <f>`, and `AUK_IMPRINT_EVAL_IR=<f>` the helper's MIR, diffed against `compiler
-      ir --imprint-eval`. `scripts/diff_ir.sh`: **209 programs x 5 variants (run, --release,
-      --release -g, --trace=json, --debug) and 26 imprint helpers, 0 differ** (the back end's
-      corpus plus `compiler/tests/ir/`; E0115/E0420 imprint failures included). The compiler
+      [--trace=..] [--debug] <file>` prints what `auk ir` prints. Imprints run a helper program:
+      the port JIT-compiles it and runs it in a forked child itself since Phase 4
+      (`drive.eval_imprints`; until then the Rust run left its records for the port in
+      `AUK_IMPRINT_RECORDS`, now removed); `AUK_IMPRINT_EVAL_IR=<f> auk ir` writes the helper's
+      MIR, diffed against `compiler ir --imprint-eval`. `scripts/diff_ir.sh`: **213 programs x 5
+      variants (run, --release, --release -g, --trace=json, --debug) and 27 imprint helpers, 0
+      differ** (the back end's corpus plus `compiler/tests/ir/`; E0115/E0420 imprint failures
+      included). The compiler
       itself (`compiler/src/main.auk`, 7.9 MB of MIR) lowers identically. Not ported:
       `lower::emit_eval` (the debugger's expression evaluation, `auk run --debug` only). Lowering
       alone is 1.54x Rust as ported (`scripts/ir_time.sh`; pilot-report.md, "3c").
@@ -373,8 +374,9 @@ step diffed against the golden corpus before the next starts:
       including `tests/errors/` and `docs/errors/` examples → MIR text. Done through the type
       checker's diagnostics, typed program and MIR text (`scripts/check.sh` pilot step runs
       every diff, `diff_ir.sh` included); patterns/effects diagnostics remain.
-- [ ] Prelude (`src/prelude/*.auk`) is embedded the same way: one `extern fn ..: str = "#embed .."`
-      per file. For now `resolve.auk` reads it from disk (`resolve.sources(dir)`).
+- [x] Prelude (`src/prelude/*.auk`) is embedded the same way: one `extern fn ..: str = "#embed .."`
+      per file (`compiler/src/embedded.auk`, with `docs/spec.md` and the `docs/errors` pages;
+      Phase 4). `resolve.sources(dir)` still reads a prelude directory, for tools.
 
 **Language freeze** from here to the end of Phase 4: no language changes (or each one is made in
 both compilers and both golden outputs). Bug fixes allowed, made in both.
@@ -422,18 +424,23 @@ numbers: [pilot-report.md](pilot-report.md), "Phase 4".
       programs, 0 differ** (stdout, stderr, exit code). The port compiling the Auk compiler's own
       MIR (`pilot_tokens`/`pilot_ast`) is among them. On Linux (AArch64, the CI image) too:
       diff_mir 130 dumps, diff_llvm 78 IR texts, run_backend 48 programs, 0 differ.
-- [ ] Driver: `main.rs` (214) — `run`, `build`, `check`, `test`, `ir`; same flags and exit codes.
-      For now `compiler mir|llvm|build|run <dump>` (`compiler/src/driver.auk`) on the Rust
-      compiler's MIR; the real commands need the checker and lowering (Phase 3).
-- [ ] Diff gate: program output identical for the whole corpus; `auk ir` identical; `bench/perf`
-      generated code within ±5% (same MIR → same IR should make this free). Back half done for
-      the corpus above (IR identical at every level, so `bench/perf` code is identical too);
-      the whole gate needs the Auk front end's MIR.
-- [ ] **Bootstrap fixed point:** stage 1 (built by Rust) compiles `compiler/` → stage 2; stage 2
-      compiles it → stage 3; stage 2 and stage 3 are bit-identical. Requires deterministic output
-      (no hash-order iteration, no timestamps/paths in objects).
-- [ ] Self-compile time measured and acceptable (target: a full rebuild of the compiler in
-      under ~30 s; set the real number from the pilot).
+- [x] Driver: `main.rs` (214) → `compiler/src/main.auk` (the `auk` command), `drive.auk`
+      (build.rs's driver half: check, generate, JIT run, `build_native`, trace flags, project
+      roots, flat test directories), `posix.auk`, `embedded.auk` (prelude, spec and error pages
+      `#embed`ded: the binary needs no checkout). `run`, `build`, `test`, `check`, `ir`, `fmt`,
+      `holes`, `hatch`, `explain`, `spec`, `lsp`, `mcp`, `__jit` (with `AUK_SOURCES`, so `hatch`
+      builds its candidates with itself), same flags, output and exit codes. Imprints run in a
+      forked JIT child (`drive.eval_imprints`). Not yet: `debug`, `dap`, `dive`, `run --live`
+      (Phase 5). `scripts/diff_driver.sh`: 53 cases (usage errors, traces, `-O`, `build -o -g`,
+      imprint panics, test filters, flat directories, the leak checker), 0 differ.
+- [x] Diff gate: `scripts/golden.sh --compare` with stage 2: tokens, ast, check, fmt 997 files,
+      ir 213, run 46 entries, 0 differ. `tests/*.rs` against stage 2 (`AUK_BIN`): 505 pass, 0
+      fail (tests needing `debug`, `live`, `parse`, `typed` skip, `tests/auk_bin`). `bench/perf`:
+      all 7 executables byte-identical to the Rust `auk`'s.
+- [x] **Bootstrap fixed point** (`scripts/bootstrap.sh [--perf]`; `check.sh bootstrap`): stage 1
+      (built by Rust), stage 2 and stage 3 are all bit-identical (5.17 MB).
+- [x] Self-compile time: 26–33 s per stage on an M-series Mac (Rust builds the same compiler in
+      ~27 s), at the ~30 s target.
 - [ ] Freeze ends. Tag `v0-rust-final`.
 
 ## Phase 5 — Tools
