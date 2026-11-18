@@ -141,10 +141,46 @@ pass on macOS and Linux; ASan clean; `bench/perf` within ±5% of Phase 0.
       `LLVMErrorRef`). Deferred until something requires one.
 
 ### 2c. `llvm` binding package
-- [ ] Bind the ~258 LLVM C functions `src/mir/llvm/` and `src/build.rs` use (generated from a
-      list, not by hand), grouped: context/module/types, builder, constants, debug info (DIBuilder),
-      target/object emission, ORC JIT, bitcode reader/linker.
-- [ ] Port one small piece of codegen (e.g. a function that adds two ints) end to end as proof.
+- [x] Bind the LLVM C functions `src/mir/llvm/` and `src/build.rs` use, generated from a list
+      (`packages/llvm/gen/gen.py` over `gen/bind.txt` and the LLVM 23 headers; `--check` finds
+      names `src/` uses that the list lacks): 211 functions in `llvm.ir` (40), `values` (54),
+      `builder` (56), `debug` (10), `target` (24), `orc` (16), `bitcode` (8), `passes` (3); 21
+      `extern type`s, one per `LLVM*Ref`; 57 enum constants. Of the 262 names `src/` uses, only
+      the ORC structs `LLVMOrcCSymbolMapPair`/`LLVMJITEvaluatedSymbol`/`LLVMJITSymbolFlags` aren't
+      bound as such (by value in an array): `llvm.kit.define` lays them out with `ffi.alloc`.
+      `--survey`: 1062 of the C API's 1066 functions bind; the rest take `const char **` or
+      MCJIT's options struct.
+- [x] FFI extension: `"T (*)(params)"` prototypes call a C function by address (`Callee::CPtr`),
+      which is how Auk calls code ORC compiled.
+- [x] Proof (`auk test packages/llvm`, leak-checked, and `tests/llvm_package.rs`): `add(i64, i64)`
+      built in Auk, verified, IR compared as text, JIT-compiled with ORC LLJIT and called through
+      the looked-up address; object file, assembly and bitcode emitted, bitcode read back and
+      linked into another module; O2 run; debug info; absolute symbols. `packages/llvm/example`
+      also links the object with `cc` into an executable (`auk run` and `auk build`).
+- [x] Port one small piece of codegen: `Gen::bin`, `truth`, `bool8`, `cstr_addr` from
+      `codegen.rs` (`llvm.codegen`), each operator JIT-compiled and called.
+
+Gaps for Phase 4, found doing 2c:
+- [ ] No conversion between an `extern type` and `ffi.Ptr`. Putting a handle in C memory
+      (`LLVMOrcCSymbolMapPair.Name`) needed a second binding of `LLVMOrcLLJITMangleAndIntern`
+      returning `void *`. A `ffi.ptr_of(x)`/`T.from_ptr(p)` pair would remove that.
+- [ ] `rt_symbols()`: the JIT defines the runtime's addresses as absolute symbols. The Auk
+      compiler needs those addresses in its own process: either export the runtime's symbols from
+      the compiler binary (`-export_dynamic` / `-rdynamic`, then the process generator finds them)
+      or a `dlsym` binding (`RTLD_DEFAULT` is `(void *)-2` on macOS, `0` on Linux).
+- [ ] Embedding files in the binary: `rtlink.rs` and `build.rs` `include_bytes!` `auk_rt.bc` and
+      `libauk_rt.a`. Auk has no equivalent (`imprint` is pure, so it can't read files).
+- [ ] `[link] libs` can't depend on the platform or ask `llvm-config`: the package names
+      `/opt/homebrew/opt/llvm@23/lib/libLLVM.dylib`, which is macOS/Homebrew only.
+- [ ] A string's byte length costs a copy (`s.bytes().len()`); every generated wrapper for a
+      `const char *` + length pays it. A `byte_len` would make names free.
+- [ ] Each call that takes a list (`build_call2`, `build_gep2`, `function_type`) mallocs and frees
+      a C array; fine for the pilot, measure in Phase 4.
+- [ ] Which `LLVM*Ref` parameters accept NULL and which results may be NULL is a hand list in
+      `gen.py` (`NULLABLE_ARG`, `NULLABLE_RET`); porting the rest of the back end will add to it,
+      and to `bind.txt` for new functions and enum values.
+- [ ] One `extern fn` per JIT entry signature (`"int64_t (*)(int64_t, int64_t)"`); `exec.rs`'s
+      few fixed entry points (`dk_entry`, `dk_init`) fit that.
 
 ### 2d. Language/runtime gaps the compiler will hit (fix before Phase 3)
 - [x] In-place mutation of uniquely owned arrays/maps (no copy when rc == 1) — the compiler is
