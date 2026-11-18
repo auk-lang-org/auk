@@ -30,6 +30,10 @@
 #if defined(__APPLE__)
 #include <sys/ucontext.h>
 #else
+#include <elf.h>
+#include <fcntl.h>
+#include <link.h>
+#include <sys/auxv.h>
 #include <ucontext.h>
 #endif
 
@@ -82,13 +86,69 @@ static uintptr_t fault_pc(void *uc) {
 #endif
 }
 
+#if defined(__linux__)
+/* The function symbol containing pc in the executable's own .symtab, into out: on Linux,
+ * dladdr only sees the dynamic symbol table, which doesn't have Auk's local functions. Read
+ * with pread (async-signal-safe), nothing allocated. 1 when found. */
+static int elf_sym_name(uintptr_t pc, char *out, size_t cap) {
+    int fd = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        return 0;
+    }
+    int found = 0;
+    ElfW(Ehdr) eh;
+    if (pread(fd, &eh, sizeof eh, 0) != (ssize_t)sizeof eh || memcmp(eh.e_ident, ELFMAG, SELFMAG) != 0 || eh.e_shentsize != sizeof(ElfW(Shdr))) {
+        close(fd);
+        return 0;
+    }
+    /* a PIE is loaded at its program headers' address less their file offset */
+    uintptr_t addr = eh.e_type == ET_DYN ? pc - ((uintptr_t)getauxval(AT_PHDR) - (uintptr_t)eh.e_phoff) : pc;
+    for (unsigned i = 0; i < eh.e_shnum && !found; i++) {
+        ElfW(Shdr) sh, str;
+        if (pread(fd, &sh, sizeof sh, (off_t)(eh.e_shoff + (uint64_t)i * sizeof sh)) != (ssize_t)sizeof sh || sh.sh_type != SHT_SYMTAB) {
+            continue;
+        }
+        if (pread(fd, &str, sizeof str, (off_t)(eh.e_shoff + (uint64_t)sh.sh_link * sizeof str)) != (ssize_t)sizeof str) {
+            break;
+        }
+        ElfW(Sym) syms[64];
+        size_t n = sh.sh_size / sizeof syms[0];
+        for (size_t k = 0; k < n && !found; k += 64) {
+            size_t m = n - k < 64 ? n - k : 64;
+            if (pread(fd, syms, m * sizeof syms[0], (off_t)(sh.sh_offset + k * sizeof syms[0])) != (ssize_t)(m * sizeof syms[0])) {
+                break;
+            }
+            for (size_t j = 0; j < m; j++) {
+                ElfW(Sym) *s = &syms[j];
+                if ((s->st_info & 0xf) == STT_FUNC && addr >= s->st_value && addr < s->st_value + s->st_size) {
+                    ssize_t r = pread(fd, out, cap - 1, (off_t)(str.sh_offset + s->st_name));
+                    out[r > 0 ? r : 0] = 0;
+                    found = r > 0;
+                    break;
+                }
+            }
+        }
+    }
+    close(fd);
+    return found;
+}
+#endif
+
 /* The Auk name of the function at pc ("dk_f12_parse" -> "parse"), into out; "<unknown>"
  * when there are no symbols. */
 static void fn_name(uintptr_t pc, char *out, size_t cap) {
     const char *name = NULL;
     Dl_info info;
+#if defined(__linux__)
+    char sym[256];
+    if (pc != 0 && elf_sym_name(pc, sym, sizeof sym)) {
+        name = sym;
+    } else
+#endif
     if (pc != 0 && dladdr((void *)pc, &info) != 0 && info.dli_sname != NULL) {
         name = info.dli_sname;
+    }
+    if (name != NULL) {
         if (name[0] == '_') {
             name++;
         }
