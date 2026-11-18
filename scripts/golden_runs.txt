@@ -1,0 +1,50 @@
+# Programs scripts/golden.sh runs (`auk run`), from the repo root: deterministic ones only (no
+# network, GUI, audio, timing, randomness, or files outside the repo).
+# Format: <name> run <file.auk> [args...] [< stdin-file]   (`auk run`: stdout, stderr, exit code)
+#         <name> test <file.auk|dir>                       (`auk test`: its report and exit code)
+hello            run  examples/hello.auk
+fib              run  examples/fib.auk
+inventory        run  examples/inventory.auk
+life             run  examples/life.auk
+physics          run  examples/physics.auk
+tour             run  examples/tour.auk
+csv_stats        run  examples/csv_stats.auk tests/fixtures/stats.csv qty
+csv_stats_usage  run  examples/csv_stats.auk
+wc               run  examples/wc.auk tests/fixtures/words.txt
+wc_usage         run  examples/wc.auk
+wc_missing       run  examples/wc.auk tests/fixtures/no_such_file.txt
+grep             run  examples/grep.auk fox < tests/fixtures/words.txt
+grep_none        run  examples/grep.auk zebra < tests/fixtures/words.txt
+else_inference   run  tests/fixtures/else_inference.auk
+bitwise          test tests/fixtures/bitwise.auk
+collections      test tests/fixtures/collections.auk
+sha256           test tests/fixtures/sha256.auk
+pilot_tokens     run  compiler/src/main.auk tokens examples/tour.auk
+pilot_ast        run  compiler/src/main.auk ast examples/tour.auk
+examples_tests   test examples
+pkg_audio        test packages/audio
+pkg_cli          test packages/cli
+pkg_compress     test packages/compress
+pkg_csv          test packages/csv
+pkg_datetime     test packages/datetime
+pkg_encoding     test packages/encoding
+pkg_glob         test packages/glob
+pkg_graphics     test packages/graphics
+pkg_hash         test packages/hash
+pkg_http         test packages/http
+pkg_json         test packages/json
+pkg_llvm         test packages/llvm
+pkg_log          test packages/log
+pkg_markdown     test packages/markdown
+pkg_num          test packages/num
+pkg_regex        test packages/regex
+pkg_splash       test packages/splash
+pkg_sup          test packages/sup
+pkg_template     test packages/template
+pkg_term         test packages/term
+pkg_text         test packages/text
+pkg_toml         test packages/toml
+pkg_url          test packages/url
+pkg_uuid         test packages/uuid
+pkg_xml          test packages/xml
+pkg_yaml         test packages/yaml
