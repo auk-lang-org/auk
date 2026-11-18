@@ -5,7 +5,8 @@
  *    with dispatch semaphores to fit the blocking connection API (a task is a thread). Waits
  *    wake every 50 ms so a cancelled task still ends. The certificate check is the system's own
  *    trust evaluation (Security.framework, an SSL policy for the host), run in a verify block so
- *    the reason for a refusal can be reported.
+ *    the reason for a refusal can be reported. A connection reset before the server's
+ *    certificate arrived is retried once as a TLS 1.2 fallback (see auk_net_tls).
  *  - elsewhere: OpenSSL 3 or 1.1 (libssl), loaded with dlopen on first use, so nothing is needed
  *    at build time. Without libssl at run time, net.tls is an Err ("tls unavailable: libssl not
  *    found").
@@ -118,6 +119,7 @@ typedef struct NwTls {
     /* written on q only */
     bool reported;
     bool ok;
+    bool saw_cert; /* the verify block ran: the server got as far as its certificate */
     int domain;
     int code;
     char why[256]; /* why the trust evaluation failed */
@@ -271,18 +273,18 @@ static AukErr *resolve_first(const char *h, const char *ports, int64_t port) {
     return NULL;
 }
 
-AUK_API AukRes_conn auk_net_tls(const AukStr *host, int64_t port) {
-    const char *h = auk_str_cstr(host);
-    AukErr *bad = check_args(h, port);
-    if (bad != NULL) {
-        return tls_conn_err(bad);
-    }
-    char ports[24];
-    snprintf(ports, sizeof ports, "%lld", (long long)port);
-    bad = resolve_first(h, ports, port);
-    if (bad != NULL) {
-        return tls_conn_err(bad);
-    }
+/* The outcome of a handshake, read on the connection's queue. */
+typedef struct NwOutcome {
+    bool ok;
+    bool saw_cert;
+    int domain;
+    int code;
+    char why[256];
+} NwOutcome;
+
+/* Connect to h:ports and run the handshake (waiting for its outcome, cancellably). fallback: the
+ * TLS 1.2 retry (see auk_net_tls). */
+static NwTls *nw_connect(const char *h, const char *ports, bool fallback, NwOutcome *out) {
     NwTls *t = auk__xcalloc(1, sizeof(NwTls));
     t->q = dispatch_queue_create("auk.net.tls", DISPATCH_QUEUE_SERIAL);
     t->ready = dispatch_semaphore_create(0);
@@ -297,10 +299,17 @@ AUK_API AukRes_conn auk_net_tls(const AukStr *host, int64_t port) {
         ^(nw_protocol_options_t tls) {
           sec_protocol_options_t sec = nw_tls_copy_sec_protocol_options(tls);
           sec_protocol_options_set_min_tls_protocol_version(sec, tls_protocol_version_TLSv12);
+          if (fallback) {
+              sec_protocol_options_set_max_tls_protocol_version(sec, tls_protocol_version_TLSv12);
+              /* TLS_FALLBACK_SCSV (RFC 7507): a server that does speak TLS 1.3 refuses this
+               * hello, so forged resets can't downgrade a connection to it */
+              sec_protocol_options_set_tls_is_fallback_attempt(sec, true);
+          }
           sec_protocol_options_set_verify_block(
               sec,
               ^(sec_protocol_metadata_t md, sec_trust_t trust_ref, sec_protocol_verify_complete_t complete) {
                 (void)md;
+                t->saw_cert = true;
                 SecTrustRef trust = sec_trust_copy_ref(trust_ref);
                 CFStringRef name = CFStringCreateWithCString(NULL, t->host, kCFStringEncodingUTF8);
                 SecPolicyRef policy = SecPolicyCreateSSL(true, name);
@@ -365,25 +374,48 @@ AUK_API AukRes_conn auk_net_tls(const AukStr *host, int64_t port) {
         auk__check_cancel("a blocking call");
     }
     /* read the outcome on the queue */
-    __block bool ok;
-    __block int domain;
-    __block int code;
-    char why[sizeof t->why];
-    char *whyp = why; /* a block can't capture an array */
     dispatch_sync(t->q, ^{
-      memcpy(whyp, t->why, sizeof t->why);
-      ok = t->ok;
-      domain = t->domain;
-      code = t->code;
+      memcpy(out->why, t->why, sizeof t->why);
+      out->ok = t->ok;
+      out->saw_cert = t->saw_cert;
+      out->domain = t->domain;
+      out->code = t->code;
     });
-    if (!ok) {
+    return t;
+}
+
+AUK_API AukRes_conn auk_net_tls(const AukStr *host, int64_t port) {
+    const char *h = auk_str_cstr(host);
+    AukErr *bad = check_args(h, port);
+    if (bad != NULL) {
+        return tls_conn_err(bad);
+    }
+    char ports[24];
+    snprintf(ports, sizeof ports, "%lld", (long long)port);
+    bad = resolve_first(h, ports, port);
+    if (bad != NULL) {
+        return tls_conn_err(bad);
+    }
+    NwOutcome o;
+    NwTls *t = nw_connect(h, ports, false, &o);
+    /* Network.framework's TLS 1.3 hello offers a post-quantum key share (X25519MLKEM768) and
+     * is about 1.5 KB, two TCP segments; some servers and middleboxes reset such a connection,
+     * some of the time (badssl.com's hosts: about half the attempts; OpenSSL offering the same
+     * group sees the same resets, with X25519 alone none). Network.framework has no setting for
+     * the key shares, so a reset before the server's certificate arrived is retried once as a
+     * TLS 1.2 hello (no key share, one segment), marked as a fallback. */
+    if (!o.ok && !o.saw_cert && o.domain == nw_error_domain_posix && o.code == ECONNRESET) {
+        nw_tls_free(t);
+        t = nw_connect(h, ports, true, &o);
+    }
+    if (!o.ok) {
         nw_tls_free(t);
         AukStrBuf m = {0};
         tls_prefix(&m, h, port);
-        if (why[0] != 0) {
-            return tls_conn_err(prefixed(&m, ": certificate verification failed: ", why, 0));
+        if (o.why[0] != 0) {
+            return tls_conn_err(prefixed(&m, ": certificate verification failed: ", o.why, 0));
         }
-        return tls_conn_err(nw_err(&m, domain, code));
+        return tls_conn_err(nw_err(&m, o.domain, o.code));
     }
     AukConn *c = auk__conn_new(-1);
     c->tls = t;

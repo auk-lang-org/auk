@@ -165,25 +165,26 @@ static void net_tls_local_failures(void) {
 
 /* ---- tls against real hosts ------------------------------------------------------------------ */
 
-/* net.tls to host must fail certificate verification. Retries a couple of times: the badssl.com
- * servers sometimes reset a connection before sending their certificate. */
+/* net.tls to host must fail certificate verification, every time: three attempts. (The
+ * badssl.com servers reset about half of the connections that offer Network.framework's
+ * post-quantum TLS 1.3 key share, before sending their certificate; tls.c retries those as
+ * TLS 1.2, and this checks that no reset gets through.) */
 static void expect_bad_cert(const char *file, int line, const char *host_name) {
     AukStr *host = s(host_name);
-    bool cert = false;
-    char *last = "";
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 3; i++) {
         AukRes_conn c = auk_net_tls(host, 443);
         if (c.ok) {
             rel(c.val);
             rel(host);
             t_fail(file, line, "net.tls %s: connected despite a bad certificate", host_name);
         }
-        last = err_text(c.err);
-        cert = strstr(last, "certificate verification failed") != NULL;
-        if (cert) break;
+        char *m = err_text(c.err);
+        if (strstr(m, "certificate verification failed") == NULL) {
+            rel(host);
+            t_fail(file, line, "net.tls %s (attempt %d): want a certificate error, got: %s", host_name, i + 1, m);
+        }
     }
     rel(host);
-    if (!cert) t_fail(file, line, "net.tls %s: want a certificate error, got: %s", host_name, last);
 }
 #define EXPECT_BAD_CERT(h) expect_bad_cert(__FILE__, __LINE__, (h))
 
