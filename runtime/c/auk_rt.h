@@ -873,13 +873,15 @@ AUK_API double auk_gui_scale(int64_t win);
 AUK_API AukRes_unit auk_gui_present_rects(int64_t win, const AukFrame *f, const AukArr *rects);
 AUK_API AukArr *auk_gui_next_event(int64_t win, int64_t ms, const char *loc);
 
+/* ---- gui_host.c: the window process ------------------------------------------------------ */
+
+/* Run the window process (AUK_GUI_HOST is set). Returns an exit code only if it can't start. */
+int auk__gui_host_main(void);
+
 /* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
 
 
 
-
-/* The window process's entry (gui_host.rs). */
-int auk__gui_host_main(void);
 
 
 #endif
