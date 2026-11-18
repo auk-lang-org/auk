@@ -20,9 +20,9 @@
 #                target/bin/raft.
 #
 # The seed: --seed, else $AUK_SEED, else the target/bin/auk of an earlier build, else `auk` on
-# the PATH, else (or with --from-seed) the checked-in seed: seed/<os>-<arch>.bc.xz, the
+# the PATH, else (or with --from-seed) the checked-in seed: seed/<os>-<arch>.bc.gz, the
 # compiler as LLVM bitcode (scripts/cut_seed.sh), compiled with clang and linked with cc into
-# target/auk-build/seed/auk. A fresh clone needs only LLVM 23, xz and a C linker.
+# target/auk-build/seed/auk. A fresh clone needs only LLVM 23 and a C linker.
 # LLVM: $LLVM_CONFIG, else Homebrew's llvm@23 (macOS) or llvm-config-23 (Linux).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -68,12 +68,12 @@ if [ "$FROM_SEED" = 0 ] && [ -z "$SEED" ]; then
 fi
 if [ "$FROM_SEED" = 1 ]; then
   ARCH="$(uname -m)"; [ "$ARCH" = aarch64 ] && ARCH=arm64
-  bc="seed/$OS-$ARCH.bc.xz"
+  bc="seed/$OS-$ARCH.bc.gz"
   [ -f "$bc" ] || die "no auk to start from and no seed for $OS-$ARCH ($bc): pass --seed <auk>"
   t0=$(ms)
   say "seed ($bc, $(sed -n 's/^commit //p' "seed/$OS-$ARCH.txt" | cut -c1-12))"
   mkdir -p "$BUILD/seed"
-  xz -d -c "$bc" > "$BUILD/seed/seed.bc"
+  gzip -d -c "$bc" > "$BUILD/seed/seed.bc"
   "$CLANG" -c -Wno-override-module "$BUILD/seed/seed.bc" -o "$BUILD/seed/seed.o"
   if [ "$OS" = macos ]; then
     libs=("$("$LLVM_CONFIG" --libdir)/libLLVM.dylib" -framework CoreFoundation -framework Security

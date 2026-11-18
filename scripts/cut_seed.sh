@@ -8,7 +8,7 @@
 # Runs `./build.sh --check` first (the seed is cut from the fixed point), then has stage 2 build
 # compiler/ once more with AUK_EMIT_BC (the module the object file is made from: the compiler,
 # with the prelude, docs and runtime archive it embeds) and links the runtime's own bitcode
-# (target/auk-rt/auk_rt.bc) into it: seed/<os>-<arch>.bc.xz, plus seed/<os>-<arch>.txt (the
+# (target/auk-rt/auk_rt.bc) into it: seed/<os>-<arch>.bc.gz, plus seed/<os>-<arch>.txt (the
 # commit, date and sha256 of the bitcode). Then checks it: the seed, compiled and linked as
 # build.sh does, must build a stage 2 identical to the one it was cut from.
 set -euo pipefail
@@ -28,14 +28,14 @@ rm -rf "$W"; mkdir -p "$W"
 AUK_EMIT_BC="$W/prog.bc" target/bin/auk build compiler/src/main.auk -o "$W/auk"
 "$LLVM_BIN/llvm-link" "$W/prog.bc" target/auk-rt/auk_rt.bc -o "$W/seed.bc" 2> /dev/null
 mkdir -p seed
-xz -9 -T0 -c "$W/seed.bc" > "seed/$NAME.bc.xz"
+gzip -9 -n -c "$W/seed.bc" > "seed/$NAME.bc.gz"
 {
   echo "commit $(git rev-parse HEAD)"
   echo "date $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "sha256 $(shasum -a 256 "$W/seed.bc" | cut -d' ' -f1)"
   echo "llvm $("$LLVM_CONFIG" --version)"
 } > "seed/$NAME.txt"
-echo "seed/$NAME.bc.xz: $(wc -c < "seed/$NAME.bc.xz" | tr -d ' ') bytes ($(wc -c < "$W/seed.bc" | tr -d ' ') uncompressed)"
+echo "seed/$NAME.bc.gz: $(wc -c < "seed/$NAME.bc.gz" | tr -d ' ') bytes ($(wc -c < "$W/seed.bc" | tr -d ' ') uncompressed)"
 
 # check: build from the seed alone, as a fresh clone would
 cp target/auk-build/stage2/auk "$W/stage2-ref"
