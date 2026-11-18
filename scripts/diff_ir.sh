@@ -2,9 +2,9 @@
 # MIR lowering (docs/self-host-plan.md, Phase 3): for every program `auk ir` takes (the back
 # end's corpus plus compiler/tests/ir/) and each of its variants (run, --release, --release -g,
 # --trace=json, --debug), the Auk port's `compiler ir` must print exactly what `auk ir` prints.
-# The port can't run the imprint helper yet (that needs the back end): the Rust run writes the
-# helper's records (AUK_IMPRINT_RECORDS) for the port to read, and the helper program itself
-# (AUK_IMPRINT_EVAL_IR), which is diffed against the port's `ir --imprint-eval`.
+# Both compute imprints by JIT-running a helper program in a forked child; the Rust run also
+# writes the helper program's MIR (AUK_IMPRINT_EVAL_IR), diffed against the port's
+# `ir --imprint-eval`.
 # Usage: scripts/diff_ir.sh [--only REGEX]
 source "$(dirname "$0")/pilot_common.sh"
 only=""
@@ -19,14 +19,11 @@ while read -r f; do
   for v in "${BACKEND_VARIANTS[@]}"; do
     n=$((n + 1))
     key="${f//\//_}${v// /}"
-    rm -f "$out/$key.rec" "$out/$key.eval.rust"
+    rm -f "$out/$key.eval.rust"
     # shellcheck disable=SC2086  # the variant's options are words
-    AUK_IMPRINT_RECORDS="$out/$key.rec" AUK_IMPRINT_EVAL_IR="$out/$key.eval.rust" \
-      "$AUK" ir $v "$f" > "$out/$key.rust" 2>&1 || true
-    imp=()
-    if [ -f "$out/$key.rec" ]; then imp=(--imprints "$out/$key.rec"); fi
+    AUK_IMPRINT_EVAL_IR="$out/$key.eval.rust" "$AUK" ir $v "$f" > "$out/$key.rust" 2>&1 || true
     # shellcheck disable=SC2086
-    "$PORT" ir $v ${imp[@]+"${imp[@]}"} "$f" > "$out/$key.auk" 2>&1 || true
+    "$PORT" ir $v "$f" > "$out/$key.auk" 2>&1 || true
     if ! cmp -s "$out/$key.rust" "$out/$key.auk"; then
       bad=$((bad + 1))
       echo "DIFF $f $v (diff $out/$key.rust $out/$key.auk)"

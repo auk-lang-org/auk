@@ -26,21 +26,6 @@
 /// The version the server reports (Cargo.toml's).
 pub let VERSION = "0.1.0"
 
-/// `compiler lsp`, with the prelude read from `dir` (the driver's `prelude_dir`).
-pub fn start(dir: str?): int uses fs, env, ffi {
-  let d = dir else {
-    eprint("error: can't find the core prelude (src/prelude/core.auk); set AUK_PRELUDE_DIR")
-    return 1
-  }
-  match resolve.sources(d) {
-    ok(cx) => run(cx)
-    err(e) => {
-      eprint("error: can't read the core prelude: {e}")
-      1
-    }
-  }
-}
-
 /// Serve on stdin/stdout until `exit`. Returns the process exit code.
 pub fn run(cx: resolve.Sources): int uses fs, env, ffi {
   var server = Server { cx, docs: {}, others: {}, diags: {}, shutdown: false, exit: false }

@@ -5,9 +5,8 @@
 /// - The model command gets its prompt on stdin from a temporary file, and its stdout and stderr
 ///   go to temporary files (Rust pipes them, writing stdin from a thread): `posix_spawnp` through
 ///   `ffi`, as core's `proc.run` takes no stdin and keeps no stderr or status.
-/// - The tests of a candidate are built and run by the Rust back end until it is ported:
-///   `auk __jit test <file>` (the `auk` next to the checkout's `target/release/`, `$AUK_BIN`, or
-///   `auk` on PATH) with the candidate's file texts in `$AUK_SOURCES` (Rust's `with_sources`),
+/// - The tests of a candidate are built and run by `auk __jit test <file>` (this binary, or
+///   `$AUK_BIN`) with the candidate's file texts in `$AUK_SOURCES` (Rust's `with_sources`),
 ///   in its own process group, killed after `TEST_TIMEOUT_MS`. A build error is its exit
 ///   status 125 (`JIT_BUILD_FAILED`), and its output is the error, as Rust's `Err` would be.
 /// - `String::from_utf8_lossy` is `lossy`; `str::trim*` (Unicode whitespace) are `utrim*`.
@@ -66,24 +65,13 @@ fn parse_args(args: [str]): Opts! {
 }
 
 /// `auk hatch`. Returns the exit code: 0 when every hole it worked on was filled. `exe` is this
-/// binary (to find the back end), `prelude` the core prelude's directory.
-pub fn run(exe: str, prelude: str?, args: [str]): int uses fs, env, ffi, time {
+/// binary (the back end that builds and runs the candidates' tests), `cx` the sources.
+pub fn run(exe: str, cx: resolve.Sources, args: [str]): int uses fs, env, ffi, time {
   let o = match parse_args(args) {
     ok(o) => o
     err(e) => {
       eprint("error: {e}\n{USAGE}")
       return 2
-    }
-  }
-  let dir = prelude else {
-    eprint("error: can't find the core prelude (src/prelude/core.auk); set AUK_PRELUDE_DIR")
-    return 1
-  }
-  let cx = match resolve.sources(dir) {
-    ok(c) => c
-    err(e) => {
-      eprint("error: {e}")
-      return 1
     }
   }
   let root = o.file
@@ -633,19 +621,11 @@ pub fn lossy(b: [int]): str {
 
 // ---- processes ----
 
-/// The Rust `auk` whose back end builds and runs the tests: `$AUK_BIN`, else the
-/// `target/release/auk` of the checkout this binary is in, else `auk` (on PATH).
-fn auk_bin(exe: str): str uses env, fs, ffi {
+/// The `auk` whose back end builds and runs the tests: `$AUK_BIN`, else this binary.
+fn auk_bin(exe: str): str uses env {
   match env.get("AUK_BIN") {
-    some(b) when b != "" => return b
-    _ => {}
-  }
-  var d = paths.parent(paths.canonicalize(exe) else exe)
-  loop {
-    let x = d else return "auk"
-    let p = paths.join(x, "target/release/auk")
-    if paths.is_file(p) { return p }
-    d = paths.parent(x)
+    some(b) when b != "" => b
+    _ => exe
   }
 }
 

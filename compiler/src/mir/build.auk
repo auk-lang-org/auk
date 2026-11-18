@@ -1,12 +1,10 @@
 /// Whole-program MIR generation (the `generate` half of src/build.rs): every instance through
 /// `mir.lower`, the entry point (the `main` shim or the test runner), the debugger's tables,
-/// `dk_init`/`dk_cleanup`; the imprint evaluator program and its records; and `compiler ir`,
-/// which prints the MIR as `auk ir` does.
+/// `dk_init`/`dk_cleanup`; the imprint evaluator program and its records.
 ///
-/// Imprints are computed at compile time by running a helper program (`imprint_program`).
-/// Running it needs the back end (Phase 4); until the port has one, `compiler ir` takes the
-/// helper's records from a file (`--imprints <file>`, as `AUK_IMPRINT_RECORDS=<file> auk ir`
-/// writes them), and `--imprint-eval` prints the helper program itself.
+/// Imprints are computed at compile time by running a helper program (`imprint_program`), which
+/// the driver (`drive.eval_imprints`) JIT-compiles and runs in a forked child; its records go
+/// through `imprint_results`.
 
 /// A generated program (MIR), plus the holes found in it.
 pub struct Generated {
@@ -430,131 +428,3 @@ fn render_at(tp: typed.TypedProgram, m: int, d: diag.Diag): str {
   d.render(md.file, md.src)
 }
 
-// ---- `compiler ir` ----
-
-/// `compiler ir [--release] [-g] [--trace=json|<file>] [--trace-core] [--debug]
-/// [--imprints <records>] [--imprint-eval] [--time] [--repeat N] <file>`: the MIR as `auk ir`
-/// prints it. `--time` prints the time of lowering (checking excluded) to stderr.
-pub fn cli(args: [str], prelude: str?): int! uses fs, time, ffi {
-  var release = false
-  var lines = false
-  var trace = mir.progen.no_trace()
-  var records: str? = none
-  var eval_only = false
-  var time_it = false
-  var quiet = false
-  var repeat = 1
-  var file: str? = none
-  var i = 2
-  while i < args.len() {
-    let a = args[i]
-    if a == "--release" {
-      release = true
-    } else if a == "-g" {
-      lines = true
-    } else if a == "--trace" || a.starts_with("--trace=") {
-      trace.on = true
-    } else if a == "--trace-core" {
-      trace.core = true
-    } else if a == "--debug" {
-      trace.debug = true
-    } else if a == "--imprints" {
-      i += 1
-      records = args.get(i)
-    } else if a == "--imprint-eval" {
-      eval_only = true
-    } else if a == "--time" {
-      time_it = true
-    } else if a == "--quiet" {
-      quiet = true
-    } else if a == "--repeat" {
-      i += 1
-      repeat = int.parse(args.get(i) else "1") else 1
-    } else if file == none && !a.starts_with("-") {
-      file = some(a)
-    }
-    i += 1
-  }
-  let path = file else {
-    eprint("usage: compiler ir [--release] [-g] [--trace=json|<file>] [--trace-core] [--debug] [--imprints <records>] <file.auk>")
-    return 2
-  }
-  let dir = prelude else {
-    eprint("error: can't find the core prelude (src/prelude/core.auk); set AUK_PRELUDE_DIR")
-    return 1
-  }
-  let cx = resolve.sources(dir)?
-  let prog = match resolve.load(cx, path) {
-    ok(p) => p
-    err(Many(ds)) => {
-      for x in ds { eprint("{x.file}: {x.diag.code}: {x.diag.message}") }
-      return 1
-    }
-  }
-  let (tpo, errs) = check.check_types(prog)
-  if errs.len() > 0 {
-    for x in errs { eprint("{x.file}:{x.diag.span.line}:{x.diag.span.col}: {x.diag.code}: {x.diag.message}") }
-    return 1
-  }
-  var tp = tpo!
-  units.erase(&tp)
-  let emb = embeds(tp)
-  if eval_only {
-    match imprint_program(tp, emb) {
-      some((p, info)) => print_raw(mir.printer.print_program(p, info))
-      none => {}
-    }
-    return 0
-  }
-  var imprints: {int: mir.progen.CVal} = {}
-  if tp.consts.any(k => k.imprint) {
-    let rf = records else {
-      eprint("error: computing imprints needs the back end; pass `--imprints <records>` (AUK_IMPRINT_RECORDS=<file> auk ir writes them)")
-      return 1
-    }
-    // the helper's exit code (-1: killed) and stderr, as the Rust compiler saw them
-    let status = fs.read("{rf}.status")?
-    let nl = status.find("\n") else status.len()
-    let code = int.parse(str(status.chars()[0..nl])) else -1
-    let stderr = if nl < status.len() { str(status.chars()[nl + 1..status.len()]) } else { "" }
-    let data = match fs.read_bytes(rf) {
-      ok(b) => b
-      err(_) => []
-    }
-    let (vals, e) = imprint_results(tp, data, if code < 0 { none } else { some(code) }, stderr)
-    match e {
-      some(msg) => {
-        eprint_raw(msg)
-        return 1
-      }
-      none => {}
-    }
-    imprints = vals
-  }
-  let mode = if release { mir.progen.Mode.Release } else { mir.progen.Mode.Run }
-  let tr = mir.progen.Trace { lines, ..trace }
-  let t0 = time.now()
-  var out = ""
-  for _ in 0..repeat {
-    match generate(tp, mode, tr, imprints, emb) {
-      ok(gen) => if !quiet { out = mir.printer.print_program(gen.prog, gen.info) }
-      err(e) => {
-        eprint_raw("{e}")
-        return 1
-      }
-    }
-  }
-  if time_it { eprint("time: {(time.now() - t0) * 1000 / repeat} us") }
-  if out != "" { print_raw(out) }
-  0
-}
-
-/// Write `s` to stdout as is (`print` adds a newline).
-fn print_raw(s: str) uses ffi {
-  let n = c_write(1, s, s.byte_len())
-  if n < 0 { eprint("error: writing the output failed") }
-}
-
-fn eprint_raw(s: str) uses ffi { let _ = c_write(2, s, s.byte_len()) }
-
-extern fn c_write(fd: int, s: str, n: int): int = "long write(int, const char *, size_t)"

@@ -1,35 +1,137 @@
-/// The self-hosting port's driver: `compiler tokens|ast|resolve|check|typed [--quiet] [--time]
-/// [--repeat N] [--core] [--all] <file>...` prints what `auk dump tokens|ast|resolve|check|typed`
-/// prints, from the Auk port of the front end; `check [--json] <file>` and `holes [--json] <file>`
-/// print what `auk check` and `auk holes` print, with the same exit code (`check` with several
-/// files prints `auk dump check`'s report of the type checker alone); `typed` the typed program
-/// (`--core`: core modules' tables too). For timing: `--quiet` does the work without printing
-/// (`check --quiet` runs the type checker alone, with `--all` all of `auk check`), `--repeat N`
-/// does the whole job N times, and `--time` prints the time per repetition (file reading
-/// excluded) to stderr.
+/// The Auk compiler written in Auk: the `auk` command (src/main.rs) with the commands the port
+/// has — `run`, `build`, `test`, `check`, `ir`, `fmt`, `holes`, `explain`, `spec`, `lsp`, `mcp`,
+/// and the hidden `__jit` and `dump tokens|ast|resolve|check|typed` — with the Rust CLI's flags,
+/// output and exit codes. The prelude (`embedded`), the language reference (`mcp.spec_main`) and
+/// the error pages (`error_pages`) are compiled in, so the binary needs no checkout.
 ///
-/// `resolve`, `check` and `typed` read the core prelude from `$AUK_PRELUDE_DIR`, or else from the
-/// `src/prelude/` of the checkout the binary was built in (found upward from the binary).
+/// The port's own oracles and timing commands:
+/// - `compiler tokens|ast|resolve|check|typed [--quiet] [--time] [--repeat N] [--core] [--all]
+///   <file>...` prints what `auk dump tokens|ast|resolve|check|typed` prints (`check` with
+///   several files, or with a timing option, prints `auk dump check`'s report of the type
+///   checker alone; `typed --core`: core modules' tables too). `--quiet` does the work without
+///   printing (`check --quiet` runs the type checker alone, with `--all` all of `auk check`),
+///   `--repeat N` does the whole job N times, and `--time` prints the time per repetition (file
+///   reading excluded) to stderr.
+/// - `compiler ir [--imprint-eval] [--time] [--quiet] [--repeat N] ...`: see `drive.ir_opts`.
+/// - `compiler mir|llvm|build-mir|run-mir <mir dump>`: the back end on the Rust compiler's MIR
+///   (`driver`).
 
-let MODES = ["tokens", "ast", "resolve", "check", "typed", "holes"]
+let USAGE_TEXT = """
+usage: auk <command> [args]
+
+commands:
+  run [-O] [--trace=json|<file>] <file> [args...]
+                           compile and run the program (-O: optimize fully, slower to
+                           start; --trace: log calls, returns, errors, peeks and panics
+                           as JSON lines; json = stderr)
+  run --debug <file> [args...]
+                           build with debugger hooks; a front end attaches through
+                           AUK_DEBUG=<unix socket> (see docs/compiler.md, Debugger)
+  debug [--break <file:line|fn>]... [--print a,b] [--json] <file> [args...]
+                           debug the program: an interactive prompt on a terminal;
+                           otherwise (or --json/--batch) run to each breakpoint and
+                           panic and report the locals and stack there
+  dap                      the Debug Adapter Protocol on stdin/stdout (editors' debuggers)
+  run --live <file> [args...]
+                           run, swapping in new code on every save (state survives;
+                           a changed struct/enum layout restarts the tasks using it)
+  build [-g] <file> [-o out]
+                           compile to a native executable (release; refuses `??` holes;
+                           -g: DWARF line tables for lldb/gdb, on macOS in <out>.dSYM)
+  check <file> [--json]    type-check only (no codegen); --json for machine-readable output
+  test [--trace=json|<dir>] [file|dir] [filter]
+                           build and run the `test` blocks of a file or project
+                           (--trace=json: each FAIL shows its trace's last events;
+                           --trace=<dir>: one <test>.jsonl trace per test)
+  --trace-limit N          (run/test) stop a trace after N events (default 10000)
+  --trace-core             (run/test) trace core library functions too
+  fmt [--check] <path>...  format .auk files in place (`-` = stdin to stdout)
+  holes <file> [--json]    brief every `??` hole: expected type, scope, contracts, tests
+  hatch <file> [--hole N] [--tries 3] [--dry-run]
+                           fill holes with an AI model, checked and tested (AUK_HATCH_CMD)
+  explain [E0xxx]          explain an error code (with no code: list every code)
+  dive [--quiet]           the interactive REPL (--quiet: no banner or prompts)
+  lsp                      run the language server (LSP over stdio)
+  mcp                      run the MCP server for AI agents (tools over stdio)
+  ir [--llvm] <file>       print the program's MIR (--llvm: its LLVM IR)
+  spec                     print the compact language reference
+
+packages are managed by `raft` (see docs/raft.md).
+
+environment:
+  AUK_LEAK_CHECK=1        `run`/`test` programs fail if runtime objects leak
+  AUK_LINKER              the linker `build` uses (default: cc)
+  AUK_HATCH_CMD           the model command `hatch` runs, prompt on stdin (default: claude -p)
+"""
+
+fn usage(): str = USAGE_TEXT.strip_suffix("\n") else USAGE_TEXT
+
+/// The commands of the Rust `auk` that the port doesn't have yet (Phase 5).
+let NOT_PORTED = ["debug", "dap", "dive"]
+
+/// The port's dump modes (`compiler <mode>`, or `auk dump <mode>`).
+let MODES = ["tokens", "ast", "resolve", "check", "typed"]
 
 fn main(args: [str]): int! uses fs, env, time, ffi, proc {
-  if args.len() >= 2 && args[1] == "fmt" { return fmt.run(args.skip(2)) }
-  if args.len() >= 2 && args[1] == "explain" { return explain.run(args.skip(2)) }
-  if args.len() >= 2 && args[1] == "lsp" { return lsp.start(prelude_dir(args[0])) }
-  if args.len() >= 2 && args[1] == "mcp" { return mcp.run(args[0]) }
-  if args.len() >= 2 && args[1] == "spec" { return mcp.spec_main() }
-  if args.len() >= 2 && args[1] == "hatch" { return hatch.run(args[0], prelude_dir(args[0]), args.skip(2)) }
-  if args.len() >= 2 && args[1] == "ir" { return mir.build.cli(args, prelude_dir(args[0])) }
-  if args.len() >= 2 && ["mir", "llvm", "build", "run"].contains(args[1]) {
-    return driver.main(args)
-  }
-  if args.len() < 3 || !MODES.contains(args[1]) {
-    eprint("usage: compiler tokens|ast|resolve|check|typed [--quiet] [--time] [--repeat N] [--core] <file>... | fmt [--check] <path>... | mir|llvm|build|run <mir dump>")
+  if args.len() < 2 {
+    eprint(usage())
     return 2
   }
-  let what = args[1]
+  let cmd = args[1]
   let rest = args.skip(2)
+  let cx = resolve.Sources { prelude: embedded.prelude(), overrides: {}, os: paths.os() }
+  match cmd {
+    "spec" => return mcp.spec_main()
+    "explain" => return explain.run(rest)
+    "lsp" => return lsp.run(cx)
+    "mcp" => return mcp.run(args[0])
+    "fmt" => return fmt.run(rest)
+    "hatch" => return hatch.run(args[0], cx, rest)
+    "holes" => {
+      if rest.len() == 1 { return holes.run(cx, rest[0], false) }
+      if rest.len() == 2 && rest[1] == "--json" { return holes.run(cx, rest[0], true) }
+      if rest.len() == 2 && rest[0] == "--json" { return holes.run(cx, rest[1], true) }
+      eprint("usage: auk holes <file> [--json]")
+      return 2
+    }
+    "check" => {
+      if rest.len() == 1 { return cli.check_file(cx, rest[0], false) }
+      if rest.len() == 2 && rest[1] == "--json" { return cli.check_file(cx, rest[0], true) }
+      // the port's timing and multi-file forms
+      if rest.any(a => a == "--quiet" || a == "--time" || a == "--repeat") {
+        return dev(cx, cmd, rest)
+      }
+      eprint(usage())
+      return 2
+    }
+    "run" | "build" | "ir" | "test" => return drive.cli(cx, cmd, rest)
+    "__jit" => return drive.jit_cli(cx, rest)
+    "dump" => {
+      let mode = rest.get(0) else ""
+      if !MODES.contains(mode) {
+        eprint("usage: auk dump tokens|ast|resolve|check|typed <file>")
+        return 2
+      }
+      return dev(cx, mode, rest.skip(1))
+    }
+    "mir" | "llvm" | "build-mir" | "run-mir" => return driver.main(args)
+    "help" | "-h" | "--help" => {
+      print(usage())
+      return 0
+    }
+    _ => {}
+  }
+  if MODES.contains(cmd) && rest.len() > 0 { return dev(cx, cmd, rest) }
+  if NOT_PORTED.contains(cmd) {
+    eprint("error: `auk {cmd}` is not in the self-hosted compiler yet (use the Rust `auk`)")
+    return 2
+  }
+  eprint(usage())
+  2
+}
+
+/// The port's dump modes: `what` (tokens, ast, resolve, check, typed) of each file.
+fn dev(cx: resolve.Sources, what: str, rest: [str]): int! uses fs, time, ffi {
   let quiet = rest.contains("--quiet")
   let time_it = rest.contains("--time")
   let core = rest.contains("--core")
@@ -43,25 +145,8 @@ fn main(args: [str]): int! uses fs, env, time, ffi, proc {
     }
   }
   var srcs: [str] = []
-  // `check [--json] <file>` and `holes [--json] <file>`: what `auk check`/`auk holes` print
-  let cli_mode = (what == "check" || what == "holes") && !quiet && !time_it && !rest.contains("--repeat") && files.len() == 1
-  if !cli_mode {
-    for f in files { srcs.push(fs.read(f)?) }
-  }
-  var cx = resolve.Sources { prelude: [], overrides: {}, os: "" }
-  var cwd = ""
-  if what == "resolve" || what == "check" || what == "typed" || what == "holes" {
-    let dir = prelude_dir(args[0]) else {
-      eprint("error: can't find the core prelude (src/prelude/core.auk); set AUK_PRELUDE_DIR")
-      return 1
-    }
-    cx = resolve.sources(dir)?
-    cwd = paths.cwd()
-  }
-  if cli_mode {
-    let json = rest.contains("--json")
-    return if what == "check" { cli.check_file(cx, files[0], json) } else { holes.run(cx, files[0], json) }
-  }
+  for f in files { srcs.push(fs.read(f)?) }
+  let cwd = paths.cwd()
   let t0 = time.now()
   var out: [str] = []
   for _ in 0..repeat {
@@ -103,19 +188,4 @@ fn main(args: [str]): int! uses fs, env, time, ffi, proc {
   if out.len() > 0 { print(out.join("\n")) }
   if time_it { eprint("time: {(time.now() - t0) * 1000 / repeat} us") }
   0
-}
-
-/// `$AUK_PRELUDE_DIR`, or the first `src/prelude` with a `core.auk` above the binary `exe`.
-fn prelude_dir(exe: str): str? uses fs, env, ffi {
-  match env.get("AUK_PRELUDE_DIR") {
-    some(d) => return d
-    none => {}
-  }
-  var d = paths.parent(paths.canonicalize(exe) else exe)
-  loop {
-    let x = d else return none
-    let p = paths.join(x, "src/prelude")
-    if paths.is_file(paths.join(p, "core.auk")) { return p }
-    d = paths.parent(x)
-  }
 }

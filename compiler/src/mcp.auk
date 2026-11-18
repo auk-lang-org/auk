@@ -21,9 +21,8 @@
 /// stdin, stdout and stderr in files of a private temporary directory instead of pipes, so no
 /// reader threads are needed (Rust waits up to 2 s for pipes a grandchild keeps open; files
 /// don't wait); invalid UTF-8 in the output becomes U+FFFD as in Rust, but a NUL byte ends it.
-/// Protocol and tool errors are `Fail.Msg(text)` (`T!E` needs an enum). Without a full driver
-/// in the port yet, `run`, `test` and `debug` (so `auk_run`, `auk_test`, `auk_debug`) report the
-/// driver's usage error until it has them.
+/// Protocol and tool errors are `Fail.Msg(text)` (`T!E` needs an enum). The port's driver has
+/// no `debug` yet, so `auk_debug` reports its error.
 
 /// Protocol revisions we speak, newest first.
 pub let PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]

@@ -4,9 +4,9 @@
 /// - `compiler mir <dump>`: the MIR as C-like text, as `auk ir <file>` prints it.
 /// - `compiler llvm [--level L] <dump>`: the LLVM IR, as `auk ir --llvm=L <file>` prints it
 ///   (`o0` by default; `light`, `o2`, `o3`, `build`, with an optional `-raw`).
-/// - `compiler build <dump> -o <out>`: an executable, as `auk build` makes it (the dump of
+/// - `compiler build-mir <dump> -o <out>`: an executable, as `auk build` makes it (the dump of
 ///   `auk dump mir --release [-g]`).
-/// - `compiler run [--level L] [--argv0 A] <dump> [args...]`: compile in memory (ORC) and run
+/// - `compiler run-mir [--level L] [--argv0 A] <dump> [args...]`: compile in memory (ORC) and run
 ///   it in this process, as `auk run` does (`light` by default; `argv[0]` is `A`, else the dump).
 ///
 /// Options before the dump: `--time` (the time of the work, reading the dump excluded, to
@@ -16,7 +16,7 @@ pub fn main(args: [str]): int! uses fs, env, proc, time, ffi {
   let what = args[1]
   var time_it = false
   var repeat = 1
-  var level = if what == "run" { "light" } else { "o0" }
+  var level = if what == "run-mir" { "light" } else { "o0" }
   var argv0: str? = none
   var i = 2
   while i < args.len() && args[i].starts_with("--") {
@@ -42,7 +42,7 @@ pub fn main(args: [str]): int! uses fs, env, proc, time, ffi {
   let rest = args.skip(i + 1)
   let text = fs.read(file)?
   let t0 = time.now()
-  if what == "run" {
+  if what == "run-mir" {
     let (prog, info) = mir.reader.read(text)?
     let code = match backend.jit(prog, info, level_of(level)?) {
       ok(c) => c
@@ -57,7 +57,7 @@ pub fn main(args: [str]): int! uses fs, env, proc, time, ffi {
     orcjit.close(code)
     return status
   }
-  if what == "build" {
+  if what == "build-mir" {
     if rest.len() != 2 || rest[0] != "-o" { return usage(what) }
     let (prog, info) = mir.reader.read(text)?
     match native.build(prog, info, rest[1]) {
@@ -103,7 +103,7 @@ fn level_of(l: str): backend.Level! = match l {
 }
 
 fn usage(what: str): int {
-  eprint("usage: compiler mir|llvm|build|run [--time] [--repeat N] [--level L] [--argv0 A] <mir dump> [-o out | args...]")
+  eprint("usage: compiler mir|llvm|build-mir|run-mir [--time] [--repeat N] [--level L] [--argv0 A] <mir dump> [-o out | args...]")
   2
 }
 

@@ -38,18 +38,18 @@ job() {
     "$AUK" dump mir --test "$target" > "$d/mir" 2> "$d/mir.err"
     local argv0="$target"
     [ -d "$target" ] && argv0="$target/src/lib.auk"
-    run "$d/auk" "$stdin" "$PORT" run --level o0 --argv0 "$argv0" "$d/mir"
+    run "$d/auk" "$stdin" "$PORT" run-mir --level o0 --argv0 "$argv0" "$d/mir"
   else
     run "$d/rust" "$stdin" "$AUK" run "$target" $rest
     "$AUK" dump mir "$target" > "$d/mir" 2> "$d/mir.err"
-    run "$d/auk" "$stdin" "$PORT" run --argv0 "$target" "$d/mir" $rest
+    run "$d/auk" "$stdin" "$PORT" run-mir --argv0 "$target" "$d/mir" $rest
   fi
   local verdict=same
   cmp -s "$d/rust" "$d/auk" || verdict="DIFF $name (jit; diff $d/rust $d/auk)"
   if [ "$kind" = run ] && [ "$verdict" = same ]; then
     "$AUK" build "$target" -o "$d/exe.rust" > "$d/build.rust" 2>&1 || true
     "$AUK" dump mir --release "$target" > "$d/mir.release" 2> "$d/mir.err"
-    "$PORT" build "$d/mir.release" -o "$d/exe.auk" > "$d/build.auk" 2>&1 || true
+    "$PORT" build-mir "$d/mir.release" -o "$d/exe.auk" > "$d/build.auk" 2>&1 || true
     run "$d/out.rust" "$stdin" "$d/exe.rust" $rest
     run "$d/out.auk" "$stdin" "$d/exe.auk" $rest
     cmp -s "$d/out.rust" "$d/out.auk" || verdict="DIFF $name (build; diff $d/out.rust $d/out.auk)"
