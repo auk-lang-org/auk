@@ -1,20 +1,26 @@
-/// The self-hosting port's driver: `compiler tokens|ast|resolve [--quiet] [--time] [--repeat N]
-/// <file>...` prints what `auk dump tokens|ast|resolve` prints, from the Auk port of the front
-/// end. For timing: `--quiet` does the work without printing, `--repeat N` does the whole job N
-/// times, and `--time` prints the time per repetition (file reading excluded) to stderr.
+/// The self-hosting port's driver: `compiler tokens|ast|resolve|check|typed [--quiet] [--time]
+/// [--repeat N] [--core] <file>...` prints what `auk dump tokens|ast|resolve|check|typed` prints,
+/// from the Auk port of the front end. `check` is the `auk check --json` report of the type
+/// checker (`check --json <file>` is accepted too); `typed` the typed program (`--core`: core
+/// modules' tables too). For timing: `--quiet` does the work without printing, `--repeat N` does
+/// the whole job N times, and `--time` prints the time per repetition (file reading excluded) to
+/// stderr.
 ///
-/// `resolve` reads the core prelude from `$AUK_PRELUDE_DIR`, or else from the `src/prelude/` of
-/// the checkout the binary was built in (found upward from the binary).
+/// `resolve`, `check` and `typed` read the core prelude from `$AUK_PRELUDE_DIR`, or else from the
+/// `src/prelude/` of the checkout the binary was built in (found upward from the binary).
+
+let MODES = ["tokens", "ast", "resolve", "check", "typed"]
 
 fn main(args: [str]): int! uses fs, env, time, ffi {
-  if args.len() < 3 || (args[1] != "tokens" && args[1] != "ast" && args[1] != "resolve") {
-    eprint("usage: compiler tokens|ast|resolve [--quiet] [--time] [--repeat N] <file>...")
+  if args.len() < 3 || !MODES.contains(args[1]) {
+    eprint("usage: compiler tokens|ast|resolve|check|typed [--quiet] [--time] [--repeat N] [--core] <file>...")
     return 2
   }
   let what = args[1]
   let rest = args.skip(2)
   let quiet = rest.contains("--quiet")
   let time_it = rest.contains("--time")
+  let core = rest.contains("--core")
   var repeat = 1
   var files: [str] = []
   for i, a in rest {
@@ -28,7 +34,7 @@ fn main(args: [str]): int! uses fs, env, time, ffi {
   for f in files { srcs.push(fs.read(f)?) }
   var cx = resolve.Sources { prelude: [], overrides: {}, os: "" }
   var cwd = ""
-  if what == "resolve" {
+  if what == "resolve" || what == "check" || what == "typed" {
     let dir = prelude_dir(args[0]) else {
       eprint("error: can't find the core prelude (src/prelude/core.auk); set AUK_PRELUDE_DIR")
       return 1
@@ -42,7 +48,19 @@ fn main(args: [str]): int! uses fs, env, time, ffi {
     for i, f in files {
       let src = srcs[i]
       if files.len() > 1 && !quiet { out.push("== {f}") }
-      if what == "resolve" {
+      if what == "check" || what == "typed" {
+        let r = resolve.load_in_package(cx, f, src)
+        if quiet {
+          match r {
+            ok(p) => { let _ = check.check_types(p) }
+            err(_) => {}
+          }
+        } else if what == "check" {
+          out.push(dump.checked(f, r))
+        } else {
+          dump.typed_program(&out, cwd, r, core)
+        }
+      } else if what == "resolve" {
         let r = resolve.load_in_package(cx, f, src)
         if !quiet { dump.resolved(&out, cwd, r) }
       } else if what == "tokens" {

@@ -912,3 +912,442 @@ fn use_line(out: var [str], p: resolve.Program, m: int, path: [ast.Ident]) {
   let text = path.map(i => i.name).join(".")
   line(&out, 1, "use {sp(span)} {text} -> {resolve.name(p, cur)} {k}/{path.len()}")
 }
+
+// ---- the checker's diagnostics and typed program (check, typed) ----
+
+/// `auk dump check`: the `auk check --json` report of the type checker proper
+/// (`check.check_types`), without patterns.rs and effects.rs.
+pub fn checked(path: str, r: resolve.Program!diag.FileFails): str {
+  let diags = match r {
+    ok(prog) => check.check_types(prog).1
+    err(Many(ds)) => ds
+  }
+  diag.json_report_files(path, diags)
+}
+
+/// `auk dump typed`: the checker's errors and the typed program (erased when there were no
+/// errors, as `check::check` returns it).
+pub fn typed_program(out: var [str], cwd: str, r: resolve.Program!diag.FileFails, core: bool) {
+  let prog = match r {
+    ok(p) => p
+    err(Many(ds)) => {
+      for d in ds {
+        line(&out, 0, "in {esc(rel(cwd, d.file))}")
+        diag_dump(&out, d.diag)
+      }
+      return
+    }
+  }
+  let (tp, errs) = check.check_types(prog)
+  for d in errs {
+    line(&out, 0, "in {esc(rel(cwd, d.file))}")
+    diag_dump(&out, d.diag)
+  }
+  match tp {
+    some(t) => {
+      var t2 = t
+      if errs.len() == 0 { units.erase(&t2) }
+      typed(&out, cwd, t2, core)
+    }
+    none => {}
+  }
+}
+
+fn show_ty(tp: typed.TypedProgram, t: types.Ty): str = types.show(tp.defs, t)
+
+fn show_tys(tp: typed.TypedProgram, ts: [types.Ty]): str = ts.map(t => types.show(tp.defs, t)).join(", ")
+
+fn ints(xs: [int]): str = "[" + xs.map(x => "{x}").join(", ") + "]"
+
+/// See src/dump.rs `typed`.
+fn typed(out: var [str], cwd: str, tp: typed.TypedProgram, core: bool) {
+  let d = tp.defs
+  let focus = tp.program.focus
+  match tp.main {
+    some(m) => line(&out, 0, "main #{m.func} args={m.takes_args} ret={show_ty(tp, m.ret)}")
+    none => line(&out, 0, "main -")
+  }
+  for i, t in d.types {
+    if tp.program.is_core(t.module) && !core { continue }
+    let ps = t.params.map(p => d.params[p].name).join(", ")
+    line(&out, 0, "def #{i} {tp.program.name(t.module)}.{t.name}<{ps}>{vis(t.public)}")
+    match t.kind {
+      Struct(fields) => for f in fields { line(&out, 1, "field {f.name}: {show_ty(tp, f.ty)}{vis(f.public)}") }
+      Enum(variants) => for v in variants {
+        let fs = v.fields.map(x => match x.0 {
+          some(n) => "{n}: {types.show(d, x.1)}"
+          none => types.show(d, x.1)
+        })
+        line(&out, 1, "variant {v.name}({fs.join(", ")})")
+      }
+      Opaque(ct) => line(&out, 1, "opaque {esc(ct)}")
+    }
+  }
+  for i, s in d.shapes {
+    if tp.program.is_core(s.module) && !core { continue }
+    line(&out, 0, "shape #{i} {tp.program.name(s.module)}.{s.name}{vis(s.public)}")
+    for m in s.methods { line(&out, 1, "method {m.name}({show_tys(tp, m.params)}): {show_ty(tp, m.ret)}") }
+  }
+  for i, f in tp.fns {
+    let ps = f.params.map(p => (if p.var_ { "var " } else { "" }) + (p.name else "_") + ": " + types.show(d, p.ty))
+    let gs = f.generics.map(g => bounded(d, g))
+    let kind = match f.kind {
+      Auk(item, clauses, header) => "auk item={item} clauses={ints(clauses)}" + flag(header, " header")
+      Extern(symbol, loc, item) => "extern {esc(symbol)}" + flag(loc, " +loc") + " item={item}"
+      Ffi(sig, convs, item) => {
+        let free = match sig.free {
+          some(x) => " free={x}"
+          none => ""
+        }
+        let cps = sig.params.map(x => cffi.show(x)).join(", ")
+        "ffi {sig.name} ({cps}) -> {cffi.show(sig.ret)}{free}" + flag(sig.indirect, " indirect") +
+          " convs=[{convs.map(conv_text).join(", ")}] item={item}"
+      }
+      Intrinsic(which, item) => "intrinsic {typed.intrinsic_name(which)} item={item}"
+    }
+    let g = if gs.len() == 0 { "" } else { "<" + gs.join(", ") + ">" }
+    let a = if f.is_async { "async " } else { "" }
+    line(&out, 0, "fn #{i} {tp.program.name(f.module)}.{a}{f.name}{g}({ps.join(", ")}): {show_ty(tp, f.ret)} [{kind}]{vis(f.public)}")
+    if f.module == focus || core {
+      let olds = f.olds.map(x => "#{x}").join(", ")
+      let r = match f.result_local {
+        some(l) => " result={l}"
+        none => ""
+      }
+      line(&out, 1, "span {sp(f.span)} uses=[{f.effects.join(", ")}] callees=[{f.callees.map(x => "{x}").join(", ")}] olds=[{olds}]{r}")
+    }
+  }
+  for i, k in tp.consts {
+    line(&out, 0, "const #{i} {tp.program.name(k.module)}.{k.name}: {show_ty(tp, k.ty)}{vis(k.public)}" + flag(k.imprint, " imprint") + " item={k.item} {sp(k.span)}")
+  }
+  for i, t in tp.tests {
+    line(&out, 0, "test #{i} {tp.program.name(t.module)}.{esc(t.name)} item={t.item} {sp(t.span)}")
+  }
+  for m, t in tp.tables {
+    if m != focus && !core { continue }
+    line(&out, 0, "module {m} {tp.program.name(m)} {esc(rel(cwd, tp.program.mods[m].file))}")
+    tables(&out, tp, t)
+  }
+  for i, inst in tp.instances {
+    let (what, module) = match inst.body {
+      Fn(f) => ("fn #{f} {tp.fns[f].name}", tp.fns[f].module)
+      Test(t) => ("test #{t} {esc(tp.tests[t].name)}", tp.tests[t].module)
+      Const(k) => ("const #{k} {tp.consts[k].name}", tp.consts[k].module)
+    }
+    let args = if inst.type_args.len() == 0 { "" } else { "<" + show_tys(tp, inst.type_args) + ">" }
+    line(&out, 0, "instance {i} {what}{args}")
+    if module != focus && !core { continue }
+    for n in inst.resolved.keys().sort() { line(&out, 1, "#{n} -> {target(tp, inst.resolved[n])}") }
+    for n in inst.shows.keys().sort() { line(&out, 1, "show #{n} -> {target(tp, inst.shows[n])}") }
+    for n in inst.vtables.keys().sort() { line(&out, 1, "vtable #{n} -> {inst.vtables[n]}") }
+  }
+  for t in tp.types_used { line(&out, 0, "used {show_ty(tp, t)}") }
+  // Rust's BTreeMap order: by (Builtin, Ty)
+  var impls: [(int, types.Ty)] = []
+  for k in tp.shape_impls.keys() { impls.push((builtin_rank(k.0), k.1)) }
+  for k in impls.sort_by(x => x) {
+    let b = rank_builtin(k.0)
+    line(&out, 0, "impl {builtin_name(b)} {show_ty(tp, k.1)} -> {target(tp, tp.shape_impls[(b, k.1)])}")
+  }
+  for t in tp.from_value_impls.keys().sort() {
+    line(&out, 0, "from_value {show_ty(tp, t)} -> {target(tp, tp.from_value_impls[t])}")
+  }
+  for i, v in tp.vtables {
+    line(&out, 0, "vtable {i} {d.shapes[v.shape].name} {show_ty(tp, v.ty)} [{v.methods.map(x => target(tp, x)).join(", ")}]")
+  }
+}
+
+fn builtin_rank(b: types.Builtin): int = match b {
+  Show => 0
+  Ord => 1
+  Eq => 2
+  Data => 3
+}
+
+fn rank_builtin(r: int): types.Builtin =
+  if r == 0 { types.Builtin.Show } else if r == 1 { types.Builtin.Ord } else if r == 2 { types.Builtin.Eq } else { types.Builtin.Data }
+
+/// Rust's `{b:?}`.
+fn builtin_name(b: types.Builtin): str = match b {
+  Show => "Show"
+  Ord => "Ord"
+  Eq => "Eq"
+  Data => "Data"
+}
+
+/// A type parameter with its bounds: `T: Show + Eq`, `Ord: Ord implicit`.
+fn bounded(d: types.Defs, p: int): str {
+  let tp = d.params[p]
+  let bs = tp.bounds.map(b => d.shapes[b].name)
+  let b = if bs.len() == 0 { "" } else { ": " + bs.join(" + ") }
+  tp.name + b + flag(tp.implicit, " implicit")
+}
+
+fn conv_text(cv: cffi.Conv): str = match cv {
+  Int(bytes, signed) => "int{bytes}" + (if signed { "s" } else { "u" })
+  Bool => "bool"
+  Float(f32) => if f32 { "f32" } else { "f64" }
+  Str(owned) => "str" + flag(owned, "+owned")
+  OptStr(owned) => "optstr" + flag(owned, "+owned")
+  Ptr => "ptr"
+  OptPtr => "optptr"
+  Unit => "unit"
+  List(elem, back) => "list {elem_name(elem)}" + flag(back, " back")
+  Out(x) => "out(" + conv_text(x) + ")"
+}
+
+fn elem_name(e: cffi.Elem): str = match e {
+  Raw => "Raw"
+  I8 => "I8"
+  U8 => "U8"
+  I16 => "I16"
+  U16 => "U16"
+  I32 => "I32"
+  U32 => "U32"
+  F32 => "F32"
+}
+
+fn fn_name(tp: typed.TypedProgram, f: int): str = "{tp.fns[f].name}#{f}"
+
+fn variant_name(tp: typed.TypedProgram, def: int, index: int): str {
+  let vs = types.variants(tp.defs, def)
+  let v = if index < vs.len() { vs[index].name } else { "?" }
+  "{tp.defs.types[def].name}.{v}"
+}
+
+fn targs(tp: typed.TypedProgram, ts: [types.Ty]): str = if ts.len() == 0 { "" } else { "<" + show_tys(tp, ts) + ">" }
+
+fn shape_method(tp: typed.TypedProgram, shape: int, method: int): str {
+  let s = tp.defs.shapes[shape]
+  let m = if method < s.methods.len() { s.methods[method].name } else { "?" }
+  "{s.name}.{m}"
+}
+
+fn callee(tp: typed.TypedProgram, ce: typed.Callee): str = match ce {
+  Fn(func, type_args) => "fn {fn_name(tp, func)}{targs(tp, type_args)}"
+  Variant(v) => "variant {variant_name(tp, v.def, v.index)}{targs(tp, v.args)}"
+  Closure => "closure"
+  Shape(shape, method, self_ty) => "shape {shape_method(tp, shape, method)} @{show_ty(tp, self_ty)}"
+  Vtable(shape, method) => "vtable {shape_method(tp, shape, method)}"
+}
+
+fn target(tp: typed.TypedProgram, t: typed.Target): str = match t {
+  Instance(i) => "inst {i}"
+  Extern(symbol, loc) => "extern {esc(symbol)}" + flag(loc, " +loc")
+  Ffi(f) => "ffi {fn_name(tp, f)}"
+  Intrinsic(which, ty) => "intrinsic {typed.intrinsic_name(which)} {show_ty(tp, ty)}"
+  Derived(shape, ty) => "derived {builtin_name(shape)} {show_ty(tp, ty)}"
+  Vtable(shape, method) => "vtable {shape_method(tp, shape, method)}"
+  Variant(def, index) => "variant {variant_name(tp, def, index)}"
+  Closure => "closure"
+}
+
+fn coercions(tp: typed.TypedProgram, cs: [typed.Coercion]): str = cs.map(co => match co {
+  WrapSome => "some"
+  WrapOk => "ok"
+  ToAny(s) => "any {tp.defs.shapes[s].name}"
+}).join(",")
+
+fn opt_char(x: char?): str = match x {
+  some(ch) => "{int(ch)}"
+  none => "-"
+}
+
+fn opt_int(x: int?): str = match x {
+  some(n) => "{n}"
+  none => "-"
+}
+
+/// One module's side tables (see src/dump.rs `tables`).
+fn tables(out: var [str], tp: typed.TypedProgram, t: typed.Tables) {
+  var seen: {int: bool} = {}
+  for k in t.types.keys() { seen[k] = true }
+  for k in t.coercions.keys() { seen[k] = true }
+  for k in t.names.keys() { seen[k] = true }
+  for k in t.binds.keys() { seen[k] = true }
+  for k in t.variants.keys() { seen[k] = true }
+  for k in t.calls.keys() { seen[k] = true }
+  for k in t.fields.keys() { seen[k] = true }
+  for k in t.struct_lits.keys() { seen[k] = true }
+  for k in t.struct_pats.keys() { seen[k] = true }
+  for k in t.closures.keys() { seen[k] = true }
+  for k in t.tries.keys() { seen[k] = true }
+  for k in t.fails.keys() { seen[k] = true }
+  for k in t.elses.keys() { seen[k] = true }
+  for k in t.opt_chains.keys() { seen[k] = true }
+  for k in t.awaits.keys() { seen[k] = true }
+  for k in t.fors.keys() { seen[k] = true }
+  for k in t.formats.keys() { seen[k] = true }
+  for k in t.shows.keys() { seen[k] = true }
+  for k in t.value_map_pats.keys() { seen[k] = true }
+  for k in t.err_payload_pats.keys() { seen[k] = true }
+  for k in t.units.keys() { seen[k] = true }
+  let d = tp.defs
+  for n in seen.keys().sort() {
+    var s: [str] = ["#{n}"]
+    match t.types.get(n) {
+      some(ty) => s.push(" : " + types.show(d, ty))
+      none => {}
+    }
+    match t.coercions.get(n) {
+      some(cs) => s.push(" coerce=" + coercions(tp, cs))
+      none => {}
+    }
+    match t.names.get(n) {
+      some(r) => {
+        let r2 = match r {
+          Local(l) => "local {l}"
+          Const(k) => "const {tp.consts[k].name}#{k}"
+          Fn(func, type_args) => "fn {fn_name(tp, func)}{targs(tp, type_args)}"
+          Variant(v) => "variant {variant_name(tp, v.def, v.index)}{targs(tp, v.args)}"
+          None => "none"
+        }
+        s.push(" name=(" + r2 + ")")
+      }
+      none => {}
+    }
+    match t.binds.get(n) {
+      some(l) => s.push(" bind={l}")
+      none => {}
+    }
+    match t.variants.get(n) {
+      some(v) => s.push(" variant={variant_name(tp, v.def, v.index)}{targs(tp, v.args)}")
+      none => {}
+    }
+    match t.calls.get(n) {
+      some(call) => {
+        let args = call.args.map(a => (if a.by_ref { "&" } else { "" }) + "#{a.node}").join(", ")
+        s.push(" call=({callee(tp, call.callee)})({args})")
+      }
+      none => {}
+    }
+    match t.fields.get(n) {
+      some((def, i)) => {
+        let fs = types.fields(d, def)
+        let f = if i < fs.len() { fs[i].name } else { "?" }
+        s.push(" field={d.types[def].name}.{f}")
+      }
+      none => {}
+    }
+    match t.struct_lits.get(n) {
+      some(sl) => {
+        let fs = sl.fields.map(x => match x.1 {
+          Expr(node) => "{x.0}=#{node}"
+          Local(l, cs) => "{x.0}=local {l}" + (if cs.len() == 0 { "" } else { " " + coercions(tp, cs) })
+        })
+        s.push(" struct={d.types[sl.def].name}{targs(tp, sl.args)}{{{fs.join(", ")}}}")
+      }
+      none => {}
+    }
+    match t.struct_pats.get(n) {
+      some(spat) => {
+        let fs = spat.fields.map(x => match x.1 {
+          some(l) => "{x.0}=local {l}"
+          none => "{x.0}"
+        })
+        s.push(" struct_pat={d.types[spat.def].name}{{{fs.join(", ")}}}")
+      }
+      none => {}
+    }
+    match t.closures.get(n) {
+      some(cl) => {
+        let caps = cl.captures.map(l => "{l}").join(", ")
+        s.push(" closure=({show_tys(tp, cl.params)}) => {show_ty(tp, cl.ret)} captures=[{caps}]" + flag(cl.unpack, " unpack"))
+      }
+      none => {}
+    }
+    match t.tries.get(n) {
+      some(tr) => {
+        let conv = match tr.conv {
+          None => ""
+          ToErr(from) => " to_err " + types.show(d, from)
+        }
+        let k = match tr.kind {
+          Result => "Result"
+          Option => "Option"
+          ListResult => "ListResult"
+          ListOption => "ListOption"
+        }
+        s.push(" try={k}{conv}")
+      }
+      none => {}
+    }
+    match t.fails.get(n) {
+      some(f) => {
+        let f2 = match f {
+          Message => "message"
+          Err => "err"
+          Typed => "typed"
+          TypedToErr(x) => "typed_to_err " + types.show(d, x)
+        }
+        s.push(" fail={f2}")
+      }
+      none => {}
+    }
+    match t.elses.get(n) {
+      some(e) => {
+        let k = match e.kind {
+          Option => "option"
+          Result => "result"
+          Refutable => "refutable"
+          UnwrapRefutable(option) => "unwrap_refutable " + (if option { "option" } else { "result" })
+        }
+        let b = match e.binder {
+          some(l) => " binder={l}"
+          none => ""
+        }
+        s.push(" else={k}{b}")
+      }
+      none => {}
+    }
+    match t.opt_chains.get(n) {
+      some(o) => s.push(" opt_chain" + flag(o.flatten, " flatten"))
+      none => {}
+    }
+    match t.awaits.get(n) {
+      some(a) => {
+        let k = match a {
+          Direct => "Direct"
+          Task => "Task"
+          Tuple => "Tuple"
+          List => "List"
+        }
+        s.push(" await={k}")
+      }
+      none => {}
+    }
+    match t.fors.get(n) {
+      some(f) => {
+        let k = match f {
+          Range(inclusive) => "range" + flag(inclusive, " inclusive")
+          List => "list"
+          Map => "map"
+          Chan => "chan"
+        }
+        s.push(" for={k}")
+      }
+      none => {}
+    }
+    match t.formats.get(n) {
+      some(f) => s.push(" format={esc(f.text)} fill={opt_char(f.fill)} align={opt_char(f.align)} zero={f.zero} width={opt_int(f.width)} precision={opt_int(f.precision)} radix={opt_char(f.radix)}")
+      none => {}
+    }
+    match t.shows.get(n) {
+      some(ce) => s.push(" show=({callee(tp, ce)})")
+      none => {}
+    }
+    if t.value_map_pats.contains(n) { s.push(" value_map") }
+    match t.err_payload_pats.get(n) {
+      some(x) => s.push(" err_payload=" + types.show(d, x))
+      none => {}
+    }
+    match t.units.get(n) {
+      some(u) => s.push(" unit=" + esc(u))
+      none => {}
+    }
+    line(&out, 1, s.join(""))
+  }
+  for i, l in t.locals {
+    line(&out, 1, "local {i} {l.name}: {types.show(d, l.ty)}" + flag(l.mutable, " mut") + " {sp(l.span)}")
+  }
+}

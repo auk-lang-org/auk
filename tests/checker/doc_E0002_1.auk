@@ -1,0 +1,1 @@
+fn greet(): str = "hello

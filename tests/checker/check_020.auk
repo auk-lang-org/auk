@@ -1,0 +1,1 @@
+fn f(p: int?): int? = p?.0

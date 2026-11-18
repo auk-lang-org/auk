@@ -1,0 +1,5 @@
+fn main() {
+  var n = 1
+  n += 1
+  print(n)
+}

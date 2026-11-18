@@ -127,3 +127,112 @@ fn parse_i32(t: str): int? {
   }
   if n > 2147483647 { none } else { n }
 }
+
+// ---- erasing units (src/units.rs `erase`) ----
+
+/// Remove every unit of measure from a checked program, so codegen only sees plain `int` and
+/// `float` (units cost nothing at run time). `check.check` calls it; the language server
+/// keeps the units for hovers. `types_used` stays sorted (by `types.cmp`) without duplicates.
+pub fn erase(tp: var typed.TypedProgram) {
+  for d in 0..tp.defs.types.len() {
+    match tp.defs.types[d].kind {
+      Struct(fields) => tp.defs.types[d].kind = types.TypeDefKind.Struct(fields.map(f => types.FieldDef { ty: e(f.ty), ..f }))
+      Enum(variants) => tp.defs.types[d].kind = types.TypeDefKind.Enum(variants.map(v => types.VariantDef { fields: v.fields.map(f => (f.0, e(f.1))), ..v }))
+      Opaque(_) => {}
+    }
+  }
+  for s in 0..tp.defs.shapes.len() {
+    tp.defs.shapes[s].methods = tp.defs.shapes[s].methods.map(m => types.ShapeMethod { name: m.name, params: all(m.params), ret: e(m.ret) })
+  }
+  for f in 0..tp.fns.len() {
+    tp.fns[f].params = tp.fns[f].params.map(p => typed.ParamInfo { ty: e(p.ty), ..p })
+    tp.fns[f].ret = e(tp.fns[f].ret)
+  }
+  for k in 0..tp.consts.len() { tp.consts[k].ty = e(tp.consts[k].ty) }
+  for m in 0..tp.tables.len() {
+    var t = tp.tables[m]
+    for n in t.types.keys() { t.types[n] = e(t.types[n]) }
+    t.locals = t.locals.map(l => typed.LocalInfo { ty: e(l.ty), ..l })
+    for n in t.variants.keys() { t.variants[n] = vref(t.variants[n]) }
+    for n in t.calls.keys() {
+      let cl = t.calls[n]
+      t.calls[n] = typed.Call { callee: callee(cl.callee), args: cl.args }
+    }
+    for n in t.shows.keys() { t.shows[n] = callee(t.shows[n]) }
+    for n in t.names.keys() {
+      match t.names[n] {
+        Fn(func, type_args) => t.names[n] = typed.NameRef.Fn(func, all(type_args))
+        Variant(v) => t.names[n] = typed.NameRef.Variant(vref(v))
+        _ => {}
+      }
+    }
+    for n in t.struct_lits.keys() {
+      let s = t.struct_lits[n]
+      t.struct_lits[n] = typed.StructLit { args: all(s.args), ..s }
+    }
+    for n in t.closures.keys() {
+      let c = t.closures[n]
+      t.closures[n] = typed.ClosureInfo { params: all(c.params), ret: e(c.ret), ..c }
+    }
+    for n in t.fails.keys() {
+      match t.fails[n] {
+        TypedToErr(x) => t.fails[n] = typed.FailKind.TypedToErr(e(x))
+        _ => {}
+      }
+    }
+    for n in t.tries.keys() {
+      let tr = t.tries[n]
+      match tr.conv {
+        ToErr(from) => t.tries[n] = typed.TryInfo { kind: tr.kind, conv: typed.ErrConv.ToErr(e(from)) }
+        _ => {}
+      }
+    }
+    for n in t.err_payload_pats.keys() { t.err_payload_pats[n] = e(t.err_payload_pats[n]) }
+    tp.tables[m] = t
+  }
+  for i in 0..tp.instances.len() {
+    var inst = tp.instances[i]
+    inst.type_args = all(inst.type_args)
+    for n in inst.resolved.keys() { inst.resolved[n] = target(inst.resolved[n]) }
+    for n in inst.shows.keys() { inst.shows[n] = target(inst.shows[n]) }
+    tp.instances[i] = inst
+  }
+  var used: [types.Ty] = []
+  for t in tp.types_used { used.push(types.erase_units(t)) }
+  used = used.sort()
+  var dedup: [types.Ty] = []
+  for t in used {
+    if dedup.len() == 0 || dedup[dedup.len() - 1] != t { dedup.push(t) }
+  }
+  tp.types_used = dedup
+  var impls: {(types.Builtin, types.Ty): typed.Target} = {}
+  for k in tp.shape_impls.keys() { impls[(k.0, types.erase_units(k.1))] = target(tp.shape_impls[k]) }
+  tp.shape_impls = impls
+  var fv: {types.Ty: typed.Target} = {}
+  for k in tp.from_value_impls.keys() { fv[types.erase_units(k)] = target(tp.from_value_impls[k]) }
+  tp.from_value_impls = fv
+  tp.vtables = tp.vtables.map(v => typed.Vtable { shape: v.shape, ty: e(v.ty), methods: v.methods.map(x => target(x)) })
+  match tp.main {
+    some(m) => tp.main = typed.MainInfo { ret: e(m.ret), ..m }
+    none => {}
+  }
+}
+
+fn e(t: types.Ty): types.Ty = if t.has_units() { types.erase_units(t) } else { t }
+
+fn all(ts: [types.Ty]): [types.Ty] = ts.map(t => e(t))
+
+fn vref(v: typed.VariantRef): typed.VariantRef = typed.VariantRef { args: all(v.args), ..v }
+
+fn callee(c: typed.Callee): typed.Callee = match c {
+  Fn(func, type_args) => typed.Callee.Fn(func, all(type_args))
+  Variant(v) => typed.Callee.Variant(vref(v))
+  Shape(shape, method, self_ty) => typed.Callee.Shape(shape, method, e(self_ty))
+  x => x
+}
+
+fn target(t: typed.Target): typed.Target = match t {
+  Intrinsic(which, ty) => typed.Target.Intrinsic(which, e(ty))
+  Derived(shape, ty) => typed.Target.Derived(shape, e(ty))
+  x => x
+}

@@ -1,0 +1,9 @@
+enum E { A, B(k: int) }
+fn f(x: int!): int {
+  match x {
+    ok(n) => n
+    err(A) => 0
+    err(B(k)) => k
+  }
+}
+fn main() {}

@@ -471,3 +471,71 @@ test "show types" {
   assert show(d, unit()) == "()"
   assert show(d, Ty.Measured(Ty.Float, [("m", 1), ("s", -2)])) == "float<m/s^2>"
 }
+
+/// Rust's derived `Ord` on `Ty` (variant order, then fields left to right), for the ordered
+/// sets and maps of types (`types_used`). Also makes `Ty` fit `Ord`.
+pub fn cmp(a: Ty, b: Ty): int {
+  let ra = rank(a)
+  let rb = rank(b)
+  if ra != rb { return if ra < rb { -1 } else { 1 } }
+  match (a, b) {
+    (List(x), List(y)) | (Opt(x), Opt(y)) | (Task(x), Task(y)) | (Mut(x), Mut(y)) => cmp(x, y)
+    (Map(a1, b1), Map(a2, b2)) | (Res(a1, b1), Res(a2, b2)) => {
+      let c = cmp(a1, a2)
+      if c != 0 { c } else { cmp(b1, b2) }
+    }
+    (Tuple(xs), Tuple(ys)) => cmp_all(xs, ys)
+    (Named(d1, xs), Named(d2, ys)) => if d1 != d2 { cmp_int(d1, d2) } else { cmp_all(xs, ys) }
+    (Param(x), Param(y)) | (Any(x), Any(y)) | (Var(x), Var(y)) => cmp_int(x, y)
+    (Fn(p1, r1), Fn(p2, r2)) => {
+      let c = cmp_all(p1, p2)
+      if c != 0 { c } else { cmp(r1, r2) }
+    }
+    (Measured(x, u), Measured(y, v)) => {
+      let c = cmp(x, y)
+      if c != 0 { return c }
+      for i, p in u {
+        if i >= v.len() { return 1 }
+        let q = v[i]
+        if p.0 != q.0 { return if p.0 < q.0 { -1 } else { 1 } }
+        if p.1 != q.1 { return cmp_int(p.1, q.1) }
+      }
+      if u.len() < v.len() { -1 } else { 0 }
+    }
+    _ => 0
+  }
+}
+
+fn cmp_int(a: int, b: int): int = if a < b { -1 } else if a > b { 1 } else { 0 }
+
+fn cmp_all(xs: [Ty], ys: [Ty]): int {
+  for i, x in xs {
+    if i >= ys.len() { return 1 }
+    let c = cmp(x, ys[i])
+    if c != 0 { return c }
+  }
+  if xs.len() < ys.len() { -1 } else { 0 }
+}
+
+fn rank(t: Ty): int = match t {
+  Int => 0
+  Float => 1
+  Bool => 2
+  Char => 3
+  Str => 4
+  Never => 5
+  List(_) => 6
+  Map(_, _) => 7
+  Tuple(_) => 8
+  Opt(_) => 9
+  Res(_, _) => 10
+  Named(_, _) => 11
+  Param(_) => 12
+  Any(_) => 13
+  Fn(_, _) => 14
+  Task(_) => 15
+  Measured(_, _) => 16
+  Mut(_) => 17
+  Var(_) => 18
+  Error => 19
+}

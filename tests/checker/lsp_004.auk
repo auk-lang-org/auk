@@ -1,0 +1,3 @@
+```auk
+let total: int
+```

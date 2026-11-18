@@ -308,3 +308,24 @@ pub fn symbol(op: BinOp): str = match op {
   Shl => "<<"
   Shr => ">>"
 }
+
+/// A type as written (src/ast.rs `type_dump`), for messages.
+pub fn type_dump(t: Type): str = match t.kind {
+  Named(path, args) => if args.len() == 0 {
+    path.map(i => i.name).join(".")
+  } else {
+    path.map(i => i.name).join(".") + "<" + args.map(type_dump).join(", ") + ">"
+  }
+  List(x) => "[" + type_dump(x) + "]"
+  Map(k, v) => "{{" + type_dump(k) + ": " + type_dump(v) + "}}"
+  Tuple(ts) => "(" + ts.map(type_dump).join(", ") + ")"
+  Optional(x) => type_dump(x) + "?"
+  Fallible(ok, err) => match err {
+    none => type_dump(ok) + "!"
+    some(e) => type_dump(ok) + "!" + type_dump(e)
+  }
+  Any(x) => "any " + type_dump(x)
+  Fn(params, ret) => "(" + params.map(type_dump).join(", ") + ") => " + type_dump(ret)
+  Measured(base, us) => type_dump(base) + "<" + units.text(us) + ">"
+  Var(x) => "var " + type_dump(x)
+}

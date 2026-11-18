@@ -1,0 +1,1 @@
+fn braces(): str = "empty: {}"
