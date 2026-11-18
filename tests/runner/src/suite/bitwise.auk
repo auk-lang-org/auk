@@ -10,7 +10,10 @@ pub fn tests(): [t.Test] uses env, ffi, time, fs = [
   t.test("shift_amounts_outside_0_to_63_panic", shift_amounts_outside_0_to_63_panic),
   t.test("units_are_rejected_with_an_int_fix", units_are_rejected_with_an_int_fix),
   t.test("non_int_operands_are_rejected", non_int_operands_are_rejected),
-  t.test("bitwise_next_to_a_comparison_needs_parentheses", bitwise_next_to_a_comparison_needs_parentheses),
+  t.test(
+    "bitwise_next_to_a_comparison_needs_parentheses",
+    bitwise_next_to_a_comparison_needs_parentheses,
+  ),
 ]
 
 fn auk_cmd(): cmd.Cmd uses env, ffi = t.auk().setenv("AUK_LEAK_CHECK", "1")
@@ -26,17 +29,30 @@ fn scratch(name: str, src: str): str uses env, fs, ffi {
 fn operators_pass_their_tests() uses env, ffi, time {
   let o = auk_cmd().args(["test", "tests/fixtures/bitwise.auk"]).output()
   t.check(o.success(), "{o.stdout}\n{o.stderr}")
-  t.eq(o.stdout, "ok and or xor truth tables\nok not\nok shifts\nok precedence\nok compound assignment\nok bytes\n6 passed, 0 failed\n", o.stderr)
+  t.eq(
+    o.stdout,
+    "ok and or xor truth tables\nok not\nok shifts\nok precedence\nok compound assignment\nok bytes\n6 passed, 0 failed\n",
+    o.stderr,
+  )
 }
 
 fn sha256_in_auk_matches_the_known_digests() uses env, ffi, time {
   let o = auk_cmd().args(["test", "tests/fixtures/sha256.auk"]).output()
   t.check(o.success(), "{o.stdout}\n{o.stderr}")
-  t.eq(o.stdout, "ok sha256 of the empty string\nok sha256 of abc\nok sha256 of a two-block message\n3 passed, 0 failed\n", o.stderr)
+  t.eq(
+    o.stdout,
+    "ok sha256 of the empty string\nok sha256 of abc\nok sha256 of a two-block message\n3 passed, 0 failed\n",
+    o.stderr,
+  )
 }
 
 fn fixtures_are_fmt_clean() uses env, ffi, time {
-  let o = auk_cmd().args(["fmt", "--check", "tests/fixtures/bitwise.auk", "tests/fixtures/sha256.auk"]).output()
+  let o = auk_cmd().args([
+    "fmt",
+    "--check",
+    "tests/fixtures/bitwise.auk",
+    "tests/fixtures/sha256.auk",
+  ]).output()
   t.check(o.success(), o.describe())
 }
 
@@ -51,7 +67,10 @@ fn shift_amounts_outside_0_to_63_panic() uses env, fs, ffi, time {
     let src = "fn main(args: [str]) {{\n  let n = int.parse(\"{n}\")!\n  print({expr})\n}}\n"
     let o = auk_cmd().arg("run").arg(scratch(name, src)).output()
     t.check(o.code == some(101), "{name}: {o.describe()}")
-    t.check(o.stderr.starts_with("panic: shift amount {n} is outside 0..63\n"), "{name}: {o.stderr}")
+    t.check(
+      o.stderr.starts_with("panic: shift amount {n} is outside 0..63\n"),
+      "{name}: {o.stderr}",
+    )
     t.check(o.stderr.contains("{name}.auk:"), "{name}: the panic points at the shift: {o.stderr}")
   }
   // 0 and 63 are fine
@@ -71,7 +90,10 @@ fn units_are_rejected_with_an_int_fix() uses env, fs, ffi, time {
   let out = check("unit", "fn f(n: int<B>): int = n & 0xff\n")
   t.check(out.contains("\"code\":\"E0293\""), out)
   t.check(out.contains("`&` works on bits, but this is `int<B>`, a value with a unit"), out)
-  t.check(out.contains("\"fixes\":[{{\"line\":1,\"col\":24,\"end_line\":1,\"end_col\":24,\"text\":\"int(\"}},{{\"line\":1,\"col\":25,\"end_line\":1,\"end_col\":25,\"text\":\")\"}}]"), out)
+  t.check(
+    out.contains("\"fixes\":[{{\"line\":1,\"col\":24,\"end_line\":1,\"end_col\":24,\"text\":\"int(\"}},{{\"line\":1,\"col\":25,\"end_line\":1,\"end_col\":25,\"text\":\")\"}}]"),
+    out,
+  )
   // every operator, either side, and compound assignment (no fix on an assignment target)
   for i, body in ["1 | n", "n ^ 1", "~n", "n << 1", "1 >> n"] {
     let out = check("unit{i}", "fn f(n: int<B>): int = {body}\n")
@@ -101,7 +123,10 @@ fn non_int_operands_are_rejected() uses env, fs, ffi, time {
 fn bitwise_next_to_a_comparison_needs_parentheses() uses env, fs, ffi, time {
   let out = check("mix", "fn even(x: int): bool = x & 1 == 0\n")
   t.check(out.contains("\"code\":\"E0038\""), out)
-  t.check(out.contains("\"fixes\":[{{\"line\":1,\"col\":25,\"end_line\":1,\"end_col\":25,\"text\":\"(\"}},{{\"line\":1,\"col\":30,\"end_line\":1,\"end_col\":30,\"text\":\")\"}}]"), out)
+  t.check(
+    out.contains("\"fixes\":[{{\"line\":1,\"col\":25,\"end_line\":1,\"end_col\":25,\"text\":\"(\"}},{{\"line\":1,\"col\":30,\"end_line\":1,\"end_col\":30,\"text\":\")\"}}]"),
+    out,
+  )
   // applying the fix checks clean
   let out = check("mix_fixed", "fn even(x: int): bool = (x & 1) == 0\n")
   t.check(out.contains("\"ok\":true"), out)

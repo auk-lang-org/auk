@@ -31,7 +31,8 @@ pub struct Out {
 
 pub let DEFAULT_TIMEOUT_MS = 300000
 
-pub fn new(prog: str): Cmd = Cmd { argv: [prog], env: [], cwd: none, stdin: none, timeout_ms: DEFAULT_TIMEOUT_MS }
+pub fn new(prog: str): Cmd =
+  Cmd { argv: [prog], env: [], cwd: none, stdin: none, timeout_ms: DEFAULT_TIMEOUT_MS }
 
 pub fn arg(c: Cmd, a: str): Cmd = Cmd { argv: c.argv + [a], ..c }
 

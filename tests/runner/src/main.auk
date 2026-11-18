@@ -93,7 +93,8 @@ fn main(args: [str]): int uses fs, env, ffi, time, net, proc {
   for si, s in all {
     for ti, test in s.tests {
       let name = "{s.name}::{test.name}"
-      let wanted = o.filters.len() == 0 || o.filters.any(f => if o.exact { name == f } else { name.contains(f) })
+      let wanted = o.filters.len() == 0 ||
+        o.filters.any(f => if o.exact { name == f } else { name.contains(f) })
       let by_ignore = match o.ignored {
         0 => !test.ignored
         1 => true
@@ -152,7 +153,11 @@ fn main(args: [str]): int uses fs, env, ffi, time, net, proc {
   0
 }
 
-async fn worker(sel: [(int, int)], todo: Chan<int>, done: Chan<Done>): int uses fs, env, ffi, time, net, proc {
+async fn worker(
+  sel: [(int, int)],
+  todo: Chan<int>,
+  done: Chan<Done>,
+): int uses fs, env, ffi, time, net, proc {
   let all = suites()
   for i in todo {
     let (si, ti) = sel[i]
@@ -175,7 +180,7 @@ fn clean(m: str): str {
   match m.strip_prefix("unwrapped an error: ") {
     some(rest) => {
       let parts = rest.split(" at ")
-      if parts.len() > 1 && parts[parts.len() - 1].contains("tests/runner/src/t.auk:") {
+      if parts.len() > 1 && parts[parts.len() - 1].contains("/src/t.auk:") {
         parts.take(parts.len() - 1).join(" at ")
       } else {
         rest

@@ -19,7 +19,7 @@ pub fn ignored(name: str, run: () => ()): Test = Test { name, run, ignored: true
 /// The prefix of a failure message that means "skipped".
 pub let SKIP = "skipped: "
 
-fn boom(msg: str): ()! = core.fail(msg)
+fn boom(msg: str): ()! = sys.fail_with(msg)
 
 /// Fail the test with `msg`.
 pub fn fail(msg: str) { boom(msg)! }
@@ -35,14 +35,20 @@ pub fn check(cond: bool, msg: str) { if !cond { fail(msg) } }
 
 /// Fail unless `a == b`, showing both and `msg`.
 pub fn eq(a: str, b: str, msg: str) {
-  if a != b { fail("assertion failed: left == right ({msg})\n  left: {a.show()}\n right: {b.show()}") }
+  if a != b {
+    fail("assertion failed: left == right ({msg})\n  left: {a.show()}\n right: {b.show()}")
+  }
 }
 
 /// Fail unless the text contains `part`.
-pub fn has(text: str, part: str) { if !text.contains(part) { fail("expected {part.show()} in:\n{text}") } }
+pub fn has(text: str, part: str) {
+  if !text.contains(part) { fail("expected {part.show()} in:\n{text}") }
+}
 
 /// Fail if the text contains `part`.
-pub fn lacks_text(text: str, part: str) { if text.contains(part) { fail("unexpected {part.show()} in:\n{text}") } }
+pub fn lacks_text(text: str, part: str) {
+  if text.contains(part) { fail("unexpected {part.show()} in:\n{text}") }
+}
 
 /// End the test as skipped.
 pub fn skip(why: str) { fail(SKIP + why) }
@@ -121,7 +127,7 @@ pub fn scratch(name: str): str uses env, fs, ffi {
 /// A fresh, empty directory under the system's temporary directory (Rust's
 /// `std::env::temp_dir()` ones), unique to this run: `<tmp>/<name>-<pid>`.
 pub fn temp(name: str): str uses fs, ffi {
-  let base = fs.temp_dir() else "/tmp"
+  let base = sys.getenv("TMPDIR") else "/tmp"
   let d = paths.join(base.strip_suffix("/") else base, "{name}-{sys.pid()}")
   rm_rf(d)
   must(fs.mkdir(d), "mkdir {d}")
@@ -165,13 +171,20 @@ pub fn copy_dir(from: str, to: str) uses fs {
   must(fs.mkdir(to), "mkdir {to}")
   for name in must(fs.list(from), "list {from}") {
     let (a, b) = (paths.join(from, name), paths.join(to, name))
-    if fs.is_dir(a) { copy_dir(a, b) } else { must(fs.write_bytes(b, must(fs.read_bytes(a), "read {a}")), "write {b}") }
+    if fs.is_dir(a) {
+      copy_dir(a, b)
+    } else {
+      must(fs.write_bytes(b, must(fs.read_bytes(a), "read {a}")), "write {b}")
+    }
   }
 }
 
 /// The `.auk` files directly in `dir`, sorted.
 pub fn auk_files(dir: str): [str] uses fs {
-  must(fs.list(dir), "list {dir}").filter(n => n.ends_with(".auk")).sort().map(n => paths.join(dir, n))
+  must(fs.list(dir), "list {dir}")
+    .filter(n => n.ends_with(".auk"))
+    .sort()
+    .map(n => paths.join(dir, n))
 }
 
 /// Whether this is macOS.

@@ -197,7 +197,11 @@ fn poll_once(c: var Child, want_write: bool, ms: int): bool uses ffi {
       } else {
         let got = read_some(fd)
         match got {
-          some(bytes) => if fd == c.out { for b in bytes { c.obuf.push(b) } } else { for b in bytes { c.ebuf.push(b) } }
+          some(bytes) => if fd == c.out {
+            for b in bytes { c.obuf.push(b) }
+          } else {
+            for b in bytes { c.ebuf.push(b) }
+          }
           none => {
             let _ = c_close(fd)
             if fd == c.out { c.out = -1 } else { c.err = -1 }
@@ -397,7 +401,7 @@ pub fn unix_connect(path: str): int? uses ffi {
     for i, b in bytes { ffi.write_u8(addr, 2 + i, b) }
   } else {
     ffi.write_u8(addr, 0, 106)  // sun_len
-    ffi.write_u8(addr, 1, 1)  // AF_UNIX
+    ffi.write_u8(addr, 1, 1)    // AF_UNIX
     for i, b in bytes { ffi.write_u8(addr, 2 + i, b) }
   }
   let r = c_connect(fd, addr, 110)
@@ -453,7 +457,13 @@ extern fn c_waitpid(pid: int, status: var int, flags: int): int = "int waitpid(i
 extern fn c_kill(pid: int, sig: int): int = "int kill(int, int)"
 extern fn c_strerror(e: int): str = "char *strerror(int)"
 extern fn c_socket(d: int, t: int, p: int): int = "int socket(int, int, int)"
-extern fn c_connect(fd: int, addr: ffi.Ptr, n: int): int = "int connect(int, const void *, unsigned int)"
+
+extern fn c_connect(
+  fd: int,
+  addr: ffi.Ptr,
+  n: int,
+): int = "int connect(int, const void *, unsigned int)"
+
 extern fn c_sigemptyset(s: ffi.Ptr): int = "int sigemptyset(void *)"
 extern fn c_sigaddset(s: ffi.Ptr, sig: int): int = "int sigaddset(void *, int)"
 extern fn c_fa_init(fa: ffi.Ptr): int = "int posix_spawn_file_actions_init(void *)"
@@ -473,12 +483,20 @@ extern fn c_fa_dup2(
   to: int,
 ): int = "int posix_spawn_file_actions_adddup2(void *, int, int)"
 
-extern fn c_fa_chdir(fa: ffi.Ptr, dir: str): int = "int posix_spawn_file_actions_addchdir_np(void *, const char *)"
+extern fn c_fa_chdir(
+  fa: ffi.Ptr,
+  dir: str,
+): int = "int posix_spawn_file_actions_addchdir_np(void *, const char *)"
+
 extern fn c_attr_init(a: ffi.Ptr): int = "int posix_spawnattr_init(void *)"
 extern fn c_attr_destroy(a: ffi.Ptr): int = "int posix_spawnattr_destroy(void *)"
 extern fn c_attr_flags(a: ffi.Ptr, flags: int): int = "int posix_spawnattr_setflags(void *, short)"
 extern fn c_attr_pgroup(a: ffi.Ptr, g: int): int = "int posix_spawnattr_setpgroup(void *, int)"
-extern fn c_attr_sigdefault(a: ffi.Ptr, s: ffi.Ptr): int = "int posix_spawnattr_setsigdefault(void *, const void *)"
+
+extern fn c_attr_sigdefault(
+  a: ffi.Ptr,
+  s: ffi.Ptr,
+): int = "int posix_spawnattr_setsigdefault(void *, const void *)"
 
 extern fn c_spawnp(
   pid: var int,
@@ -495,5 +513,19 @@ pub fn setenv(k: str, v: str) uses ffi { let _ = c_setenv(k, v, 1) }
 /// The number of CPUs online.
 pub fn cpus(): int uses ffi = max(1, c_sysconf(if linux() { 84 } else { 58 }))
 
-extern fn c_setenv(k: str, v: str, overwrite: int): int = "int setenv(const char *, const char *, int)"
+extern fn c_setenv(
+  k: str,
+  v: str,
+  overwrite: int,
+): int = "int setenv(const char *, const char *, int)"
+
 extern fn c_sysconf(n: int): int = "long sysconf(int)"
+
+/// An Err with message `msg` (for `t.fail`: t.auk's own `fail` shadows core's there, and
+/// `core.fail(msg)` makes a typed error whose message is empty).
+pub fn fail_with(msg: str): ()! = fail(msg)
+
+/// An environment variable (C `getenv`; for helpers that use `ffi` but not `env`).
+pub fn getenv(k: str): str? uses ffi = c_getenv(k)
+
+extern fn c_getenv(k: str): str? = "char *getenv(const char *)"
