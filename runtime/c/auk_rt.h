@@ -807,6 +807,10 @@ AukRes_arr auk__tls_read(void *tls, int64_t max);
 AukRes_unit auk__tls_write(void *tls, const uint8_t *buf, int64_t n);
 void auk__tls_free(void *tls);
 
+/* ---- audio_out.c: sound output ---------------------------------------------------------- */
+
+AUK_API AukRes_unit auk_audio_out_play(const AukArr *samples, int64_t channels, int64_t rate, const char *loc);
+
 /* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
 
 
