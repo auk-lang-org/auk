@@ -258,9 +258,9 @@ Auk compiler lives in `compiler/`, built by the Rust `auk` (stage 0). Pipeline o
 step diffed against the golden corpus before the next starts:
 
 - [ ] Shared: `diag.rs` (385) diagnostics + fix-its, `json.rs` (434), `types.rs` (554).
-      `types.rs` done (3a): `compiler/src/types.auk`. `diag.rs` so far only `Span`/`Diag`/`Fix`
-      and `FileDiag`; rendering (`render`, the code table) and `json.rs` come with the checker's
-      diagnostics gate.
+      `types.rs` done (3a): `compiler/src/types.auk`. `diag.rs`: `Span`/`Diag`/`Fix`, `FileDiag`,
+      the warning list and the `check --json` report (`json_report_files`, 3b); still missing:
+      the text rendering (`render`, the code table) and the rest of `json.rs` (MCP/LSP).
 - [x] `resolve.rs` (578): `compiler/src/resolve.auk` (3a). Oracle `auk dump resolve <file>`
       (`src/dump.rs`, unit test `dump::tests::resolve_dump`): load as `auk check` does
       (`load_in_package`), print packages (deps, effects, links), modules in load order with
@@ -293,14 +293,34 @@ step diffed against the golden corpus before the next starts:
     order, `is_under`/`strip_base`), `canonicalize`/`cwd` (C `realpath`) and `os` (C `uname`), so
     `compiler/` declares `effects = ["ffi"]`.
   - `diag.auk`: `FileDiag`, and `FileFails { Many([FileDiag]) }` as the program-level error.
-- [ ] `check.rs` (1943), `check/expr.rs` (3657), `check/pat.rs` (425), `check/shapes.rs` (629),
-      `patterns.rs` (901) exhaustiveness
-- [ ] `effects.rs` (647), `units.rs` (267), `holes.rs` (690)
-- [ ] `typed.rs` (653)
+- [x] `check.rs` (2086), `check/expr.rs` (3835), `check/pat.rs` (482), `check/shapes.rs` (633),
+      `typed.rs` (662), `ffi.rs` (551), `units::erase` (3b): `check.auk`, `check_expr.auk` +
+      `check_ops.auk` (expr.rs split at `place`), `check_pat.auk`, `check_shapes.auk`,
+      `typed.auk`, `cffi.auk`. Oracles: `auk dump check <file>` (the `check --json` report of
+      `check::check_types`, i.e. before patterns.rs/effects.rs) and `auk dump typed [--core]
+      <file>` (the typed program MIR lowering consumes: signatures, every node's side-table facts,
+      locals, instances with resolved targets, concrete types, shape impls, vtables; unit test
+      `dump::tests::typed_dump`). `scripts/diff_check.sh` and `scripts/diff_typed.sh`: **913
+      files, 0 differ** each, over the corpus plus `tests/checker/` (652 programs extracted from
+      the Rust tests and the `docs/errors/` examples, nearly every checker diagnostic). Checker
+      alone 1.28x Rust after three fixes (pilot-report.md, "3b").
+
+  **What the next steps build on**: `check.check_types(prog): (typed.TypedProgram?,
+  [diag.FileDiag])` (Rust's `check_types`); `typed.auk` has every side table as `{int: X}`
+  keyed by node id, ids are `int`s, `types_used` is a list sorted by `types.cmp` (Rust's
+  `BTreeSet<Ty>` order, which instance numbering depends on); `units.erase(&tp)` gives what
+  `check::check` returns. `Checker` methods live in four files; each method of another file has a
+  forward in `check.auk` so `c.f(..)` works everywhere (gap 1 of 3b): add new cross-file methods
+  the same way. `check_shapes.visit_pat`/`visit_expr_pats` push patterns like `visit.auk`.
+- [ ] `patterns.rs` (901) exhaustiveness, `effects.rs` (647), `holes.rs` (690): then `check_all`
+      (sorted, deduplicated diagnostics after the type check) and the oracle becomes
+      `auk check --json` itself (`compiler check --json` prints `check_types`' report today).
 - [ ] MIR: `mir/mod.rs` (511), `types.rs` (234), `layout.rs` (278), `lower.rs` (3577),
       `lower/pat.rs` (342), `progen.rs` (2167), `print.rs` (581)
 - [ ] Diff gates: tokens → AST → diagnostics (codes, messages, spans, fix-its) for every file,
-      including `tests/errors/` and `docs/errors/` examples → MIR text.
+      including `tests/errors/` and `docs/errors/` examples → MIR text. Done through the type
+      checker's diagnostics and typed program (`scripts/check.sh` pilot step runs every diff);
+      patterns/effects diagnostics and MIR text remain.
 - [ ] Prelude (`src/prelude/*.auk`) is embedded the same way: one `extern fn ..: str = "#embed .."`
       per file. For now `resolve.auk` reads it from disk (`resolve.sources(dir)`).
 

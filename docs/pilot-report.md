@@ -380,12 +380,132 @@ The ratio is the parser's.
 
 No compiler or runtime bug blocked the port; no compiler or runtime change was needed.
 
+### 3b: the type checker
+
+| Rust (non-test lines) | Auk (`compiler/src/`) |
+|---|---|
+| `check.rs` (2086) | `check.auk` (2390, of which ~110 one-line forwards, see gap 1) |
+| `check/expr.rs` (3835) | `check_expr.auk` (2134, up to `fail_call`) + `check_ops.auk` (2001, from `place`) |
+| `check/pat.rs` (482) | `check_pat.auk` (496) |
+| `check/shapes.rs` (633) | `check_shapes.auk` (671) |
+| `typed.rs` (662, half docs) | `typed.auk` (339) |
+| `ffi.rs` (551: prototypes, `conv`) | `cffi.auk` (549, with its test) |
+| `units::erase`, `diag::json_report_files`, `Ty`'s derived `Ord`, `ast::type_dump` | `units.auk` (+110), `diag.auk` (+69), `types.cmp` (+70), `ast.auk` (+20) |
+| `dump.rs` check/typed modes (+420) | `dump.auk` (+420), `main.auk` |
+
+patterns.rs (exhaustiveness), effects.rs and holes.rs are not ported (the next step): `check.rs`
+produces all its own diagnostics without them; `check_all` runs them only after the types
+check clean.
+
+**Oracles.** `auk dump check <file>` is the `auk check --json` report of the checker proper
+(`check::check_types`: types, inference, overloading, shapes), i.e. without the patterns.rs and
+effects.rs passes; once those are ported the oracle becomes `auk check --json` itself.
+`auk dump typed [--core] <file>` prints the checker's errors and the typed program MIR lowering
+will consume (units erased, as `check::check` returns it): definitions, every function's
+signature, kind, callees, `old` captures and `result` local; constants and tests; for the focus
+module a line per node with every side-table fact (type, coercions, name, binding, variant,
+call with callee/type arguments/by-ref args, field, struct literal/pattern, closure, `?`,
+`fail`, `else`, `?.`, `await`, `for`, format spec, show, value-map and error-payload patterns,
+units) and the locals; every instance with its resolved targets; `types_used`, shape
+implementations, `from_value` implementations and vtables. `--core` adds core's tables (diffed
+once). Unit test: `dump::tests::typed_dump`. The Auk driver takes `compiler check --json <file>`
+and `compiler typed [--core] <file>`.
+
+**Corpus.** The golden corpus has few checker errors, so `tests/checker/` adds 652 small
+programs extracted from the Rust integration tests' string literals (`tests/*.rs`) and the
+`docs/errors/*.md` examples: they hit nearly every checker code (E0102-E0370, with notes and
+fix-its) and the parse/lex codes, standalone (no project).
+
+```
+check: 913 files, 0 differ
+typed: 913 files, 0 differ        (typed --core: 0 differ)
+tokens / ast / resolve: 913 files, 0 differ
+```
+
+Like the earlier phases this was at zero on the first full run: the port is line by line (three
+of the five files were written in parallel against one shared header of signatures), and the
+one design rule that made that work is in gap 1.
+
+**Timing** (`scripts/pilot_time.sh 3 10`, 119 files / 955 KB, tests/checker/ left out; best of
+3; "check alone" is check minus resolve, so it is the checker on every program the corpus files
+load, prelude and dependencies included):
+
+| measure | Rust | Auk (as ported) | Auk / Rust | Rust | Auk (3 fixes below) | Auk / Rust |
+|---|---|---|---|---|---|---|
+| resolve, in-process (per pass) | 796 ms | 1658 ms | 2.08x | 870 ms | 1779 ms | 2.04x |
+| check (load + check), in-process | 2580 ms | 4865 ms | 1.89x | 2790 ms | 4242 ms | **1.52x** |
+| check alone (difference) | 1784 ms | 3207 ms | 1.80x | 1919 ms | 2463 ms | **1.28x** |
+| typed + dump, whole process | 2801 ms | 5542 ms | 1.98x | 2791 ms | 4676 ms | 1.68x |
+
+(Two runs of the script; the machine was shared with other agents' builds, so compare ratios.
+tokens and ast stay at 2.6x and 2.0x.)
+
+The checker is closer to Rust than the parser is: it is mostly map lookups, unification and
+small allocations, where Rust also allocates (`Ty` is boxed there too).
+
+**Profile** (`sample`, check of examples/ and packages/, as ported): of the checker's time,
+inference (`expr_inner` and below) ~34%, `finish_body` 25%, monomorphization
+(`process_instance`) 22%, collection 8%, `lines` 7%. Three cliffs, each fixed in the port
+without changing its shape (the second commit after the port):
+
+1. *`finish_body` copied each body's tables* (`auk_arr_make_unique`, `auk_map_set`): `var t =
+   cx.t` shares the maps with `cx`, so the first write copies them (the pilot's "moving out of a
+   container" gap, 12); and `c.tables[m].locals[l].ty = fix_ty(.., c.tables[m].locals[l].ty)`
+   copied the module's whole `locals` list per body, because the read on the right still holds a
+   reference while the store needs the list unique (gap 13, "reads retain", with a worse effect:
+   O(n) per store instead of an RC pair). Fix: update `cx.t` in place, read into a local before
+   storing, and write only types that still contain variables. 25% -> 15% of the checker.
+2. *`any_ty` allocated*: `children(t)` builds a list per node, and every `has_vars`/`has_error`/
+   `has_params`/`has_units` walks the type through it (`use_type` asks four per type, recursively:
+   11% of the time). A `match` instead of the list, and `resolve` returning a type without
+   variables as is instead of rebuilding it.
+3. *`lines(src)` per clause*: Rust's `src.lines().nth(k)` is lazy; the port split the whole
+   module for every clause without a return type (`params_close`, 7%). Each module is split once.
+
+What remains is spread out: RC traffic on `Ty`/`Expr` values (`dk_rc*`), `auk_map_set`/
+`auk_map_get_opt` for the side tables (Rust's `HashMap` inserts are cheaper than the runtime's
+maps with RC'd keys), and `expr_ids` re-walking each body's AST per instance (Rust does the same
+walk with a closure, without building a list).
+
+### Gaps found (3b)
+
+1. **A dot call only looks in the current module, the receiver type's module and core**, so
+   methods of one type can't be split across files: `check.rs`'s `impl Checker` is spread over
+   four Rust files, and in Auk a function in `check_ops.auk` taking `var Checker` can't be reached
+   as `c.place(..)` from `check_expr.auk`. The port keeps Rust's files and puts a one-line forward
+   for every method of the other files in `check.auk` (the type's module), which `c.f(..)` finds
+   from everywhere (~110 forwards). A rule like "a package's modules may extend a type of the
+   package" (or `impl`-like grouping) would remove them. The alternative, one 9000-line module, also
+   works.
+2. **Moving out and reads retain** (pilot gaps 12, 13) cost more in the checker than in the
+   parser: the table copies above. Every `var x = s.field` followed by mutation is a copy unless
+   `s` dies first, and `a[i] = f(a[i])` copies `a`. Both are easy to write by accident; a warning,
+   or the compiler moving a value out of a dying local, would help.
+3. **No labelled `continue`/`break`** (`continue 'methods` in `find_impl`): a flag.
+4. **No `{:?}`**: the checker's fix-its quote strings and chars Rust-style (`"\"x\""`); the port has
+   a `debug_str` helper (exact for ASCII and the usual escapes, not for Unicode Rust escapes as
+   non-printable).
+5. **`T??`** again (pilot gap 7): `ffi.rs`'s `PtrOf` returns `Option<Option<CTy>>`; the port uses a
+   three-variant enum (`NotPtr`/`AnyPtr`/`CType`), which reads better anyway.
+6. **No target architecture**: `ffi.rs` asks `cfg!(target_arch)` for plain `char`'s signedness;
+   the port assumes signed (right on macOS and Linux x86_64, wrong on Linux arm64) because asking
+   the OS needs `uses ffi` everywhere. An `env.arch()` next to the wanted `env.os()` (3a gap 2).
+7. Smaller: keyword field names again (`FnInfo.uses` is `effects`); `u64` literal bits in an `int`
+   (pilot gap 6: overflow checks become `n < 0`); Rust's `HashMap`-ordered loops all feed
+   order-independent code (`similar` breaks ties by name), except `check_duplicate_fns`, whose
+   order only matters for three same-signature definitions at one position; the port iterates
+   names sorted.
+
+No compiler or runtime bug blocked the port; no compiler or runtime change was needed.
+
 ## Reproduce
 
 ```
-scripts/diff_tokens.sh        # tokens: 254 files, 0 differ
-scripts/diff_ast.sh           # ast: 254 files, 0 differ
-scripts/diff_resolve.sh       # resolve: 254 files, 0 differ
+scripts/diff_tokens.sh        # tokens: 913 files, 0 differ
+scripts/diff_ast.sh           # ast: 913 files, 0 differ
+scripts/diff_resolve.sh       # resolve: 913 files, 0 differ (254 before tests/checker/)
+scripts/diff_check.sh         # check: 913 files, 0 differ
+scripts/diff_typed.sh         # typed: 913 files, 0 differ, and typed --core
 scripts/pilot_time.sh 7 20    # the tables above
 auk test compiler             # the ported unit tests
 auk build compiler/bench/cliffs.auk -o /tmp/cliffs && /tmp/cliffs 80000
