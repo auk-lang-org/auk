@@ -1,0 +1,87 @@
+# Build and test Auk from its bootstrap seed, and cut seeds for new platforms.
+#
+# ci     (every push and pull request): ./build.sh --from-seed --check --test on each platform
+#        that has a seed in seed/ (a fresh clone's build: seed -> stage 1 -> stage 2, stage 3
+#        bit-identical, the runtime's C tests and the integration tests).
+# seeds  (run by hand: Actions -> auk -> Run workflow): for the x86-64 platforms, which have no
+#        seed yet. Builds the Rust auk from the tag v0-rust-final (the last Rust compiler), uses
+#        it to build this commit to the fixed point, cuts seed/<os>-x86_64.bc.gz with
+#        scripts/cut_seed.sh (which checks the seed alone rebuilds the same stage 2) and uploads
+#        it as an artifact, to commit to seed/.
+name: auk
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      cut_seeds:
+        description: Cut x86-64 seeds (macOS, Linux) from v0-rust-final
+        type: boolean
+        default: true
+
+jobs:
+  ci:
+    if: github.event_name != 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15, seed: macos-arm64 }
+          - { os: macos-15-intel, seed: macos-x86_64 }
+          - { os: ubuntu-24.04, seed: linux-x86_64 }
+          - { os: ubuntu-24.04-arm, seed: linux-arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Seed for this platform?
+        id: has
+        run: |
+          if [ -f "seed/${{ matrix.seed }}.bc.gz" ]; then echo "seed=yes" >> "$GITHUB_OUTPUT"
+          else echo "::notice::no seed/${{ matrix.seed }}.bc.gz yet (run the workflow by hand to cut one); skipped"; fi
+      - name: LLVM 23
+        if: steps.has.outputs.seed == 'yes'
+        uses: ./.github/actions/llvm
+      - name: Build from the seed, to the fixed point, and test
+        if: steps.has.outputs.seed == 'yes'
+        run: ./build.sh --from-seed --check --test
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.seed }}
+          path: target/auk-build/*.log
+          if-no-files-found: ignore
+
+  seeds:
+    if: github.event_name == 'workflow_dispatch' && inputs.cut_seeds
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15-intel, seed: macos-x86_64 }
+          - { os: ubuntu-24.04, seed: linux-x86_64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: LLVM 23
+        uses: ./.github/actions/llvm
+      - name: The Rust auk (v0-rust-final)
+        run: |
+          git worktree add ../rust v0-rust-final
+          cd ../rust
+          LLVM_SYS_231_PREFIX="$("$LLVM_CONFIG" --prefix)" cargo build --release
+          ./target/release/auk run examples/hello.auk
+      - name: Build this commit to the fixed point with it
+        run: ./build.sh --seed ../rust/target/release/auk --check
+      - name: Tests (informational)
+        continue-on-error: true
+        run: ./build.sh --test
+      - name: Cut the seed
+        run: scripts/cut_seed.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seed-${{ matrix.seed }}
+          path: seed/${{ matrix.seed }}.*
