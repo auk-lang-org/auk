@@ -316,11 +316,16 @@ pub fn eval_imprints(tp: &TypedProgram) -> Result<HashMap<ConstId, CVal>, String
         let code = j.run_forked(&args, mir::backend::Redirect { stdout: Some(Path::new("/dev/null")), stderr: Some(&errs), ..Default::default() })?;
         Ok((code, fs::read_to_string(&errs).unwrap_or_default()))
     };
-    let res = run().and_then(|(code, stderr)| imprint_results(tp, &records, code, &stderr));
-    // ... and its records, which the port reads instead of running the helper itself
+    let ran = run();
+    // ... and its records (plus `<file>.status`: the exit code, -1 if killed, then stderr),
+    // which the port reads instead of running the helper itself
     if let Ok(p) = env::var("AUK_IMPRINT_RECORDS") {
-        let _ = fs::copy(&records, p);
+        let _ = fs::copy(&records, &p);
+        if let Ok((code, stderr)) = &ran {
+            let _ = fs::write(format!("{p}.status"), format!("{}\n{stderr}", code.unwrap_or(-1)));
+        }
     }
+    let res = ran.and_then(|(code, stderr)| imprint_results(tp, &records, code, &stderr));
     let _ = fs::remove_dir_all(&dir);
     res
 }
