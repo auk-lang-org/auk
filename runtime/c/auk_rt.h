@@ -478,6 +478,26 @@ AUK_API bool auk_value_eq(AukValue a, AukValue b);
 AUK_API AukStr *auk_value_show(AukValue v);
 AUK_API extern const AukElemOps auk_ops_value;
 
+/* ---- trace.c: execution traces ---------------------------------------------------------- */
+
+AUK_API extern _Atomic bool auk_trace_live;
+AUK_API const char **auk__trace_site_slot(void);
+AUK_API void auk_trace_init(bool tests);
+bool auk__trace_tail_mode(void);
+const char *auk__trace_dir(void);
+void auk__trace_test_begin(const char *name, const char *tail_path);
+void auk__trace_test_end(const char *name, bool ok, const char *tail_path);
+void auk__trace_flush(void);
+AUK_API bool auk_trace_begin(void);
+AUK_API void auk_trace_call(const char *fn, const char *loc, int n, AukStr **args);
+AUK_API bool auk_trace_exit(void);
+AUK_API void auk_trace_ret(const char *fn, AukStr *shown);
+AUK_API void auk_trace_err(const char *fn, const AukErr *e);
+void auk__trace_peek(const char *loc, const char *src_text, const AukStr *shown);
+void auk__trace_on_panic(const char *loc, const char *msg, size_t n, bool caught);
+void auk__trace_save(int64_t *depth, int *mute);
+void auk__trace_restore(int64_t depth, int mute);
+
 /* ---- str.c: strings, the builder, parsing and formatting ---------------------------------- */
 
 bool auk__dbg_busy(void);
@@ -701,20 +721,12 @@ AukRes_arr auk__tls_read(void *tls, int64_t max);
 AukRes_unit auk__tls_write(void *tls, const uint8_t *buf, int64_t n);
 void auk__tls_free(void *tls);
 
-/* Write out the trace (trace.rs). */
-void auk__trace_flush(void);
 
-/* The tracer's and the debugger's per-thread state at a recovery point (trace.rs, dbg.rs). */
-void auk__trace_save(int64_t *depth, int *mute);
-void auk__trace_restore(int64_t depth, int mute);
+/* The debugger's per-thread state at a recovery point (dbg.rs). */
 void auk__dbg_save(void **top, int64_t *depth);
 void auk__dbg_restore(void *top, int64_t depth);
 
-/* Is tracing on? (trace.rs) */
-extern _Atomic bool auk_trace_live;
-
-/* The debugger and tracer hear about panics (dbg.rs, trace.rs). */
+/* The debugger hears about panics (dbg.rs). */
 void auk__dbg_on_panic(const char *loc, const char *msg, size_t n, bool caught);
-void auk__trace_on_panic(const char *loc, const char *msg, size_t n, bool caught);
 
 #endif
