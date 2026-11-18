@@ -3967,6 +3967,17 @@ fn root_name(e: &Expr) -> Option<&str> {
 }
 
 impl Scan {
+    /// An assignment target (`x`, `p.a[i]`, `(a, b)`): the variables it changes.
+    fn assigned(&mut self, t: &Expr) {
+        match &t.kind {
+            EK::Tuple(xs) => xs.iter().for_each(|x| self.assigned(x)),
+            _ => {
+                if let Some(r) = root_name(t) {
+                    self.changed.insert(r.to_string());
+                }
+            }
+        }
+    }
     fn block(&mut self, b: &Block) {
         b.stmts.iter().for_each(|x| self.expr(x));
     }
@@ -4069,9 +4080,7 @@ impl Scan {
                 }
             }
             EK::Assign { target, value, .. } => {
-                if let Some(r) = root_name(target) {
-                    self.changed.insert(r.to_string());
-                }
+                self.assigned(target);
                 self.expr(target);
                 self.expr(value);
             }
