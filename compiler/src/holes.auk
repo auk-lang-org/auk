@@ -254,7 +254,7 @@ fn callers(tp: typed.TypedProgram, mods: [int], fids: {int: bool}): [TestRef] {
 
 /// The char offset of a 1-based (line, char column) position in `cs` (Rust's `offset`, in
 /// chars instead of bytes: a column past the line's end runs on into the next lines).
-fn offset(cs: [char], line: int, col: int): int {
+pub fn offset(cs: [char], line: int, col: int): int {
   var start = 0
   for _ in 1..line {
     var i = start

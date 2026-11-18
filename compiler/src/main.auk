@@ -19,6 +19,7 @@ fn main(args: [str]): int! uses fs, env, time, ffi, proc {
   if args.len() >= 2 && args[1] == "lsp" { return lsp.start(prelude_dir(args[0])) }
   if args.len() >= 2 && args[1] == "mcp" { return mcp.run(args[0]) }
   if args.len() >= 2 && args[1] == "spec" { return mcp.spec_main() }
+  if args.len() >= 2 && args[1] == "hatch" { return hatch.run(args[0], prelude_dir(args[0]), args.skip(2)) }
   if args.len() >= 2 && args[1] == "ir" { return mir.build.cli(args, prelude_dir(args[0])) }
   if args.len() >= 2 && ["mir", "llvm", "build", "run"].contains(args[1]) {
     return driver.main(args)
