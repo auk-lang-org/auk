@@ -10,6 +10,14 @@
 //! segment names a module (`Program::first_segment`, then `child` per segment) with the module
 //! it reaches; or the load's diagnostics. File names are relative to the current directory.
 //!
+//! `auk dump check <file>...` prints the `auk check --json` report of the type checker proper
+//! (`check::check_types`: types, inference, overloading, shapes), without the later passes
+//! (patterns.rs exhaustiveness, effects.rs). `auk dump typed [--core] <file>...` prints the
+//! checker's errors and the typed program it produces (erased of units when there are no
+//! errors, as `check::check` returns it): definitions, signatures, every node's facts from the
+//! side tables, locals, instances with their resolved call targets, concrete types, shape
+//! implementations and vtables (see `typed`). These are the oracles of the self-hosted checker.
+//!
 //! A file under a `prelude/` directory is parsed as a core prelude file (`extern` allowed).
 //! For timing: `--quiet` lexes or parses without printing, `--repeat N` does the whole job N
 //! times, and `--time` prints the time per repetition (file reading excluded) to stderr.
@@ -25,17 +33,23 @@ use super::diag::FileDiag;
 use super::parser;
 use super::resolve::{self, ModId, Program};
 use super::token::{StrPart, Tok, Token};
+use super::check;
+use super::ffi::Conv;
+use super::typed::*;
+use super::types::{Defs, DefId, ParamId, ShapeId, Ty, TypeDefKind};
+use std::collections::{BTreeSet, HashMap};
 
 pub fn run(args: &[String]) -> i32 {
     let (what, rest) = match args.split_first() {
-        Some((w, rest)) if w == "tokens" || w == "ast" || w == "resolve" => (w.as_str(), rest),
+        Some((w, rest)) if ["tokens", "ast", "resolve", "check", "typed"].contains(&w.as_str()) => (w.as_str(), rest),
         _ => {
-            eprintln!("usage: auk dump tokens|ast|resolve [--quiet] [--time] [--repeat N] <file>...");
+            eprintln!("usage: auk dump tokens|ast|resolve|check|typed [--quiet] [--time] [--repeat N] [--core] <file>...");
             return 2;
         }
     };
     let quiet = rest.iter().any(|a| a == "--quiet");
     let time = rest.iter().any(|a| a == "--time");
+    let core = rest.iter().any(|a| a == "--core");
     let repeat: u32 = match rest.iter().position(|a| a == "--repeat") {
         Some(i) => rest.get(i + 1).and_then(|n| n.parse().ok()).unwrap_or(1),
         None => 1,
@@ -58,7 +72,16 @@ pub fn run(args: &[String]) -> i32 {
         if files.len() > 1 && !quiet {
             let _ = writeln!(out, "== {f}");
         }
-        if what == "resolve" {
+        if what == "check" || what == "typed" {
+            let r = resolve::load_in_package(Path::new(f.as_str()), src.clone());
+            if quiet {
+                std::hint::black_box(r.map(check::check_types)).ok();
+            } else if what == "check" {
+                out.push_str(&checked(f, r));
+            } else {
+                typed_program(&mut out, r, core);
+            }
+        } else if what == "resolve" {
             let r = resolve::load_in_package(Path::new(f.as_str()), src.clone());
             if !quiet {
                 resolved(&mut out, &r);
@@ -993,6 +1016,404 @@ fn use_line(out: &mut String, p: &Program, m: ModId, path: &[Ident]) {
     line(out, 1, &format!("use {} {text} -> {} {k}/{}", sp(span), p.name(cur), path.len()));
 }
 
+// ---- the checker's diagnostics and typed program (check, typed) ----
+
+/// `auk dump check`: the `auk check --json` report of the type checker proper (types,
+/// inference, overloading, shapes: `check::check_types`), without the later passes
+/// (patterns.rs exhaustiveness, effects.rs).
+fn checked(path: &str, r: Result<Program, Vec<FileDiag>>) -> String {
+    let diags = match r {
+        Ok(prog) => check::check_types(prog).1,
+        Err(ds) => ds,
+    };
+    format!("{}\n", super::diag::json_report_files(path, &diags))
+}
+
+/// `auk dump typed`: the checker's errors (as `in <file>` + `error ...` lines) and the typed
+/// program (`typed`), the erased one (`check::check`'s result) when there were no errors.
+fn typed_program(out: &mut String, r: Result<Program, Vec<FileDiag>>, core: bool) {
+    let prog = match r {
+        Ok(p) => p,
+        Err(ds) => return resolved(out, &Err(ds)),
+    };
+    let (tp, errs) = check::check_types(prog);
+    for d in &errs {
+        line(out, 0, &format!("in {}", esc(&rel(&d.file))));
+        diag(out, &d.diag);
+    }
+    if let Some(mut tp) = tp {
+        if errs.is_empty() {
+            super::units::erase(&mut tp);
+        }
+        typed(out, &tp, core);
+    }
+}
+
+/// The typed program: the non-core type and shape definitions, every function's signature,
+/// constants and tests, the focus module's side tables (a line per node, in node order, with
+/// every fact about it) and locals, the instances (with their resolved targets for bodies in the
+/// focus module), then the concrete types, shape implementations and vtables. (Each file of a
+/// project is the focus once, so the corpus covers every module.) `core` adds core's
+/// definitions, and prints every module's tables and every instance's targets.
+fn typed(out: &mut String, tp: &TypedProgram, core: bool) {
+    let d = &tp.defs;
+    let show = |t: &Ty| d.show(t);
+    let shows = |ts: &[Ty]| ts.iter().map(|t| d.show(t)).collect::<Vec<_>>().join(", ");
+    match &tp.main {
+        Some(m) => line(out, 0, &format!("main #{} args={} ret={}", m.func, m.takes_args, show(&m.ret))),
+        None => line(out, 0, "main -"),
+    }
+    for (i, t) in d.types.iter().enumerate() {
+        if tp.program.is_core(t.module) && !core {
+            continue;
+        }
+        let ps: Vec<String> = t.params.iter().map(|p| d.params[*p].name.clone()).collect();
+        line(out, 0, &format!("def #{i} {}.{}<{}>{}", tp.program.name(t.module), t.name, ps.join(", "), vis(t.public)));
+        match &t.kind {
+            TypeDefKind::Struct { fields } => {
+                for f in fields {
+                    line(out, 1, &format!("field {}: {}{}", f.name, show(&f.ty), vis(f.public)));
+                }
+            }
+            TypeDefKind::Enum { variants } => {
+                for v in variants {
+                    let fs: Vec<String> = v.fields.iter().map(|(n, t)| format!("{}{}", n.as_ref().map(|n| format!("{n}: ")).unwrap_or_default(), show(t))).collect();
+                    line(out, 1, &format!("variant {}({})", v.name, fs.join(", ")));
+                }
+            }
+            TypeDefKind::Opaque { c_type } => line(out, 1, &format!("opaque {}", esc(c_type))),
+        }
+    }
+    for (i, s) in d.shapes.iter().enumerate() {
+        if tp.program.is_core(s.module) && !core {
+            continue;
+        }
+        line(out, 0, &format!("shape #{i} {}.{}{}", tp.program.name(s.module), s.name, vis(s.public)));
+        for m in &s.methods {
+            line(out, 1, &format!("method {}({}): {}", m.name, shows(&m.params), show(&m.ret)));
+        }
+    }
+    for (i, f) in tp.fns.iter().enumerate() {
+        let ps: Vec<String> = f.params.iter().map(|p| format!("{}{}: {}", if p.var { "var " } else { "" }, p.name.as_deref().unwrap_or("_"), show(&p.ty))).collect();
+        let gs: Vec<String> = f.generics.iter().map(|g| bounded(d, *g)).collect();
+        let kind = match &f.kind {
+            FnKind::Auk { item, clauses, header } => {
+                format!("auk item={item} clauses={clauses:?}{}", if *header { " header" } else { "" })
+            }
+            FnKind::Extern { symbol, loc, item } => format!("extern {}{} item={item}", esc(symbol), if *loc { " +loc" } else { "" }),
+            FnKind::Ffi { sig, convs, item } => {
+                let cs: Vec<String> = convs.iter().map(conv_text).collect();
+                let cps: Vec<String> = sig.params.iter().map(|p| p.show()).collect();
+                format!(
+                    "ffi {} ({}) -> {}{}{} convs=[{}] item={item}",
+                    sig.name,
+                    cps.join(", "),
+                    sig.ret.show(),
+                    sig.free.as_ref().map(|f| format!(" free={f}")).unwrap_or_default(),
+                    if sig.indirect { " indirect" } else { "" },
+                    cs.join(", ")
+                )
+            }
+            FnKind::Intrinsic { which, item } => format!("intrinsic {which:?} item={item}"),
+        };
+        line(
+            out,
+            0,
+            &format!(
+                "fn #{i} {}.{}{}{}({}): {} [{kind}]{}",
+                tp.program.name(f.module),
+                if f.is_async { "async " } else { "" },
+                f.name,
+                if gs.is_empty() { String::new() } else { format!("<{}>", gs.join(", ")) },
+                ps.join(", "),
+                show(&f.ret),
+                vis(f.public)
+            ),
+        );
+        if f.module == tp.program.focus || core {
+            let callees: Vec<String> = f.callees.iter().map(|c| c.to_string()).collect();
+            let olds: Vec<String> = f.olds.iter().map(|c| format!("#{c}")).collect();
+            let r = f.result_local.map(|l| format!(" result={l}")).unwrap_or_default();
+            line(out, 1, &format!("span {} uses=[{}] callees=[{}] olds=[{}]{r}", sp(f.span), f.uses.join(", "), callees.join(", "), olds.join(", ")));
+        }
+    }
+    for (i, c) in tp.consts.iter().enumerate() {
+        line(out, 0, &format!("const #{i} {}.{}: {}{}{} item={} {}", tp.program.name(c.module), c.name, show(&c.ty), vis(c.public), if c.imprint { " imprint" } else { "" }, c.item, sp(c.span)));
+    }
+    for (i, t) in tp.tests.iter().enumerate() {
+        line(out, 0, &format!("test #{i} {}.{} item={} {}", tp.program.name(t.module), esc(&t.name), t.item, sp(t.span)));
+    }
+    for (m, t) in tp.tables.iter().enumerate() {
+        if m != tp.program.focus && !core {
+            continue;
+        }
+        line(out, 0, &format!("module {m} {} {}", tp.program.name(m), esc(&rel(&tp.program.mods[m].file))));
+        tables(out, tp, t);
+    }
+    for (i, inst) in tp.instances.iter().enumerate() {
+        let (what, module) = match inst.body {
+            BodyRef::Fn(f) => (format!("fn #{f} {}", tp.fns[f].name), tp.fns[f].module),
+            BodyRef::Test(t) => (format!("test #{t} {}", esc(&tp.tests[t].name)), tp.tests[t].module),
+            BodyRef::Const(c) => (format!("const #{c} {}", tp.consts[c].name), tp.consts[c].module),
+        };
+        let args = if inst.type_args.is_empty() { String::new() } else { format!("<{}>", shows(&inst.type_args)) };
+        line(out, 0, &format!("instance {i} {what}{args}"));
+        if module != tp.program.focus && !core {
+            continue;
+        }
+        for (n, t) in sorted(&inst.resolved) {
+            line(out, 1, &format!("#{n} -> {}", target(tp, t)));
+        }
+        for (n, t) in sorted(&inst.shows) {
+            line(out, 1, &format!("show #{n} -> {}", target(tp, t)));
+        }
+        for (n, v) in sorted(&inst.vtables) {
+            line(out, 1, &format!("vtable #{n} -> {v}"));
+        }
+    }
+    for t in &tp.types_used {
+        line(out, 0, &format!("used {}", show(t)));
+    }
+    for ((b, t), x) in &tp.shape_impls {
+        line(out, 0, &format!("impl {b:?} {} -> {}", show(t), target(tp, x)));
+    }
+    for (t, x) in &tp.from_value_impls {
+        line(out, 0, &format!("from_value {} -> {}", show(t), target(tp, x)));
+    }
+    for (i, v) in tp.vtables.iter().enumerate() {
+        let ms: Vec<String> = v.methods.iter().map(|x| target(tp, x)).collect();
+        line(out, 0, &format!("vtable {i} {} {} [{}]", d.shapes[v.shape].name, show(&v.ty), ms.join(", ")));
+    }
+}
+
+/// A type parameter with its bounds: `T: Show + Eq`, `Ord (implicit)`.
+fn bounded(d: &Defs, p: ParamId) -> String {
+    let tp = &d.params[p];
+    let bs: Vec<String> = tp.bounds.iter().map(|b| d.shapes[*b].name.clone()).collect();
+    format!("{}{}{}", tp.name, if bs.is_empty() { String::new() } else { format!(": {}", bs.join(" + ")) }, if tp.implicit { " implicit" } else { "" })
+}
+
+/// A map keyed by node id, in node order.
+fn sorted<V>(m: &HashMap<NodeId, V>) -> Vec<(NodeId, &V)> {
+    let mut v: Vec<(NodeId, &V)> = m.iter().map(|(k, v)| (*k, v)).collect();
+    v.sort_by_key(|x| x.0);
+    v
+}
+
+fn conv_text(c: &Conv) -> String {
+    match c {
+        Conv::Int { bytes, signed } => format!("int{bytes}{}", if *signed { "s" } else { "u" }),
+        Conv::Bool => "bool".into(),
+        Conv::Float { f32 } => if *f32 { "f32".into() } else { "f64".into() },
+        Conv::Str { owned } => format!("str{}", if *owned { "+owned" } else { "" }),
+        Conv::OptStr { owned } => format!("optstr{}", if *owned { "+owned" } else { "" }),
+        Conv::Ptr => "ptr".into(),
+        Conv::OptPtr => "optptr".into(),
+        Conv::Unit => "unit".into(),
+        Conv::List { elem, back } => format!("list {elem:?}{}", if *back { " back" } else { "" }),
+        Conv::Out(x) => format!("out({})", conv_text(x)),
+    }
+}
+
+fn fn_name(tp: &TypedProgram, f: FnId) -> String {
+    format!("{}#{f}", tp.fns[f].name)
+}
+
+fn variant_name(tp: &TypedProgram, def: DefId, index: usize) -> String {
+    let vs = tp.defs.variants(def);
+    format!("{}.{}", tp.defs.types[def].name, vs.get(index).map(|v| v.name.as_str()).unwrap_or("?"))
+}
+
+fn targs(tp: &TypedProgram, ts: &[Ty]) -> String {
+    if ts.is_empty() { String::new() } else { format!("<{}>", ts.iter().map(|t| tp.defs.show(t)).collect::<Vec<_>>().join(", ")) }
+}
+
+fn shape_method(tp: &TypedProgram, shape: ShapeId, method: usize) -> String {
+    let s = &tp.defs.shapes[shape];
+    format!("{}.{}", s.name, s.methods.get(method).map(|m| m.name.as_str()).unwrap_or("?"))
+}
+
+fn callee(tp: &TypedProgram, c: &Callee) -> String {
+    match c {
+        Callee::Fn { func, type_args } => format!("fn {}{}", fn_name(tp, *func), targs(tp, type_args)),
+        Callee::Variant(v) => format!("variant {}{}", variant_name(tp, v.def, v.index), targs(tp, &v.args)),
+        Callee::Closure => "closure".into(),
+        Callee::Shape { shape, method, self_ty } => format!("shape {} @{}", shape_method(tp, *shape, *method), tp.defs.show(self_ty)),
+        Callee::Vtable { shape, method } => format!("vtable {}", shape_method(tp, *shape, *method)),
+    }
+}
+
+fn target(tp: &TypedProgram, t: &Target) -> String {
+    match t {
+        Target::Instance(i) => format!("inst {i}"),
+        Target::Extern { symbol, loc } => format!("extern {}{}", esc(symbol), if *loc { " +loc" } else { "" }),
+        Target::Ffi(f) => format!("ffi {}", fn_name(tp, *f)),
+        Target::Intrinsic { which, ty } => format!("intrinsic {which:?} {}", tp.defs.show(ty)),
+        Target::Derived { shape, ty } => format!("derived {shape:?} {}", tp.defs.show(ty)),
+        Target::Vtable { shape, method } => format!("vtable {}", shape_method(tp, *shape, *method)),
+        Target::Variant { def, index } => format!("variant {}", variant_name(tp, *def, *index)),
+        Target::Closure => "closure".into(),
+    }
+}
+
+fn coercions(tp: &TypedProgram, cs: &[Coercion]) -> String {
+    let v: Vec<String> = cs
+        .iter()
+        .map(|c| match c {
+            Coercion::WrapSome => "some".to_string(),
+            Coercion::WrapOk => "ok".to_string(),
+            Coercion::ToAny(s) => format!("any {}", tp.defs.shapes[*s].name),
+        })
+        .collect();
+    v.join(",")
+}
+
+/// One module's side tables: a line per node that appears in any of them (node order), with
+/// every fact about it, then the module's locals.
+fn tables(out: &mut String, tp: &TypedProgram, t: &Tables) {
+    let mut ids: BTreeSet<NodeId> = BTreeSet::new();
+    ids.extend(t.types.keys());
+    ids.extend(t.coercions.keys());
+    ids.extend(t.names.keys());
+    ids.extend(t.binds.keys());
+    ids.extend(t.variants.keys());
+    ids.extend(t.calls.keys());
+    ids.extend(t.fields.keys());
+    ids.extend(t.struct_lits.keys());
+    ids.extend(t.struct_pats.keys());
+    ids.extend(t.closures.keys());
+    ids.extend(t.tries.keys());
+    ids.extend(t.fails.keys());
+    ids.extend(t.elses.keys());
+    ids.extend(t.opt_chains.keys());
+    ids.extend(t.awaits.keys());
+    ids.extend(t.fors.keys());
+    ids.extend(t.formats.keys());
+    ids.extend(t.shows.keys());
+    ids.extend(t.value_map_pats.iter());
+    ids.extend(t.err_payload_pats.keys());
+    ids.extend(t.units.keys());
+    let d = &tp.defs;
+    for n in ids {
+        let mut s = format!("#{n}");
+        if let Some(ty) = t.types.get(&n) {
+            let _ = write!(s, " : {}", d.show(ty));
+        }
+        if let Some(cs) = t.coercions.get(&n) {
+            let _ = write!(s, " coerce={}", coercions(tp, cs));
+        }
+        if let Some(r) = t.names.get(&n) {
+            let r = match r {
+                NameRef::Local(l) => format!("local {l}"),
+                NameRef::Const(c) => format!("const {}#{c}", tp.consts[*c].name),
+                NameRef::Fn { func, type_args } => format!("fn {}{}", fn_name(tp, *func), targs(tp, type_args)),
+                NameRef::Variant(v) => format!("variant {}{}", variant_name(tp, v.def, v.index), targs(tp, &v.args)),
+                NameRef::None => "none".into(),
+            };
+            let _ = write!(s, " name=({r})");
+        }
+        if let Some(l) = t.binds.get(&n) {
+            let _ = write!(s, " bind={l}");
+        }
+        if let Some(v) = t.variants.get(&n) {
+            let _ = write!(s, " variant={}{}", variant_name(tp, v.def, v.index), targs(tp, &v.args));
+        }
+        if let Some(c) = t.calls.get(&n) {
+            let args: Vec<String> = c.args.iter().map(|a| format!("{}#{}", if a.by_ref { "&" } else { "" }, a.node)).collect();
+            let _ = write!(s, " call=({})({})", callee(tp, &c.callee), args.join(", "));
+        }
+        if let Some((def, i)) = t.fields.get(&n) {
+            let f = d.fields(*def).get(*i).map(|f| f.name.as_str()).unwrap_or("?");
+            let _ = write!(s, " field={}.{f}", d.types[*def].name);
+        }
+        if let Some(sl) = t.struct_lits.get(&n) {
+            let fs: Vec<String> = sl
+                .fields
+                .iter()
+                .map(|(i, v)| match v {
+                    FieldValue::Expr(x) => format!("{i}=#{x}"),
+                    FieldValue::Local(l, cs) => format!("{i}=local {l}{}", if cs.is_empty() { String::new() } else { format!(" {}", coercions(tp, cs)) }),
+                })
+                .collect();
+            let _ = write!(s, " struct={}{}{{{}}}", d.types[sl.def].name, targs(tp, &sl.args), fs.join(", "));
+        }
+        if let Some(sp) = t.struct_pats.get(&n) {
+            let fs: Vec<String> = sp.fields.iter().map(|(i, l)| match l {
+                Some(l) => format!("{i}=local {l}"),
+                None => i.to_string(),
+            }).collect();
+            let _ = write!(s, " struct_pat={}{{{}}}", d.types[sp.def].name, fs.join(", "));
+        }
+        if let Some(c) = t.closures.get(&n) {
+            let caps: Vec<String> = c.captures.iter().map(|l| l.to_string()).collect();
+            let ps: Vec<String> = c.params.iter().map(|p| d.show(p)).collect();
+            let _ = write!(s, " closure=({}) => {} captures=[{}]{}", ps.join(", "), d.show(&c.ret), caps.join(", "), if c.unpack { " unpack" } else { "" });
+        }
+        if let Some(tr) = t.tries.get(&n) {
+            let conv = match &tr.conv {
+                ErrConv::None => String::new(),
+                ErrConv::ToErr { from } => format!(" to_err {}", d.show(from)),
+            };
+            let _ = write!(s, " try={:?}{conv}", tr.kind);
+        }
+        if let Some(f) = t.fails.get(&n) {
+            let f = match f {
+                FailKind::Message => "message".to_string(),
+                FailKind::Err => "err".to_string(),
+                FailKind::Typed => "typed".to_string(),
+                FailKind::TypedToErr(x) => format!("typed_to_err {}", d.show(x)),
+            };
+            let _ = write!(s, " fail={f}");
+        }
+        if let Some(e) = t.elses.get(&n) {
+            let k = match e.kind {
+                ElseKind::Option => "option".to_string(),
+                ElseKind::Result => "result".to_string(),
+                ElseKind::Refutable => "refutable".to_string(),
+                ElseKind::UnwrapRefutable { option } => format!("unwrap_refutable {}", if option { "option" } else { "result" }),
+            };
+            let b = e.binder.map(|l| format!(" binder={l}")).unwrap_or_default();
+            let _ = write!(s, " else={k}{b}");
+        }
+        if let Some(o) = t.opt_chains.get(&n) {
+            let _ = write!(s, " opt_chain{}", if o.flatten { " flatten" } else { "" });
+        }
+        if let Some(a) = t.awaits.get(&n) {
+            let _ = write!(s, " await={a:?}");
+        }
+        if let Some(f) = t.fors.get(&n) {
+            let f = match f {
+                ForKind::Range { inclusive } => format!("range{}", if *inclusive { " inclusive" } else { "" }),
+                ForKind::List => "list".into(),
+                ForKind::Map => "map".into(),
+                ForKind::Chan => "chan".into(),
+            };
+            let _ = write!(s, " for={f}");
+        }
+        if let Some(f) = t.formats.get(&n) {
+            let c = |x: Option<char>| x.map(|c| (c as u32).to_string()).unwrap_or_else(|| "-".into());
+            let u = |x: Option<usize>| x.map(|c| c.to_string()).unwrap_or_else(|| "-".into());
+            let _ = write!(s, " format={} fill={} align={} zero={} width={} precision={} radix={}", esc(&f.text), c(f.fill), c(f.align), f.zero, u(f.width), u(f.precision), c(f.radix));
+        }
+        if let Some(c) = t.shows.get(&n) {
+            let _ = write!(s, " show=({})", callee(tp, c));
+        }
+        if t.value_map_pats.contains(&n) {
+            s.push_str(" value_map");
+        }
+        if let Some(x) = t.err_payload_pats.get(&n) {
+            let _ = write!(s, " err_payload={}", d.show(x));
+        }
+        if let Some(u) = t.units.get(&n) {
+            let _ = write!(s, " unit={}", esc(u));
+        }
+        line(out, 1, &s);
+    }
+    for (i, l) in t.locals.iter().enumerate() {
+        line(out, 1, &format!("local {i} {}: {}{} {}", l.name, d.show(&l.ty), if l.mutable { " mut" } else { "" }, sp(l.span)));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1079,5 +1500,44 @@ mod tests {
         );
         let e = res("fn f( {\n");
         assert!(e.starts_with("in \"t.auk\"\nerror E0"), "{e}");
+    }
+
+    fn typ(src: &str) -> String {
+        let mut out = String::new();
+        typed_program(&mut out, resolve::load_source(Path::new("t.auk"), src.to_string()), false);
+        out
+    }
+
+    #[test]
+    fn typed_dump() {
+        let out = typ("fn f(x: int): int = x + 1\nfn main() { print(\"{f(2)}\") }\n");
+        assert!(out.starts_with("main #224 args=false ret=()\nfn #0 core.show<T: Show>(x: T): str [intrinsic Show item=6] pub\n"), "{out}");
+        assert!(out.contains("fn #223 t.f(x: int): int [auk item=0 clauses=[0]]\n  span 1:4-1:5 uses=[] callees=[] olds=[]\n"), "{out}");
+        assert!(out.contains("  span 2:4-2:8 uses=[] callees=[16, 223] olds=[]\n"), "{out}");
+        assert!(
+            out.contains(
+                "module 14 t \"t.auk\"\n  \
+                   #1 : int bind=0\n  \
+                   #3 : int\n  \
+                   #6 : int name=(local 0)\n  \
+                   #7 : int\n  \
+                   #8 : int\n  \
+                   #12 : int\n  \
+                   #13 : int call=(fn f#223)(#12)\n  \
+                   #14 : str\n  \
+                   #15 : () call=(fn print#16<str>)(#14)\n  \
+                   #16 : ()\n  \
+                   local 0 x: int 1:6-1:7\n"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("instance 21 fn #224 main\n  #13 -> inst 20\n  #15 -> inst 26\n"), "{out}");
+        assert!(out.contains("instance 26 fn #16 print<str>\n"), "{out}");
+        // errors first, then the partial program
+        let e = typ("fn f(x: int): str = x\n");
+        assert!(e.starts_with("in \"t.auk\"\nerror E0200 1:21-1:22 \"expected `str`, found `int`\"\n"), "{e}");
+        assert!(e.contains("\nmain -\n"), "{e}");
+        let j = checked("t.auk", resolve::load_source(Path::new("t.auk"), "fn f(x: int): str = x\n".to_string()));
+        assert!(j.starts_with("{\"file\":\"t.auk\",\"ok\":false,\"diagnostics\":[{\"code\":\"E0200\""), "{j}");
     }
 }

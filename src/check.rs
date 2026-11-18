@@ -73,8 +73,9 @@ pub fn check_partial(prog: Program) -> (Option<TypedProgram>, Vec<FileDiag>) {
 }
 
 /// Types, inference, overloading and shapes only: the typed program (partial when there are
-/// errors; `None` when the declarations failed) and the errors.
-fn check_types(prog: Program) -> (Option<TypedProgram>, Vec<FileDiag>) {
+/// errors; `None` when the declarations failed) and the errors. (`auk dump check|typed`, the
+/// oracles of the self-hosted checker, stop here too.)
+pub(crate) fn check_types(prog: Program) -> (Option<TypedProgram>, Vec<FileDiag>) {
     let mut c = Checker::new(prog);
     c.collect();
     if !c.errs.is_empty() {
