@@ -23,9 +23,15 @@ impl Drop for Tmp {
     }
 }
 
+/// The raft under test: `$RAFT_BIN` (e.g. the Auk port, built by scripts/diff_raft.sh), else
+/// the Rust one.
+fn raft_bin() -> PathBuf {
+    std::env::var_os("RAFT_BIN").map_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_raft")), PathBuf::from)
+}
+
 /// Run raft in `dir` against the fixture registry: (success, stdout, stderr).
 fn raft(dir: &Path, args: &[&str]) -> (bool, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_raft"))
+    let out = Command::new(raft_bin())
         .args(args)
         .current_dir(dir)
         .env("RAFT_REGISTRY", concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/registry"))
