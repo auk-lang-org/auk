@@ -323,6 +323,24 @@ fn nested_ty(p: var Parser): ast.Type!diag.Fail {
   r
 }
 
+/// A type in a parenthesized list, which may be a function type's `var T` parameter.
+fn nested_param_ty(p: var Parser): ast.Type!diag.Fail {
+  if !p.at(token.Var) { return nested_ty(&p) }
+  let start = p.bump().span
+  let t = nested_ty(&p)?
+  ast.Type { id: p.id(), span: start.to(p.prev), kind: ast.TypeKind.Var(t) }
+}
+
+/// `item`s separated by commas up to `close` (which it eats).
+fn list(p: var Parser, close: token.Tok, what: str, item: (var Parser) => ast.Type!diag.Fail): [ast.Type]!diag.Fail {
+  var xs: [ast.Type] = []
+  while !p.list_end(close) {
+    xs.push(item(&p)?)
+    if p.list_sep(close, what)? { break }
+  }
+  xs
+}
+
 fn nested_pattern(p: var Parser): ast.Pat!diag.Fail {
   let s = p.lift()
   let r = pattern(&p)
@@ -793,10 +811,13 @@ fn ty(p: var Parser): ast.Type!diag.Fail {
     }
     LParen => {
       p.bump()
-      let ts = type_list(&p, token.RParen, "type")?
+      let ts = list(&p, token.RParen, "type", nested_param_ty)?
+      let vs = ts.filter(t => t.kind is Var(_))
       if p.eat(token.FatArrow) {
         let ret = ty(&p)?
         ast.TypeKind.Fn(ts, ret)
+      } else if vs.len() > 0 {
+        fail(bad(diag.new("E0023", vs[0].span, "`var` is only for a parameter of a function type").note("a function type looks like `(var P, int) => R`")))
       } else if ts.len() == 1 {
         // `(T)` is just `T`
         var t = ts[0]

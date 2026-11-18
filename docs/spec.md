@@ -34,6 +34,8 @@ A `var` parameter mutates the caller's variable, marked `&` at the call site:
 fn bump(n: var int) { n += 1 }
 bump(&x)
 x.bump()             // a dot call needs no &
+fn list(p: var Parser, item: (var Parser) => Node!): [Node]! { ... item(&p)? ... }
+list(&p, q => q.node())   // a closure's parameter is `var` when the function type says so
 ```
 
 ## Clauses and patterns

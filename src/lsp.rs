@@ -694,6 +694,7 @@ impl<'a> Finder<'a> {
                 params.iter().for_each(|x| self.ty(x));
                 self.ty(ret);
             }
+            TypeKind::Var(x) => self.ty(x),
         }
     }
 

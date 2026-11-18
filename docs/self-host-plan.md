@@ -199,7 +199,7 @@ Gaps for Phase 4, found doing 2c:
 - [ ] Anything else the pilot exposes: big recursive enums (AST/MIR), deep recursion limits,
       hash maps keyed by structs/ints, sorting with a comparator, interning.
       Found by the pilot (details and snippets in [pilot-report.md](pilot-report.md), "Gaps"):
-  - [ ] `var` parameters in function types (`(var P) => T`), for parser combinators.
+  - [x] `var` parameters in function types (`(var P) => T`), for parser combinators.
   - [x] Or-patterns (`A | B =>`).
   - [x] Bare variant names of another module's enum in expressions where `T?`/`T!`/`T!E` is
         expected (and never silently core's `Value.Float`/`Int`/`Str`: E0117), or a way to import them.

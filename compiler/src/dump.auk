@@ -295,6 +295,10 @@ fn ty(out: var [str], d: int, t: ast.Type) {
       line(&out, d, "{head} measured {units_text(units)}")
       ty(&out, d + 1, base)
     }
+    Var(t) => {
+      line(&out, d, "{head} var")
+      ty(&out, d + 1, t)
+    }
   }
 }
 

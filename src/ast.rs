@@ -228,6 +228,8 @@ pub enum TypeKind {
     Any(Box<Type>),
     /// `(A, B) => R`: the type of a closure.
     Fn { params: Vec<Type>, ret: Box<Type> },
+    /// `var T`: a `var` parameter of a function type (only there): `(var P) => R`.
+    Var(Box<Type>),
     /// `float<m/s>`, `int<px>`: a number type with a unit of measure (`units` is canonical;
     /// a malformed unit was already reported by the parser).
     Measured { base: Box<Type>, units: Units },
@@ -633,6 +635,7 @@ pub fn type_dump(t: &Type) -> String {
             format!("({}) => {}", params.iter().map(type_dump).collect::<Vec<_>>().join(", "), type_dump(ret))
         }
         TypeKind::Measured { base, units } => format!("{}<{units}>", type_dump(base)),
+        TypeKind::Var(t) => format!("var {}", type_dump(t)),
     }
 }
 

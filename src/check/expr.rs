@@ -790,7 +790,8 @@ impl Checker {
             }
             let (s, args) = self.instantiate(f);
             let info = &self.fns[f];
-            let ps: Vec<Ty> = info.params.iter().map(|p| p.ty.subst(&s)).collect();
+            // a `var` parameter stays one in the function's type: `(var P) => R`
+            let ps: Vec<Ty> = info.params.iter().map(|p| if p.var { Ty::Mut(Box::new(p.ty.subst(&s))) } else { p.ty.subst(&s) }).collect();
             let r = info.ret.subst(&s);
             self.cx().t.names.insert(e.id, NameRef::Fn { func: f, type_args: args });
             self.cx().callees.insert(f);
@@ -1850,7 +1851,13 @@ impl Checker {
     fn closure_call(&mut self, e: &Expr, callee: &Expr, ft: &Ty, args: &[ArgSrc]) -> Ty {
         let ft = match self.shallow(ft) {
             Ty::Var(_) => {
-                let ps: Vec<Ty> = args.iter().map(|_| self.fresh()).collect();
+                let ps: Vec<Ty> = args
+                    .iter()
+                    .map(|a| match a {
+                        ArgSrc::Expr(Expr { kind: K::Ref(_), .. }) => Ty::Mut(Box::new(self.fresh())),
+                        _ => self.fresh(),
+                    })
+                    .collect();
                 let r = self.fresh();
                 let f = Ty::func(ps, r);
                 self.unify(ft, &f);
@@ -1865,17 +1872,61 @@ impl Checker {
                     return *r;
                 }
                 let mut out = Vec::new();
-                for (a, p) in args.iter().zip(&ps) {
+                let what = self.text(callee.span);
+                for (i, (a, p)) in args.iter().zip(&ps).enumerate() {
+                    // a `var T` parameter takes the caller's variable, marked `&`
+                    let (var, p) = match self.shallow(p) {
+                        Ty::Mut(t) => (true, *t),
+                        _ => (false, p.clone()),
+                    };
                     match *a {
                         ArgSrc::Recv(x) => {
                             let t = self.recv_ty(x);
-                            self.coerce_at(x, &t, p, false);
-                            out.push(Arg { node: x.id, by_ref: false });
+                            if var {
+                                if !self.unify(&t, &p) {
+                                    self.mismatch(x, &t, &p, false);
+                                }
+                                self.place(x, true, PlaceUse::Receiver(&what));
+                            } else {
+                                self.coerce_at(x, &t, &p, false);
+                            }
+                            out.push(Arg { node: x.id, by_ref: var });
                         }
-                        ArgSrc::Expr(x) => {
-                            self.check(x, p);
-                            out.push(Arg { node: x.id, by_ref: false });
-                        }
+                        ArgSrc::Expr(x) => match (&x.kind, var) {
+                            (K::Ref(inner), true) => {
+                                let t = self.infer(inner, Some(&p));
+                                self.record(x.id, &t);
+                                if !self.unify(&t, &p) {
+                                    self.mismatch(inner, &t, &p, false);
+                                }
+                                self.place(inner, true, PlaceUse::Ref);
+                                out.push(Arg { node: x.id, by_ref: true });
+                            }
+                            (K::Ref(inner), false) => {
+                                self.err(
+                                    Diag::new("E0311", x.span, format!("parameter {} of `{what}` is not a `var` parameter, so its argument takes no `&`", i + 1))
+                                        .note("`&` marks an argument the callee may change; remove it")
+                                        .fix(Span { end_line: x.span.line, end_col: x.span.col + 1, ..x.span }, ""),
+                                );
+                                let t = self.infer(inner, Some(&p));
+                                self.record(x.id, &t);
+                                self.coerce_at(inner, &t, &p, false);
+                                out.push(Arg { node: x.id, by_ref: false });
+                            }
+                            (_, true) => {
+                                self.err(
+                                    Diag::new("E0310", x.span, format!("parameter {} of `{what}` is `var`, so the argument needs `&`", i + 1))
+                                        .note(format!("`{what}` may change it; write `&{}` to let it change the caller's variable", self.text(x.span)))
+                                        .fix(Span { end_line: x.span.line, end_col: x.span.col, ..x.span }, "&"),
+                                );
+                                self.check(x, &p);
+                                out.push(Arg { node: x.id, by_ref: false });
+                            }
+                            (_, false) => {
+                                self.check(x, &p);
+                                out.push(Arg { node: x.id, by_ref: false });
+                            }
+                        },
                     }
                 }
                 self.note_call(e.id, Call { callee: Callee::Closure, args: out });
@@ -2971,7 +3022,7 @@ impl Checker {
         let expected = match exp.ty().map(|t| self.shallow(t)) {
             Some(Ty::Fn(ps, r)) => Some((ps, *r)),
             Some(v @ Ty::Var(_)) => {
-                let ps: Vec<Ty> = params.iter().map(|_| self.fresh()).collect();
+                let ps: Vec<Ty> = params.iter().map(|p| if p.var { Ty::Mut(Box::new(self.fresh())) } else { self.fresh() }).collect();
                 let r = self.fresh();
                 self.unify(&v, &Ty::func(ps.clone(), r.clone()));
                 Some((ps, r))
@@ -3000,12 +3051,28 @@ impl Checker {
         }
         let m = self.cur_module();
         let mut ptys = Vec::new();
+        // per parameter: is it `var` (from `p: var T`, or a `var T` in the expected type)?
+        let mut vars = Vec::new();
         for (i, p) in params.iter().enumerate() {
             let from_exp = match (&elem_tys, &expected) {
                 (Some(ts), _) => ts.get(i).cloned(),
                 (None, Some((ps, _))) => ps.get(i).cloned(),
                 _ => None,
             };
+            let (exp_var, from_exp) = match from_exp.map(|t| self.shallow(&t)) {
+                Some(Ty::Mut(t)) => (true, Some(*t)),
+                t => (false, t),
+            };
+            let wrong_var = p.var && from_exp.is_some() && !exp_var && !arity_mismatch;
+            if wrong_var {
+                let xs = self.show(from_exp.as_ref().unwrap());
+                self.err(
+                    Diag::new("E0200", p.span, format!("this closure parameter is `var`, but the function type here passes a plain `{xs}`"))
+                        .note(format!("a `var` parameter needs a function type that says so, e.g. `(var {xs}) => ...`")),
+                );
+            }
+            // (after a wrong `var`, the closure keeps the expected type: no second error)
+            vars.push((p.var && !wrong_var) || exp_var);
             let t = match &p.ty {
                 Some(ann) => {
                     let mut g = self.cx().generics.clone();
@@ -3026,7 +3093,7 @@ impl Checker {
             ptys.push(t);
         }
         let ret = expected.as_ref().map(|(_, r)| r.clone()).unwrap_or_else(|| self.fresh());
-        self.push_scope();
+        // the frame starts before the parameters' scope: they are the closure's own, not captures
         self.push_frame(Frame {
             ret: Some(ret.clone()),
             ret_span: None,
@@ -3038,14 +3105,17 @@ impl Checker {
             ret_insert: None,
             what: "closure",
         });
+        self.push_scope();
         let mut seen = HashMap::new();
-        for (p, t) in params.iter().zip(&ptys) {
+        for ((p, t), &var) in params.iter().zip(&ptys).zip(&vars) {
             self.cx().t.types.insert(p.id, t.clone());
-            self.pattern(&p.pat, t, false, &mut seen);
+            self.pattern(&p.pat, t, var, &mut seen);
         }
         self.check(body, &ret);
-        let frame = self.pop_frame();
         self.pop_scope();
+        let frame = self.pop_frame();
+        // a `var` parameter is `var T` in the closure's type (passed by reference)
+        let ptys: Vec<Ty> = ptys.into_iter().zip(&vars).map(|(t, &v)| if v { Ty::Mut(Box::new(t)) } else { t }).collect();
         self.cx().t.closures.insert(e.id, ClosureInfo { params: ptys.clone(), ret: ret.clone(), captures: frame.captures.clone(), unpack });
         // captures of a nested closure are captures of the enclosing closure too (handled by
         // lookup_local walking every frame)

@@ -925,6 +925,8 @@ impl Checker {
                 None => Ty::Error,
             },
             TypeKind::Fn { params, ret } => Ty::func(params.iter().map(|x| self.resolve_type(m, x, g)).collect(), self.resolve_type(m, ret, g)),
+            // the parser allows `var T` only as a function type's parameter
+            TypeKind::Var(x) => Ty::Mut(Box::new(self.resolve_type(m, x, g))),
             TypeKind::Measured { base, units } => match self.resolve_type(m, base, g) {
                 b @ (Ty::Int | Ty::Float) => Ty::measured(b, units.clone()),
                 Ty::Error => Ty::Error,

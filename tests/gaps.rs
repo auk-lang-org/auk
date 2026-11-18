@@ -230,3 +230,98 @@ fn or_patterns_format() {
     assert!(o.status.success());
     assert_eq!(fs::read_to_string(&p).unwrap(), "fn f(n: int): int = match n {\n  0 | 1 => 1\n  _ => n\n}\n");
 }
+
+// ---- 3. `var` parameters in function types ----
+
+const VAR_FN_PROGRAM: &str = r#"struct Parser { toks: [str], pos: int, depth: int }
+enum Fail { Bad(m: str) }
+
+fn peek(p: Parser): str = p.toks.get(p.pos) else ""
+fn next(p: var Parser): str {
+  let t = p.peek()
+  p.pos += 1
+  t
+}
+
+fn item(p: var Parser): str!Fail {
+  let t = p.next()
+  if t == "!" { fail(Bad("bang at {p.pos - 1}")) }
+  t.upper()
+}
+
+/// `close`-terminated, comma-separated items, each parsed by `f`
+fn list(p: var Parser, close: str, f: (var Parser) => str!Fail): [str]!Fail {
+  var out: [str] = []
+  while p.peek() != close && p.peek() != "" {
+    out.push(f(&p)?)
+    if p.peek() == "," { p.next() }
+  }
+  p.next()
+  out
+}
+
+fn nested(p: var Parser, f: (var Parser) => str!Fail): str!Fail {
+  p.depth += 1
+  let r = f(&p)
+  p.depth -= 1
+  r
+}
+
+fn twice(n: var int, g: (var int, int) => ()) {
+  g(&n, 1)
+  g(&n, 2)
+}
+
+fn main() {
+  var p = Parser { toks: ["a", ",", "b", ",", "c", ")", "z"], pos: 0, depth: 0 }
+  print(list(&p, ")", item))
+  print(p.pos)
+  var q = Parser { toks: ["x", "y", ")"], pos: 0, depth: 0 }
+  print(list(&q, ")", r => "<{r.next()}>"))
+  var s = Parser { toks: ["x", "!", ")"], pos: 0, depth: 0 }
+  print(list(&s, ")", item) else e => ["{e}"])
+  var u = Parser { toks: ["k"], pos: 0, depth: 3 }
+  print(nested(&u, (r: var Parser) => "{r.depth}:{r.next()}"))
+  print("{u.depth} {u.pos}")
+  var n = 10
+  twice(&n, (x, k) => { x += k })
+  print(n)
+  let h: (var int) => int = x => {
+    x *= 2
+    x
+  }
+  var m = 5
+  print("{h(&m)} {m}")
+  let fs: [(var int) => ()] = [x => { x += 1 }, x => { x *= 3 }]
+  for f in fs { f(&m) }
+  print(m)
+}
+"#;
+
+#[test]
+fn var_parameters_in_function_types() {
+    let p = file(VAR_FN_PROGRAM);
+    assert_eq!(run_leak_free(&p), "ok([\"A\", \"B\", \"C\"])\n6\nok([\"<x>\", \"<y>\"])\n[\"Bad(\\\"bang at 1\\\")\"]\nok(\"4:k\")\n3 1\n13\n10 10\n33\n");
+}
+
+#[test]
+fn var_parameters_in_function_types_are_checked() {
+    let err = check_err(&file("fn apply(n: var int, g: (var int) => ()) { g(n) }\n"));
+    assert!(err.contains("1:46: error[E0310]: parameter 1 of `g` is `var`, so the argument needs `&`"), "{err}");
+    assert!(err.contains("fix: insert `&` at 1:46"), "{err}");
+    let err = check_err(&file("fn apply(n: int, g: (int) => ()) { g(&n) }\n"));
+    assert!(err.contains("error[E0311]: parameter 1 of `g` is not a `var` parameter"), "{err}");
+    // a `var` closure parameter needs a function type that says so (one error, not two)
+    let err = check_err(&file("fn plain(g: (int) => int): int = g(1)\nfn main() { print(plain((x: var int) => x)) }\n"));
+    assert!(err.contains("error[E0200]: this closure parameter is `var`, but the function type here passes a plain `int`"), "{err}");
+    assert_eq!(err.matches("error[").count(), 1, "{err}");
+    // a function with a `var` parameter has a `var` function type
+    let err = check_err(&file("fn bump(n: var int) { n += 1 }\nfn main() { print([1].map(bump)) }\n"));
+    assert!(err.contains("found `(var int) => ()`"), "{err}");
+    // a closure inside still captures by value
+    let err = check_err(&file("fn apply(n: var int, g: (var int) => ()) { g(&n) }\nfn main() {\n  var a = 1\n  apply(&a, x => {\n    let f = () => { x += 1 }\n    f()\n  })\n}\n"));
+    assert!(err.contains("error[E0323]: a closure can't change `x`, a variable it captures"), "{err}");
+    // `var` only in a function type's parameters
+    let err = check_err(&file("fn f(x: (var int)) {}\n"));
+    assert!(err.contains("1:10: error[E0023]: `var` is only for a parameter of a function type"), "{err}");
+}

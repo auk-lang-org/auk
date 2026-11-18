@@ -137,6 +137,8 @@ pub enum TypeKind {
   Fn(params: [Type], ret: Type),
   /// `float<m/s>`: `units` is canonical (sorted base names, non-zero exponents).
   Measured(base: Type, units: [(str, int)]),
+  /// `var T`: a `var` parameter of a function type (only there): `(var P) => R`.
+  Var(t: Type),
 }
 
 pub struct Pat { id: int, span: diag.Span, kind: PatKind }

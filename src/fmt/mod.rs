@@ -745,6 +745,7 @@ impl Fmt {
             TypeKind::Any(t) => format!("any {}", self.ty(t)),
             TypeKind::Fn { params, ret } => format!("({}) => {}", self.tys(params), self.ty(ret)),
             TypeKind::Measured { base, units } => format!("{}<{units}>", self.ty(base)),
+            TypeKind::Var(t) => format!("var {}", self.ty(t)),
         }
     }
 

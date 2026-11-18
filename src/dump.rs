@@ -373,6 +373,10 @@ fn ty(out: &mut String, d: usize, t: &Type) {
             line(out, d, &format!("{head} measured {}", units_text(units)));
             ty(out, d + 1, base);
         }
+        TypeKind::Var(t) => {
+            line(out, d, &format!("{head} var"));
+            ty(out, d + 1, t);
+        }
     }
 }
 

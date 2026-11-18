@@ -628,9 +628,12 @@ impl Parser {
             }
             Tok::LParen => {
                 self.bump();
-                let ts = self.list(Tok::RParen, "type", |p| p.ty())?;
+                let ts = self.list(Tok::RParen, "type", |p| p.param_ty())?;
                 if self.eat(&Tok::FatArrow) {
                     TypeKind::Fn { params: ts, ret: Box::new(self.ty()?) }
+                } else if let Some(v) = ts.iter().find(|t| matches!(t.kind, TypeKind::Var(_))) {
+                    return Err(Diag::new("E0023", v.span, "`var` is only for a parameter of a function type")
+                        .note("a function type looks like `(var P, int) => R`"));
                 } else if ts.len() == 1 {
                     // `(T)` is just `T`
                     let mut t = ts.into_iter().next().unwrap();
@@ -659,6 +662,16 @@ impl Parser {
         };
         let t = Type { id: self.id(), span: start.to(self.prev), kind };
         self.type_suffix(t, start)
+    }
+
+    /// A type in a parenthesized list, which may be a function type's `var T` parameter.
+    fn param_ty(&mut self) -> PResult<Type> {
+        if !self.at(&Tok::Var) {
+            return self.ty();
+        }
+        let start = self.bump().span;
+        let t = self.ty()?;
+        Ok(Type { id: self.id(), span: start.to(self.prev), kind: TypeKind::Var(Box::new(t)) })
     }
 
     /// The `<m/s>` unit token after a number literal or `int`/`float`, in canonical form.

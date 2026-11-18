@@ -50,6 +50,9 @@ pub enum Ty {
     /// `float<m/s>`, `int<px>`: `Int` or `Float` with a non-empty unit of measure. Checked
     /// only: `erase_units` turns it back into the plain number type before codegen.
     Measured(Box<Ty>, Units),
+    /// `var T`: a `var` parameter of a function type (only there, as a parameter of `Fn`): the
+    /// closure gets the caller's variable by reference.
+    Mut(Box<Ty>),
     /// An inference variable (only during checking).
     Var(u32),
     /// The type of an expression that already produced a diagnostic; it unifies with anything so
@@ -154,7 +157,7 @@ impl Ty {
 
     pub fn children(&self) -> Vec<&Ty> {
         match self {
-            Ty::List(t) | Ty::Opt(t) | Ty::Task(t) | Ty::Measured(t, _) => vec![t],
+            Ty::List(t) | Ty::Opt(t) | Ty::Task(t) | Ty::Measured(t, _) | Ty::Mut(t) => vec![t],
             Ty::Map(a, b) | Ty::Res(a, b) => vec![a, b],
             Ty::Tuple(ts) | Ty::Named(_, ts) => ts.iter().collect(),
             Ty::Fn(ps, r) => ps.iter().chain(std::iter::once(&**r)).collect(),
@@ -168,6 +171,7 @@ impl Ty {
             Ty::List(t) => Ty::List(Box::new(t.map_ty(f))),
             Ty::Opt(t) => Ty::Opt(Box::new(t.map_ty(f))),
             Ty::Task(t) => Ty::Task(Box::new(t.map_ty(f))),
+            Ty::Mut(t) => Ty::Mut(Box::new(t.map_ty(f))),
             Ty::Measured(t, u) => Ty::Measured(Box::new(t.map_ty(f)), u.clone()),
             Ty::Map(a, b) => Ty::Map(Box::new(a.map_ty(f)), Box::new(b.map_ty(f))),
             Ty::Res(a, b) => Ty::Res(Box::new(a.map_ty(f)), Box::new(b.map_ty(f))),
@@ -397,6 +401,10 @@ impl Defs {
                 self.fmt(t, out);
                 let _ = write!(out, "<{u}>");
             }
+            Ty::Mut(t) => {
+                out.push_str("var ");
+                self.fmt(t, out);
+            }
             Ty::Var(_) => out.push('_'),
             Ty::Error => out.push_str("{error}"),
         }
@@ -486,6 +494,8 @@ impl Infer {
         match (&a, &b) {
             (Ty::Error, _) | (_, Ty::Error) | (Ty::Never, _) | (_, Ty::Never) => true,
             (Ty::Var(x), Ty::Var(y)) if x == y => true,
+            // `var T` is only a function type's parameter: no type variable stands for it
+            (Ty::Var(_), Ty::Mut(_)) | (Ty::Mut(_), Ty::Var(_)) => false,
             (Ty::Var(x), t) | (t, Ty::Var(x)) => {
                 if self.occurs(*x, t) {
                     return false;
@@ -493,7 +503,7 @@ impl Infer {
                 self.bind(*x, t.clone());
                 true
             }
-            (Ty::List(x), Ty::List(y)) | (Ty::Opt(x), Ty::Opt(y)) | (Ty::Task(x), Ty::Task(y)) => self.unify(x, y),
+            (Ty::List(x), Ty::List(y)) | (Ty::Opt(x), Ty::Opt(y)) | (Ty::Task(x), Ty::Task(y)) | (Ty::Mut(x), Ty::Mut(y)) => self.unify(x, y),
             (Ty::Measured(x, u), Ty::Measured(y, v)) => u == v && self.unify(x, y),
             (Ty::Map(a1, b1), Ty::Map(a2, b2)) | (Ty::Res(a1, b1), Ty::Res(a2, b2)) => self.unify(a1, a2) && self.unify(b1, b2),
             (Ty::Tuple(xs), Ty::Tuple(ys)) => xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| self.unify(x, y)),

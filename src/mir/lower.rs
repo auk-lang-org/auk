@@ -149,6 +149,14 @@ pub struct Lower<'g, 'a> {
     saved: Vec<FnState>,
 }
 
+/// The machine type of a function type's parameter: a `var T` one is a pointer to the variable.
+fn param_mty(t: &Ty) -> MTy {
+    match t {
+        Ty::Mut(inner) => MTy::ptr(d(inner)),
+        _ => d(t),
+    }
+}
+
 /// Emit instance `i` (and whatever it needs).
 pub fn emit_instance(g: &mut Gen, i: InstId) {
     let tp = g.tp;
@@ -1790,7 +1798,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let mut pts = vec![MTy::obj_ptr()];
                 let mut cs = vec![self.fld(&c.c, Sel::F(1))];
                 for (a, pt) in args.iter().zip(&ps) {
-                    pts.push(d(pt));
+                    pts.push(param_mty(pt));
                     cs.push(match a {
                         ArgV::Val(v) => self.val_as(v, pt),
                         ArgV::Addr(p, _) => p.clone(),
@@ -2005,12 +2013,20 @@ impl<'g, 'a> Lower<'g, 'a> {
         let r = *r;
         let k = self.g.fresh();
         let mut pts = vec![MTy::obj_ptr()];
-        pts.extend(ps.iter().map(d));
+        pts.extend(ps.iter().map(param_mty));
         let n = self.g.declare(format!("dk_fv{k}"), pts, d(&r), Abi::Auk);
         self.g.memo2.insert(key, n);
         let pv = self.begin_fn(n, r.clone());
         self.push(ScopeKind::Block);
-        let args = ps.iter().enumerate().map(|(k, p)| ArgV::Val(Val::plain(pv[k + 1].clone(), p.clone()))).collect();
+        let args = ps
+            .iter()
+            .enumerate()
+            .map(|(k, p)| match p {
+                // a `var` parameter: pass the caller's variable on
+                Ty::Mut(t) => ArgV::Addr(pv[k + 1].clone(), (**t).clone()),
+                _ => ArgV::Val(Val::plain(pv[k + 1].clone(), p.clone())),
+            })
+            .collect();
         let v = self.call_target(target, func, args, &r, Ex::cstr("<fn>"), None);
         if r.is_unit() || r == Ty::Never {
             self.cleanup_from(0);
@@ -3456,7 +3472,7 @@ impl<'g, 'a> Lower<'g, 'a> {
         // the lifted function
         let fty = if info.unpack { vec![Ty::Tuple(ptys.clone())] } else { ptys.clone() };
         let mut pts = vec![MTy::obj_ptr()];
-        pts.extend(fty.iter().map(d));
+        pts.extend(fty.iter().map(param_mty));
         let fname = self.g.declare(format!("dk_clo{k}"), pts, d(&ret), Abi::Auk);
         let pv = self.begin_fn(fname, ret.clone());
         let owner = match self.tp.instances[self.inst].body {
@@ -3481,7 +3497,14 @@ impl<'g, 'a> Lower<'g, 'a> {
             }
         } else {
             for (i, (p, t)) in params.iter().zip(&ptys).enumerate() {
-                self.bind_top(&p.pat, &pv[i + 1].clone(), t);
+                match t {
+                    // a `var` parameter: a pointer to the caller's variable
+                    Ty::Mut(inner) => {
+                        let place = pv[i + 1].clone().deref(d(inner));
+                        self.bind_top(&p.pat, &place, inner);
+                    }
+                    _ => self.bind_top(&p.pat, &pv[i + 1].clone(), t),
+                }
             }
         }
         if !matches!(body.kind, EK::Block(_)) {
