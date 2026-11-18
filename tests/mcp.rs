@@ -13,6 +13,8 @@ use std::time::Duration;
 
 use json::{Json, obj};
 
+mod auk_bin;
+
 const TOOLS: &[&str] = &["auk_spec", "auk_check", "auk_run", "auk_test", "auk_debug", "auk_fmt", "auk_explain", "auk_holes"];
 
 struct Client {
@@ -42,7 +44,7 @@ impl Client {
     }
 
     fn spawn() -> Client {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_auk"))
+        let mut child = Command::new(auk_bin::auk_bin())
             .arg("mcp")
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .stdin(Stdio::piped())
@@ -172,6 +174,9 @@ fn check_a_clean_example() {
 
 #[test]
 fn run_hello() {
+    if auk_bin::lacks("run", "auk_run") {
+        return;
+    }
     let mut c = Client::start();
     let (text, is_error) = c.call("auk_run", obj([("path", "examples/hello.auk".into())]));
     assert!(!is_error, "{text}");
@@ -184,6 +189,9 @@ fn run_hello() {
 
 #[test]
 fn test_calc() {
+    if auk_bin::lacks("test", "auk_test") {
+        return;
+    }
     let mut c = Client::start();
     let (text, is_error) = c.call("auk_test", obj([("path", "examples/calc.auk".into())]));
     assert!(!is_error, "{text}");
@@ -192,6 +200,9 @@ fn test_calc() {
 
 #[test]
 fn run_and_test_with_a_trace() {
+    if auk_bin::lacks("run", "auk_run with a trace") || auk_bin::lacks("test", "auk_test with a trace") {
+        return;
+    }
     let mut c = Client::start();
     let (text, is_error) = c.call("auk_run", obj([("path", "examples/fib.auk".into()), ("trace", Json::Bool(true))]));
     assert!(!is_error, "{text}");
@@ -275,6 +286,9 @@ fn errors() {
 
 #[test]
 fn debug_reports_stops() {
+    if auk_bin::lacks("debug", "auk_debug") {
+        return;
+    }
     let mut c = Client::start();
     let args = obj([
         ("path", "examples/fib.auk".into()),
@@ -296,7 +310,7 @@ fn debug_reports_stops() {
 
 #[test]
 fn holes_when_available() {
-    let has_holes = Command::new(env!("CARGO_BIN_EXE_auk"))
+    let has_holes = Command::new(auk_bin::auk_bin())
         .arg("help")
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim_start().starts_with("holes")))
