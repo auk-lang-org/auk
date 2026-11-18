@@ -3,7 +3,7 @@
 # server (symbols, hover, definition, diagnostics, formatting) and the debugger (breakpoint,
 # stack, variables, evaluate, continue, program output), against each `auk` given.
 #
-#   scripts/vscode_e2e.sh [<auk>...]   (default: target/release/auk and target/pilot/compiler)
+#   scripts/vscode_e2e.sh [<auk>...]   (default: target/bin/auk)
 #
 # Needs VS Code ($VSCODE, default the macOS app). Opens a VS Code window for a few seconds per
 # binary, with a throwaway user-data and extensions directory (your settings and extensions are
@@ -12,7 +12,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VSCODE="${VSCODE:-/Applications/Visual Studio Code.app/Contents/MacOS/Code}"
 [ -x "$VSCODE" ] || { echo "vscode_e2e: no VS Code at $VSCODE (set VSCODE)" >&2; exit 2; }
-if [ "$#" = 0 ]; then set -- "$ROOT/target/release/auk" "$ROOT/target/pilot/compiler"; fi
+if [ "$#" = 0 ]; then set -- "$ROOT/target/bin/auk"; fi
 OUT="$ROOT/target/vscode-e2e"
 rm -rf "$OUT"; mkdir -p "$OUT"
 status=0 n=0

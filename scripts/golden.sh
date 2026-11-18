@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# The golden corpus (docs/self-host-plan.md, Phase 0): what the Rust `auk` makes of every .auk
-# file in tests/, examples/, packages/ (without .raft/ copies), compiler/ (with its prelude), saved
-# so a port of the compiler (Phases 3-5) can be diffed against it.
+# The golden corpus (docs/self-host-plan.md, Phase 0): what an `auk` makes of every .auk file in
+# tests/, examples/, packages/ (without .raft/ copies) and compiler/ (with its prelude), recorded
+# so another build can be diffed against it (the Rust compiler was the reference through Phase
+# 5; now a previous build is: e.g. the installed auk against a change in target/bin/auk).
 #
-#   scripts/golden.sh                     record target/golden/rust with target/release/auk
+#   scripts/golden.sh                     record target/golden/ref with the reference auk
 #   scripts/golden.sh --compare <auk>     record target/golden/compare with <auk> (same CLI),
-#                                         re-record the Rust reference, and report differences
-#                                         (exit 1 on any)
+#                                         re-record the reference, and report differences
+#                                         (exit 1 on any); the reference against itself
+#                                         catches nondeterministic output
 # Options:
 #   --modes m,m,...   only these modes (default: all of tokens,ast,check,ir,fmt,run)
 #   --only <regex>    only corpus files / run entries whose path or name matches (grep -E)
-#   --reuse           --compare: keep an existing target/golden/rust instead of re-recording it
-#   --no-build        don't run `cargo build --release` first
+#   --ref <auk>       the reference (default target/bin/auk)
+#   --reuse           --compare: keep an existing target/golden/ref instead of re-recording it
+#   --no-build        don't run ./build.sh first
 #   -j N              parallel jobs (default: the number of CPUs)
 #
 # Modes, one output file per corpus file at target/golden/<label>/<mode>/<path>:
@@ -103,6 +106,7 @@ while [ $# -gt 0 ]; do
     --modes) MODES="${2//,/ }"; shift 2 ;;
     --only) ONLY="$2"; shift 2 ;;
     --compare) COMPARE="$2"; shift 2 ;;
+    --ref) REFBIN="$2"; shift 2 ;;
     --reuse) REUSE=1; shift ;;
     --no-build) BUILD=0; shift ;;
     -j) JOBS="$2"; shift 2 ;;
@@ -147,21 +151,24 @@ record() {
   echo "golden: recorded $label with $bin in $((SECONDS - start))s:$summary"
 }
 
-if [ "$BUILD" = 1 ]; then cargo build --release -q; fi
-RUST="$ROOT/target/release/auk"
+if [ "$BUILD" = 1 ]; then ./build.sh > /dev/null; fi
+REFBIN="${REFBIN:-$ROOT/target/bin/auk}"
+case "$REFBIN" in */*) ;; *) REFBIN="$(command -v "$REFBIN" || echo "$REFBIN")" ;; esac
+REFBIN="$(cd "$(dirname "$REFBIN")" && pwd)/$(basename "$REFBIN")"
+[ -x "$REFBIN" ] || { echo "golden.sh: the reference $REFBIN is not an executable" >&2; exit 2; }
 
 if [ -z "$COMPARE" ]; then
-  record "$RUST" rust
+  record "$REFBIN" ref
   exit 0
 fi
 
 case "$COMPARE" in */*) ;; *) COMPARE="$(command -v "$COMPARE" || echo "$COMPARE")" ;; esac
 OTHER="$(cd "$(dirname "$COMPARE")" && pwd)/$(basename "$COMPARE")"
 [ -x "$OTHER" ] || { echo "golden.sh: $COMPARE is not an executable" >&2; exit 2; }
-if [ "$REUSE" = 0 ] || [ ! -d target/golden/rust ]; then record "$RUST" rust; fi
+if [ "$REUSE" = 0 ] || [ ! -d target/golden/ref ]; then record "$REFBIN" ref; fi
 record "$OTHER" compare
 
-REF="$ROOT/target/golden/rust" NEW="$ROOT/target/golden/compare" total=0
+REF="$ROOT/target/golden/ref" NEW="$ROOT/target/golden/compare" total=0
 
 # compared <mode>: the outputs to compare (with --only, just the selected ones): every corpus
 # file, every run entry, and for ir the files either side has an output for.
@@ -185,7 +192,7 @@ for m in $MODES; do
     if [ "$shown" -lt 20 ]; then
       shown=$((shown + 1))
       if [ ! -f "$b" ]; then echo "  $m: $rel: missing from compare"
-      elif [ ! -f "$a" ]; then echo "  $m: $rel: missing from rust"
+      elif [ ! -f "$a" ]; then echo "  $m: $rel: missing from ref"
       else
         echo "  $m: $rel ($( (diff "$a" "$b" || true) | grep -c '^[<>]') lines differ; diff ${a#$ROOT/} ${b#$ROOT/})"
         { diff "$a" "$b" || true; } | head -6 | sed 's/^/      /' | cut -c1-200

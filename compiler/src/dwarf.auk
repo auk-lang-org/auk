@@ -12,7 +12,7 @@
 ///
 /// Rust's `Option<Debug>` is a `Debug` with `on` (handles are `?`s when it is off).
 
-/// The version the producer string names (Cargo.toml's `version`, `CARGO_PKG_VERSION`).
+/// The version the producer string names (the Rust compiler's Cargo.toml `version`, kept).
 let VERSION = "0.1.0"
 
 pub struct Debug {

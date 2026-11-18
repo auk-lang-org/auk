@@ -233,10 +233,15 @@ let TLS_GET = r"""
   """
 
 fn tls_refuses_a_self_signed_local_server() uses env, fs, ffi, time, net {
-  if cmd.new("openssl").arg("version").try_output() is err(_) {
-    eprint("note: tls_refuses_a_self_signed_local_server skipped (no `openssl` command)")
-    return
+  let version = match cmd.new("openssl").arg("version").try_output() {
+    ok(v) => v.stdout
+    err(_) => {
+      eprint("note: tls_refuses_a_self_signed_local_server skipped (no `openssl` command)")
+      return
+    }
   }
+  // LibreSSL's s_server (macOS's /usr/bin/openssl) takes a port alone, not host:port
+  let libressl = version.starts_with("LibreSSL")
   let d = scratch("tls_self_signed")
   let o = cmd
     .new("openssl")
@@ -263,7 +268,7 @@ fn tls_refuses_a_self_signed_local_server() uses env, fs, ffi, time, net {
   var server = cmd
     .new("openssl")
     .args(["s_server", "-quiet", "-www", "-cert", "cert.pem", "-key", "key.pem", "-accept"])
-    .arg("127.0.0.1:{port}")
+    .arg(if libressl { "{port}" } else { "127.0.0.1:{port}" })
     .cwd(d)
     .start()
   let start = time.now()

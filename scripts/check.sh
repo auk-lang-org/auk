@@ -1,42 +1,32 @@
 #!/usr/bin/env bash
-# Everything that must stay green (docs/compiler.md, Testing; the self-host plan's Phase 0 gate):
-#   1. cargo test --release        the compiler's unit and integration tests (tests/*.rs)
-#   2. runtime/c/test/run.sh       the C runtime's unit tests (AUK_NET_TESTS=1: with real hosts)
-#   3. pilot diffs                 tokens, AST, module tree, `auk check` (--json and text),
-#                                  `auk holes`, the typed program, formatting and MIR of the Auk
-#                                  port (compiler/) = the Rust ones, `auk hatch`, `dive`,
-#                                  `run --live`, `debug` and `dap` too; raft (raft/) = the Rust raft
-#   4. golden self-consistency     scripts/golden.sh --compare with the Rust auk itself: 0 diffs
-#                                  (catches nondeterministic output)
-#   5. bench smoke                 bench/perf programs, small inputs, `auk build` = `auk run`
-#   6. runner                      the Auk integration test runner (tests/runner/, the port of
-#                                  tests/*.rs) against the Rust auk and the self-hosted port, and
-#                                  every Rust integration test has an Auk counterpart
-#   (bootstrap, not by default: stage 1 → 2 → 3 of compiler/, bit-identical, and bench/perf
-#    built by stage 2 = by Rust, ~2 min)
-#   (backend, not by default: the self-hosted back end's checks, scripts/diff_mir.sh and
-#    run_backend.sh, ~8 min; scripts/diff_llvm.sh, ~15 min, is separate)
-#   (vscode, not by default: the VS Code extension end to end in a real VS Code, against the
-#    Rust auk and the port, scripts/vscode_e2e.sh; opens a window, ~30 s)
-# Usage: scripts/check.sh [step...]   (steps: cargo runtime pilot golden bench runner backend bootstrap vscode;
-# default all but backend, bootstrap and vscode)
+# Everything that must stay green (docs/compiler.md, Testing):
+#   1. build      ./build.sh --check: the runtime, raft, and the compiler from the seed `auk`
+#                 through stage 3, which must be bit-identical to stage 2 (the fixed point)
+#   2. runtime    runtime/c/test/run.sh: the C runtime's unit tests (AUK_NET_TESTS=1: with
+#                 real hosts)
+#   3. runner     the integration tests (tests/runner/) against target/bin/auk and raft
+#   4. golden     scripts/golden.sh --compare of target/bin/auk with itself: 0 differences
+#                 (catches nondeterministic output)
+#   5. bench      bench/perf programs on small inputs: `auk build` and `auk run` agree
+#   (seed, not by default: ./build.sh --from-seed, the build a fresh clone does, ~1 min)
+#   (vscode, not by default: the VS Code extension end to end in a real VS Code,
+#    scripts/vscode_e2e.sh; opens a window, ~30 s)
+# Usage: scripts/check.sh [step...]   (steps: build runtime runner golden bench seed vscode;
+# default all but seed and vscode)
 # Runs every selected step, then lists the failed ones; exits non-zero if any failed.
-# Needs the packages' .raft/ dependencies installed (`raft install`), like the suite.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-AUK="$ROOT/target/release/auk"
-STEPS="${*:-cargo runtime pilot golden bench runner}"
+AUK="$ROOT/target/bin/auk"
+STEPS="${*:-build runtime runner golden bench}"
 
-step_cargo() { cargo test --release --no-fail-fast; }
+step_build() { ./build.sh --check; }
 # real-host TLS tests reach badssl.com, which times out now and then: off unless asked for
 step_runtime() { AUK_NET_TESTS="${AUK_NET_TESTS:-0}" sh runtime/c/test/run.sh; }
-step_pilot() { scripts/gen_error_pages.sh --check && scripts/diff_tokens.sh && scripts/diff_ast.sh && scripts/diff_resolve.sh && scripts/diff_check.sh && scripts/diff_check_text.sh && scripts/diff_holes.sh && scripts/diff_typed.sh && scripts/diff_parse_typed.sh && scripts/diff_fmt.sh && scripts/diff_ir.sh && scripts/diff_raft.sh && scripts/diff_hatch.sh && scripts/diff_dive.sh && scripts/diff_live.sh --no-build && scripts/diff_debug.sh --no-build; }
-step_backend() { scripts/diff_mir.sh && scripts/run_backend.sh; }
-step_vscode() { scripts/vscode_e2e.sh; }
-step_bootstrap() { scripts/bootstrap.sh --no-build --perf; }
+step_runner() { scripts/test_runner.sh --no-build; }
 step_golden() { scripts/golden.sh --no-build --compare "$AUK"; }
-step_runner() { scripts/test_runner.sh; }
+step_seed() { ./build.sh --from-seed; }
+step_vscode() { scripts/vscode_e2e.sh; }
 
 # fib 25, sieve 100k, ...: every bench program built and JIT-run on a small input, same output.
 step_bench() {
@@ -59,14 +49,16 @@ step_bench() {
   return "$fail"
 }
 
-cargo build --release -q || exit 1
 failed=""
 for s in $STEPS; do
   if ! declare -F "step_$s" >/dev/null; then echo "check.sh: unknown step $s" >&2; exit 2; fi
   echo "=== $s"
   start=$SECONDS
   if "step_$s"; then echo "=== $s: ok ($((SECONDS - start))s)"
-  else echo "=== $s: FAILED ($((SECONDS - start))s)"; failed="$failed $s"; fi
+  else echo "=== $s: FAILED ($((SECONDS - start))s)"; failed="$failed $s"
+    # every later step runs target/bin/auk
+    [ "$s" = build ] && { echo "check.sh: the build failed; stopping"; exit 1; }
+  fi
 done
 if [ -n "$failed" ]; then echo "check.sh: failed:$failed"; exit 1; fi
 echo "check.sh: all ok"

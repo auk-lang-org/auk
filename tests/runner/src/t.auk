@@ -61,11 +61,11 @@ pub fn root(): str uses ffi = paths.cwd()
 /// `root/p`.
 pub fn abs(p: str): str uses ffi = paths.join(root(), p)
 
-/// The `auk` binary to run: `$AUK_BIN`, else `target/release/auk`.
-pub fn auk_bin(): str uses env, ffi = env.get("AUK_BIN") else abs("target/release/auk")
+/// The `auk` binary to run: `$AUK_BIN`, else `target/bin/auk`.
+pub fn auk_bin(): str uses env, ffi = env.get("AUK_BIN") else abs("target/bin/auk")
 
-/// The `raft` binary to run: `$RAFT_BIN`, else `target/release/raft`.
-pub fn raft_bin(): str uses env, ffi = env.get("RAFT_BIN") else abs("target/release/raft")
+/// The `raft` binary to run: `$RAFT_BIN`, else `target/bin/raft`.
+pub fn raft_bin(): str uses env, ffi = env.get("RAFT_BIN") else abs("target/bin/raft")
 
 /// What a binary from `$AUK_BIN` lacks when `$AUK_BIN_LACKS` is unset: the commands the
 /// self-hosted port's driver doesn't have yet: nothing since the hidden `parse` and `typed`, the

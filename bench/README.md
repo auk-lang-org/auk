@@ -11,7 +11,7 @@ Results and the failure analysis are in [results.md](results.md).
 
 ```
 bench/
-  bin/auk            the compiler, built once (cargo build --release) and frozen for the runs
+  bin/auk            the compiler, built once (./build.sh) and frozen for the runs
   spec.md             snapshot of docs/spec.md (= `bin/auk spec`): spec v2, 10,097 chars, 3,198 o200k tokens
   tasks/NN_name/      20 tasks, see below
   harness/

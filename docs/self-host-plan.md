@@ -601,31 +601,56 @@ Port onto the Auk compiler, each with its existing tests passing:
 
 ## Phase 6 — Retire Rust
 
-- [ ] **Bootstrap seed:** release binaries per platform (macOS arm64/x86_64, Linux x86_64/arm64),
-      plus checked-in LLVM bitcode (or textual IR) of the compiler, so a fresh checkout builds
-      with LLVM alone — no previous `auk` needed.
-- [x] Build script: `./build.sh [--check] [--test] [--seed <auk>]` — the runtime (`runtime/c` →
-      `target/auk-rt/libauk_rt.a` and `auk_rt.bc` with LLVM's clang, as build.rs did: one
-      translation unit plus the `own translation unit` files), raft (by the seed; it installs
-      `compiler/.raft`), seed → stage 1 → stage 2 (`target/bin/auk`), raft by stage 2
-      (`target/bin/raft`); `--check`: stage 3 bit-identical to stage 2; `--test`: the runtime's
-      C tests and `tests/runner/` against `target/bin/`. ~45 s on an M5. Checked with the Rust
-      `auk` as the seed and with an earlier `target/bin/auk` (no Rust involved): stage 2 = stage
-      3, C tests 72/72, runner 351 pass, 6 skip (`parse`/`typed`), 0 fail. Not covered:
-      `AUK_RT_SANITIZE` (the sanitized runtime is build.rs-only for now).
-- [ ] Tag `v0-rust-final` on the last commit with the Rust `auk` (all diffs 0, suite green); the
-      language freeze ends with the delete.
-- [x] The prelude moved out of `src/`: `compiler/prelude/` (Rust's `include_str!`, the port's
-      `#embed`s, raft's checkout detection and the corpus scripts follow).
-- [ ] Delete `Cargo.toml`, `Cargo.lock`, `build.rs`, `src/`, `tests/*.rs`, `.cargo/`,
-      `target/` (Rust's; `target/auk-rt`, `target/auk-build` and `target/bin` are build.sh's).
-      `build.sh` already builds `libauk_rt.a`/`auk_rt.bc`; the comments in `native.auk` and
-      `rtlink.auk` that say build.rs does go with the delete.
-- [ ] Install moves off `~/.cargo/bin` (e.g. `~/.auk/bin` or `/usr/local`); update README, docs,
-      `site/index.html`, editor settings.
-- [ ] Release process: how a new seed is cut (every release, from the fixed point).
+- [x] Tag `v0-rust-final` (9d3caf1): the last commit with the Rust `auk` — Phase 5 done, every
+      diff 0, check.sh all ok. It can always rebuild a seed. The language freeze ends here.
+- [x] The prelude moved out of `src/`: `compiler/prelude/`.
+- [x] Build script: `./build.sh [--check] [--test] [--install [<dir>]] [--seed <auk> |
+      --from-seed]` — the runtime (`runtime/c` → `target/auk-rt/libauk_rt.a` and `auk_rt.bc`
+      with LLVM's clang, as build.rs did), raft (by the seed; it installs `compiler/.raft`),
+      seed → stage 1 → stage 2 (`target/bin/auk`), raft by stage 2 (`target/bin/raft`);
+      `--check`: stage 3 bit-identical to stage 2; `--test`: the runtime's C tests and
+      `tests/runner/` against `target/bin/`. ~45 s on an M5.
+- [x] **Bootstrap seed:** `seed/<os>-<arch>.bc.gz`, the compiler as LLVM bitcode — the module
+      `auk build` makes its object file from (`AUK_EMIT_BC`; it carries the prelude, docs and the
+      runtime archive it embeds) linked with the runtime's own bitcode — so a fresh clone builds
+      with LLVM and a C linker alone: `build.sh` compiles it with clang and links it with `cc`
+      (and LLVM's library) when there is no `auk` to start from. `scripts/cut_seed.sh` cuts it
+      from the fixed point of a clean commit and checks that the seed alone rebuilds the same
+      stage 2 (`seed/<os>-<arch>.txt`: commit, date, sha256, LLVM). Bitcode, not binaries: one
+      file per platform (13.5 MB, 8 MB gzipped; xz would be 5.9 MB, but stock macOS has no xz).
+      `macos-arm64` cut here; `linux-arm64` cut in the CI image (ci/linux) from the Rust `auk`
+      before the delete; `linux-x86_64` by GitHub Actions (`.github/workflows/auk.yml`, job
+      `seeds`: the Rust `auk` from `v0-rust-final` builds the commit to the fixed point on an
+      x86-64 runner, then `cut_seed.sh`). No macOS x86-64: LLVM 23 has no Intel macOS build
+      (LLVM's releases are arm64-only, Homebrew's Intel `llvm` is 22) and macOS left Intel
+      after 26. CI (`ci` job) builds from each seed to the fixed point and runs the tests on
+      every push. Windows: docs/windows-plan.md.
+      Checked: a `git clone` with no `auk` and no cargo on the PATH runs `./build.sh --check
+      --test` from the seed to the fixed point; C tests 72/72; the runner 357/357 (its local TLS
+      test now also works with LibreSSL's `openssl`, macOS's `/usr/bin` one: `-accept <port>`).
+- [x] Install: `./build.sh --install [<dir>]` copies `auk` and `raft` to `~/.auk/bin` (and a
+      `raft.registry` naming the checkout's `packages/`: the Rust raft baked that path in with
+      `CARGO_MANIFEST_DIR`; the Auk raft reads it next to its binary). README, docs/compiler.md
+      and the VS Code README say so; the extension's default `auk.path` is `auk` on the PATH.
+      The site has no install instructions.
+- [x] Release process: cut a seed per platform with `scripts/cut_seed.sh` at every release and
+      whenever the current seed can no longer build the compiler (a language or ABI change it
+      doesn't know); `seed/README.md`.
+- [x] Delete `Cargo.toml`, `Cargo.lock`, `build.rs`, `.cargo/`, `src/` (the Rust compiler and
+      raft), `tests/*.rs` and `tests/auk_bin/` (the Auk runner, `tests/runner/`, has every test),
+      and the scripts that diffed the port against the Rust compiler (`diff_*`, `pilot_*`,
+      `ir_time`, `backend_time`, `run_backend`, `bootstrap`, `test_coverage`, `lsp_time`; they
+      are in `v0-rust-final`). `check.sh` is now: build (to the fixed point), runtime, runner,
+      golden (self-consistency), bench; opt-in `seed`, `vscode`. `golden.sh` compares any two
+      builds (`--ref`, default `target/bin/auk`). ci/linux builds from the seed, without Rust.
+      Kept: `bench/perf/rust/*.rs`, the Rust programs `auk` is benchmarked against (they are
+      benchmarks, not part of the toolchain). The compiler's dev commands that read the Rust
+      compiler's MIR dumps (`compiler mir|llvm|build-mir|run-mir`, `mir/reader.auk`) stay for
+      now; nothing produces such dumps any more.
 
-**Done when:** no `.rs` in the repo; fresh clone + LLVM + C compiler builds and passes everything.
+**Done:** no `.rs` in the toolchain (only the benchmark programs); a fresh clone with LLVM and a
+C linker builds and passes everything. Not covered by `build.sh` yet: the whole suite on an
+ASan-instrumented runtime (Rust's `AUK_RT_SANITIZE`; the C tests still run under ASan/TSan).
 
 ## Phase 7 — Runtime to Auk (Auk only)
 

@@ -8,8 +8,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 OUT="${1:-docs/perf-baseline.md}"
 RUNS="${RUNS:-5}"
-AUK="$ROOT/target/release/auk"
-cargo build --release -q
+AUK="$ROOT/target/bin/auk"
+./build.sh > /dev/null
 export LC_ALL=C
 load="$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{print $1}' || cut -d' ' -f1 /proc/loadavg)"
 
@@ -93,7 +93,7 @@ below when a phase changes them.
 - **Date:** $(date -u +%Y-%m-%d)
 - **Commit:** $commit
 - **Machine:** $cpu, $ncpu cores, $mem GB, $os
-- **Toolchain:** $(rustc --version | cut -d' ' -f1-2), LLVM $llvm, \`cargo build --release\`
+- **Toolchain:** LLVM $llvm, \`./build.sh\` (the self-hosted compiler)
 - **Load average when it started:** $load (a busy machine inflates every number)
 - **Method:** best of $RUNS runs (corpus-wide rows: best of $(( RUNS / 2 > 0 ? RUNS / 2 : 1 ))), wall time
 

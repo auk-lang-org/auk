@@ -1,6 +1,6 @@
 /// `auk build`'s back half (src/build.rs `build_native`): the program compiled to an object file
 /// (O2, with the runtime's inlinable functions) and linked with the runtime library
-/// (`libauk_rt.a`, embedded in the compiler: build.rs copies it to `target/auk-rt/`) by the
+/// (`libauk_rt.a`, embedded in the compiler: build.sh builds it into `target/auk-rt/`) by the
 /// system linker driver (`cc`; `AUK_LINKER` overrides it). With debug info (`-g`, the MIR
 /// carries source locations) on macOS, `dsymutil` gathers the DWARF into `<out>.dSYM`.
 

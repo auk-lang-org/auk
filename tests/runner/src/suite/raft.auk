@@ -1,7 +1,7 @@
 /// tests/raft.rs: the package manager end to end against the fixture registry
 /// (tests/fixtures/registry): `new`, `add` (transitive, path dependencies), `remove`,
 /// `install`, `list`, the lock file, effects, checksums and errors. The raft under test is
-/// `$RAFT_BIN` (e.g. the Auk port, built by scripts/diff_raft.sh), else target/release/raft.
+/// `$RAFT_BIN`, else target/bin/raft.
 
 pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("new_app_and_lib", new_app_and_lib),

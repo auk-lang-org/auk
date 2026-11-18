@@ -8,8 +8,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 name=${1:-$(date +%Y%m%d-%H%M%S)}
 [ $# -gt 0 ] && shift
 if [ "${REBUILD:-0}" = 1 ]; then
-  (cd "$here/.." && cargo build --release)
-  cp "$here/../target/release/auk" "$here/bin/auk"
+  (cd "$here/.." && ./build.sh > /dev/null)
+  cp "$here/../target/bin/auk" "$here/bin/auk"
   "$here/bin/auk" spec > "$here/spec.md"
 fi
 python3 -I "$here/harness/verify.py"

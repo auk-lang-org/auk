@@ -1,5 +1,5 @@
 /// Runtime functions inlined into `auk build` programs (src/mir/llvm/rtlink.rs): the runtime's
-/// own LLVM bitcode (built by build.rs from the same source as `libauk_rt.a`) is linked into the
+/// own LLVM bitcode (built by build.sh from the same source as `libauk_rt.a`) is linked into the
 /// program's module before it is optimized, so LLVM can inline small runtime functions (string
 /// and map helpers, element ops) into generated code. Nothing from it is emitted: a function
 /// LLVM may inline becomes `available_externally`, so every call it doesn't inline still goes to
@@ -12,7 +12,7 @@
 /// thread-local. Unsafe exported functions become plain declarations, exported constants
 /// `available_externally`, exported mutable globals declarations.
 ///
-/// The bitcode is embedded in the compiler (`#embed`): build.rs copies it to `target/auk-rt/`.
+/// The bitcode is embedded in the compiler (`#embed`): build.sh builds it into `target/auk-rt/`.
 /// If this LLVM can't read it the program is built without it (`link` returns false). Rust keys
 /// its maps by pointer; here by the value's address (`addr_of`).
 

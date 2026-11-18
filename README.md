@@ -35,24 +35,20 @@ programs live in [`examples/`](examples/): start with `hello.auk`, `fib.auk` and
 
 ## Usage
 
-Requires Rust and LLVM 23 (`brew install llvm@23`; `.cargo/config.toml` points the build at
-`/opt/homebrew/opt/llvm@23`, and `auk` links its `libLLVM` dynamically). `auk run`/`test`
-compile in memory (LLVM's ORC JIT); `auk build` also needs a system linker (`cc`).
+Requires LLVM 23 (`brew install llvm@23` on macOS; `llvm-23-dev` and `clang-23` from
+apt.llvm.org on Linux) and a C linker (`cc`). The compiler is written in Auk (`compiler/`);
+`./build.sh` builds it from the previous `auk`, or on a fresh clone from the checked-in seed
+(`seed/`: the compiler as LLVM bitcode), and installs `auk` and `raft` in `~/.auk/bin`.
+`auk run`/`test` compile in memory (LLVM's ORC JIT); `auk build` also needs the linker.
 
 ```sh
-cargo build
-./target/debug/auk run examples/tour.auk              # compile and run
-./target/debug/auk build examples/fib.auk -o fib      # native executable (release; refuses `??` holes)
-./target/debug/auk check examples/calc.auk --json     # type-check only; JSON diagnostics for agents
-./target/debug/auk test examples/bank.auk             # run the `test` blocks (a file or a project dir)
-cargo test                                              # the compiler's whole test suite
-```
-
-Or without Rust, from any existing `auk` (the compiler is written in Auk, `compiler/`):
-
-```sh
-./build.sh --seed ~/.cargo/bin/auk --check --test       # runtime, raft, auk → target/bin/; tests
-./target/bin/auk run examples/tour.auk
+./build.sh --check --test --install             # runtime, raft, auk (to the fixed point); tests
+export PATH="$HOME/.auk/bin:$PATH"
+auk run examples/tour.auk                       # compile and run
+auk build examples/fib.auk -o fib               # native executable (release; refuses `??` holes)
+auk check examples/calc.auk --json              # type-check only; JSON diagnostics for agents
+auk test examples/bank.auk                      # run the `test` blocks (a file or a project dir)
+scripts/check.sh                                # everything: build, tests, golden, bench
 ```
 
 | command | does |
@@ -136,24 +132,25 @@ source ─▶ lexer ─▶ parser ─▶ resolve ─▶ checker ─▶ patterns/
                              and names  shapes     `uses`              control flow
 ```
 
-- **lexer / parser** (`src/lexer.rs`, `src/parser.rs`): newline-terminated statements, string
+- **lexer / parser** (`compiler/src/lexer.auk`, `parser.auk`): newline-terminated statements, string
   interpolation, recursive descent with precedence climbing.
-- **resolve** (`src/resolve.rs`): the module tree of the project, its `.raft/` dependencies, and
+- **resolve** (`compiler/src/resolve.auk`): the module tree of the project, its `.raft/` dependencies, and
   the core library in `compiler/prelude/*.auk`.
-- **checker** (`src/check.rs`, `src/check/`): inference driven by the expected type,
+- **checker** (`compiler/src/check*.auk`): inference driven by the expected type,
   overloading and dot calls, shapes (monomorphized), auto-wrapping into `T?`/`T!`, units of
-  measure (`src/units.rs`; erased before codegen).
-- **patterns / effects** (`src/patterns.rs`, `src/effects.rs`): clause and `match`
+  measure (`units.auk`; erased before codegen).
+- **patterns / effects** (`compiler/src/patterns.auk`, `effect_check.auk`): clause and `match`
   exhaustiveness and reachability; `uses` checking against each function and `raft.toml`.
-- **lower / MIR / LLVM** (`src/mir/`, `src/build.rs`): each program becomes MIR, a
+- **lower / MIR / LLVM** (`compiler/src/mir/`, `codegen.auk`, `drive.auk`): each program becomes MIR, a
   structured IR with explicit reference counting, then machine code with LLVM: compiled in
   memory and run in-process for `run`/`test`, or an object file linked into an executable for
   `build`. The runtime is [`runtime/c`](runtime/c/), written in C (linked into the `auk`
   binary for the JIT, and embedded as a static library for `build`).
-- **diagnostics** (`src/diag.rs`): stable codes, notes and fix-its; every code has a page in
+- **diagnostics** (`compiler/src/diag.auk`): stable codes, notes and fix-its; every code has a page in
   [`docs/errors/`](docs/errors/) (`auk explain E0400`).
 
-[`docs/compiler.md`](docs/compiler.md) has the full architecture: source layout, runtime ABI, and
+The compiler is written in Auk itself (it was ported from Rust, tag `v0-rust-final`; see
+[`docs/self-host-plan.md`](docs/self-host-plan.md)). [`docs/compiler.md`](docs/compiler.md) has the full architecture: source layout, runtime ABI, and
 how contracts, holes, tests, `peek` and `imprint` compile.
 
 ## Editors
