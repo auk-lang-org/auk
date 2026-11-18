@@ -259,8 +259,9 @@ step diffed against the golden corpus before the next starts:
 
 - [ ] Shared: `diag.rs` (385) diagnostics + fix-its, `json.rs` (434), `types.rs` (554).
       `types.rs` done (3a): `compiler/src/types.auk`. `diag.rs`: `Span`/`Diag`/`Fix`, `FileDiag`,
-      the warning list and the `check --json` report (`json_report_files`, 3b); still missing:
-      the text rendering (`render`, the code table) and the rest of `json.rs` (MCP/LSP).
+      the warning list and the `check --json` report (`json_report_files`, 3b); the text
+      rendering (`render`, with the fmt port) is diffed through `auk check`'s human output (3c);
+      still missing: the code table (`auk explain`) and the rest of `json.rs` (MCP/LSP).
 - [x] `resolve.rs` (578): `compiler/src/resolve.auk` (3a). Oracle `auk dump resolve <file>`
       (`src/dump.rs`, unit test `dump::tests::resolve_dump`): load as `auk check` does
       (`load_in_package`), print packages (deps, effects, links), modules in load order with
@@ -313,15 +314,33 @@ step diffed against the golden corpus before the next starts:
   `check::check` returns. `Checker` methods live in four files; each method of another file has a
   forward in `check.auk` so `c.f(..)` works everywhere (gap 1 of 3b): add new cross-file methods
   the same way. `check_shapes.visit_pat`/`visit_expr_pats` push patterns like `visit.auk`.
-- [ ] `patterns.rs` (901) exhaustiveness, `effects.rs` (647), `holes.rs` (690): then `check_all`
-      (sorted, deduplicated diagnostics after the type check) and the oracle becomes
-      `auk check --json` itself (`compiler check --json` prints `check_types`' report today).
+- [x] `patterns.rs` (901) exhaustiveness, `effects.rs` (647), `holes.rs` (690), `check_all` /
+      `check_partial` and main.rs's `check_file` (3c): `patterns.auk`, `effect_check.auk` (a
+      module named `effects` would collide with the many locals of that name: E0116),
+      `holes.auk`, `cli.auk`, `check.check_all`. The Auk driver now has `compiler check [--json]
+      <file>` and `compiler holes [--json] <file>` with `auk check`/`auk holes`'s stdout, stderr
+      and exit code, and the oracles are those commands themselves: `scripts/diff_check.sh`
+      (`check --json`), `scripts/diff_check_text.sh` (`check`: the rendered diagnostics) and
+      `scripts/diff_holes.sh` (`holes`, `holes --json`) compare all three streams: **959 files,
+      0 differ** each. `tests/checker/` gained `pat_*` (or-pattern alternatives, lists, literals,
+      structs, options/typed errors, guards, `Value`/maps, binding patterns, one-line arms),
+      `eff_chains` (hidden effects through generic instances, closures, function values, `Show`
+      impls, `any Shape`, combined E0410+E0411 fixes, `uses` anchors after multi-line parameter
+      lists), `hole_scopes`, `effects_project/` and `effects_none/` (E0413 against raft.toml),
+      and the remaining programs the Rust tests run through `auk check`/`auk holes`.
+      All of `auk check` 1.40x Rust in-process, the two new passes 2.47x (pilot-report.md, "3c").
+
+  **What the next steps build on**: `check.check_all(prog)` / `check.check_partial(prog)` (Rust's
+  names and results); `patterns.children(e)` (the direct sub-expressions in source order, Rust's
+  `patterns::children`); `cli.print_diags(cx, diags)` renders diagnostics to stderr against each
+  file's text (`resolve.source_of`); `holes.discover(tp)`/`holes.brief_text`/`holes.hole_json`
+  for `auk hatch` and the MCP tools.
 - [ ] MIR: `mir/mod.rs` (511), `types.rs` (234), `layout.rs` (278), `lower.rs` (3577),
       `lower/pat.rs` (342), `progen.rs` (2167), `print.rs` (581)
 - [ ] Diff gates: tokens → AST → diagnostics (codes, messages, spans, fix-its) for every file,
       including `tests/errors/` and `docs/errors/` examples → MIR text. Done through the type
-      checker's diagnostics and typed program (`scripts/check.sh` pilot step runs every diff);
-      patterns/effects diagnostics and MIR text remain.
+      checker's diagnostics (all of `auk check`, JSON and text) and typed program, and
+      `auk holes` (`scripts/check.sh` pilot step runs every diff); MIR text remains.
 - [ ] Prelude (`src/prelude/*.auk`) is embedded the same way: one `extern fn ..: str = "#embed .."`
       per file. For now `resolve.auk` reads it from disk (`resolve.sources(dir)`).
 

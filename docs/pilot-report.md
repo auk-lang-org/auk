@@ -499,6 +499,80 @@ walk with a closure, without building a list).
 
 No compiler or runtime bug blocked the port; no compiler or runtime change was needed.
 
+### 3c: patterns, effects, holes and `auk check`
+
+| Rust (non-blank lines) | Auk (`compiler/src/`) |
+|---|---|
+| `patterns.rs` (896) | `patterns.auk` (954) |
+| `effects.rs` (607) | `effect_check.auk` (701) |
+| `holes.rs` (662, with its JSON via `json.rs`) | `holes.auk` (600) |
+| `check::check_all`/`check_partial`, `main.rs` `check_file` | `check.auk` (+22), `cli.auk` (36) |
+
+The rest of the checker: exhaustiveness and reachability (Maranget's usefulness, or-pattern
+alternatives reported on their own), the effects analysis (direct and hidden effects, call
+chains, E0410-E0415 with their combined fix-its), and `auk holes` (scopes at each hole, the
+brief, the JSON). `check_all` sorts and deduplicates their diagnostics after a clean type check,
+as Rust does. The driver now has `compiler check [--json] <file>` and `compiler holes [--json]
+<file>`, with `auk check`'s and `auk holes`'s stdout, stderr and exit code (the text mode
+renders with the `Diag::render` the fmt port brought).
+
+**Oracles.** The commands themselves: `scripts/diff_check.sh` (`check <file> --json`),
+`scripts/diff_check_text.sh` (`check <file>`: the rendered diagnostics on stderr) and
+`scripts/diff_holes.sh` (`holes <file>` and `holes <file> --json`) each compare stdout, stderr and
+the exit code (`scripts/pilot_common.sh`, `diff_cmd`). The corpus gained `tests/checker/pat_*`,
+`eff_chains`, `hole_scopes`, two projects (`effects_project/`: E0413 against `effects = ["net",
+"time"]`, shapes and generic instances across modules; `effects_none/`: E0413 against `effects =
+[]`, holes with errors) and 14 programs the Rust tests run through `auk check`/`auk holes` that
+weren't in it yet (found by logging what `check_file` and `holes::run` read during `cargo test`).
+
+```
+check:      959 files, 0 differ     (auk check --json)
+check_text: 959 files, 0 differ     (auk check)
+holes:      959 files, 0 differ     (auk holes)
+holes_json: 959 files, 0 differ     (auk holes --json)
+tokens / ast / resolve / typed: 959 files, 0 differ
+```
+
+All four were at zero on the first full run, as in the earlier phases. One divergence was found
+by reading rather than by the corpus: the ported `render` showed an empty line for a diagnostic
+at line 0 where Rust's `lines().nth(0.saturating_sub(1))` shows the first line (fixed, with a
+test; no corpus file has such a diagnostic).
+
+**Timing** (`scripts/pilot_time.sh 3 10`, new rows; 119 files, tests/checker/ left out; best of
+3; the machine was shared with other agents' builds):
+
+| measure | Rust | Auk | Auk / Rust |
+|---|---|---|---|
+| check (type checker), in-process | 2796 ms | 3624 ms | 1.30x |
+| check alone (difference with resolve) | 1908 ms | 2246 ms | 1.18x |
+| **`check_all`** (all of `auk check`), in-process | 3083 ms | 4331 ms | **1.40x** |
+| patterns + effects (difference) | 287 ms | 707 ms | 2.47x |
+| `auk check --json`, one process per file | 6159 ms | 5350 ms | 0.87x |
+
+The two new passes are slower relative to Rust than the type checker, but they are a sixth of
+the port's check time. A `sample` puts ~85% of them in effects (`check_fn`: collecting each
+body's nodes, then `needs` per node: map lookups, small sets as sorted lists, the `Via` with its
+callee name), mostly in malloc/free and RC traffic; patterns is small. Per process the port is
+faster than Rust: the Rust binary loads LLVM at start-up, which is most of a small file's check.
+
+### Gaps found (3c)
+
+1. **A module name reserves the identifier project-wide** (fmt gap 2) hit harder: a module
+   `effects` broke `parser.auk` and the checker, which have locals named `effects`, so the port
+   is `effect_check.auk`; in `holes.auk` the local `holes` became `hs`.
+2. **Keyword field names** again: `FnBrief.requires`/`ensures` are `pre`/`post` (as `FnClause`).
+3. **No ordered set**: Rust's `BTreeSet<String>` (effects) is a sorted list without duplicates
+   with three helpers (`set_of`, `set_union`, `set_subset`); `HashSet`s are `{K: bool}`.
+4. **Closures can't update captured state**: Rust's `show_args` closure (it threads the set of
+   names used) is a method taking `var Names`, and `Walk`'s `arms.iter().any(|a| self.expr(..))`
+   is a loop; `Option<Option<usize>>` (`T??`) is an enum `Reach { Live, Dead(int?) }`.
+5. **No print without a line break** (fmt gap 1): rendered diagnostics and hole briefs end with
+   one, so they are printed with it stripped.
+6. Smaller: `holes::offset` works on byte offsets; the port counts chars (same results on any
+   text); Rust's `{:?}` of a test name is `check_expr.debug_str` (now `pub`).
+
+No compiler or runtime bug blocked the port; no compiler or runtime change was needed.
+
 ## Phase 5
 
 ### fmt
@@ -563,11 +637,13 @@ No compiler or runtime bug was hit; no compiler or runtime change was needed.
 ## Reproduce
 
 ```
-scripts/diff_tokens.sh        # tokens: 924 files, 0 differ
-scripts/diff_ast.sh           # ast: 924 files, 0 differ
-scripts/diff_resolve.sh       # resolve: 924 files, 0 differ (254 before tests/checker/)
-scripts/diff_check.sh         # check: 924 files, 0 differ
-scripts/diff_typed.sh         # typed: 924 files, 0 differ, and typed --core
+scripts/diff_tokens.sh        # tokens: 959 files, 0 differ
+scripts/diff_ast.sh           # ast: 959 files, 0 differ
+scripts/diff_resolve.sh       # resolve: 959 files, 0 differ (254 before tests/checker/)
+scripts/diff_check.sh         # check (auk check --json): 959 files, 0 differ
+scripts/diff_check_text.sh    # check_text (auk check): 959 files, 0 differ
+scripts/diff_holes.sh         # holes, holes_json: 959 files, 0 differ each
+scripts/diff_typed.sh         # typed: 959 files, 0 differ, and typed --core
 scripts/diff_fmt.sh           # fmt: 258 files, 0 differ, 0 not idempotent
 scripts/pilot_time.sh 7 20    # the tables above
 auk test compiler             # the ported unit tests
