@@ -5,9 +5,11 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+mod auk_bin;
+
 /// Run a dive session on `input`; returns its stdout (asserting a clean exit and empty stderr).
 fn dive(input: &str) -> String {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_auk"))
+    let mut child = Command::new(auk_bin::auk_bin())
         .args(["dive", "--quiet"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -135,9 +137,9 @@ fn main(): ()! {
 "#,
     );
     // The saved session is a program that checks, formats as is and runs.
-    let fmt = Command::new(env!("CARGO_BIN_EXE_auk")).args(["fmt", "--check"]).arg(dir.join("session.auk")).output().unwrap();
+    let fmt = Command::new(auk_bin::auk_bin()).args(["fmt", "--check"]).arg(dir.join("session.auk")).output().unwrap();
     assert!(fmt.status.success(), "{}", String::from_utf8_lossy(&fmt.stderr));
-    let run = Command::new(env!("CARGO_BIN_EXE_auk")).arg("run").arg(dir.join("session.auk")).output().unwrap();
+    let run = Command::new(auk_bin::auk_bin()).arg("run").arg(dir.join("session.auk")).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&run.stdout), "hello from a statement\n");
     let _ = fs::remove_dir_all(&dir);
 }
@@ -223,6 +225,6 @@ dive:1:9: error[E0012]: unclosed `[`
 
 #[test]
 fn bad_flag() {
-    let out = Command::new(env!("CARGO_BIN_EXE_auk")).args(["dive", "--nope"]).stdin(Stdio::null()).output().unwrap();
+    let out = Command::new(auk_bin::auk_bin()).args(["dive", "--nope"]).stdin(Stdio::null()).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
 }
