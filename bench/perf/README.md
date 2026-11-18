@@ -6,32 +6,36 @@ compiler can constant-fold. `run.sh` builds Duck with `duck build` (release) and
 -C target-cpu=native`, plus a second Rust build with `overflow-checks=on`, because Duck traps on overflow.
 It then times the best of 5 runs and checks that the outputs match.
 
-## Results with the LLVM back end (2026-11-17, Apple Silicon, rustc 1.99.1, best of 3, quiet machine)
+## Results (2026-11-17, Apple Silicon, rustc 1.99.1, `duck build` with the LLVM back end, best of 5, quiet machine)
 
-| bench | size | rust -O | rust +overflow checks | duck (Cranelift, before) | duck (LLVM) | duck/rust | duck/rust+oc |
+| bench | size | rust -O | rust +overflow checks | duck (Cranelift, before the port) | duck | duck/rust | duck/rust+oc |
 |---|---|---|---|---|---|---|---|
-| fib (recursion, int math) | 38 | 0.058s | 0.090s | 0.167s | 0.094s | 1.6x | **1.05x** |
-| sieve (`[bool]` index/store) | 50M | 0.153s | 0.166s | 1.304s | 0.396s | 2.6x | **2.4x** |
-| nbody (`[float]` index/store, float math) | 5M steps | 0.164s | 0.164s | 2.615s | 0.353s | 2.2x | **2.2x** |
-| hashmap (`{int: int}` insert/get) | 5M | 0.151s | 0.152s | 0.417s | 0.426s | 2.8x | **2.8x** |
-| trees (enum alloc + match) | depth 18 | 1.637s | 1.679s | 3.278s | 2.553s | 1.6x | **1.5x** |
-| strings (interp, join, split, chars) | 5M | 0.248s | 0.251s | 0.752s | 0.753s | 3.0x | **3.0x** |
-| sort (`xs.sort()` of ints) | 10M | 0.175s | 0.176s | 4.664s | 3.031s | 17x | **17x** |
+| fib (recursion, int math) | 38 | 0.058s | 0.086s | 0.157s | 0.092s | 1.6x | **1.07x** |
+| sieve (`[bool]` index/store) | 50M | 0.166s | 0.168s | 1.278s | 0.399s | 2.4x | **2.4x** |
+| nbody (`[float]` index/store, float math) | 5M steps | 0.162s | 0.162s | 2.576s | 0.350s | 2.2x | **2.2x** |
+| hashmap (`{int: int}` insert/get) | 5M | 0.160s | 0.158s | 0.449s | 0.266s | 1.7x | **1.7x** |
+| trees (enum alloc + match) | depth 18 | 1.617s | 1.648s | 3.276s | 2.594s | 1.6x | **1.6x** |
+| strings (interp, join, split, chars) | 5M | 0.246s | 0.251s | 0.771s | 0.451s | 1.8x | **1.8x** |
+| sort (`xs.sort()` of ints) | 10M | 0.178s | 0.190s | 4.681s | 0.163s | 0.92x | **0.86x** |
 
-Items 1 and 2 of the profile below are fixed: the LLVM back end compiles list access, checked arithmetic,
-reference counting and the exact float ops inline (`src/mir/llvm/intrin.rs`). What remains:
+What changed since the Cranelift profile below:
 
-- **hashmap**: about 38% of the samples are in the runtime's integer hash (`int_hash`), 34% in
-  `duck_map_get_opt`. A cheaper integer hash (a multiply-xorshift) is the next step.
-- **strings**: about 30% of the samples are in macOS malloc's `free` (it reads the clock), freeing the
-  temporary strings interpolation makes (`duck_str_from_int`, then the builder's buffer in
-  `duck_sb_finish`). Writing ints straight into the string builder would remove them.
-- **sort**: item 3 below still holds.
+- Items 1 and 2 are fixed: the back end compiles list access, checked arithmetic, reference
+  counting and the exact float ops inline (`src/mir/llvm/intrin.rs`).
+- Item 3 is fixed: `sort` is the runtime's (`duck_arr_sorted`: ints and floats sorted as values,
+  anything else through a permutation by the element ops' `cmp`).
+- Maps: index slots carry a hash fingerprint and keys sit with their values (about two cache misses
+  per lookup instead of four), and `m[k] = (m.get(k) else d) op x` is one lookup when `k` is present.
+- Strings: the string builder keeps short text inline and interpolating an int writes its digits
+  straight into it, so `"w{i}"` allocates only the result.
 
-The absolute times are lower than the table below's mostly because that run was on a heavily loaded machine;
-compare within a table.
+What remains: allocation (strings: every `split` piece and map key is a heap string, and macOS `free`
+reads the clock; trees: a box per node), the cache misses of a big map, and list writes' copy-on-write
+checks.
 
-## Results with Cranelift (2026-11-17, Apple Silicon, rustc 1.99.1, duck at e03bb96 + working tree, loaded machine)
+The Cranelift table below was measured on a heavily loaded machine; compare within a table.
+
+## Results with Cranelift, before the port (2026-11-17, duck at e03bb96, loaded machine)
 
 | bench | size | rust -O | rust +overflow checks | duck | duck/rust | duck/rust+oc |
 |---|---|---|---|---|---|---|
