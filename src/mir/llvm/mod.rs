@@ -4,6 +4,7 @@
 mod codegen;
 mod debug;
 mod jit;
+mod rtlink;
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
@@ -120,7 +121,9 @@ struct Built {
     tm: LLVMTargetMachineRef,
 }
 
-fn build(prog: &Program, info: &TyInfo, ex: &Exports, live: Option<(usize, HashMap<u32, usize>)>, level: Level) -> Result<Built, String> {
+/// Translate, verify and optimize `prog`. `link_runtime`: link the runtime's inlinable functions
+/// into the module first (`rtlink.rs`; `duck build` only: it costs compile time).
+fn build(prog: &Program, info: &TyInfo, ex: &Exports, live: Option<(usize, HashMap<u32, usize>)>, level: Level, link_runtime: bool) -> Result<Built, String> {
     let tm = target_machine(level)?;
     unsafe {
         let cx = LLVMContextCreate();
@@ -136,6 +139,10 @@ fn build(prog: &Program, info: &TyInfo, ex: &Exports, live: Option<(usize, HashM
         let dl = LLVMCreateTargetDataLayout(tm);
         LLVMSetModuleDataLayout(m, dl);
         llvm_sys::target::LLVMDisposeTargetData(dl);
+        // DUCK_NO_RT_INLINE=1: without the runtime's bitcode (to compare)
+        if link_runtime && std::env::var_os("DUCK_NO_RT_INLINE").is_none() && !rtlink::link(cx, m) {
+            eprintln!("note: the runtime's bitcode can't be used with this LLVM; runtime calls won't be inlined");
+        }
         if cfg!(debug_assertions) || std::env::var_os("DUCK_VERIFY").is_some() {
             let mut msg = std::ptr::null_mut();
             if LLVMVerifyModule(m, LLVMVerifierFailureAction::LLVMReturnStatusAction, &mut msg) != 0 {
@@ -171,7 +178,7 @@ fn exports(entry: &str) -> Exports {
 
 /// Compile a program in memory.
 pub fn jit(prog: &Program, info: &TyInfo, level: Level) -> Result<Jit, String> {
-    let b = build(prog, info, &exports("dk_entry"), None, level)?;
+    let b = build(prog, info, &exports("dk_entry"), None, level, false)?;
     let code = jit::Code::load(&emit(b)?)?;
     let entry = code.lookup("dk_entry")?;
     Ok(Jit::new(entry, Box::new(code)))
@@ -180,7 +187,7 @@ pub fn jit(prog: &Program, info: &TyInfo, level: Level) -> Result<Jit, String> {
 /// The debugger's evaluation module, compiled in memory for good: (entry, `dk_init`).
 pub fn jit_eval(prog: &Program, info: &TyInfo) -> Result<(*const u8, *const u8), String> {
     let ex = Exports { entry: "dk_entry".into(), names: vec!["dk_init".into()], all: false };
-    let b = build(prog, info, &ex, None, Level::O0)?;
+    let b = build(prog, info, &ex, None, Level::O0, false)?;
     let code = jit::Code::load(&emit(b)?)?;
     let entry = code.lookup("dk_entry")?;
     let init = code.lookup("dk_init")?;
@@ -192,7 +199,7 @@ pub fn jit_eval(prog: &Program, info: &TyInfo) -> Result<(*const u8, *const u8),
 /// at `table` (8-byte code pointers).
 pub fn jit_live(prog: &Program, info: &TyInfo, table: usize, slots: &HashMap<u32, usize>) -> Result<LiveJit, String> {
     let ex = Exports { entry: "dk_entry".into(), names: Vec::new(), all: true };
-    let b = build(prog, info, &ex, Some((table, slots.clone())), Level::O0)?;
+    let b = build(prog, info, &ex, Some((table, slots.clone())), Level::O0, false)?;
     let code = jit::Code::load(&emit(b)?)?;
     let entry = code.lookup("dk_entry")?;
     let mut addrs = HashMap::new();
@@ -210,7 +217,7 @@ pub fn jit_live(prog: &Program, info: &TyInfo, table: usize, slots: &HashMap<u32
 
 /// Compile a program to an object file whose `main` is the entry point.
 pub fn object(prog: &Program, info: &TyInfo, opt: bool) -> Result<Vec<u8>, String> {
-    emit(build(prog, info, &exports("main"), None, if opt { Level::O2 } else { Level::O0 })?)
+    emit(build(prog, info, &exports("main"), None, if opt { Level::O2 } else { Level::O0 }, opt)?)
 }
 
 /// Generate machine code for a built module: an object file's bytes (consumes the module).
@@ -233,7 +240,7 @@ fn emit(b: Built) -> Result<Vec<u8>, String> {
 
 /// The program's LLVM IR, unoptimized, as text (`duck ir --llvm`).
 pub fn ir_text(prog: &Program, info: &TyInfo) -> Result<String, String> {
-    let b = build(prog, info, &exports("main"), None, Level::O0)?;
+    let b = build(prog, info, &exports("main"), None, Level::O0, false)?;
     unsafe {
         let s = message(LLVMPrintModuleToString(b.m));
         LLVMDisposeModule(b.m);

@@ -1,6 +1,7 @@
 //! Builds the runtime (`runtime/`, the `duck_rt` crate) as a static library and puts it in
 //! `OUT_DIR/libduck_rt.a`, which the compiler embeds (`include_bytes!`) and links into every
-//! program it builds. A nested `cargo build` with its own target directory (so it never waits
+//! program it builds, plus the runtime's own LLVM bitcode (`OUT_DIR/duck_rt.bc`, one codegen
+//! unit), which `duck build` links into the program so small runtime functions can inline. A nested `cargo build` with its own target directory (so it never waits
 //! on the outer build's lock) and the `rt` profile (release, `panic = "abort"`).
 
 use std::env;
@@ -19,9 +20,10 @@ fn main() {
     let tdir = out.join("rt-target");
     let mut cmd = Command::new(cargo);
     cmd.current_dir(&manifest)
-        .args(["build", "-p", "duck_rt", "--lib", "--profile", "rt", "--target", &target])
+        .args(["rustc", "-p", "duck_rt", "--lib", "--crate-type", "staticlib", "--profile", "rt", "--target", &target])
         .arg("--target-dir")
-        .arg(&tdir);
+        .arg(&tdir)
+        .args(["--", "--emit=link,llvm-bc", "-C", "codegen-units=1"]);
     // Don't leak the outer build's settings (e.g. RUSTFLAGS for coverage) into the runtime.
     for (k, _) in env::vars() {
         if k.starts_with("CARGO_") && k != "CARGO_HOME" || k == "RUSTFLAGS" || k == "RUSTC_WRAPPER" {
@@ -35,6 +37,15 @@ fn main() {
     assert!(status.success(), "building the runtime (duck_rt) failed");
     let lib = tdir.join(&target).join("rt").join("libduck_rt.a");
     std::fs::copy(&lib, out.join("libduck_rt.a")).unwrap_or_else(|e| panic!("copying {}: {e}", lib.display()));
+    // the bitcode is `deps/duck_rt-<hash>.bc`: the newest one
+    let deps = tdir.join(&target).join("rt").join("deps");
+    let bc = std::fs::read_dir(&deps)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "bc") && p.file_name().unwrap().to_string_lossy().starts_with("duck_rt-"))
+        .max_by_key(|p| p.metadata().and_then(|m| m.modified()).unwrap())
+        .unwrap_or_else(|| panic!("no duck_rt bitcode in {}", deps.display()));
+    std::fs::copy(&bc, out.join("duck_rt.bc")).unwrap_or_else(|e| panic!("copying {}: {e}", bc.display()));
     symbols(&manifest.join("runtime/src"), &out.join("rt_symbols.rs"));
 }
 
