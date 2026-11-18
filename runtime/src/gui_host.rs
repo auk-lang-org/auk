@@ -18,6 +18,12 @@
 //!   `OPEN` with the same title takes one over, and the next client to leave closes the rest.
 //!   Exit when `AUK_GUI_OWNER` (the live parent's pid) is gone.
 
+/// testing.c's program entry calls this for the window process.
+#[unsafe(no_mangle)]
+pub extern "C" fn auk__gui_host_main() -> i32 {
+    host_main()
+}
+
 /// Run the window process. Returns an exit code only if it can't start.
 pub fn host_main() -> i32 {
     let spec = std::env::var("AUK_GUI_HOST").unwrap_or_default();

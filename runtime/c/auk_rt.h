@@ -713,6 +713,31 @@ AUK_API AukArr *auk_env_lines(void);
 AUK_API AukRes_str auk_proc_run(const AukStr *cmd, const AukArr *args);
 AUK_API _Noreturn void auk_proc_exit(int64_t code, const char *loc);
 
+/* ---- testing.c: contracts, assert, peek, tests, program entry ------------------------- */
+
+typedef AukErr *(*AukTestFn)(void);
+typedef AukRes_int (*AukMainFn)(AukArr *args);
+AUK_API _Noreturn void auk_requires_fail(const char *loc, const char *cond_text);
+AUK_API _Noreturn void auk_ensures_fail(const char *loc, const char *cond_text);
+AUK_API _Noreturn void auk_hole(const char *loc, const char *expected);
+AUK_API _Noreturn void auk_assert_fail(const char *loc, const char *cond_text);
+AUK_API _Noreturn void auk_assert_fail_cmp(const char *loc, const char *cond_text, const AukStr *left, const AukStr *right);
+AUK_API void auk_peek(const char *loc, const char *src_text, const AukStr *shown);
+AUK_API void auk_test_register(const char *name, AukTestFn fn);
+AUK_API int auk_test_main(int argc, char **argv);
+AUK_API int auk_main_wrapper(int argc, char **argv, AukMainFn user_main);
+
+/* ---- compiler.c: helpers for generated code, the imprint evaluator ---------------------- */
+
+AUK_API AukErr *auk__err_with_tag(const char *prefix, int tag);
+AUK_API AukErr *auk__err_concat(const char *a, const AukStr *s, const char *b);
+AUK_API uint64_t auk_hash_float(double x);
+AUK_API uint64_t auk_value_hash(const AukValue *v);
+AUK_API bool auk__imprint_open(int argc, const char *const *argv);
+AUK_API void auk__imprint_close(void);
+AUK_API void auk__imprint_mark(int tag, int64_t c);
+AUK_API void auk__imprint_value(int64_t c, const AukValue *v);
+
 /* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
 
 
@@ -725,6 +750,9 @@ void auk__tls_free(void *tls);
 /* The debugger's per-thread state at a recovery point (dbg.rs). */
 void auk__dbg_save(void **top, int64_t *depth);
 void auk__dbg_restore(void *top, int64_t depth);
+
+/* The window process's entry (gui_host.rs). */
+int auk__gui_host_main(void);
 
 /* The debugger hears about panics (dbg.rs). */
 void auk__dbg_on_panic(const char *loc, const char *msg, size_t n, bool caught);
