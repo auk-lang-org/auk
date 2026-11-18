@@ -2621,6 +2621,18 @@ impl<'g, 'a> Lower<'g, 'a> {
         if op.is_none() && self.fused_map_update(target, value) {
             return;
         }
+        // `s = s + x` on a local string is `s += x`
+        if op.is_none()
+            && let EK::Binary { op: BinOp::Add, lhs, rhs } = &value.kind
+            && matches!(target.kind, EK::Name(_))
+            && self.same_operand(target, lhs)
+            && self.pure_read(rhs)
+            && !self.t.calls.contains_key(&value.id)
+            && self.ty(target.id) == Ty::Str
+            && self.t.coercions.get(&value.id).is_none_or(|c| c.is_empty())
+        {
+            return self.assign(e, Some(BinOp::Add), target, rhs);
+        }
         if op.is_some() && self.t.calls.contains_key(&e.id) {
             // a user operator: target = op(target, value)
             let v = self.call(e, None, false);
@@ -2658,11 +2670,8 @@ impl<'g, 'a> Lower<'g, 'a> {
                         };
                         self.set(lv, c);
                     }
-                    Ty::Str => {
-                        let n = self.decl(&Ty::Str, Ex::rt("auk_str_concat", vec![lv.clone(), rc], MTy::D(Ty::Str)));
-                        self.do_(Ex::rt("auk_release", vec![lv.clone()], MTy::Void));
-                        self.set(lv, n);
-                    }
+                    // in place when the string is unique: appending in a loop is linear
+                    Ty::Str => self.do_(Ex::rt("auk_str_append", vec![lv.addr(), rc], MTy::Void)),
                     Ty::List(_) => self.do_(Ex::rt("auk_arr_extend", vec![lv.addr(), rc], MTy::Void)),
                     _ => {}
                 }

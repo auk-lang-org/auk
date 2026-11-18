@@ -398,6 +398,8 @@ AukHeap *auk__heap_current(void);
 AukHeap *auk__heap_switch(AukHeap *h);
 AukHeader *auk__heap_alloc(size_t size, uint32_t kind);
 void auk__heap_free(AukHeader *h);
+size_t auk__heap_usable(AukHeader *h);
+AukHeader *auk__heap_resize(AukHeader *h, size_t size);
 void auk__heap_sweep(AukHeap *heap);
 AUK_API void *auk_heap_switch(void *h);
 AUK_API void *auk_heap_new(void);
@@ -560,6 +562,9 @@ AUK_API uint32_t auk_str_char_at(const AukStr *s, int64_t i, const char *loc);
 AUK_API AukOpt_char auk_str_get(const AukStr *s, int64_t i);
 AUK_API AukStr *auk_str_slice(const AukStr *s, int64_t a, int64_t b, const char *loc);
 AUK_API AukStr *auk_str_concat(const AukStr *a, const AukStr *b);
+/* `*ps += b`: appends in place when *ps is unique (rc 1), growing it geometrically;
+ * otherwise *ps becomes a new string and the old one is released. */
+AUK_API void auk_str_append(AukStr **ps, const AukStr *b);
 AUK_API bool auk_str_eq(const AukStr *a, const AukStr *b);
 AUK_API bool auk_str_eq_lit(const AukStr *s, const char *lit);
 /* A `match` on `str` with many literal arms: the literals sorted by (length, bytes). */

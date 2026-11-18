@@ -465,6 +465,29 @@ static void str_switch_lookup(void) {
     rel(k);
 }
 
+static void str_append_in_place(void) {
+    AukStr *a = s("ab");
+    AukStr *shared = ret(a);
+    auk_str_append(&a, shared); /* shared: a new string, the old one released */
+    CHECK(a != shared);
+    CHECK_INT(auk_refcount(shared), 1);
+    for (int i = 0; i < 1000; i++) {
+        AukStr *e = s("\xc3\xa9");
+        auk_str_append(&a, e);
+        rel(e);
+    }
+    CHECK_INT(a->len_bytes, 2004);
+    CHECK_INT(a->len_chars, 1004);
+    CHECK(!a->is_ascii);
+    auk_str_append(&a, a); /* appending itself */
+    CHECK_INT(a->len_bytes, 4008);
+    CHECK(memcmp(a->data + 2004, "abab\xc3\xa9", 6) == 0 && a->data[4008] == 0);
+    auk_str_append(&a, NULL); /* "" changes nothing */
+    CHECK_INT(a->len_chars, 2008);
+    rel(a);
+    rel(shared);
+}
+
 static void str_char_helpers(void) {
     CHECK(auk_char_is_digit('7') && !auk_char_is_digit('a'));
     CHECK(auk_char_is_alpha('Q') && !auk_char_is_alpha('1'));
@@ -493,5 +516,6 @@ const TestCase str_tests[] = {
     {"str_builder", str_builder},
     {"str_char_helpers", str_char_helpers},
     {"str_switch_lookup", str_switch_lookup},
+    {"str_append_in_place", str_append_in_place},
     {NULL, NULL},
 };

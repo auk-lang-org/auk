@@ -18,6 +18,11 @@
  * closing the connections the task still had open. */
 #include <pthread.h>
 #include <stdlib.h>
+#ifdef __APPLE__
+#include <malloc/malloc.h>
+#else
+#include <malloc.h>
+#endif
 
 #include "auk_rt.h"
 
@@ -182,6 +187,43 @@ void auk__heap_free(AukHeader *h) {
     l->next->prev = l->prev;
     pthread_mutex_unlock(&heap->lock);
     free(l);
+}
+
+/* The bytes usable from h (the header included) in its allocation, which may be more than
+ * were asked for. */
+size_t auk__heap_usable(AukHeader *h) {
+    bool tracked = (h->flags & AUK_TRACKED) != 0;
+    void *base = tracked ? (uint8_t *)h - sizeof(Link) : (void *)h;
+#ifdef __APPLE__
+    size_t n = malloc_size(base);
+#else
+    size_t n = malloc_usable_size(base);
+#endif
+    return tracked ? n - sizeof(Link) : n;
+}
+
+/* Grow (or shrink) h's allocation to size bytes from the header on; returns its new address.
+ * The object must be unique: nothing else may hold the old address. Bytes past the old size
+ * are not zeroed. */
+AukHeader *auk__heap_resize(AukHeader *h, size_t size) {
+    if ((h->flags & AUK_TRACKED) == 0) {
+        AukHeader *n = realloc(h, size);
+        if (n == NULL) {
+            abort();
+        }
+        return n;
+    }
+    Link *l = (Link *)((uint8_t *)h - sizeof(Link));
+    AukHeap *heap = l->heap;
+    pthread_mutex_lock(&heap->lock);
+    Link *n = realloc(l, sizeof(Link) + size);
+    if (n == NULL) {
+        abort();
+    }
+    n->prev->next = n;
+    n->next->prev = n;
+    pthread_mutex_unlock(&heap->lock);
+    return (AukHeader *)((uint8_t *)n + sizeof(Link));
 }
 
 /* Free every object still in heap, then the heap. No object outside it may point into it.

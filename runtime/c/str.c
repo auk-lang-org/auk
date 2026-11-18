@@ -526,6 +526,38 @@ AUK_API AukStr *auk_str_concat(const AukStr *a, const AukStr *b) {
     return s;
 }
 
+AUK_API void auk_str_append(AukStr **ps, const AukStr *b) {
+    AukStr *a = *ps;
+    int64_t nb = slen(b);
+    if (nb == 0) {
+        return;
+    }
+    if (a == NULL || atomic_load_explicit(&a->h.rc, memory_order_acquire) != 1) {
+        *ps = auk_str_concat(a, b);
+        auk_release(a);
+        return;
+    }
+    /* unique: nobody else can see a change; grow in place */
+    int64_t na = a->len_bytes;
+    int64_t chars = auk_str_len(b);
+    bool ascii = is_ascii(b);
+    size_t need = sizeof(AukStr) + (size_t)(na + nb) + 1;
+    if (auk__heap_usable(&a->h) < need) {
+        size_t want = sizeof(AukStr) + (size_t)(na + nb) * 2 + 1;
+        bool self = a == b;
+        a = (AukStr *)auk__heap_resize(&a->h, want);
+        if (self) {
+            b = a;
+        }
+    }
+    memmove(a->data + na, sdata(b), (size_t)nb);
+    a->data[na + nb] = 0;
+    a->len_bytes = na + nb;
+    a->len_chars += chars;
+    a->is_ascii = a->is_ascii && ascii;
+    *ps = a;
+}
+
 static bool bytes_eq(const uint8_t *a, int64_t na, const uint8_t *b, int64_t nb) {
     return na == nb && memcmp(a, b, (size_t)na) == 0;
 }
