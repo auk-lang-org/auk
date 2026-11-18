@@ -343,29 +343,91 @@ fn rstr(p: var Records): str? {
   }
 }
 
-/// The imprint values from the helper's records (written by a run that exited 0).
-pub fn imprint_values(tp: typed.TypedProgram, data: [int]): {int: mir.progen.CVal}! {
+/// The imprint values from the helper's records (`code`: its exit code, none if killed), or
+/// the error to report (Rust's `imprint_results`: E0115 for a cycle, E0420 for a panic).
+pub fn imprint_results(tp: typed.TypedProgram, data: [int], code: int?, stderr: str): ({int: mir.progen.CVal}, str?) {
   var p = Records { b: data, i: 0 }
   var values: {int: mir.progen.CVal} = {}
+  var stack: [int] = []
+  var cycle: int? = none
   while p.i < data.len() {
     let tag = rbyte(&p)
     let end = if tag == 86 { 32 } else { 10 }
     let c = rint(&p, end) else break
     if c < 0 || c >= tp.consts.len() { break }
-    if tag == 86 {
+    if tag == 66 {
+      stack.push(c)
+    } else if tag == 69 {
+      let _ = stack.pop()
+    } else if tag == 67 {
+      cycle = some(c)
+    } else if tag == 86 {
       let v = rvalue(&p) else break
       values[c] = v
       let _ = rbyte(&p)
-    } else if tag != 66 && tag != 69 && tag != 67 {
+    } else {
       break
     }
   }
-  for c, k in tp.consts {
-    if k.imprint && !values.contains(c) {
-      return fail("error: computing the imprints failed: no value for `{k.name}` in the records")
+  match cycle {
+    some(c) => {
+      let k = tp.consts[c]
+      var dg = diag.new("E0115", k.span, "the constant `{k.name}` depends on itself")
+      dg = dg.note("computing `{k.name}` at compile time needs its own value (through a function call)")
+      dg = dg.note("break the cycle: give one of the constants a value that doesn't read the other")
+      return (values, some(render_at(tp, k.module, dg)))
     }
+    none => {}
   }
-  values
+  if code == some(101) {
+    let (msg, at) = panic_message(stderr)
+    // blame the innermost imprint being computed; a `let` it was computing goes in a note
+    var c = -1
+    var i = stack.len() - 1
+    while i >= 0 && c < 0 {
+      if tp.consts[stack[i]].imprint { c = stack[i] }
+      i -= 1
+    }
+    if c < 0 { return (values, some("error: computing the imprints panicked: {msg}\n  at {at}\n")) }
+    let k = tp.consts[c]
+    var dg = diag.new("E0420", k.span, "computing `imprint {k.name}` at compile time panicked: {msg}")
+    dg = dg.note("the panic happened at {at}")
+    match stack.last() {
+      some(top) => if top != c { dg = dg.note("while computing the constant `{tp.consts[top].name}`") }
+      none => {}
+    }
+    return (values, some(render_at(tp, k.module, dg)))
+  }
+  var missing = false
+  for c, k in tp.consts {
+    if k.imprint && !values.contains(c) { missing = true }
+  }
+  if code != some(0) || missing {
+    let status = match code {
+      some(n) => "exit status {n}"
+      none => "killed by a signal"
+    }
+    return (values, some("error: computing the imprints failed ({status}); this is an auk compiler bug:\n{stderr}"))
+  }
+  (values, none)
+}
+
+/// The message and location of the last `panic: <msg>\n  at <loc>` in a program's stderr.
+fn panic_message(stderr: str): (str, str) {
+  let parts = stderr.split("panic: ")
+  if parts.len() < 2 { return ("(no message)", "<unknown>") }
+  let ls = mir.progen.rust_lines(parts[parts.len() - 1])
+  let msg = ls.get(0) else ""
+  let at = match ls.get(1) {
+    some(l) => l.trim().strip_prefix("at ") else "<unknown>"
+    none => "<unknown>"
+  }
+  (msg, at)
+}
+
+fn render_at(tp: typed.TypedProgram, m: int, d: diag.Diag): str {
+  let md = tp.program.mods[m]
+  d.render(md.file, md.src)
 }
 
 // ---- `compiler ir` ----
@@ -450,7 +512,24 @@ pub fn cli(args: [str], prelude: str?): int! uses fs, time, ffi {
       eprint("error: computing imprints needs the back end; pass `--imprints <records>` (AUK_IMPRINT_RECORDS=<file> auk ir writes them)")
       return 1
     }
-    imprints = imprint_values(tp, fs.read_bytes(rf)?)?
+    // the helper's exit code (-1: killed) and stderr, as the Rust compiler saw them
+    let status = fs.read("{rf}.status")?
+    let nl = status.find("\n") else status.len()
+    let code = int.parse(str(status.chars()[0..nl])) else -1
+    let stderr = if nl < status.len() { str(status.chars()[nl + 1..status.len()]) } else { "" }
+    let data = match fs.read_bytes(rf) {
+      ok(b) => b
+      err(_) => []
+    }
+    let (vals, e) = imprint_results(tp, data, if code < 0 { none } else { some(code) }, stderr)
+    match e {
+      some(msg) => {
+        eprint_raw(msg)
+        return 1
+      }
+      none => {}
+    }
+    imprints = vals
   }
   let mode = if release { mir.progen.Mode.Release } else { mir.progen.Mode.Run }
   let tr = mir.progen.Trace { lines, ..trace }
