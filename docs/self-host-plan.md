@@ -19,7 +19,7 @@ What there is to move today:
 | Runtime tests | `runtime/c/test/*.c` (was `runtime/tests/*.rs`) | ~3.2k lines C (Phase 1 done) |
 | Compiler | `src/` (lexer → check → MIR → LLVM); its Auk port `compiler/src/` | ~42k lines Rust; ~39k lines Auk (self-hosting since Phase 4) |
 | Tools | `fmt repl lsp dap debug mcp live hatch explain dive`, `raft` | inside the 42k |
-| Integration tests | `tests/*.rs` (25 files) + fixtures | drive the binaries (any `auk` via `$AUK_BIN`) |
+| Integration tests | `tests/*.rs` (24 files) + fixtures; their Auk port `tests/runner/` (360/360 tests) | drive the binaries (any `auk` via `$AUK_BIN`) |
 | Build | `Cargo.toml`, `build.rs`, `.cargo/config.toml` (`runtime/build.rs` went with Phase 1) | |
 | Rust deps | `llvm-sys`, `libc`, `cc` (rustls and webpki-roots went with Phase 1) | |
 | Auk code already | `src/prelude/*.auk`, `packages/` (24), `examples/` | 135 `.auk` files under tests/examples/packages |
@@ -491,8 +491,49 @@ Port onto the Auk compiler, each with its existing tests passing:
 - [ ] Threads: tools that use `std::thread` (`dap`, `debug`, `mcp`, `live`, `hatch`) use Auk
       tasks/channels instead. `mcp` done: each tool call is a task. `hatch` needs none: the
       model's stdin is a file and the tests run in a spawned child.
-- [ ] Integration tests: `tests/*.rs` (24 files) become an Auk test runner over the same
-      fixtures (spawns the binaries, compares output).
+- [x] Integration tests: `tests/*.rs` (24 files) become an Auk test runner over the same
+      fixtures (spawns the binaries, compares output). **`tests/runner/`**, an Auk project of its
+      own like `raft/` (no dependencies, so no `.raft/`): `suite/<file>.auk` per
+      `tests/<file>.rs`, same test names, order, inputs and expected outputs (12k lines, most
+      of it the embedded programs; run.rs's string literals were extracted mechanically, so
+      they are byte-identical). **360/360** Rust tests have a counterpart
+      (`scripts/test_coverage.sh` lists them per file, from the `#[test]` fns; the 4 copies of
+      src/json.rs's unit tests excluded). Design:
+      - `cmd.auk`: a `Command` built by value (`t.auk().args([..]).setenv(k, v).cwd(d)
+        .stdin(s).timeout(ms).output()` → code, signal, stdout, stderr), or `start()` for a
+        live child (lsp, mcp, dap, debug, dive, live reload). `sys.auk`: `posix_spawnp`
+        through `ffi` with all three streams on pipes (`poll` feeds stdin and drains both
+        outputs, so nothing deadlocks), `addchdir_np` for the cwd, its own process group
+        (a timeout, default 300 s, kills the group), close-on-exec pipes plus
+        `POSIX_SPAWN_CLOEXEC_DEFAULT` on macOS (a child never holds another test's pipe), SIGPIPE
+        ignored in the runner and reset in children; unix sockets for `AUK_DEBUG`.
+      - `t.auk`: `t.check`/`t.fail`, `t.skip_if_lacks(cmd, what)` and `t.lacks` (the
+        `auk_bin::lacks` mechanism: `$AUK_BIN_LACKS`, default for an `$AUK_BIN` binary
+        `debug,dap,dive,live,parse,typed`), `t.scratch` (under `target/test-tmp/<pid>`, removed
+        after a green run) and `t.temp` (`$TMPDIR`), `t.install` (raft install, stale lock
+        regenerated). JSON through `json.auk`, copied from compiler/src (as raft copies
+        `paths.auk`; so is `paths.auk`).
+      - Every test runs as a task (`-j`, default the CPU count) under `catch`, so a panic fails
+        one test; `raft install` in examples, http, url, log once before (`--no-setup`); filters
+        by substring of `suite::name` (`--exact`, `--list`, `--ignored`/`--include-ignored`
+        for run.rs's 3 gui tests). Files that ran `CARGO_BIN_EXE_auk` (debug, dive, fmt, parse,
+        hatch, net, packages_*, llvm_package) take `$AUK_BIN` too, skipping only where the port
+        lacks a command.
+      - `scripts/test_runner.sh` (check.sh step `runner`): builds both, runs the runner against
+        the Rust `auk` and against `target/pilot/compiler`, then the coverage check.
+      **Results:** Rust `auk`: 357 pass (+3 ignored gui tests, which pass on macOS), ~50 s wall
+      (the Rust suite: ~57 s); the port: 330 pass, 27 skip (debug 15, dive 4, parse 3, typed 2,
+      live 2, units' AST check 1), ~52 s; partial skips inside passing tests as in Rust (explain's
+      parse examples, fmt's AST comparison, mcp's `auk_debug`). `RAFT_BIN` = the Auk raft:
+      raft.rs 10/10. Deviations (no input or expected output changed): scratch names are unique
+      per test instead of per-process counters (tests run in parallel); lsp/mcp servers are
+      closed at the end of each test instead of on drop; net.rs's echo client is an ffi socket
+      (it needs a half-close, which `net.Conn` lacks); ffi.rs's test library is built once,
+      race-free; check2/shadow read `check --json` with `json.auk` (a `null` reads as missing).
+      Found on the way: `core.fail(msg)` (core qualified) makes an Err whose message is empty
+      (Rust auk and port alike), and `auk fmt` changes compiler/src/json.auk (not fmt-clean).
+      Gaps: none; still to come when the commands are ported: the 27 skips. `tests/*.rs` stay
+      until Phase 6 deletes them (the coverage check keeps the two in step).
 - [ ] VS Code extension (`editors/vscode`) still works against the new `lsp`/`dap`.
 
 ## Phase 6 — Retire Rust
