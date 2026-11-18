@@ -171,6 +171,66 @@ typedef struct AukValue {
     } u;
 } AukValue;
 
+/* Optionals (`T?`: { bool some; T val; }) and results (`T!`: { bool ok; T val; AukErr *err; }). */
+typedef struct AukOpt_int {
+    bool some;
+    int64_t val;
+} AukOpt_int;
+typedef struct AukOpt_float {
+    bool some;
+    double val;
+} AukOpt_float;
+typedef struct AukOpt_bool {
+    bool some;
+    bool val;
+} AukOpt_bool;
+typedef struct AukOpt_char {
+    bool some;
+    uint32_t val;
+} AukOpt_char;
+typedef struct AukOpt_str {
+    bool some;
+    AukStr *val;
+} AukOpt_str;
+typedef struct AukOpt_arr {
+    bool some;
+    AukArr *val;
+} AukOpt_arr;
+typedef struct AukOpt_value {
+    bool some;
+    AukValue val;
+} AukOpt_value;
+typedef struct AukRes_unit {
+    bool ok;
+    AukUnit val;
+    AukErr *err;
+} AukRes_unit;
+typedef struct AukRes_int {
+    bool ok;
+    int64_t val;
+    AukErr *err;
+} AukRes_int;
+typedef struct AukRes_float {
+    bool ok;
+    double val;
+    AukErr *err;
+} AukRes_float;
+typedef struct AukRes_str {
+    bool ok;
+    AukStr *val;
+    AukErr *err;
+} AukRes_str;
+typedef struct AukRes_arr {
+    bool ok;
+    AukArr *val;
+    AukErr *err;
+} AukRes_arr;
+typedef struct AukRes_value {
+    bool ok;
+    AukValue val;
+    AukErr *err;
+} AukRes_value;
+
 /* Map entry i's key and value (map.rs). */
 static inline uint8_t *auk__map_key(const AukMap *m, int64_t i) {
     return m->entries + i * m->stride;
@@ -370,27 +430,92 @@ AUK_API bool auk_value_eq(AukValue a, AukValue b);
 AUK_API AukStr *auk_value_show(AukValue v);
 AUK_API extern const AukElemOps auk_ops_value;
 
-/* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
+/* ---- str.c: strings, the builder, parsing and formatting ---------------------------------- */
 
-AUK_API AukStr *auk_str_lit(const char *cstr);
-AUK_API AukStr *auk_str_from_bytes(const char *p, int64_t n);
+bool auk__dbg_busy(void);
+bool auk__dbg_set_busy(bool b);
+int64_t auk__show_left(void);
+void auk__set_show_left(int64_t v);
+bool auk__show_exhausted(void);
+bool auk__show_take(int64_t n);
+
+AUK_API int64_t auk_str_len(const AukStr *s);
+AUK_API int64_t auk_str_byte_len(const AukStr *s);
 AUK_API const char *auk_str_cstr(const AukStr *s);
-AUK_API bool auk_str_eq(const AukStr *a, const AukStr *b);
-AUK_API int auk_str_cmp(const AukStr *a, const AukStr *b);
-AUK_API uint64_t auk_str_hash(const AukStr *s);
-AUK_API AukStr *auk_str_quote(const AukStr *s);
-AUK_API AukStr *auk_char_quote(uint32_t c);
-AUK_API AukStr *auk_str_from_int(int64_t v);
-AUK_API AukStr *auk_str_from_float(double v);
-AUK_API AukStr *auk_str_from_bool(bool b);
+AUK_API bool auk_utf8_valid(const char *p, int64_t n, int64_t *chars_out, bool *ascii_out);
+AUK_API int auk_utf8_encode(uint32_t c, char *buf);
+void auk__sb_put(AukStrBuf *b, const void *p, int64_t n);
+void auk__sb_put_cstr(AukStrBuf *b, const char *s);
 AUK_API void auk_sb_bytes(AukStrBuf *b, const char *p, int64_t n);
 AUK_API void auk_sb_lit(AukStrBuf *b, const char *cstr);
 AUK_API void auk_sb_str(AukStrBuf *b, const AukStr *s);
+AUK_API void auk_sb_str_own(AukStrBuf *b, AukStr *s);
+AUK_API void auk_sb_char(AukStrBuf *b, uint32_t c);
+AUK_API void auk_sb_int(AukStrBuf *b, int64_t v);
 AUK_API AukStr *auk_sb_finish(AukStrBuf *b);
+AUK_API void auk_sb_free(AukStrBuf *b);
+_Noreturn void auk__panic_sb(const char *loc, AukStrBuf *b);
+AukErr *auk__err_sb(AukStrBuf *b);
+AukStr *auk__str_raw(const char *p, int64_t n, int64_t chars, bool ascii);
+AukStr *auk__str_new(const char *p, int64_t n);
+AUK_API AukStr *auk_str_from_bytes(const char *p, int64_t n);
+AUK_API AukStr *auk_str_lit(const char *cstr);
+AUK_API AukRes_str auk_str_try_from_bytes(const char *p, int64_t n);
+AUK_API AukRes_str auk_str_from_utf8(AukArr *bytes);
+int64_t auk__str_byte_offset(const AukStr *s, int64_t i);
+AUK_API uint32_t auk_str_char_at(const AukStr *s, int64_t i, const char *loc);
+AUK_API AukOpt_char auk_str_get(const AukStr *s, int64_t i);
+AUK_API AukStr *auk_str_slice(const AukStr *s, int64_t a, int64_t b, const char *loc);
+AUK_API AukStr *auk_str_concat(const AukStr *a, const AukStr *b);
+AUK_API bool auk_str_eq(const AukStr *a, const AukStr *b);
+AUK_API bool auk_str_eq_lit(const AukStr *s, const char *lit);
+AUK_API int auk_str_cmp(const AukStr *a, const AukStr *b);
+AUK_API uint64_t auk_str_hash(const AukStr *s);
 void auk__str_free(AukStr *s);
+AUK_API AukArr *auk_str_split_ws(const AukStr *s);
+AUK_API AukArr *auk_str_split(const AukStr *s, const AukStr *sep);
+AUK_API AukStr *auk_str_trim_start(const AukStr *s);
+AUK_API AukStr *auk_str_trim_end(const AukStr *s);
+AUK_API AukStr *auk_str_trim(const AukStr *s);
+AUK_API AukArr *auk_str_lines(const AukStr *s);
+AUK_API bool auk_str_starts_with(const AukStr *s, const AukStr *pre);
+AUK_API bool auk_str_ends_with(const AukStr *s, const AukStr *suf);
+AUK_API bool auk_str_contains(const AukStr *s, const AukStr *sub);
+AUK_API AukOpt_int auk_str_find(const AukStr *s, const AukStr *sub);
+AUK_API AukStr *auk_str_replace(const AukStr *s, const AukStr *from, const AukStr *to);
+AUK_API AukStr *auk_str_upper(const AukStr *s);
+AUK_API AukStr *auk_str_lower(const AukStr *s);
+AUK_API AukStr *auk_str_repeat(const AukStr *s, int64_t n, const char *loc);
+AUK_API AukArr *auk_str_chars(const AukStr *s);
+AUK_API AukArr *auk_str_bytes(const AukStr *s);
+AUK_API AukStr *auk_str_from_chars(AukArr *chars);
+AUK_API AukRes_int auk_int_parse(const AukStr *s);
+AUK_API AukRes_float auk_float_parse(const AukStr *s);
+AUK_API bool auk_char_is_digit(uint32_t c);
+AUK_API bool auk_char_is_alpha(uint32_t c);
+AUK_API bool auk_char_is_space(uint32_t c);
+AUK_API uint32_t auk_char_upper(uint32_t c);
+AUK_API uint32_t auk_char_lower(uint32_t c);
+AUK_API AukOpt_char auk_char_from_int(int64_t n);
+AUK_API AukStr *auk_str_from_int(int64_t v);
+void auk__fmt_float_shortest(double v, char *out, size_t outn);
+AUK_API AukStr *auk_str_from_float(double v);
+AUK_API AukStr *auk_str_from_char(uint32_t c);
+AUK_API AukStr *auk_str_from_bool(bool b);
+AUK_API AukStr *auk_str_quote(const AukStr *s);
+AUK_API AukStr *auk_char_quote(uint32_t c);
+AUK_API AukStr *auk_fmt_int(int64_t v, const char *spec);
+AUK_API AukStr *auk_fmt_float(double v, const char *spec);
+AUK_API AukStr *auk_fmt_str(const AukStr *s, const char *spec);
+AUK_API AukStr *auk_fmt_char(uint32_t c, const char *spec);
+AUK_API AukStr *auk_fmt_bool(bool v, const char *spec);
+
+/* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
 
 AUK_API AukArr *auk_arr_new(const AukElemOps *ops, int64_t cap);
 AUK_API void *auk_arr_at(const AukArr *a, int64_t i, const char *loc);
+AUK_API void auk_arr_push(AukArr **pa, const void *elem);
+AUK_API void *auk_arr_make_unique(AukArr **pa);
 AUK_API bool auk_arr_eq(const AukArr *a, const AukArr *b);
 AUK_API int auk_arr_cmp(const AukArr *a, const AukArr *b);
 AUK_API uint64_t auk_arr_hash(const AukArr *a);
@@ -407,6 +532,9 @@ void auk__task_free(void *t);
 void auk__conn_free(void *c);
 void auk__listener_free(void *l);
 void auk__chan_free(void *c);
+
+/* Is tracing on? (trace.rs) */
+extern _Atomic bool auk_trace_live;
 
 /* The debugger and tracer hear about panics (dbg.rs, trace.rs). */
 void auk__dbg_on_panic(const char *loc, const char *msg, size_t n, bool caught);

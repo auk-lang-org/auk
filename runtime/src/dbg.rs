@@ -96,8 +96,6 @@ thread_local! {
     static TOP: Cell<*mut Frame> = const { Cell::new(std::ptr::null_mut()) };
     static DEPTH: Cell<i64> = const { Cell::new(0) };
     static TID: Cell<i64> = const { Cell::new(0) };
-    /// Set while this thread runs the debugger (showing values runs Auk code: no stops).
-    static BUSY: Cell<bool> = const { Cell::new(false) };
     static STEP: Cell<Step> = const { Cell::new(Step { kind: StepKind::None, epoch: 0, depth: 0, line: 0, site: 0 }) };
     static REG: Registration = const { Registration(Cell::new(false)) };
 }
@@ -234,7 +232,7 @@ pub unsafe extern "C" fn auk_dbg_leave(f: *mut Frame) {
 /// A statement of an instrumented function, while armed: stop here?
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn auk_dbg_hook(f: *mut Frame) {
-    if !ATTACHED.load(Relaxed) || BUSY.with(|b| b.get()) {
+    if !ATTACHED.load(Relaxed) || auk__dbg_busy() {
         return;
     }
     let Some(info) = INFO.get() else { return };
@@ -262,9 +260,9 @@ pub unsafe extern "C" fn auk_dbg_hook(f: *mut Frame) {
                 hit = true;
                 break;
             };
-            let r = BUSY.with(|b| b.replace(true));
+            let r = auk__dbg_set_busy(true);
             let v = eval_at(f, &c);
-            BUSY.with(|b| b.set(r));
+            auk__dbg_set_busy(r);
             match v {
                 Ok((v, _)) if v == "true" => {
                     hit = true;
@@ -408,7 +406,7 @@ fn step_done(s: &State, info: &Info, site: i64) -> bool {
 /// A panic on this thread (rc.rs): stop first, if the debugger wants panics. `caught`: it will
 /// jump to a recovery point (`catch`, a task's own).
 pub fn on_panic(loc: &str, msg: &str, caught: bool) {
-    if !ATTACHED.load(Relaxed) || BUSY.with(|b| b.get()) || INFO.get().is_none() {
+    if !ATTACHED.load(Relaxed) || auk__dbg_busy() || INFO.get().is_none() {
         return;
     }
     let me = tid();
@@ -437,6 +435,13 @@ pub fn on_panic(loc: &str, msg: &str, caught: bool) {
     stop(s, me, "panic", Some(extra));
 }
 
+unsafe extern "C" {
+    /// This thread is showing a value for the debugger (str.c keeps the flag: its show budget
+    /// applies while it is set).
+    safe fn auk__dbg_busy() -> bool;
+    safe fn auk__dbg_set_busy(b: bool) -> bool;
+}
+
 /// rc.c's panic path calls this.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn auk__dbg_on_panic(loc: *const std::ffi::c_char, msg: *const u8, n: usize, caught: bool) {
@@ -458,7 +463,7 @@ pub fn restore_state(s: (*mut Frame, i64)) {
 
 /// Is the debugger showing a value on this thread (the show budget applies)?
 pub fn showing() -> bool {
-    BUSY.with(|b| b.get())
+    auk__dbg_busy()
 }
 
 // ---- stopping ---------------------------------------------------------------------------
@@ -501,9 +506,9 @@ fn stop(mut s: MutexGuard<'static, State>, me: i64, reason: &str, extra: Option<
         let (seq, text) = s.queue.pop_front().expect("command");
         let words: Vec<String> = text.split_whitespace().map(String::from).collect();
         drop(s);
-        let resume = BUSY.with(|b| b.replace(true));
+        let resume = auk__dbg_set_busy(true);
         let r = serve(seq, &words, &text, me);
-        BUSY.with(|b| b.set(resume));
+        auk__dbg_set_busy(resume);
         s = st();
         if let Some(kind) = r {
             if kind != StepKind::None {

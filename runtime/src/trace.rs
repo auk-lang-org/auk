@@ -32,8 +32,6 @@ pub static auk_trace_live: AtomicBool = AtomicBool::new(false);
 thread_local! {
     /// The call site of the next traced call (C: `_Thread_local const char *auk_trace_site`).
     static TRACE_SITE: Cell<*const c_char> = const { Cell::new(std::ptr::null()) };
-    /// C: `_Thread_local int64_t auk__show_left = -1`.
-    static SHOW_LEFT: Cell<i64> = const { Cell::new(-1) };
     static DEPTH: Cell<i64> = const { Cell::new(0) };
     /// > 0 while the tracer itself runs Auk code (a user `show`): nothing is traced.
     static MUTE: Cell<c_int> = const { Cell::new(0) };
@@ -54,39 +52,14 @@ fn live() -> bool {
     auk_trace_live.load(Relaxed)
 }
 
-/// `auk__show_exhausted` (auk_internal.h).
-#[inline]
-pub fn show_exhausted() -> bool {
-    (live() || crate::dbg::showing()) && SHOW_LEFT.with(|c| c.get()) == 0
-}
-
-/// `auk__show_take` (auk_internal.h): count n appended bytes against the budget; false = drop them.
-#[inline]
-pub fn show_take(n: i64) -> bool {
-    if !live() && !crate::dbg::showing() {
-        return true;
-    }
-    SHOW_LEFT.with(|c| {
-        let left = c.get();
-        if left < 0 {
-            return true;
-        }
-        if left == 0 {
-            return false;
-        }
-        c.set(if n >= left { 0 } else { left - n });
-        true
-    })
-}
-
-/// The current `auk__show_left` of this thread.
-pub fn show_left() -> i64 {
-    SHOW_LEFT.with(|c| c.get())
-}
-
-/// Set `auk__show_left` (-1 = no budget).
-pub fn set_show_left(v: i64) {
-    SHOW_LEFT.with(|c| c.set(v));
+unsafe extern "C" {
+    #[link_name = "auk__show_exhausted"]
+    pub safe fn show_exhausted() -> bool;
+    #[link_name = "auk__show_left"]
+    pub safe fn show_left() -> i64;
+    /// -1: no budget.
+    #[link_name = "auk__set_show_left"]
+    pub safe fn set_show_left(v: i64);
 }
 
 /// The show budget of one traced value: enough for its first VALUE_MAX chars.
