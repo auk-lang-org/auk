@@ -140,7 +140,8 @@ pub unsafe extern "C" fn auk_chan_close(c: *mut AukChan) {
     }
 }
 
-pub unsafe fn auk__chan_free(c: *mut AukChan) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk__chan_free(c: *mut AukChan) {
     unsafe {
         let inner = Box::from_raw((*c).inner);
         let st = inner.state.into_inner().unwrap_or_else(|e| e.into_inner());

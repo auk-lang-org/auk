@@ -423,7 +423,8 @@ pub const SEND_FLAGS: c_int = libc::MSG_NOSIGNAL;
 )))]
 pub const SEND_FLAGS: c_int = 0;
 
-pub unsafe fn auk__conn_free(c: *mut AukConn) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk__conn_free(c: *mut AukConn) {
     unsafe {
         auk_conn_close(c);
         auk__free_obj(c.cast());
@@ -522,7 +523,8 @@ pub unsafe extern "C" fn auk_net_tcp(host: *const AukStr, port: i64) -> AukRes_c
     }
 }
 
-pub unsafe fn auk__listener_free(l: *mut AukListener) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk__listener_free(l: *mut AukListener) {
     unsafe {
         auk_listener_close(l);
         auk__free_obj(l.cast());

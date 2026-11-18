@@ -96,7 +96,8 @@ pub unsafe extern "C" fn auk_arr_from(ops: *const AukElemOps, elems: *const c_vo
     }
 }
 
-pub unsafe fn auk__arr_free(a: *mut AukArr) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk__arr_free(a: *mut AukArr) {
     unsafe {
         if !(*a).base.is_null() {
             auk_release((*a).base.cast());

@@ -1,10 +1,9 @@
 //! Recovering from panics: `catch e` and task threads. A thread may have recovery points
-//! (`catch.c`, a stack of `sigsetjmp` buffers); a panic on such a thread records its message
+//! (`runtime/c/catch.c`, a stack of `sigsetjmp` buffers); a panic on such a thread records its message
 //! here and jumps to the innermost one instead of ending the process. The aborted code is not
 //! cleaned up: objects it owned leak, and `var` state it was changing stays half-changed.
 
-use std::cell::RefCell;
-use std::ffi::{c_int, c_void};
+use std::ffi::{c_char, c_int, c_void};
 use std::ptr::null_mut;
 
 use crate::task::AukThunk;
@@ -13,7 +12,8 @@ use crate::*;
 unsafe extern "C" {
     fn auk__catch_run(f: AukThunk, env: *mut c_void, out: *mut c_void) -> c_int;
     fn auk__catch_active() -> c_int;
-    fn auk__catch_throw() -> !;
+    fn auk__catch_throw(loc: *const c_char, msg: *const u8, n: usize) -> !;
+    fn auk__catch_take(msg: *mut *mut c_char, loc: *mut *mut c_char);
 }
 
 /// A recovered panic: its message and where it happened.
@@ -30,10 +30,6 @@ impl Panic {
     }
 }
 
-thread_local! {
-    static CAUGHT: RefCell<Option<Panic>> = const { RefCell::new(None) };
-}
-
 /// Does this thread have a recovery point?
 pub fn recoverable() -> bool {
     unsafe { auk__catch_active() != 0 }
@@ -42,9 +38,23 @@ pub fn recoverable() -> bool {
 /// Record the panic and jump to this thread's innermost recovery point (`recoverable()` must
 /// hold).
 pub fn throw(loc: &str, msg: &str) -> ! {
-    let p = Panic { msg: msg.to_string(), loc: loc.to_string() };
-    CAUGHT.with(|c| *c.borrow_mut() = Some(p));
-    unsafe { auk__catch_throw() }
+    let loc = std::ffi::CString::new(loc.replace('\0', "")).unwrap();
+    unsafe { auk__catch_throw(loc.as_ptr(), msg.as_ptr(), msg.len()) }
+}
+
+/// The panic catch.c recorded, if any.
+fn take() -> Option<Panic> {
+    let (mut m, mut l) = (null_mut(), null_mut());
+    unsafe {
+        auk__catch_take(&mut m, &mut l);
+        if m.is_null() {
+            return None;
+        }
+        let p = Panic { msg: cstr(m).into_owned(), loc: cstr(l).into_owned() };
+        libc::free(m.cast());
+        libc::free(l.cast());
+        Some(p)
+    }
 }
 
 /// Run `f(env, out)` under a recovery point: None if it finished, the panic if one jumped back.
@@ -56,7 +66,7 @@ pub unsafe fn run(f: AukThunk, env: *mut c_void, out: *mut c_void) -> Option<Pan
     }
     crate::trace::restore_state(saved);
     crate::dbg::restore_state(dbg);
-    Some(CAUGHT.with(|c| c.borrow_mut().take()).unwrap_or(Panic { msg: "panic".into(), loc: "<unknown>".into() }))
+    Some(take().unwrap_or(Panic { msg: "panic".into(), loc: "<unknown>".into() }))
 }
 
 /// `catch e`: run the thunk (it writes e's value to `out`); NULL when it finished, else the

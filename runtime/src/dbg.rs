@@ -437,6 +437,14 @@ pub fn on_panic(loc: &str, msg: &str, caught: bool) {
     stop(s, me, "panic", Some(extra));
 }
 
+/// rc.c's panic path calls this.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk__dbg_on_panic(loc: *const std::ffi::c_char, msg: *const u8, n: usize, caught: bool) {
+    let loc = unsafe { crate::cstr(loc) };
+    let msg = String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(msg, n) });
+    on_panic(&loc, &msg, caught)
+}
+
 /// The debugger stack of a recovery point (`catch`, a task), restored when a panic jumps back
 /// past frames that never got to leave.
 pub fn save_state() -> (*mut Frame, i64) {

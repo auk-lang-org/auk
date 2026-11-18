@@ -1,0 +1,284 @@
+# Plan: Auk only — from Rust, through C, to a self-hosted Auk
+
+**End state:** Auk is written in Auk. Building it needs only an `auk` binary (or the checked-in
+bootstrap seed) and LLVM — no Rust, no C compiler. The only non-Auk code left is the OS
+(libc/libSystem, system frameworks) and LLVM's own libraries.
+
+**Route:** Rust → C runtime + Auk compiler (Phases 1–6) → Auk runtime (Phase 7). C is a
+stepping stone: it gets Rust out without waiting for the low-level language features an Auk
+runtime needs. (C over C++: setjmp-based `catch` makes RAII unsafe.)
+
+**Rule for every phase:** one moving part at a time. After every step there is a working
+`auk`, and the whole suite is green. Nothing merges that breaks that.
+
+What there is to move today:
+
+| Part | Where | Size |
+|---|---|---|
+| Runtime | `runtime/src/*.rs` (+ `catch.c`) | ~11k lines Rust, 22 modules |
+| Runtime tests | `runtime/tests/*.rs` | ~2.7k lines |
+| Compiler | `src/` (lexer → check → MIR → LLVM) | ~37k lines Rust |
+| Tools | `fmt repl lsp dap debug mcp live hatch explain dive`, `raft` | inside the 37k |
+| Integration tests | `tests/*.rs` (24 files) + fixtures | drive the binaries |
+| Build | `Cargo.toml`, `build.rs`, `runtime/build.rs`, `.cargo/config.toml` | |
+| Rust deps | `llvm-sys`, `libc`, `rustls`, `webpki-roots`, `cc` | |
+| Auk code already | `src/prelude/*.auk`, `packages/` (24), `examples/` | 135 `.auk` files under tests/examples/packages |
+
+---
+
+## Phase 0 — Groundwork
+
+- [ ] **Perf baseline:** record `bench/perf` numbers and compile times (whole corpus: `auk check`,
+      `auk build`, `auk run` startup) on the current Rust build. Every later phase compares to these.
+- [ ] **Golden corpus:** a script that runs the Rust `auk` over every `.auk` in `tests/`,
+      `examples/`, `packages/`, `src/prelude/` and saves: token dump, diagnostics (JSON),
+      `auk ir` MIR text, `auk fmt` output, program stdout/stderr/exit code. Phases 3–5 diff against it.
+- [ ] Add the dump modes the golden corpus needs if missing (`auk tokens`, stable AST dump).
+- [ ] CI job (or `make check`) that runs: cargo tests, `tests/*.rs`, runtime tests, bench smoke.
+- [ ] Decide versioning for the transition: the Rust `auk` is "stage 0" and is tagged
+      (`v0-rust-final`) at the end of Phase 4 so it can always rebuild the seed.
+
+## Phase 1 — Runtime to C (Rust compiler unchanged)
+
+C lives in `runtime/c/`, one header `auk_rt.h` mirroring the `#[repr(C)]` types in
+`value.rs`/`lib.rs`. **Started:** `auk_rt.h` and `heap.c` exist (untracked).
+
+### 1a. Build plumbing
+- [ ] `runtime/build.rs`: compile `runtime/c/*.c` with the `cc` crate and link them into `auk_rt`
+      while Rust and C modules coexist (already does this for `catch.c`).
+- [ ] Root `build.rs`: once the runtime is all C, replace the nested `cargo rustc` with
+      `clang -O2 -c` → `ar` for `libauk_rt.a`, and `clang -emit-llvm` + `llvm-link` for `auk_rt.bc`
+      (keeps small runtime functions inlining into programs).
+- [ ] Generate `rt_symbols.rs` (the JIT's symbol table) from `auk_rt.h` instead of scanning
+      `#[no_mangle]` in `.rs` files.
+- [ ] A check that `auk_rt.h` matches the layouts the compiler assumes (`src/mir/layout.rs`):
+      `_Static_assert` on sizes/offsets in C, and a test that compares them to the compiler's.
+
+### 1b. Replacements for Rust std (shared C helpers)
+- [ ] Locks/threads: `pthread_mutex`, `pthread_cond`, `pthread_create`; `_Thread_local` for
+      `thread_local!`/`Cell`; C11 `<stdatomic.h>` for atomics and `Arc`-style counts.
+- [ ] A growable byte buffer (`Vec<u8>`/`String` stand-in) and a small `buf_printf` replacing
+      every `format!` (≈40 uses: error messages, trace/dbg JSON, test output).
+- [ ] Panics → one `auk_fatal(loc, msg)` that prints and aborts, same text as today.
+- [ ] UTF-8 encode/decode helpers (`.chars()`, char boundaries) for `str` and `rc`.
+- [ ] Float formatting: vendor **Ryu** for shortest round-trip, matching Rust's `{}` output
+      exactly (incl. `inf`, `NaN`, `-0`, exponent thresholds) — write a test table first.
+- [ ] Float parsing: `strtod` with a wrapper that rejects what Rust's `parse::<f64>` rejects
+      (hex floats, `infinity` spellings, leading `+`, whitespace).
+- [ ] Unicode case/class tables if `str` uses `to_uppercase`/`is_alphabetic`/`is_whitespace`
+      on non-ASCII: generate compact tables from UnicodeData once, check them in.
+- [ ] Time (`clock_gettime`), env (`getenv`/`environ`), process (`posix_spawn`, pipes,
+      `waitpid`), fs (POSIX), sockets (BSD), error text (`strerror`, matching Rust's io messages).
+
+### 1c. Port modules, leaf first (suite after each)
+Each: write the C, delete the `.rs`, run runtime tests + full suite, compare perf.
+- [ ] `value` (221), `err` (149), `copy` (181), `heap` (205 — **in progress**), `rc` (750)
+- [ ] `catch` (73 + 37 C): fold into C entirely; setjmp/longjmp stays in one file
+- [ ] `str` (1303), `arr` (676), `map` (497)
+- [ ] `chan` (154), `task` (417)
+- [ ] `core` (1102): fs, net, proc, time, env, rand
+- [ ] `tls` (284): **Network.framework** on macOS; **OpenSSL via dlopen** on Linux. Keep:
+      verification always on, same error messages. Drops `rustls`, `ring`, `webpki-roots`.
+- [ ] `trace` (694), `dbg` (1113), `testing` (255), `compiler` (131)
+- [ ] `pixels` (431), `audio_out` (314 → `.m`, CoreAudio)
+- [ ] `gui` (835), `gui_host` (1171 → `.m`, AppKit)
+- [ ] `lib.rs` (417): the remaining glue; then the crate is a thin shell around C
+
+**Write C that will translate to Auk later (Phase 7):** plain functions and structs; no
+macro-generated code; no varargs in the runtime's own API; no bit-fields; nothing beyond
+libc/pthreads/system frameworks; setjmp/longjmp only in `catch.c`; ObjC confined to the two `.m` files.
+
+### 1d. Tests and safety
+- [ ] Port `runtime/tests/{arr,map,str,io,net,core}.rs` + `common/mod.rs` to C tests in
+      `runtime/c/test/` with a tiny assert harness; `make rt-test`.
+- [ ] ASan + UBSan build of the runtime; run the whole suite under it once per module port
+      and at the end. TSan run for `task`/`chan`/`heap`.
+- [ ] Linux build and test (pthreads/`-ldl -lrt`, OpenSSL path).
+
+**Done when:** `runtime/` has no `.rs`; rustls/ring/webpki-roots/`cc`-for-catch gone; all tests
+pass on macOS and Linux; ASan clean; `bench/perf` within ±5% of Phase 0.
+
+## Phase 2 — FFI and the LLVM binding
+
+### 2a. User-level FFI (`docs/ffi-plan.md`)
+- [ ] `extern fn ... = "<C prototype>"` allowed in packages declaring `effects = ["ffi"]`.
+- [ ] C prototype parser, Auk↔C type check (E0040), marshalling (ints, bool, float, `str` ↔
+      `const char *`, `ffi.Ptr`, `void`).
+- [ ] JIT resolves user symbols (dlopen/dlsym); `auk build` links named libraries.
+
+### 2b. What the compiler-in-Auk additionally needs
+- [ ] Opaque pointer types per C type (`LLVMValueRef`, `LLVMTypeRef`, …) so they don't mix.
+- [ ] Arrays of pointers passed in (`LLVMTypeRef *params, unsigned n`).
+- [ ] Out-parameters (`char **err`, `LLVMModuleRef *out`).
+- [ ] Owned C strings returned (`LLVMPrintModuleToString` → copy → `LLVMDisposeMessage`).
+- [ ] Byte buffers in/out (`LLVMMemoryBufferRef` for object files and bitcode).
+- [ ] Callbacks? Check whether ORC/DiagnosticHandler needs one; if so, C-ABI function pointers to Auk fns.
+
+### 2c. `llvm` binding package
+- [ ] Bind the ~258 LLVM C functions `src/mir/llvm/` and `src/build.rs` use (generated from a
+      list, not by hand), grouped: context/module/types, builder, constants, debug info (DIBuilder),
+      target/object emission, ORC JIT, bitcode reader/linker.
+- [ ] Port one small piece of codegen (e.g. a function that adds two ints) end to end as proof.
+
+### 2d. Language/runtime gaps the compiler will hit (fix before Phase 3)
+- [ ] In-place mutation of uniquely owned arrays/maps (no copy when rc == 1) — the compiler is
+      all vectors and maps.
+- [ ] Efficient string building (append without O(n²)).
+- [ ] Anything else the pilot exposes: big recursive enums (AST/MIR), deep recursion limits,
+      hash maps keyed by structs/ints, sorting with a comparator, interning.
+- [ ] Process/fs/args/env APIs the driver needs (`auk build` writes temp files, runs the linker,
+      `dsymutil`).
+
+### 2e. Pilot — go/no-go
+- [ ] Port `token.rs` (268) + `lexer.rs` (1077) + `ast.rs` (794) + `parser.rs` (2143) to Auk.
+- [ ] Byte-identical token and AST dumps over the golden corpus.
+- [ ] Time both on the whole corpus. **Go** if the Auk version is within ~2–3× of Rust (and
+      profiling shows a path to closer); otherwise fix codegen/runtime first and re-measure.
+
+## Phase 3 — Self-hosted front end (language freeze starts)
+
+Auk compiler lives in `compiler/`, built by the Rust `auk` (stage 0). Pipeline order, each
+step diffed against the golden corpus before the next starts:
+
+- [ ] Shared: `diag.rs` (385) diagnostics + fix-its, `json.rs` (434), `types.rs` (554)
+- [ ] `resolve.rs` (578)
+- [ ] `check.rs` (1943), `check/expr.rs` (3657), `check/pat.rs` (425), `check/shapes.rs` (629),
+      `patterns.rs` (901) exhaustiveness
+- [ ] `effects.rs` (647), `units.rs` (267), `holes.rs` (690)
+- [ ] `typed.rs` (653)
+- [ ] MIR: `mir/mod.rs` (511), `types.rs` (234), `layout.rs` (278), `lower.rs` (3577),
+      `lower/pat.rs` (342), `progen.rs` (2167), `print.rs` (581)
+- [ ] Diff gates: tokens → AST → diagnostics (codes, messages, spans, fix-its) for every file,
+      including `tests/errors/` and `docs/errors/` examples → MIR text.
+- [ ] Prelude (`src/prelude/*.auk`) is embedded the same way.
+
+**Language freeze** from here to the end of Phase 4: no language changes (or each one is made in
+both compilers and both golden outputs). Bug fixes allowed, made in both.
+
+## Phase 4 — Back end and bootstrap
+
+- [ ] `mir/llvm/codegen.rs` (1436), `intrin.rs` (336), `debug.rs` (150, DWARF), `rtlink.rs`
+      (226, linking `auk_rt.bc`), `mod.rs` (252), `backend.rs` (52), `exec.rs` (138)
+- [ ] Object emission + linking (`build.rs`, 880): still via `cc` for now (Phase 7 removes it).
+- [ ] ORC JIT (`jit.rs`, 76): runtime symbols resolve from the compiler's own process (it links
+      the C runtime), so no generated symbol table.
+- [ ] Driver: `main.rs` (214) — `run`, `build`, `check`, `test`, `ir`; same flags and exit codes.
+- [ ] Diff gate: program output identical for the whole corpus; `auk ir` identical; `bench/perf`
+      generated code within ±5% (same MIR → same IR should make this free).
+- [ ] **Bootstrap fixed point:** stage 1 (built by Rust) compiles `compiler/` → stage 2; stage 2
+      compiles it → stage 3; stage 2 and stage 3 are bit-identical. Requires deterministic output
+      (no hash-order iteration, no timestamps/paths in objects).
+- [ ] Self-compile time measured and acceptable (target: a full rebuild of the compiler in
+      under ~30 s; set the real number from the pilot).
+- [ ] Freeze ends. Tag `v0-rust-final`.
+
+## Phase 5 — Tools
+
+Port onto the Auk compiler, each with its existing tests passing:
+- [ ] `fmt/` (doc 298, mod 1597, tests 354)
+- [ ] `repl.rs` (878), `explain.rs` (169), `dive`
+- [ ] `lsp.rs` (1420), `dap.rs` (521), `debug.rs` (887), `dbg_eval.rs` (149)
+- [ ] `mcp.rs` (705), `live.rs` (549), `hatch.rs` (484)
+- [ ] `raft` (492 + manifest 276, toml 358, semver 127, sha256 65) — HTTP via the runtime's net/tls
+- [ ] Threads: tools that use `std::thread` (`dap`, `debug`, `mcp`, `live`, `hatch`) use Auk
+      tasks/channels instead.
+- [ ] Integration tests: `tests/*.rs` (24 files) become an Auk test runner over the same
+      fixtures (spawns the binaries, compares output).
+- [ ] VS Code extension (`editors/vscode`) still works against the new `lsp`/`dap`.
+
+## Phase 6 — Retire Rust
+
+- [ ] **Bootstrap seed:** release binaries per platform (macOS arm64/x86_64, Linux x86_64/arm64),
+      plus checked-in LLVM bitcode (or textual IR) of the compiler, so a fresh checkout builds
+      with LLVM alone — no previous `auk` needed.
+- [ ] Build script (`make`/`build.sh`): seed → stage 1 → stage 2, runtime, tools, tests.
+- [ ] Delete `Cargo.toml`, `Cargo.lock`, `build.rs`, `runtime/build.rs`, `src/`, `.cargo/`, `target/`.
+- [ ] Install moves off `~/.cargo/bin` (e.g. `~/.auk/bin` or `/usr/local`); update README, docs,
+      `site/index.html`, editor settings.
+- [ ] Release process: how a new seed is cut (every release, from the fixed point).
+
+**Done when:** no `.rs` in the repo; fresh clone + LLVM + C compiler builds and passes everything.
+
+## Phase 7 — Runtime to Auk (Auk only)
+
+### 7a. Low-level Auk (gated: only `runtime/`, like `extern fn` in the prelude)
+- [ ] Raw pointers: `ptr[T]`, load/store, offset, cast, null; `sizeof`/`alignof`.
+- [ ] `#[repr(C)]` structs and unions, fixed-width ints (`u8 … i64`, `usize`), bit ops.
+- [ ] **No-RC mode:** functions/types the compiler never refcounts or copies — needed because
+      the allocator and RC machinery are written in it and can't call into themselves.
+- [ ] Atomics (load/store/CAS/fetch-add with orderings), thread-locals, fences.
+- [ ] `export fn` with the C ABI and a fixed symbol name; calling conventions for callbacks
+      (CoreAudio render callback, pthread start routine, qsort-style comparators).
+- [ ] Inline hints / `always_inline` so small runtime functions still inline into programs.
+- [ ] Compile-time layout checks (equivalent of `_Static_assert`).
+
+### 7b. Things that were C-only
+- [ ] `catch` without setjmp in C: either an LLVM setjmp/longjmp intrinsic, or (better) move
+      `catch` to LLVM landing pads / unwinding — decide early, it affects codegen.
+- [ ] ObjC: call `objc_msgSend`/`sel_registerName`/`objc_getClass` via FFI to replace
+      `gui_host.m` and `audio_out.m`; blocks (if any AppKit API needs them) via a small
+      block-literal layout in Auk.
+- [ ] Network.framework/OpenSSL bindings via FFI (Network.framework uses blocks — check;
+      fall back to Security.framework `SecureTransport` alternatives or OpenSSL on macOS too).
+- [ ] Ryu, Unicode tables, `buf_printf` → Auk.
+- [ ] Varargs: none in our API by then (Phase 1 rule); calling libc varargs (`printf`, `open`
+      with mode) via fixed-arg wrappers or varargs FFI support.
+
+### 7c. Port
+- [ ] Same order as Phase 1c, one module at a time, C and Auk linked together meanwhile.
+- [ ] `auk_rt.bc` is produced by the Auk compiler; `libauk_rt.a` via LLVM's archive writer.
+- [ ] Same C tests (called through `export fn`), then rewrite them as Auk tests.
+- [ ] ASan/UBSan equivalent: build the runtime with LLVM sanitizer passes from the Auk compiler.
+- [ ] ±5% perf bar against Phase 1 numbers.
+
+### 7d. Drop the C compiler from the toolchain
+- [ ] Linking: `auk build` currently runs `cc` (`AUK_LINKER`). Switch to calling the system
+      linker directly (`ld` on macOS with the right `-syslibroot`/`-platform_version`;
+      `ld`/crt objects on Linux) or embed LLD via the LLVM binding.
+- [ ] `dsymutil` for `-g` on macOS: keep calling it (ships with Xcode CLT / LLVM) or use
+      LLVM's library.
+- [ ] Delete `runtime/c/`; build script needs only `auk` + LLVM.
+
+**Done when:** no `.c`, `.h`, `.m`, `.rs` in the repo; a fresh machine with LLVM and the seed
+builds and passes everything.
+
+---
+
+## Cross-cutting
+
+- **Determinism** (needed for the fixed point): ordered maps or sorted iteration wherever output
+  depends on it; no addresses/timestamps in output.
+- **Error-message parity:** every diagnostic and runtime error string stays byte-identical
+  through every phase — the golden corpus and `docs/errors/` enforce it.
+- **Platform matrix:** macOS arm64 is primary; Linux x86_64 must pass at the end of each phase.
+- **Docs:** `docs/compiler.md`, `README.md`, site, error docs updated at the end of each phase.
+- **Memory/debugger/fault-tolerance plans:** `--debug`, DAP, `catch`/supervisors, per-task heaps
+  must keep working at every step (their tests are in the suite).
+
+## Risks
+
+- **Compiler speed in Auk** — refcounting and copies on a ~37k-line program. The Phase 2 pilot
+  measures it before the big commitment.
+- **Length of the freeze** — Phases 3–4 are the bulk of the work. Keep them moving; don't run
+  big language work in parallel.
+- **FFI ergonomics** — the LLVM C API is pointer-heavy. Fallback: emit textual LLVM IR and call
+  `llc`/`clang`, losing in-process JIT until bindings are ready.
+- **Unsafe dialect creep** (Phase 7) — low-level Auk stays gated to `runtime/` so ordinary Auk
+  stays safe and the LLM-facing language stays small.
+- **`catch` mechanism** (Phase 7) — replacing setjmp touches codegen, the debugger and per-task
+  heaps; prototype it before porting `rc`/`heap`.
+- **Bootstrap rot** — if the seed can't be rebuilt, the project is stuck; keep `v0-rust-final`
+  buildable and cut seeds from the fixed point every release.
+
+## Rough sizing
+
+| Phase | Work | Relative size |
+|---|---|---|
+| 0 | baselines, golden corpus, CI | S |
+| 1 | runtime → C (~11k lines) | L |
+| 2 | FFI, LLVM binding, pilot, language gaps | M–L |
+| 3 | front end → Auk (~22k lines) | XL |
+| 4 | back end, driver, fixed point (~4k lines + build) | L |
+| 5 | tools → Auk (~11k lines) | L |
+| 6 | seed, build script, delete Rust | S |
+| 7 | low-level Auk, runtime → Auk, own linking | L–XL |

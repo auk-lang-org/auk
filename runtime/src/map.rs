@@ -90,7 +90,8 @@ pub unsafe extern "C" fn auk_map_new(kops: *const AukElemOps, vops: *const AukEl
     }
 }
 
-pub unsafe fn auk__map_free(m: *mut AukMap) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk__map_free(m: *mut AukMap) {
     unsafe {
         for i in 0..(*m).n {
             if *(*m).dead.add(i as usize) {

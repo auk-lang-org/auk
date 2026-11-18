@@ -417,7 +417,8 @@ pub unsafe extern "C" fn auk_str_hash(s: *const AukStr) -> u64 {
     unsafe { crate::rc::auk_hash_bytes(auk_str_cstr(s).cast(), auk_str_byte_len(s) as usize) }
 }
 
-pub unsafe fn auk__str_free(s: *mut AukStr) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk__str_free(s: *mut AukStr) {
     unsafe { auk__free_obj(s.cast()) }
 }
 

@@ -378,7 +378,8 @@ pub unsafe extern "C" fn auk_task_await_all(ts: *mut *mut AukTask, n: i64, outs:
     }
 }
 
-pub unsafe fn auk__task_free(t: *mut AukTask) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk__task_free(t: *mut AukTask) {
     unsafe {
         task_join(t);
         if !(*t).panic.is_null() {

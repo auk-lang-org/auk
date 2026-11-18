@@ -682,6 +682,13 @@ pub fn auk__trace_panic(loc: *const c_char, msg: &str, caught: bool) {
     unsafe { auk__trace_flush() };
 }
 
+/// rc.c's panic path calls this.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk__trace_on_panic(loc: *const c_char, msg: *const u8, n: usize, caught: bool) {
+    let msg = String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(msg, n) });
+    auk__trace_panic(loc, &msg, caught)
+}
+
 /// This thread's call depth and mute count, saved at a recovery point (`catch`, a task) and put
 /// back when a panic jumps past traced frames that never got to exit.
 pub fn save_state() -> (i64, c_int) {
