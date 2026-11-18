@@ -293,7 +293,7 @@ pub fn max<T: Ord>(xs: [T]): T? {
 }
 
 /// A sorted copy (stable).
-pub fn sort<T: Ord>(xs: [T]): [T] = xs.sort_by(x => x)
+pub extern fn sort<T: Ord>(xs: [T]): [T] = "duck_arr_sorted"
 
 /// A copy sorted by `key` (a stable merge sort).
 pub fn sort_by<T, K: Ord>(xs: [T], key: (T) => K): [T] {

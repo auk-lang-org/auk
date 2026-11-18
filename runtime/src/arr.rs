@@ -493,18 +493,40 @@ pub unsafe extern "C" fn duck_arr_sort_with(pa: *mut *mut DuckArr, cmp: SortCmpF
     }
 }
 
-unsafe extern "C" fn ops_cmp(x: *const c_void, y: *const c_void, ctx: *mut c_void) -> c_int {
-    unsafe { ((*(ctx as *const DuckElemOps)).cmp.unwrap_unchecked())(x, y) }
-}
-
+/// Sort `*pa` in place (made unique first), stable, by the elements' `cmp` (their element ops:
+/// the same comparison as Duck's `<`, derived or user-written). Ints and floats are sorted as
+/// values; other elements through a permutation of their indexes, moved only once it is done, so
+/// a user `cmp` that panics leaves the list as it was.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn duck_arr_sort(pa: *mut *mut DuckArr) {
     unsafe {
         let ops = (**pa).ops;
-        if (*ops).cmp.is_none() {
-            panic_msg_rt("sort: element type has no cmp");
+        let Some(cmp) = (*ops).cmp else { panic_msg_rt("sort: element type has no cmp") };
+        duck_arr_make_unique(pa);
+        let a = *pa;
+        let n = (*a).len as usize;
+        if n < 2 {
+            return;
         }
-        duck_arr_sort_with(pa, ops_cmp, ops as *mut c_void);
+        if ptr::eq(ops, &crate::rc::duck_ops_int) {
+            // equal ints are indistinguishable: an unstable sort is a stable one
+            std::slice::from_raw_parts_mut((*a).data as *mut i64, n).sort_unstable();
+            return;
+        }
+        if ptr::eq(ops, &crate::rc::duck_ops_float) {
+            // 0.0 and -0.0 compare equal but print differently: keep their order
+            std::slice::from_raw_parts_mut((*a).data as *mut f64, n).sort_by(|x, y| crate::rc::duck_float_cmp(*x, *y).cmp(&0));
+            return;
+        }
+        let size = (*ops).size;
+        let at = |i: usize| (*a).data.add(i * size) as *const c_void;
+        let mut perm: Vec<usize> = (0..n).collect();
+        perm.sort_by(|&i, &j| cmp(at(i), at(j)).cmp(&0));
+        let mut sorted = vec![0u8; n * size];
+        for (k, &i) in perm.iter().enumerate() {
+            ptr::copy_nonoverlapping((*a).data.add(i * size), sorted.as_mut_ptr().add(k * size), size);
+        }
+        ptr::copy_nonoverlapping(sorted.as_ptr(), (*a).data, n * size);
     }
 }
 

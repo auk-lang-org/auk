@@ -839,10 +839,38 @@ pub extern "C" fn duck_char_from_int(n: i64) -> DuckOpt_char {
 
 // ---- formatting --------------------------------------------------------------------------
 
+/// `v` in decimal, written into the end of `buf`; returns where it starts.
+fn int_digits(v: i64, buf: &mut [u8; 20]) -> usize {
+    let mut i = buf.len();
+    let mut n = v.unsigned_abs();
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    if v < 0 {
+        i -= 1;
+        buf[i] = b'-';
+    }
+    i
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn duck_str_from_int(v: i64) -> *mut DuckStr {
-    let s = v.to_string();
-    str_raw(s.as_bytes(), s.len() as i64, true)
+    let mut buf = [0u8; 20];
+    let at = int_digits(v, &mut buf);
+    str_raw(&buf[at..], (buf.len() - at) as i64, true)
+}
+
+/// Append `v` in decimal (what interpolating an int does: no temporary string).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn duck_sb_int(b: *mut DuckStrBuf, v: i64) {
+    let mut buf = [0u8; 20];
+    let at = int_digits(v, &mut buf);
+    unsafe { sb_put(b, &buf[at..]) }
 }
 
 /// C's `snprintf(buf, .., "%.*e", prec, v)`.
@@ -1165,13 +1193,33 @@ pub unsafe extern "C" fn duck_fmt_bool(v: bool, spec: *const c_char) -> *mut Duc
 
 // ---- builder -----------------------------------------------------------------------------
 
+/// Where the builder's text is: its inline bytes or its heap buffer.
+unsafe fn sb_data(b: *mut DuckStrBuf) -> *mut u8 {
+    unsafe { if (*b).buf.is_null() { (*b).small.as_mut_ptr() } else { (*b).buf } }
+}
+
 unsafe fn sb_reserve(b: *mut DuckStrBuf, extra: i64) {
     unsafe {
         let b = &mut *b;
+        if b.buf.is_null() {
+            // inline until the text outgrows it, then to the heap with what's there
+            if b.len + extra <= DUCK_SB_SMALL as i64 {
+                return;
+            }
+            let mut cap = 2 * DUCK_SB_SMALL as i64;
+            while cap < b.len + extra + 1 {
+                cap *= 2;
+            }
+            let heap: *mut u8 = duck__xrealloc(std::ptr::null_mut(), cap as usize).cast();
+            std::ptr::copy_nonoverlapping(b.small.as_ptr(), heap, b.len as usize);
+            b.buf = heap;
+            b.cap = cap;
+            return;
+        }
         if b.len + extra < b.cap {
             return;
         }
-        let mut cap = if b.cap != 0 { b.cap * 2 } else { 32 };
+        let mut cap = b.cap * 2;
         while cap < b.len + extra + 1 {
             cap *= 2;
         }
@@ -1186,7 +1234,7 @@ unsafe fn sb_put(b: *mut DuckStrBuf, p: &[u8]) {
     }
     unsafe {
         sb_reserve(b, p.len() as i64);
-        std::ptr::copy_nonoverlapping(p.as_ptr(), (*b).buf.add((*b).len as usize), p.len());
+        std::ptr::copy_nonoverlapping(p.as_ptr(), sb_data(b).add((*b).len as usize), p.len());
         (*b).len += p.len() as i64;
     }
 }
@@ -1237,7 +1285,7 @@ pub unsafe extern "C" fn duck_sb_char(b: *mut DuckStrBuf, c: u32) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn duck_sb_finish(b: *mut DuckStrBuf) -> *mut DuckStr {
     unsafe {
-        let s = str_from_bytes(raw((*b).buf as *const c_char, (*b).len));
+        let s = str_from_bytes(raw(sb_data(b) as *const c_char, (*b).len));
         duck_sb_free(b);
         s
     }
@@ -1245,7 +1293,11 @@ pub unsafe extern "C" fn duck_sb_finish(b: *mut DuckStrBuf) -> *mut DuckStr {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn duck_sb_free(b: *mut DuckStrBuf) {
     unsafe {
-        libc::free((*b).buf.cast());
-        *b = DuckStrBuf::INIT;
+        if !(*b).buf.is_null() {
+            libc::free((*b).buf.cast());
+        }
+        (*b).buf = std::ptr::null_mut();
+        (*b).len = 0;
+        (*b).cap = 0;
     }
 }

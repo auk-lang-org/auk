@@ -3100,7 +3100,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                     let own = |s: Ex| Ex::rt("duck_sb_str_own", vec![sbp.clone(), s], MTy::Void);
                     let e = match (&v.ty, spec) {
                         (Ty::Int, Some(s)) => own(Ex::rt("duck_fmt_int", vec![c, s], st)),
-                        (Ty::Int, None) => own(Ex::rt("duck_str_from_int", vec![c], st)),
+                        (Ty::Int, None) => Ex::rt("duck_sb_int", vec![sbp.clone(), c], MTy::Void),
                         (Ty::Float, Some(s)) => own(Ex::rt("duck_fmt_float", vec![c, s], st)),
                         (Ty::Float, None) => own(Ex::rt("duck_str_from_float", vec![c], st)),
                         (Ty::Str, Some(s)) => own(Ex::rt("duck_fmt_str", vec![c, s], st)),

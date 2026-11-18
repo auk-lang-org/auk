@@ -88,7 +88,8 @@ fn shapes_monomorphize_per_type() {
     setup();
     let out = duck(&["typed", "examples/inventory.duck"]);
     let text = String::from_utf8_lossy(&out.stdout);
-    for want in ["examples.top<Item>", "examples.report<Item>", "examples.report<Order>", "core.sort<Item>"] {
+    // (core's own generics instantiate too; `sort` is a runtime extern, so `filter` stands for them)
+    for want in ["examples.top<Item>", "examples.report<Item>", "examples.report<Order>", "core.filter<int>"] {
         assert!(text.contains(want), "missing instance {want}:\n{text}");
     }
     assert!(text.contains("fn examples.top<Ord>([Ord], int): [Ord]"), "{text}");

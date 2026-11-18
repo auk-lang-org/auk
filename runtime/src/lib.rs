@@ -324,15 +324,20 @@ pub struct DuckListener {
     pub port: i64,
 }
 
-/// Growable string builder (stack-allocated by callers).
+/// Growable string builder (stack-allocated by callers; generated code zero-initializes one and
+/// passes its address). Text up to `DUCK_SB_SMALL` bytes stays in `small` (`buf` NULL, `cap` 0),
+/// so building a short string allocates nothing until `duck_sb_finish` makes the result; longer
+/// text moves to a heap buffer. There is no pointer into the struct itself, so it may be moved.
 #[repr(C)]
 pub struct DuckStrBuf {
     pub buf: *mut u8,
     pub len: i64,
     pub cap: i64,
+    pub small: [u8; DUCK_SB_SMALL],
 }
+pub const DUCK_SB_SMALL: usize = 40;
 impl DuckStrBuf {
-    pub const INIT: DuckStrBuf = DuckStrBuf { buf: std::ptr::null_mut(), len: 0, cap: 0 };
+    pub const INIT: DuckStrBuf = DuckStrBuf { buf: std::ptr::null_mut(), len: 0, cap: 0, small: [0; DUCK_SB_SMALL] };
 }
 
 pub use task::DuckTask;

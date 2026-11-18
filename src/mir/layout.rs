@@ -102,7 +102,8 @@ impl<'p, 'a> Layouts<'p, 'a> {
                 let fs = self.aggs[*a as usize].fields.clone();
                 if fs.is_empty() { vec![MTy::I32] } else { fs }
             }
-            MTy::Rt(Rt::StrBuf) => vec![MTy::void_ptr(), MTy::I64, MTy::I64],
+            // DuckStrBuf: buf, len, cap, then DUCK_SB_SMALL (40) inline bytes
+            MTy::Rt(Rt::StrBuf) => vec![MTy::void_ptr(), MTy::I64, MTy::I64, MTy::I64, MTy::I64, MTy::I64, MTy::I64, MTy::I64],
             MTy::Rt(Rt::Obj) => vec![MTy::I64, MTy::U32, MTy::Code, MTy::Code],
             MTy::Rt(Rt::ElemOps) => vec![MTy::U64, MTy::Code, MTy::Code, MTy::Code, MTy::Code, MTy::Code, MTy::Code, MTy::Code],
             MTy::D(d) => match d {
