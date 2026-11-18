@@ -4,7 +4,7 @@
 #   2. runtime/c/test/run.sh       the C runtime's unit tests (AUK_NET_TESTS=1: with real hosts)
 #   3. pilot diffs                 tokens, AST, module tree, `auk check` (--json and text),
 #                                  `auk holes`, the typed program, formatting and MIR of the Auk
-#                                  port (compiler/) = the Rust ones
+#                                  port (compiler/) = the Rust ones; raft (raft/) = the Rust raft
 #   4. golden self-consistency     scripts/golden.sh --compare with the Rust auk itself: 0 diffs
 #                                  (catches nondeterministic output)
 #   5. bench smoke                 bench/perf programs, small inputs, `auk build` = `auk run`
@@ -20,7 +20,7 @@ STEPS="${*:-cargo runtime pilot golden bench}"
 step_cargo() { cargo test --release --no-fail-fast; }
 # real-host TLS tests reach badssl.com, which times out now and then: off unless asked for
 step_runtime() { AUK_NET_TESTS="${AUK_NET_TESTS:-0}" sh runtime/c/test/run.sh; }
-step_pilot() { scripts/diff_tokens.sh && scripts/diff_ast.sh && scripts/diff_resolve.sh && scripts/diff_check.sh && scripts/diff_check_text.sh && scripts/diff_holes.sh && scripts/diff_typed.sh && scripts/diff_fmt.sh && scripts/diff_ir.sh; }
+step_pilot() { scripts/diff_tokens.sh && scripts/diff_ast.sh && scripts/diff_resolve.sh && scripts/diff_check.sh && scripts/diff_check_text.sh && scripts/diff_holes.sh && scripts/diff_typed.sh && scripts/diff_fmt.sh && scripts/diff_ir.sh && scripts/diff_raft.sh; }
 step_golden() { scripts/golden.sh --no-build --compare "$AUK"; }
 
 # fib 25, sieve 100k, ...: every bench program built and JIT-run on a small input, same output.
