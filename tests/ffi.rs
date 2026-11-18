@@ -11,8 +11,10 @@ use std::process::{Command, Output};
 use std::sync::OnceLock;
 use std::fs;
 
+mod auk_bin;
+
 fn auk(args: &[&str]) -> Output {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_auk"));
+    let mut c = Command::new(auk_bin::auk_bin());
     c.env_remove("AUK_LEAK_CHECK");
     c.args(args).output().unwrap()
 }
@@ -64,7 +66,7 @@ fn testlib() -> &'static Path {
 }
 
 fn run(main: &Path, args: &[&str], leak_check: bool) -> Output {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_auk"));
+    let mut c = Command::new(auk_bin::auk_bin());
     c.arg("run").arg(main).args(args);
     if leak_check {
         c.env("AUK_LEAK_CHECK", "1");
@@ -163,7 +165,7 @@ fn main() uses ffi {
 #[test]
 fn libc_functions_already_in_the_process() {
     let main = project("libc", "\"ffi\"", &[], LIBC);
-    let o = Command::new(env!("CARGO_BIN_EXE_auk")).arg("run").arg(&main).env("AUK_FFI_TEST", "set").env("AUK_LEAK_CHECK", "1").output().unwrap();
+    let o = Command::new(auk_bin::auk_bin()).arg("run").arg(&main).env("AUK_FFI_TEST", "set").env("AUK_LEAK_CHECK", "1").output().unwrap();
     let (out, err) = text(&o);
     assert!(o.status.success(), "{err}");
     assert_eq!(out, "5 7 6\nset unset\nfalse false true 99 44\n");

@@ -7,8 +7,10 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod auk_bin;
+
 fn auk(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_auk")).args(args).output().unwrap()
+    Command::new(auk_bin::auk_bin()).args(args).output().unwrap()
 }
 
 /// A fresh directory with `t.auk` holding `src`.
@@ -203,6 +205,9 @@ fn powers_roots_and_malformed_units() {
 
 #[test]
 fn a_unit_needs_an_attached_closed_bracket() {
+    if auk_bin::lacks("parse", "the AST of unit literals") {
+        return;
+    }
     // `<` right after a number (no space) with a `>` closing a unit on the same line is a unit;
     // anything else is a comparison, so no program that compiled before changes meaning
     let ast = |src: &str| {

@@ -16,8 +16,10 @@ use std::process::{Command, Output};
 use std::sync::Once;
 use std::{env, fs, thread};
 
+mod auk_bin;
+
 fn auk_cmd() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_auk"));
+    let mut c = Command::new(auk_bin::auk_bin());
     c.env_remove("AUK_LEAK_CHECK");
     c
 }
@@ -1401,6 +1403,9 @@ impl Lines {
 /// a type error keeps the old code running; a changed struct layout restarts the program.
 #[test]
 fn live_reload_swaps_code_and_keeps_state() {
+    if auk_bin::lacks("live", "live reload (`auk run --live`)") {
+        return;
+    }
     let d = scratch("live");
     let f = d.join("live.auk");
     let src = |msg: &str, fields: &str, init: &str| {
@@ -1457,6 +1462,9 @@ fn live_reload_swaps_code_and_keeps_state() {
 /// a type `main` itself holds changes shape, so the whole program restarts.
 #[test]
 fn live_reload_restarts_only_the_tasks_using_a_changed_type() {
+    if auk_bin::lacks("live", "live reload (`auk run --live`)") {
+        return;
+    }
     let d = scratch("live_sup");
     fs::create_dir_all(d.join("src")).unwrap();
     fs::write(d.join("raft.toml"), "[package]\nname = \"app\"\nversion = \"0.1.0\"\neffects = [\"time\"]\n\n[deps]\nsup = \"^0.1\"\n").unwrap();

@@ -6,8 +6,10 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::{env, fs};
 
+mod auk_bin;
+
 fn auk_cmd() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_auk"));
+    let mut c = Command::new(auk_bin::auk_bin());
     c.env("AUK_LEAK_CHECK", "1");
     c
 }

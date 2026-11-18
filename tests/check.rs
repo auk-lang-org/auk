@@ -8,8 +8,10 @@ use std::process::{Command, Output};
 use std::sync::Once;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod auk_bin;
+
 fn auk(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_auk")).args(args).output().unwrap()
+    Command::new(auk_bin::auk_bin()).args(args).output().unwrap()
 }
 
 /// `raft install` in `dir`; a lock that no longer matches the registry (the in-repo packages are
@@ -73,6 +75,9 @@ fn corpus_checks_clean() {
 /// every generic instance is concrete (`auk typed` runs `TypedProgram::validate`).
 #[test]
 fn corpus_typed_invariants() {
+    if auk_bin::lacks("typed", "the typed program and its invariants") {
+        return;
+    }
     setup();
     for f in corpus_roots() {
         let p = f.to_str().unwrap();
@@ -85,6 +90,9 @@ fn corpus_typed_invariants() {
 
 #[test]
 fn shapes_monomorphize_per_type() {
+    if auk_bin::lacks("typed", "the generic instances") {
+        return;
+    }
     setup();
     let out = auk(&["typed", "examples/inventory.auk"]);
     let text = String::from_utf8_lossy(&out.stdout);

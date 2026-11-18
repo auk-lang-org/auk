@@ -11,8 +11,10 @@ use std::process::{Command, Output};
 
 use json::Json;
 
+mod auk_bin;
+
 fn auk_cmd() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_auk"));
+    let mut c = Command::new(auk_bin::auk_bin());
     for v in ["AUK_LEAK_CHECK", "AUK_TRACE", "AUK_TRACE_LIMIT", "AUK_TRACE_TAIL"] {
         c.env_remove(v);
     }
@@ -349,6 +351,9 @@ fn traced_builds_are_leak_free() {
 /// answer when the retry prompt shows what the wrong one returned.
 #[test]
 fn hatch_retry_prompt_includes_the_trace() {
+    if auk_bin::lacks("hatch", "the retry prompt") {
+        return;
+    }
     let d = scratch("hatch");
     let src = "fn mid(xs: [int]): int { ?? }\ntest \"mid\" { assert mid([5, 7, 9]) == 7 }\n";
     fs::write(d.join("h.auk"), src).unwrap();

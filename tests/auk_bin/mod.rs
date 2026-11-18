@@ -4,14 +4,14 @@
 //! otherwise this build's `auk`.
 //!
 //! A binary from `$AUK_BIN` may lack commands. `$AUK_BIN_LACKS` lists them (comma-separated);
-//! unset, it is what the port's driver doesn't have yet: `run`, `test`, `debug`, `build`, `ir`
-//! (it can't run the imprint helper) and `parse`. Tests that need one skip it (`lacks`) with a
-//! note on stderr.
+//! unset, it is what the port's driver doesn't have yet: `debug`, `run --live`
+//! (`live`), and the hidden `parse` and `typed` (the port's `typed` prints `auk dump typed`).
+//! Tests that need one skip it (`lacks`) with a note on stderr.
 
 #![allow(dead_code)]
 
 /// The commands the port's driver doesn't have yet.
-const PORT_LACKS: &str = "run,test,debug,build,ir,parse";
+const PORT_LACKS: &str = "debug,live,parse,typed";
 
 /// The `auk` binary to run.
 pub fn auk_bin() -> String {

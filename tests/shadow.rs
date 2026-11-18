@@ -7,8 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod auk_bin;
+
 fn auk(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_auk")).args(args).output().unwrap()
+    Command::new(auk_bin::auk_bin()).args(args).output().unwrap()
 }
 
 fn scratch() -> PathBuf {

@@ -7,8 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod auk_bin;
+
 fn auk(args: &[&str]) -> Output {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_auk"));
+    let mut c = Command::new(auk_bin::auk_bin());
     c.env_remove("AUK_LEAK_CHECK");
     c.args(args).output().unwrap()
 }
@@ -119,7 +121,7 @@ fn value_variants_alone_still_work() {
 
 /// `auk run` under the leak check: stdout, asserting success and no leaks.
 fn run_leak_free(p: &Path) -> String {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_auk"));
+    let mut c = Command::new(auk_bin::auk_bin());
     let o = c.args(["run", s(p)]).env("AUK_LEAK_CHECK", "1").output().unwrap();
     let (out, err) = (String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned());
     assert!(o.status.success() && err.is_empty(), "auk run failed or leaked:\n{out}\n{err}");

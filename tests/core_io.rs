@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::{env, fs};
 
+mod auk_bin;
+
 fn scratch(name: &str) -> PathBuf {
     let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("core_io").join(name);
     let _ = fs::remove_dir_all(&d);
@@ -15,7 +17,7 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn auk_cmd() -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_auk"));
+    let mut c = Command::new(auk_bin::auk_bin());
     c.env("AUK_LEAK_CHECK", "1");
     c
 }

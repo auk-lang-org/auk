@@ -11,8 +11,10 @@ use std::process::{Command, Output};
 
 use json::Json;
 
+mod auk_bin;
+
 fn auk(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_auk")).args(args).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap()
+    Command::new(auk_bin::auk_bin()).args(args).current_dir(env!("CARGO_MANIFEST_DIR")).output().unwrap()
 }
 
 fn holes_json(file: &str) -> Json {
