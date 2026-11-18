@@ -113,7 +113,13 @@ runtime calls `objc_msgSend` from C).
       deleted while the thread waited.
 - [x] The whole suite under ASan: `AUK_RT_SANITIZE=address` (docs/compiler.md, Testing).
       `cargo test --release` and `auk test` over packages/ and examples: no reports.
-- [ ] Linux build and test (pthreads/`-ldl -lrt`, OpenSSL path).
+- [x] Linux build and test: `ci/linux/test.sh` (Docker, Debian trixie arm64, LLVM 23 from
+      apt.llvm.org; docs/compiler.md, Testing). The whole `cargo test --release` suite passes.
+      Fixes: `-D_GNU_SOURCE` for the runtime under glibc, plain `char` is unsigned on Linux
+      arm64 (FFI messages now say `char`), `[link] macos`/`linux` for per-OS libraries (the
+      `llvm` package links `-lLLVM-23` on Linux), and `auk build -g` checked with lldb and
+      `llvm-dwarfdump` on Linux too. x86-64 Linux is untested so far
+      (`AUK_LINUX_PLATFORM=linux/amd64`, emulated).
 
 **Done when:** `runtime/` has no `.rs`; rustls/ring/webpki-roots/`cc`-for-catch gone; all tests
 pass on macOS and Linux; ASan clean; `bench/perf` within ±5% of Phase 0.
@@ -170,8 +176,9 @@ Gaps for Phase 4, found doing 2c:
       or a `dlsym` binding (`RTLD_DEFAULT` is `(void *)-2` on macOS, `0` on Linux).
 - [ ] Embedding files in the binary: `rtlink.rs` and `build.rs` `include_bytes!` `auk_rt.bc` and
       `libauk_rt.a`. Auk has no equivalent (`imprint` is pure, so it can't read files).
-- [ ] `[link] libs` can't depend on the platform or ask `llvm-config`: the package names
-      `/opt/homebrew/opt/llvm@23/lib/libLLVM.dylib`, which is macOS/Homebrew only.
+- [ ] `[link] libs` can't ask `llvm-config`. (Per-platform libraries are done: `[link] macos`
+      names Homebrew's `libLLVM.dylib` path, `[link] linux` `-lLLVM-23`; another prefix still
+      means editing the manifest.)
 - [ ] A string's byte length costs a copy (`s.bytes().len()`); every generated wrapper for a
       `const char *` + length pays it. A `byte_len` would make names free.
 - [ ] Each call that takes a list (`build_call2`, `build_gep2`, `function_type`) mallocs and frees
