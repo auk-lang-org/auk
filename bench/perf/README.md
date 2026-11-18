@@ -60,7 +60,7 @@ The Cranelift table below was measured on a heavily loaded machine; compare with
 2. **Checked integer arithmetic is a function call** (fib, sieve). `+ - *` lower to `auk_add`/`auk_sub`
    /`auk_mul(a, b, loc)` instead of an inline `sadd_overflow` + `trapnz`/a cold branch. fib spends about
    27% of its samples in `auk_add`/`auk_sub`. Rust with overflow checks on is still 2.2x faster.
-3. **`sort` is a top-down merge sort written in Auk** (`src/prelude/core.auk:296`). `sort` is
+3. **`sort` is a top-down merge sort written in Auk** (`compiler/prelude/core.auk:296`). `sort` is
    `sort_by(x => x)`. Every level allocates through `take`/`skip`, the merge calls the key closure
    twice per comparison and builds `out` with `push`, and the result is concatenated with `+`. Profile:
    `sort_by` itself, then malloc/free, memmove and `auk_arr_push`/`at`/`len`. Fix: a runtime

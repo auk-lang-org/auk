@@ -18,7 +18,7 @@ build_both() {
 
 # Every .auk the pilot is checked on: the golden corpus plus compiler/tests/ (error cases).
 corpus() {
-  find tests examples packages src/prelude compiler/src compiler/tests -name '*.auk' -not -path '*/.raft/*' 2>/dev/null | LC_ALL=C sort
+  find tests examples packages compiler/src compiler/tests -name '*.auk' -not -path '*/.raft/*' 2>/dev/null | LC_ALL=C sort
 }
 
 # diff_mode tokens|ast|resolve: dump every corpus file with both and report the files that differ.
@@ -75,7 +75,7 @@ run_cmd() {
 # The back end's corpus (Phase 4): every program `auk ir` takes (golden.sh's `ir` mode: it checks
 # clean and has a `main`), plus compiler/tests/backend/ (small programs for each MIR construct).
 backend_corpus() {
-  { find tests examples packages src/prelude compiler -name '*.auk' -not -path '*/.raft/*' \
+  { find tests examples packages compiler -name '*.auk' -not -path '*/.raft/*' \
       -not -path 'compiler/tests/backend/*' 2>/dev/null \
       | while read -r f; do
           if grep -Eq '^(pub )?(async )?fn main\(' "$f" \

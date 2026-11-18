@@ -8,7 +8,7 @@
 //! - each **dependency** `d`: installed at `<project>/.raft/d/`; its root module is
 //!   `src/lib.auk` and `src/x.auk` is `d.x`. Its own `[deps]` are found in the same `.raft/`
 //!   (raft installs the whole tree flat).
-//! - **core**: the prelude compiled into the compiler (`src/prelude/*.auk`): the root `core`
+//! - **core**: the prelude compiled into the compiler (`compiler/prelude/*.auk`): the root `core`
 //!   module, always in scope, plus the modules `fs net time rand env proc audio_out gui pixels str int float ffi`.
 //!
 //! Paths (spec "Modules, packages"): a path's first segment names, in this order, a top-level
@@ -35,20 +35,20 @@ pub type PkgId = usize;
 
 /// The core prelude, compiled in: (module name, source). The first is the root `core` module.
 pub const PRELUDE: &[(&str, &str)] = &[
-    ("core", include_str!("prelude/core.auk")),
-    ("fs", include_str!("prelude/fs.auk")),
-    ("net", include_str!("prelude/net.auk")),
-    ("time", include_str!("prelude/time.auk")),
-    ("rand", include_str!("prelude/rand.auk")),
-    ("env", include_str!("prelude/env.auk")),
-    ("proc", include_str!("prelude/proc.auk")),
-    ("audio_out", include_str!("prelude/audio_out.auk")),
-    ("gui", include_str!("prelude/gui.auk")),
-    ("pixels", include_str!("prelude/pixels.auk")),
-    ("str", include_str!("prelude/str.auk")),
-    ("int", include_str!("prelude/int.auk")),
-    ("float", include_str!("prelude/float.auk")),
-    ("ffi", include_str!("prelude/ffi.auk")),
+    ("core", include_str!("../compiler/prelude/core.auk")),
+    ("fs", include_str!("../compiler/prelude/fs.auk")),
+    ("net", include_str!("../compiler/prelude/net.auk")),
+    ("time", include_str!("../compiler/prelude/time.auk")),
+    ("rand", include_str!("../compiler/prelude/rand.auk")),
+    ("env", include_str!("../compiler/prelude/env.auk")),
+    ("proc", include_str!("../compiler/prelude/proc.auk")),
+    ("audio_out", include_str!("../compiler/prelude/audio_out.auk")),
+    ("gui", include_str!("../compiler/prelude/gui.auk")),
+    ("pixels", include_str!("../compiler/prelude/pixels.auk")),
+    ("str", include_str!("../compiler/prelude/str.auk")),
+    ("int", include_str!("../compiler/prelude/int.auk")),
+    ("float", include_str!("../compiler/prelude/float.auk")),
+    ("ffi", include_str!("../compiler/prelude/ffi.auk")),
 ];
 
 thread_local! {

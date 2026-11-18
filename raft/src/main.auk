@@ -68,13 +68,13 @@ fn registry(): str uses fs, env, ffi {
 }
 
 /// The Auk checkout the running binary was built in: the first directory above the executable
-/// with `packages/` and `src/prelude/core.auk`.
+/// with `packages/` and `compiler/prelude/core.auk`.
 fn checkout(): str? uses fs, env, ffi {
   var d = paths.parent(paths.exe()?)
   loop {
     let x = d else return none
     if fs.is_dir(paths.join(x, "packages")) &&
-      paths.is_file(paths.join(x, "src/prelude/core.auk")) {
+      paths.is_file(paths.join(x, "compiler/prelude/core.auk")) {
       return x
     }
     d = paths.parent(x)

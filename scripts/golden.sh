@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The golden corpus (docs/self-host-plan.md, Phase 0): what the Rust `auk` makes of every .auk
-# file in tests/, examples/, packages/ (without .raft/ copies), src/prelude/ and compiler/, saved
+# file in tests/, examples/, packages/ (without .raft/ copies), compiler/ (with its prelude), saved
 # so a port of the compiler (Phases 3-5) can be diffed against it.
 #
 #   scripts/golden.sh                     record target/golden/rust with target/release/auk
@@ -119,7 +119,7 @@ export LC_ALL=C TZ=UTC NO_COLOR=1
 unset AUK_LEAK_CHECK AUK_DEBUG AUK_LINKER AUK_NO_RT_INLINE 2>/dev/null || true
 
 corpus() {
-  find tests examples packages src/prelude compiler -name '*.auk' -not -path '*/.raft/*' \
+  find tests examples packages compiler -name '*.auk' -not -path '*/.raft/*' \
     | LC_ALL=C sort | { if [ -n "$ONLY" ]; then grep -E "$ONLY" || true; else cat; fi; }
 }
 runs() {

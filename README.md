@@ -48,6 +48,13 @@ cargo build
 cargo test                                              # the compiler's whole test suite
 ```
 
+Or without Rust, from any existing `auk` (the compiler is written in Auk, `compiler/`):
+
+```sh
+./build.sh --seed ~/.cargo/bin/auk --check --test       # runtime, raft, auk → target/bin/; tests
+./target/bin/auk run examples/tour.auk
+```
+
 | command | does |
 |---|---|
 | `auk run <file> [args...]` | compile and run the program |
@@ -132,7 +139,7 @@ source ─▶ lexer ─▶ parser ─▶ resolve ─▶ checker ─▶ patterns/
 - **lexer / parser** (`src/lexer.rs`, `src/parser.rs`): newline-terminated statements, string
   interpolation, recursive descent with precedence climbing.
 - **resolve** (`src/resolve.rs`): the module tree of the project, its `.raft/` dependencies, and
-  the core library in `src/prelude/*.auk`.
+  the core library in `compiler/prelude/*.auk`.
 - **checker** (`src/check.rs`, `src/check/`): inference driven by the expected type,
   overloading and dot calls, shapes (monomorphized), auto-wrapping into `T?`/`T!`, units of
   measure (`src/units.rs`; erased before codegen).

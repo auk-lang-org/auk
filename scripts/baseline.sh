@@ -23,7 +23,7 @@ echo "baseline: bench/perf (RUNS=$RUNS)..." >&2
 BENCH="$(RUNS="$RUNS" AUK="$AUK" sh bench/perf/run.sh)"
 
 echo "baseline: compile times..." >&2
-find tests examples packages src/prelude compiler -name '*.auk' -not -path '*/.raft/*' \
+find tests examples packages compiler -name '*.auk' -not -path '*/.raft/*' \
   | LC_ALL=C sort > "$SCRATCH/corpus"
 COMPILE="$(python3 -I - "$AUK" "$RUNS" "$SCRATCH" <<'EOF'
 import subprocess, sys, time, os

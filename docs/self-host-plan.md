@@ -598,13 +598,23 @@ Port onto the Auk compiler, each with its existing tests passing:
 - [ ] **Bootstrap seed:** release binaries per platform (macOS arm64/x86_64, Linux x86_64/arm64),
       plus checked-in LLVM bitcode (or textual IR) of the compiler, so a fresh checkout builds
       with LLVM alone — no previous `auk` needed.
-- [ ] Build script (`make`/`build.sh`): seed → stage 1 → stage 2, runtime, tools, tests.
+- [x] Build script: `./build.sh [--check] [--test] [--seed <auk>]` — the runtime (`runtime/c` →
+      `target/auk-rt/libauk_rt.a` and `auk_rt.bc` with LLVM's clang, as build.rs did: one
+      translation unit plus the `own translation unit` files), raft (by the seed; it installs
+      `compiler/.raft`), seed → stage 1 → stage 2 (`target/bin/auk`), raft by stage 2
+      (`target/bin/raft`); `--check`: stage 3 bit-identical to stage 2; `--test`: the runtime's
+      C tests and `tests/runner/` against `target/bin/`. ~45 s on an M5. Checked with the Rust
+      `auk` as the seed and with an earlier `target/bin/auk` (no Rust involved): stage 2 = stage
+      3, C tests 72/72, runner 351 pass, 6 skip (`parse`/`typed`), 0 fail. Not covered:
+      `AUK_RT_SANITIZE` (the sanitized runtime is build.rs-only for now).
 - [ ] Tag `v0-rust-final` on the last commit with the Rust `auk` (all diffs 0, suite green); the
       language freeze ends with the delete.
-- [ ] Delete `Cargo.toml`, `Cargo.lock`, `build.rs`, `src/` (with `src/prelude/` moved, e.g. to
-      `compiler/prelude/`, since `embedded.auk` and the tools read it), `tests/*.rs`, `.cargo/`,
-      `target/`. `libauk_rt.a`/`auk_rt.bc` are built by `build.rs` today (into `target/auk-rt/`,
-      which `compiler/` `#embed`s): the build script takes that over first.
+- [x] The prelude moved out of `src/`: `compiler/prelude/` (Rust's `include_str!`, the port's
+      `#embed`s, raft's checkout detection and the corpus scripts follow).
+- [ ] Delete `Cargo.toml`, `Cargo.lock`, `build.rs`, `src/`, `tests/*.rs`, `.cargo/`,
+      `target/` (Rust's; `target/auk-rt`, `target/auk-build` and `target/bin` are build.sh's).
+      `build.sh` already builds `libauk_rt.a`/`auk_rt.bc`; the comments in `native.auk` and
+      `rtlink.auk` that say build.rs does go with the delete.
 - [ ] Install moves off `~/.cargo/bin` (e.g. `~/.auk/bin` or `/usr/local`); update README, docs,
       `site/index.html`, editor settings.
 - [ ] Release process: how a new seed is cut (every release, from the fixed point).

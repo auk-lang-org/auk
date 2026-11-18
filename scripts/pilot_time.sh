@@ -14,7 +14,7 @@ RUNS="${1:-5}"
 REPEAT="${2:-20}"
 build_both
 FILES=()
-while read -r f; do FILES+=("$f"); done < <(find tests examples packages src/prelude -name '*.auk' -not -path '*/.raft/*' -not -path 'tests/checker/*' | LC_ALL=C sort)
+while read -r f; do FILES+=("$f"); done < <(find tests examples packages compiler/prelude -name '*.auk' -not -path '*/.raft/*' -not -path 'tests/checker/*' | LC_ALL=C sort)
 BYTES=$(cat "${FILES[@]}" | wc -c | tr -d ' ')
 echo "corpus: ${#FILES[@]} files, $BYTES bytes; best of $RUNS runs"
 

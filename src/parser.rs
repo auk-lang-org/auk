@@ -21,7 +21,7 @@ pub fn parse(src: &str) -> Result<Module, Vec<Diag>> {
     parse_with(src, false)
 }
 
-/// Parse a core prelude file (`src/prelude/*.auk`). The prelude may also use the
+/// Parse a core prelude file (`compiler/prelude/*.auk`). The prelude may also use the
 /// prelude-only forms `extern fn f(..): T = "c_symbol"` and `extern type T = "CType"`, and may
 /// name functions with keywords (`fn enum(..)`, for `xs.enum()`).
 pub fn parse_prelude(src: &str) -> Result<Module, Vec<Diag>> {

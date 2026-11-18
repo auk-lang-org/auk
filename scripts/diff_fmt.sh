@@ -36,6 +36,6 @@ while read -r f; do
       echo "UNSTABLE ($side) $f (diff $key.$side.out $key.$side.again.out)"
     fi
   done
-done < <(find tests examples packages src/prelude compiler -name '*.auk' -not -path '*/.raft/*' | LC_ALL=C sort)
+done < <(find tests examples packages compiler -name '*.auk' -not -path '*/.raft/*' | LC_ALL=C sort)
 echo "fmt: $n files, $bad differ, $unstable not idempotent"
 [ "$bad" -eq 0 ] && [ "$unstable" -eq 0 ]

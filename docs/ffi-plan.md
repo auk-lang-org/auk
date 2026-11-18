@@ -1,7 +1,7 @@
 # Plan: user-level FFI (and the `sqlite` package on top of it)
 
 **Status (2026-11-18): phases 1 and 2 done** (core FFI and linking; spec "C functions",
-`src/ffi.rs`, `src/mir/lower/ffi.rs`, `runtime/c/ffi.c`, `src/prelude/ffi.auk`, tests/ffi.rs).
+`src/ffi.rs`, `src/mir/lower/ffi.rs`, `runtime/c/ffi.c`, `compiler/prelude/ffi.auk`, tests/ffi.rs).
 Beyond this plan, for the LLVM binding (self-host-plan 2b): `extern type` in user code declares
 distinct opaque C pointer types, lists cross as C arrays (`var [T]` copies back), `var`
 parameters are out-parameters, `T?` of a pointer is NULL-able, `+free(fn)` frees owned
@@ -56,7 +56,7 @@ Each one gets a clear error.
 Every user extern implicitly `uses ffi`, so callers must declare `ffi` too. The effect then shows up
 in `raft` dependency audits, which is where a reviewer should see it.
 
-## 3. The core `ffi` module (`src/prelude/ffi.auk`, `runtime/src/ffi.rs`)
+## 3. The core `ffi` module (`compiler/prelude/ffi.auk`, `runtime/src/ffi.rs`)
 
 `ffi.Ptr` is a plain machine address. It isn't reference-counted or freed automatically, can be
 compared, and `"{p}"` prints it in hex. Helpers (all `uses ffi`):

@@ -9,7 +9,7 @@
 /// - each **dependency** `d`: installed at `<project>/.raft/d/`; its root module is
 ///   `src/lib.auk` and `src/x.auk` is `d.x`. Its own `[deps]` are found in the same `.raft/`
 ///   (raft installs the whole tree flat).
-/// - **core**: the prelude (`src/prelude/*.auk`): the root `core` module, always in scope, plus
+/// - **core**: the prelude (`compiler/prelude/*.auk`): the root `core` module, always in scope, plus
 ///   the modules `fs net time rand env proc audio_out gui pixels str int float ffi`.
 ///
 /// Paths (spec "Modules, packages"): a path's first segment names, in this order, a top-level
@@ -50,7 +50,7 @@ pub let PRELUDE = [
 /// as it appears in `Module.file`, and this OS (`macos`, `linux`) for `[link]`.
 pub struct Sources { prelude: [(str, str)], overrides: {str: str}, os: str }
 
-/// Read the prelude from `dir` (`src/prelude`).
+/// Read the prelude from `dir` (`compiler/prelude`).
 pub fn sources(dir: str): Sources! uses fs, ffi {
   var prelude: [(str, str)] = []
   for name in PRELUDE { prelude.push((name, fs.read(paths.join(dir, "{name}.auk"))?)) }

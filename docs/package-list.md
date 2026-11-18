@@ -20,7 +20,7 @@ What a real package ecosystem depends on, measured from the 50 most-downloaded R
   - `GET /api/v1/crates/<name>` gave counts for 17 crates outside the top 300 (serde_yaml, zip, rusqlite, sqlx, rust_decimal, chrono-tz, proptest, insta, md-5, handlebars, tera, minijinja, similar, dirs, csv, quickcheck, serde_yml).
 - **No numbers are estimated.** Every download count below comes from those API responses, and none was unavailable (no "n/a" entries). A rank like "#103" means the crate's all-time rank.
 - **Caveat:** downloads count every CI build and every transitive dependency. They measure how deep a crate sits in dependency trees, not how often developers choose it. That is why plumbing crates dominate, and why I looked past rank 50 for application-level evidence.
-- **Verdicts** compare each crate's purpose with `docs/spec.md`, `docs/raft.md`, the five `packages/*/README.md` files, and the actual core prelude (`src/prelude/*.auk`, `runtime/src/core.rs`):
+- **Verdicts** compare each crate's purpose with `docs/spec.md`, `docs/raft.md`, the five `packages/*/README.md` files, and the actual core prelude (`compiler/prelude/*.auk`, `runtime/src/core.rs`):
   - 🟢 **Built into Auk**: a language or core feature makes it unnecessary.
   - 🔵 **Covered** by an existing package.
   - ⚪ **Not applicable**: Rust implementation plumbing.

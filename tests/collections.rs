@@ -1,4 +1,4 @@
-//! The core collection extras written in Auk (src/prelude/core.auk): `chunks`, `windows`,
+//! The core collection extras written in Auk (compiler/prelude/core.auk): `chunks`, `windows`,
 //! `flat_map`, `group_by` and `unique`, tested by tests/fixtures/collections.auk under the
 //! leak checker, plus the `requires n > 0` panics.
 

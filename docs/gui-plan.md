@@ -12,7 +12,7 @@ Three layers, built bottom-up:
 
 | layer | where | language | what it owns |
 |---|---|---|---|
-| **`gui` effect** | `runtime/src/gui/`, `src/prelude/gui.auk` | Rust + Auk externs | windows, presenting pixels, input events, clipboard, cursor shape, DPI |
+| **`gui` effect** | `runtime/src/gui/`, `compiler/prelude/gui.auk` | Rust + Auk externs | windows, presenting pixels, input events, clipboard, cursor shape, DPI |
 | **drawing + text** | `packages/graphics/src/{canvas,font,font/ttf,font/raster}.auk` | Auk | shapes, clipping, TTF parsing, glyph rasterizing, the glyph cache, drawing and measuring text |
 | **UI framework** | `packages/ui/src/{text,node,layout,widgets,app}.auk` | Auk | text layout, the widget tree, layout, hit-testing, focus, the Elm loop |
 
@@ -48,7 +48,7 @@ dependencies:
 | Linux | Xlib (`libX11.so.6`), XIM for text input | `XPutImage` of the changed rectangle (MIT-SHM later) | M1 |
 | Windows | `user32` message pump | `gdi32` `StretchDIBits` of the changed rectangle | MW |
 
-### 2.2 Auk surface (`src/prelude/gui.auk`, `uses gui`)
+### 2.2 Auk surface (`compiler/prelude/gui.auk`, `uses gui`)
 
 Windows are **int ids** (the host's), so they can be copied between tasks. As built in M0:
 
@@ -72,7 +72,7 @@ Still to add in M1: `set_title`, `set_cursor`, `clipboard_get`/`clipboard_set`,
 `Text(str)` (the only source of typed characters), `Focus(bool)`. It crosses the wire as
 `[int]`, and `next_event` decodes it in Auk.
 
-The pure core module **`pixels`** (`src/prelude/pixels.auk`, `runtime/src/pixels.rs`) has the
+The pure core module **`pixels`** (`compiler/prelude/pixels.auk`, `runtime/src/pixels.rs`) has the
 frame type and its hot loops. A **`pixels.Frame`** holds `w`×`h` 32-bit colors `0xTTRRGGBB`,
 where the top byte is *transparency*: 0 is opaque, so a plain `0xRRGGBB` literal is an opaque
 color, and `CLEAR` (`0xff000000`) is fully transparent. Alpha is `255 - T`, straight. Windows
