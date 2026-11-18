@@ -188,9 +188,10 @@ Gaps for Phase 4, found doing 2c:
       `auk_str_len` and `auk_release` by address (`tests/ffi.rs`).
 - [ ] Embedding files in the binary: `rtlink.rs` and `build.rs` `include_bytes!` `auk_rt.bc` and
       `libauk_rt.a`. Auk has no equivalent (`imprint` is pure, so it can't read files).
-- [ ] `[link] libs` can't ask `llvm-config`. (Per-platform libraries are done: `[link] macos`
-      names Homebrew's `libLLVM.dylib` path, `[link] linux` `-lLLVM-23`; another prefix still
-      means editing the manifest.)
+- [x] `[link] libs` can't ask `llvm-config`. Done: `[link]` entries expand `${VAR}`,
+      `${VAR:-default}` and `$(tool args)` when a program runs or is built; packages/llvm has
+      `macos = ["$(${LLVM_CONFIG:-/opt/homebrew/opt/llvm@23/bin/llvm-config} --libdir)/libLLVM.dylib"]`
+      and `linux = ["$(${LLVM_CONFIG:-llvm-config-23} --libdir)/libLLVM.so"]`.
 - [x] A string's byte length costs a copy (`s.bytes().len()`); every generated wrapper for a
       `const char *` + length pays it. Done: `s.byte_len()` (the runtime's stored length), used
       by the generated wrappers.

@@ -197,6 +197,58 @@ pub fn parse_manifest(text: &str) -> Manifest {
     m
 }
 
+/// Expand a `[link]` entry: `${VAR}` is the environment variable (`${VAR:-default}`: the default
+/// when it's unset or empty), and `$(tool args)` the trimmed output of running `tool` (no shell;
+/// the arguments split on whitespace, `${..}` expanded inside first). So a library's location
+/// can come from the tool that knows it: `"$(llvm-config --libdir)/libLLVM.dylib"`.
+pub fn expand_link(l: &str) -> Result<String, String> {
+    let bad = |why: String| format!("error: raft.toml [link] `{l}`: {why}\n");
+    let mut out = String::new();
+    let mut rest = l;
+    while let Some(i) = rest.find('$') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        if let Some(body) = after.strip_prefix('{') {
+            let end = body.find('}').ok_or_else(|| bad("`${` without its `}`".into()))?;
+            let (var, default) = match body[..end].split_once(":-") {
+                Some((v, d)) => (v, Some(d)),
+                None => (&body[..end], None),
+            };
+            match (std::env::var(var).ok().filter(|v| !v.is_empty()), default) {
+                (Some(v), _) => out.push_str(&v),
+                (None, Some(d)) => out.push_str(&expand_link(d)?),
+                (None, None) => return Err(bad(format!("the environment variable `{var}` is not set (`${{{var}:-default}}` gives a default)"))),
+            }
+            rest = &body[end + 1..];
+        } else if let Some(body) = after.strip_prefix('(') {
+            let mut depth = 1;
+            let end = body.char_indices().find_map(|(k, c)| {
+                depth += match c {
+                    '(' => 1,
+                    ')' => -1,
+                    _ => 0,
+                };
+                (depth == 0).then_some(k)
+            });
+            let end = end.ok_or_else(|| bad("`$(` without its `)`".into()))?;
+            let cmd = expand_link(&body[..end])?;
+            let mut words = cmd.split_whitespace();
+            let tool = words.next().ok_or_else(|| bad("`$()` names no tool".into()))?;
+            let o = std::process::Command::new(tool).args(words).output().map_err(|e| bad(format!("cannot run `{cmd}`: {e}")))?;
+            if !o.status.success() {
+                return Err(bad(format!("`{cmd}` failed: {}", String::from_utf8_lossy(&o.stderr).trim())));
+            }
+            out.push_str(String::from_utf8_lossy(&o.stdout).trim());
+            rest = &body[end + 1..];
+        } else {
+            out.push('$');
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
 fn str_list(val: &str) -> Vec<String> {
     val.trim_matches(|c| c == '[' || c == ']').split(',').map(|s| s.trim().trim_matches('"').to_string()).filter(|s| !s.is_empty()).collect()
 }
@@ -514,6 +566,20 @@ mod tests {
         let mut links = m.links.clone();
         links.sort();
         assert_eq!(links, os);
+    }
+
+    #[test]
+    fn link_entries_expand() {
+        assert_eq!(expand_link("sqlite3").unwrap(), "sqlite3");
+        assert_eq!(expand_link("${AUK_NO_SUCH_VAR:-/opt/x}/lib/a.so").unwrap(), "/opt/x/lib/a.so");
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(expand_link("${HOME}/a").unwrap(), format!("{home}/a"));
+        assert_eq!(expand_link("$(echo  /usr/lib )/libz.so").unwrap(), "/usr/lib/libz.so");
+        assert_eq!(expand_link("$(${AUK_NO_SUCH_VAR:-echo} hi)-$x").unwrap(), "hi-$x");
+        assert!(expand_link("${AUK_NO_SUCH_VAR}").unwrap_err().contains("`AUK_NO_SUCH_VAR` is not set"));
+        assert!(expand_link("$(false)").unwrap_err().contains("`false` failed"));
+        assert!(expand_link("$(auk-no-such-tool)").unwrap_err().contains("cannot run `auk-no-such-tool`"));
+        assert!(expand_link("$(echo").unwrap_err().contains("without its `)`"));
     }
 
     /// Every prelude extern that touches the outside world declares its effect: the externs of

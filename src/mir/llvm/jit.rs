@@ -93,6 +93,7 @@ pub fn lib_files(l: &str) -> Vec<String> {
 /// finds them through its process symbol generator.
 pub fn open_libs(links: &[String], syms: &[String]) -> Result<(), String> {
     for l in links {
+        let l = &crate::resolve::expand_link(l)?;
         let names = lib_files(l);
         let mut last = String::new();
         let found = names.iter().any(|n| {

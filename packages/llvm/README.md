@@ -5,9 +5,9 @@ print it, optimize it, emit object files and bitcode, link modules, add debug in
 in memory with ORC LLJIT. They are generated from a list, not written by hand.
 
 **Effects:** `ffi`. **Links:** LLVM 23's shared library (`auk run`/`test` `dlopen` it, `auk build`
-links it): on macOS `/opt/homebrew/opt/llvm@23/lib/libLLVM.dylib` (`brew install llvm@23`), on
-Linux `-lLLVM-23` (apt.llvm.org's `llvm-23-dev`). raft.toml names each under `[link] macos` /
-`linux`.
+links it), found with `llvm-config --libdir`: on macOS Homebrew's (`brew install llvm@23`;
+its llvm-config is `/opt/homebrew/opt/llvm@23/bin/llvm-config`), on Linux `llvm-config-23`'s
+(apt.llvm.org's `llvm-23-dev`). Set `LLVM_CONFIG` to use another LLVM 23.
 
 ```auk
 let c = llvm.ir.context_create()
