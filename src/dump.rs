@@ -4,6 +4,12 @@
 //! format is deliberately simple to reproduce: one node per line, children indented by two
 //! spaces, strings escaped by `esc`, floats as their IEEE bits, chars as code points.
 //!
+//! `auk dump resolve <file>...` loads each file as `auk check` does (`resolve::load_in_package`)
+//! and prints the module tree: packages, modules in load order with their children, each
+//! non-core module's items with their full paths, and every dotted path in it whose first
+//! segment names a module (`Program::first_segment`, then `child` per segment) with the module
+//! it reaches; or the load's diagnostics. File names are relative to the current directory.
+//!
 //! A file under a `prelude/` directory is parsed as a core prelude file (`extern` allowed).
 //! For timing: `--quiet` lexes or parses without printing, `--repeat N` does the whole job N
 //! times, and `--time` prints the time per repetition (file reading excluded) to stderr.
@@ -15,14 +21,16 @@ use std::{fs, path::Path};
 use super::ast::*;
 use super::diag::{Diag, Span};
 use super::lexer::lex;
+use super::diag::FileDiag;
 use super::parser;
+use super::resolve::{self, ModId, Program};
 use super::token::{StrPart, Tok, Token};
 
 pub fn run(args: &[String]) -> i32 {
     let (what, rest) = match args.split_first() {
-        Some((w, rest)) if w == "tokens" || w == "ast" => (w.as_str(), rest),
+        Some((w, rest)) if w == "tokens" || w == "ast" || w == "resolve" => (w.as_str(), rest),
         _ => {
-            eprintln!("usage: auk dump tokens|ast [--quiet] [--time] [--repeat N] <file>...");
+            eprintln!("usage: auk dump tokens|ast|resolve [--quiet] [--time] [--repeat N] <file>...");
             return 2;
         }
     };
@@ -50,7 +58,14 @@ pub fn run(args: &[String]) -> i32 {
         if files.len() > 1 && !quiet {
             let _ = writeln!(out, "== {f}");
         }
-        if what == "tokens" {
+        if what == "resolve" {
+            let r = resolve::load_in_package(Path::new(f.as_str()), src.clone());
+            if !quiet {
+                resolved(&mut out, &r);
+            } else {
+                std::hint::black_box(r).ok();
+            }
+        } else if what == "tokens" {
             match lex(src) {
                 Ok(lx) if !quiet => tokens(&mut out, lx.module_doc.as_deref(), &lx.toks),
                 r => {
@@ -718,6 +733,266 @@ fn expr(out: &mut String, d: usize, e: &Expr) {
     }
 }
 
+// ---- module tree and paths (resolve) ----
+
+/// `file` relative to the current directory (when under it).
+fn rel(file: &str) -> String {
+    let cwd = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
+    match file.strip_prefix(&format!("{cwd}/")) {
+        Some(r) if !cwd.is_empty() => r.to_string(),
+        _ => file.to_string(),
+    }
+}
+
+fn resolved(out: &mut String, r: &Result<Program, Vec<FileDiag>>) {
+    match r {
+        Ok(p) => program(out, p),
+        Err(ds) => {
+            for d in ds {
+                line(out, 0, &format!("in {}", esc(&rel(&d.file))));
+                diag(out, &d.diag);
+            }
+        }
+    }
+}
+
+fn program(out: &mut String, p: &Program) {
+    line(out, 0, &format!("root {} focus {} core {} {}", p.root, p.focus, p.core_pkg, p.core_root));
+    for (i, k) in p.pkgs.iter().enumerate() {
+        let dir = k.dir.as_ref().map(|d| esc(&rel(&d.display().to_string()))).unwrap_or_else(|| "-".into());
+        line(out, 0, &format!("pkg {i} {} root={} dir={dir}{}", esc(&k.name), k.root, if k.is_core { " core" } else { "" }));
+        for (n, d) in &k.deps {
+            line(out, 1, &format!("dep {n} {d}"));
+        }
+        if !k.effects.is_empty() {
+            line(out, 1, &format!("effects {}", k.effects.iter().map(|e| esc(e)).collect::<Vec<_>>().join(" ")));
+        }
+        if !k.links.is_empty() {
+            line(out, 1, &format!("links {}", k.links.iter().map(|l| esc(l)).collect::<Vec<_>>().join(" ")));
+        }
+    }
+    for (i, m) in p.mods.iter().enumerate() {
+        line(out, 0, &format!("mod {i} {} pkg={} file={} items={}", p.name(i), m.pkg, esc(&rel(&m.file)), m.ast.items.len()));
+        for (n, c) in &m.children {
+            line(out, 1, &format!("child {n} {c}"));
+        }
+        if p.is_core(i) {
+            continue;
+        }
+        let name = p.name(i);
+        for item in &m.ast.items {
+            item_line(out, &name, item);
+        }
+        let mut paths = Vec::new();
+        for item in &m.ast.items {
+            item_paths(item, &mut paths);
+        }
+        for path in &paths {
+            use_line(out, p, i, path);
+        }
+    }
+}
+
+fn item_line(out: &mut String, m: &str, item: &Item) {
+    let (kind, n, public) = match item {
+        Item::Fn(g) => {
+            let public = g.header.iter().map(|h| &**h).chain(&g.clauses).any(|c| c.public);
+            (format!("fn/{}", g.arity), g.name.clone(), public)
+        }
+        Item::Struct(d) => ("struct".into(), d.name.name.clone(), d.public),
+        Item::Enum(d) => ("enum".into(), d.name.name.clone(), d.public),
+        Item::Shape(d) => ("shape".into(), d.name.name.clone(), d.public),
+        Item::Test(t) => {
+            line(out, 1, &format!("item test {} {m}", esc(&t.name)));
+            return;
+        }
+        Item::Let(c) => ("let".into(), c.name.name.clone(), c.public),
+        Item::Imprint(c) => ("imprint".into(), c.name.name.clone(), c.public),
+        Item::ExternType(t) => ("extern-type".into(), t.name.name.clone(), t.public),
+    };
+    line(out, 1, &format!("item {kind} {m}.{n}{}", vis(public)));
+    if let Item::Enum(d) = item {
+        for v in &d.variants {
+            line(out, 2, &format!("variant {m}.{n}.{}", v.name.name));
+        }
+    }
+}
+
+/// A dotted path's segments, if the expression is only names and fields (`check::expr::as_path`).
+fn as_path(e: &Expr) -> Option<Vec<Ident>> {
+    match &e.kind {
+        ExprKind::Name(n) => Some(vec![Ident { name: n.clone(), span: e.span }]),
+        ExprKind::Field { expr, name } => {
+            let mut p = as_path(expr)?;
+            p.push(name.clone());
+            Some(p)
+        }
+        _ => None,
+    }
+}
+
+/// The module paths an item mentions, in order: its signature's type and pattern paths, then
+/// those of its expressions (`check::visit_item_exprs` order): `a.b.c` field chains, a method
+/// call's receiver name, and the qualifier of struct literals, types and patterns (`m.T`).
+fn item_paths(item: &Item, acc: &mut Vec<Vec<Ident>>) {
+    match item {
+        Item::Fn(g) => {
+            for c in g.header.iter().map(|h| &**h).chain(&g.clauses) {
+                clause_paths(c, acc);
+            }
+        }
+        Item::Struct(d) => {
+            generic_paths(&d.generics, acc);
+            d.fields.iter().for_each(|f| ty_paths(&f.ty, acc));
+        }
+        Item::Enum(d) => {
+            generic_paths(&d.generics, acc);
+            d.variants.iter().flat_map(|v| &v.fields).for_each(|f| ty_paths(&f.ty, acc));
+        }
+        Item::Shape(d) => {
+            generic_paths(&d.generics, acc);
+            d.methods.iter().for_each(|c| clause_paths(c, acc));
+        }
+        Item::Let(c) | Item::Imprint(c) => {
+            if let Some(t) = &c.ty {
+                ty_paths(t, acc);
+            }
+        }
+        Item::Test(_) | Item::ExternType(_) => {}
+    }
+    super::check::visit_item_exprs(item, &mut |e| expr_paths(e, acc));
+}
+
+fn clause_paths(c: &FnClause, acc: &mut Vec<Vec<Ident>>) {
+    generic_paths(&c.generics, acc);
+    for p in &c.params {
+        param_paths(p, acc);
+    }
+    if let Some(t) = &c.ret {
+        ty_paths(t, acc);
+    }
+}
+
+fn generic_paths(gs: &[Generic], acc: &mut Vec<Vec<Ident>>) {
+    gs.iter().flat_map(|g| &g.bounds).for_each(|b| ty_paths(b, acc));
+}
+
+fn param_paths(p: &Param, acc: &mut Vec<Vec<Ident>>) {
+    pat_paths(&p.pat, acc);
+    if let Some(t) = &p.ty {
+        ty_paths(t, acc);
+    }
+}
+
+/// The qualifier of `m.x` (nothing for a bare name).
+fn qualifier(path: &[Ident], acc: &mut Vec<Vec<Ident>>) {
+    if path.len() >= 2 {
+        acc.push(path[..path.len() - 1].to_vec());
+    }
+}
+
+fn ty_paths(t: &Type, acc: &mut Vec<Vec<Ident>>) {
+    match &t.kind {
+        TypeKind::Named { path, args } => {
+            qualifier(path, acc);
+            args.iter().for_each(|a| ty_paths(a, acc));
+        }
+        TypeKind::List(x) | TypeKind::Optional(x) | TypeKind::Any(x) | TypeKind::Var(x) => ty_paths(x, acc),
+        TypeKind::Measured { base, .. } => ty_paths(base, acc),
+        TypeKind::Map(k, v) => {
+            ty_paths(k, acc);
+            ty_paths(v, acc);
+        }
+        TypeKind::Tuple(ts) => ts.iter().for_each(|x| ty_paths(x, acc)),
+        TypeKind::Fallible { ok, err } => {
+            ty_paths(ok, acc);
+            if let Some(e) = err {
+                ty_paths(e, acc);
+            }
+        }
+        TypeKind::Fn { params, ret } => {
+            params.iter().for_each(|x| ty_paths(x, acc));
+            ty_paths(ret, acc);
+        }
+    }
+}
+
+fn pat_paths(p: &Pat, acc: &mut Vec<Vec<Ident>>) {
+    match &p.kind {
+        PatKind::Wild | PatKind::Bind(_) | PatKind::Lit { .. } | PatKind::None => {}
+        PatKind::Tuple(ps) | PatKind::Or(ps) => ps.iter().for_each(|x| pat_paths(x, acc)),
+        PatKind::List { head, rest, tail } => {
+            head.iter().for_each(|x| pat_paths(x, acc));
+            if let Some(x) = rest.as_ref().and_then(|r| r.pat.as_ref()) {
+                pat_paths(x, acc);
+            }
+            tail.iter().for_each(|x| pat_paths(x, acc));
+        }
+        PatKind::Variant { path, args } => {
+            qualifier(path, acc);
+            args.iter().flatten().for_each(|x| pat_paths(x, acc));
+        }
+        PatKind::Struct { path, fields, .. } => {
+            qualifier(path, acc);
+            fields.iter().filter_map(|f| f.pat.as_ref()).for_each(|x| pat_paths(x, acc));
+        }
+        PatKind::Map(es) => es.iter().for_each(|(_, x)| pat_paths(x, acc)),
+        PatKind::StrPrefix { rest, .. } => pat_paths(rest, acc),
+        PatKind::Some(x) | PatKind::Ok(x) | PatKind::Err(x) => pat_paths(x, acc),
+    }
+}
+
+/// The paths of one expression node (not its sub-expressions: the visitor reaches those).
+fn expr_paths(e: &Expr, acc: &mut Vec<Vec<Ident>>) {
+    match &e.kind {
+        ExprKind::Field { .. } => {
+            if let Some(p) = as_path(e) {
+                acc.push(p);
+            }
+        }
+        ExprKind::MethodCall { recv, .. } => {
+            if let ExprKind::Name(n) = &recv.kind {
+                acc.push(vec![Ident { name: n.clone(), span: recv.span }]);
+            }
+        }
+        ExprKind::Struct { path, .. } => qualifier(path, acc),
+        ExprKind::Is { pat, .. } => pat_paths(pat, acc),
+        ExprKind::Match { arms, .. } => arms.iter().for_each(|a| pat_paths(&a.pat, acc)),
+        ExprKind::For { index, pat, .. } => {
+            if let Some(i) = index {
+                pat_paths(i, acc);
+            }
+            pat_paths(pat, acc);
+        }
+        ExprKind::Let { pat, ty, .. } => {
+            pat_paths(pat, acc);
+            if let Some(t) = ty {
+                ty_paths(t, acc);
+            }
+        }
+        ExprKind::Closure { params, .. } => params.iter().for_each(|p| param_paths(p, acc)),
+        _ => {}
+    }
+}
+
+/// `use <span> a.b.c -> <module> k/n`: the module the first `k` of the path's `n` segments
+/// name. Nothing when the first segment names no module.
+fn use_line(out: &mut String, p: &Program, m: ModId, path: &[Ident]) {
+    let Some(mut cur) = p.first_segment(m, &path[0].name) else { return };
+    let mut k = 1;
+    while k < path.len() {
+        match p.child(cur, &path[k].name) {
+            Some(c) => cur = c,
+            None => break,
+        }
+        k += 1;
+    }
+    let (a, b) = (path[0].span, path[path.len() - 1].span);
+    let span = Span { line: a.line, col: a.col, end_line: b.end_line, end_col: b.end_col };
+    let text = path.iter().map(|i| i.name.as_str()).collect::<Vec<_>>().join(".");
+    line(out, 1, &format!("use {} {text} -> {} {k}/{}", sp(span), p.name(cur), path.len()));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -777,5 +1052,32 @@ mod tests {
         let e = ast("fn f() {\n  x & 1 == 0\n}\n");
         assert!(e.starts_with("error E0038 2:3-2:8 \"`&` mixed with a comparison needs parentheses\"\n  note "), "{e}");
         assert!(e.contains("  fix 2:3-2:3 \"(\"\n"), "{e}");
+    }
+
+    fn res(src: &str) -> String {
+        let mut out = String::new();
+        resolved(&mut out, &resolve::load_source(Path::new("t.auk"), src.to_string()));
+        out
+    }
+
+    #[test]
+    fn resolve_dump() {
+        let out = res("pub enum E { A(x: core.str.Q) }\nfn f(p: str): str! uses fs {\n  let n: net.Conn? = none\n  match e { fs.X => 1 }\n  core.fs.read(p)?\n}\n");
+        assert!(out.starts_with("root 14 focus 14 core 0 0\npkg 0 \"core\" root=0 dir=- core\npkg 1 \"t\" root=14 dir=-\nmod 0 core pkg=0 file=\"<prelude>/core.auk\""), "{out}");
+        assert!(out.contains("  child fs 1\n"), "{out}");
+        let tail = &out[out.find("mod 14 ").unwrap()..];
+        assert_eq!(
+            tail,
+            "mod 14 t pkg=1 file=\"t.auk\" items=2\n  \
+               item enum t.E pub\n    \
+                 variant t.E.A\n  \
+               item fn/1 t.f\n  \
+               use 1:19-1:27 core.str -> core.str 2/2\n  \
+               use 3:10-3:13 net -> core.net 1/1\n  \
+               use 4:13-4:15 fs -> core.fs 1/1\n  \
+               use 5:3-5:10 core.fs -> core.fs 2/2\n"
+        );
+        let e = res("fn f( {\n");
+        assert!(e.starts_with("in \"t.auk\"\nerror E0"), "{e}");
     }
 }

@@ -20,7 +20,7 @@ source ─▶ lex ─▶ parse ─▶ resolve ─▶ check ─▶ lower ─▶ M
 | file | contents |
 |---|---|
 | `src/main.rs` | the `auk` CLI: command dispatch, `check`, and the hidden `parse`/`typed` debug commands the tests use |
-| `src/dump.rs` | the hidden `auk dump tokens` and `auk dump ast`: line-oriented token and AST dumps with every span, the oracles the self-hosted front end in `compiler/` is diffed against (`scripts/diff_tokens.sh`, `diff_ast.sh`; docs/pilot-report.md) |
+| `src/dump.rs` | the hidden `auk dump tokens`, `auk dump ast` and `auk dump resolve`: line-oriented token and AST dumps with every span, and the loaded module tree (packages, modules, items, every module path with what it reaches, load diagnostics); the oracles the self-hosted front end in `compiler/` is diffed against (`scripts/diff_tokens.sh`, `diff_ast.sh`, `diff_resolve.sh`; docs/pilot-report.md) |
 | `src/token.rs`, `lexer.rs` | tokens with spans; the newline rule, interpolation parts, raw/triple strings and escapes are all lexer jobs |
 | `src/ast.rs` | the full AST: items (fn clause, struct, enum, shape, test, top-level let/imprint), patterns, expressions, types; every node has a `Span` |
 | `src/parser.rs` | recursive descent; precedence climbing per the spec's table; groups clauses after parsing |
