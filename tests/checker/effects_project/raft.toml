@@ -1,0 +1,4 @@
+[package]
+name = "effproj"
+version = "0.1.0"
+effects = ["net", "time"]

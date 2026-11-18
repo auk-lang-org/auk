@@ -1,0 +1,7 @@
+fn f(x: float): int {
+  match x {
+    1.0 => 1
+    2.5 => 2
+  }
+}
+fn main() {}
