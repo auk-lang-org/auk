@@ -499,6 +499,67 @@ walk with a closure, without building a list).
 
 No compiler or runtime bug blocked the port; no compiler or runtime change was needed.
 
+## Phase 5
+
+### fmt
+
+| Rust | Auk (`compiler/src/`) |
+|---|---|
+| `fmt/mod.rs` (1599, of which ~100 the CLI) | `fmt.auk` (1812) |
+| `fmt/doc.rs` (298) | `fmt/doc.auk` (308) |
+| `fmt/tests.rs` (354, 25 tests) | `fmt/tests.auk` (346, the same 25 as `test` blocks) |
+| `diag.rs` `render`/`severity`/`explain` (~40) | `diag.auk` (+55 with its test) |
+
+`compiler fmt [--check] <file|dir|->...` is `auk fmt`: same output, messages (parse errors
+rendered with `Diag::render`, "this is an auk fmt bug" for an output that doesn't round-trip)
+and exit codes. The port is line by line; the differences in shape are listed at the top of
+`fmt.auk`: a source position `(line, col)` is one `int` (`line << 32 | col`, so positions
+compare and key maps as ints), `ast_shape` compares the `auk dump ast` text with spans and node
+ids removed (Auk has no derived `Debug`), and the printer keeps finished lines plus the current
+one instead of one `String` it truncates at every line break.
+
+**Oracle.** `scripts/diff_fmt.sh` runs Rust `auk fmt -` and `compiler fmt -` on every `.auk`
+under `tests/ examples/ packages/ src/prelude/ compiler/` (258 files, `.raft/` copies skipped)
+and compares stdout, stderr and exit code, then feeds each successful output back to the same
+formatter: **258 files, 0 differ, 0 not idempotent** (150 formatted, 108 parse errors, whose
+rendered diagnostics match too). Zero on the first full run. `fmt --check` and in-place `fmt`
+over whole directories also agree (same file lists, same rewritten files). `auk test compiler`
+runs the 25 ported unit tests (30 tests in all pass).
+
+**Timing** (`scripts/pilot_time.sh 7 20`, new last row; best of 7, alternating; the machine had
+a load average of ~60 from other agents, so absolute numbers are high, ratios as in 3a):
+
+| measure | Rust | Auk | Auk / Rust |
+|---|---|---|---|
+| lex + parse, in-process | 56.7 ms | 88.1 ms | 1.55x |
+| `fmt --check` of the 119 files, whole process | 553 ms | 798 ms | **1.44x** |
+
+`fmt --check` per file parses the input twice, formats, parses the output and compares the two
+ASTs (`format_checked`). A `sample` of the port: parsing (all three) about half, `ast_shape`
+37% (two AST dumps and the span stripping), laying out (`module`: building docs, rendering
+each item to see if it is one line, `fits`) about a quarter, freeing ~12%. The formatter's own
+logic is not the bottleneck; a cheaper AST comparison would be (Rust's `Debug` text is also
+slow, but Auk's dump-and-strip is slower).
+
+### Gaps found
+
+1. **No print without a line break.** `print!("{out}")` is `print(out.strip_suffix("\n"))`
+   (the output always ends with one); a `print_raw`/`write` for stdout would be cleaner.
+2. **A module name reserves the identifier project-wide** (E0116): `var units` in `module()`
+   clashed with the `units` module and became `us`. Adding a module to a project can break
+   unrelated code with a local of that name.
+3. **Child modules are reached only by their full path**, so `fmt.auk` writes `fmt.doc.Doc`,
+   `fmt.doc.HardLine`, `fmt.doc.Fit.Flat` (~100 times) and has one-line wrappers for the
+   `doc` constructors (Rust's `use doc::{...}`). No type aliases either (Rust's `Cmd`).
+4. **`{` and `}` in strings are interpolation**, so every literal brace is doubled: `"{{"`,
+   `bracketed("{{", "}}", ...)`, and all the test sources (converted by a script).
+5. **No structural equality modulo some fields / no `Debug`**: `ast_shape` goes through the
+   dump (above).
+6. **No `unreachable!`**: the arms Rust marks unreachable return a harmless value (`nil()`,
+   `""`, `break`).
+
+No compiler or runtime bug was hit; no compiler or runtime change was needed.
+
 ## Reproduce
 
 ```
@@ -507,6 +568,7 @@ scripts/diff_ast.sh           # ast: 924 files, 0 differ
 scripts/diff_resolve.sh       # resolve: 924 files, 0 differ (254 before tests/checker/)
 scripts/diff_check.sh         # check: 924 files, 0 differ
 scripts/diff_typed.sh         # typed: 924 files, 0 differ, and typed --core
+scripts/diff_fmt.sh           # fmt: 258 files, 0 differ, 0 not idempotent
 scripts/pilot_time.sh 7 20    # the tables above
 auk test compiler             # the ported unit tests
 auk build compiler/bench/cliffs.auk -o /tmp/cliffs && /tmp/cliffs 80000

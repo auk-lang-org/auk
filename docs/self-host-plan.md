@@ -352,7 +352,11 @@ both compilers and both golden outputs). Bug fixes allowed, made in both.
 ## Phase 5 — Tools
 
 Port onto the Auk compiler, each with its existing tests passing:
-- [ ] `fmt/` (doc 298, mod 1597, tests 354)
+- [x] `fmt/` (doc 298, mod 1597, tests 354): `compiler/src/fmt.auk`, `fmt/doc.auk`,
+      `fmt/tests.auk` (the 25 unit tests as `test` blocks); `compiler fmt [--check] <path>... | -`.
+      `scripts/diff_fmt.sh`: Rust `auk fmt -` and the port agree on all 258 corpus files
+      (stdout, stderr, exit code; 108 parse-error files included), and both are idempotent.
+      Timing and gaps: pilot-report.md, "Phase 5".
 - [ ] `repl.rs` (878), `explain.rs` (169), `dive`
 - [ ] `lsp.rs` (1420), `dap.rs` (521), `debug.rs` (887), `dbg_eval.rs` (149)
 - [ ] `mcp.rs` (705), `live.rs` (549), `hatch.rs` (484)

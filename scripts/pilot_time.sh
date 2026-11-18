@@ -54,3 +54,11 @@ for mode in tokens ast resolve typed; do
   done
   printf '%-34s %10s ms %10s ms %8s\n' "$mode + dump, whole process" "$r" "$a" "$(ratio "$a" "$r")"
 done
+# `fmt --check` of every file in one process: parse, format, re-parse the output and compare
+# ASTs (`format_checked`), nothing written
+r="" a=""
+for _ in $(seq "$RUNS"); do
+  r=$(min "$r" "$(one_ms "$AUK" fmt --check "${FILES[@]}")")
+  a=$(min "$a" "$(one_ms "$PORT" fmt --check "${FILES[@]}")")
+done
+printf '%-34s %10s ms %10s ms %8s\n' "fmt --check, whole process" "$r" "$a" "$(ratio "$a" "$r")"
