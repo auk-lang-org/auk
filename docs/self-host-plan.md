@@ -203,8 +203,9 @@ Gaps for Phase 4, found doing 2c:
       all vectors and maps. Measured by the pilot: `h.xs.push(x)` through a `var` parameter,
       `xs[i].push(x)` and `m[k].push(x)` are O(1). Still missing: moving a value *out* of a
       container (take, change, put back copies; see below).
-- [ ] Efficient string building (append without O(n²)). The pilot measured `s += "x"` as
-      quadratic (80k appends: 202 ms, 20k: 6 ms; `[str]` + `join`: 3 ms).
+- [x] Efficient string building (append without O(n²)). The pilot measured `s += "x"` as
+      quadratic (80k appends: 202 ms, 20k: 6 ms; `[str]` + `join`: 3 ms). Now in place when
+      the string is unique: 80k appends in 2 ms.
 - [ ] Anything else the pilot exposes: big recursive enums (AST/MIR), deep recursion limits,
       hash maps keyed by structs/ints, sorting with a comparator, interning.
       Found by the pilot (details and snippets in [pilot-report.md](pilot-report.md), "Gaps"):
@@ -212,11 +213,17 @@ Gaps for Phase 4, found doing 2c:
   - [x] Or-patterns (`A | B =>`).
   - [x] Bare variant names of another module's enum in expressions where `T?`/`T!`/`T!E` is
         expected (and never silently core's `Value.Float`/`Int`/`Str`: E0117), or a way to import them.
-  - [ ] Moving a value out of a list/map element (no copy when it goes back).
-  - [ ] Reads without RC: a value read from a container/parameter that isn't mutated while it
+  - [x] Moving a value out of a list/map element (no copy when it goes back): `var g = xs[i]`
+        … `xs[i] = g` moves (80k: 870 ms → 2 ms); no new syntax.
+  - [x] Reads without RC: a value read from a container/parameter that isn't mutated while it
         lives is borrowed (no retain/release); no RC for payload-less enum constants.
   - [ ] One allocation per AST node: box the recursive edge or the variant payload, not both.
-  - [ ] `match` on `str` dispatches on length/first byte instead of a chain of `auk_str_eq`.
+        Tried (box only the enum's fields, keep the enum inline in the struct): trees 2.5x
+        faster, but the Auk parser 9–11% slower (an inline `ExprKind` makes every `Expr` copy
+        big); needs boxing the variant payload as one cell. Not done (pilot-report.md).
+  - [x] `match` on `str` dispatches on length/first byte instead of a chain of `auk_str_eq`
+        (a sorted table, binary search by length then bytes: 20 arms 3x faster).
+  - [x] `str([char])` builds straight into one buffer; `str(cs[a..b])` skips the slice (4x).
   - [x] Stack: deep recursion (Auk parser: 359 nested parens vs Rust's 925; now over 10000 on a
         256 MB main stack) and a "stack overflow" panic instead of a bare SIGSEGV.
   - [x] Smaller: `trim_start`/`trim_end`, `strip_prefix`/`strip_suffix`, `int.parse(s, radix)`,

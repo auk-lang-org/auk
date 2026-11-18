@@ -62,6 +62,43 @@ run does 20 passes); the best run counts. Whole-process time writes the full dum
 (Best of 5. A second run, best of 7 with Rust and Auk alternating, on a machine busy with another
 agent's ASan suite: lex 2.62x, lex + parse 2.10x, parse alone 1.80x, dumps 1.20x / 1.36x.)
 
+### After 2d (performance)
+
+The same script after the 2d codegen/runtime work (borrowed element reads, no RC for field-less
+variants, moving pushes, `match` on `str` by table, `str` of chars in one buffer, in-place
+`s +=`, moving an element out and back), on the grown corpus (119 files, 955 KB), best of 7,
+Rust and Auk alternating, on a loaded machine (load average ~20); "before" is main at 8b3c21a
+measured in the same session:
+
+| measure | Rust | Auk before | Auk after 2d | Auk / Rust before | after |
+|---|---|---|---|---|---|
+| lex, in-process | 19.1 ms | 56.3 ms | 37.2 ms | 2.98x | **1.94x** |
+| lex + parse, in-process | 53.2 ms | 111.9 ms | 84.8 ms | 2.09x | **1.59x** |
+| parse alone (difference) | 34.1 ms | 55.6 ms | 47.6 ms | 1.63x | **1.40x** |
+| lex + token dump, whole process | 125 ms | 151 ms | 136 ms | 1.09x | 1.09x |
+| lex + parse + AST dump, whole process | 151 ms | 209 ms | 174 ms | 1.39x | 1.15x |
+
+Port against port (the same binaries alternating, best of 9): lexing 50.1 → 35.7 ms (-29%),
+lexing + parsing 108.0 → 80.9 ms (-25%). By step, on the port (each against the previous step):
+reads without RC and moving pushes -9% lexing / -15% parsing; `match` on `str` -4% lexing; `str`
+of chars (and of a char range without the slice) with in-place `+=` -22% lexing (noisy: the
+machine was loaded).
+
+`compiler/bench/cliffs.auk` (80k iterations; best of 3, before → after):
+
+| case | before | after |
+|---|---|---|
+| `var x = xs[0]; x.push(i); xs[0] = x` | 869 ms | 1–2 ms |
+| `s += "x"` | 191 ms | 1–2 ms |
+| `parts.push("x")` + `join` (reference) | 2 ms | 1–2 ms |
+| `str(cs[0..8])`, 800k times | 86 ms | 22 ms |
+| `match` on `str`, 20 arms, 800k lookups | 24 ms | 7 ms |
+
+Not done: one allocation per AST node. Boxing only the enum's recursive fields (keeping
+`ExprKind` inline in `Expr`) made a binary-tree benchmark 2.5x faster but the Auk parser 9–11%
+slower, because every `Expr` copy then carries the whole `ExprKind`; the right shape is one box
+for a variant's whole payload, a bigger change left for later.
+
 The whole-process numbers are dominated by writing the dump, where the Auk version (`[str]`
 lines joined once) is slightly faster than the Rust one (`format!` per line); they are shown
 only to say that start-up and output don't change the picture.
@@ -269,8 +306,11 @@ Deferred, with a recommendation:
 - **7: `T??`.** Don't add (`??` is the hole). Two functions or a small enum is clearer.
 - **8: impure guards** (`'.' if self.eat('.') =>`): keep guards pure; `if`/`else` chains read better.
 - **9: Unicode char classes**: library work, plan item 1b.
-- **11–13: performance** (string `+=`, moving out of containers, RC on reads, double boxing) are
-  codegen/runtime work tracked in 2d, not language changes.
+- **11–13: performance**, codegen/runtime only, no language change (numbers under "After 2d"):
+  `s +=` appends in place when the string is unique; `var g = xs[i]` … `xs[i] = g` moves the
+  element out and back; element reads that are only looked at are borrowed (no retain/release),
+  field-less variants need no RC, `push` of a fresh value moves it; `match` on `str` is a table
+  lookup; `str([char])` builds into one buffer. Double boxing is still open (see above).
 
 ## Phase 3
 
@@ -348,4 +388,5 @@ scripts/diff_ast.sh           # ast: 254 files, 0 differ
 scripts/diff_resolve.sh       # resolve: 254 files, 0 differ
 scripts/pilot_time.sh 7 20    # the tables above
 auk test compiler             # the ported unit tests
+auk build compiler/bench/cliffs.auk -o /tmp/cliffs && /tmp/cliffs 80000
 ```
