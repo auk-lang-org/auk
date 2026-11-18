@@ -465,7 +465,19 @@ Port onto the Auk compiler, each with its existing tests passing:
       explain's E0420 example run too; still skipped (with a note): MCP `auk_debug` (`debug`)
       and explain's wrong examples of lexing/parsing codes (`parse`). Gaps: pilot-report.md,
       "Phase 5".
-- [ ] `repl.rs` (878), `dive`
+- [x] `repl.rs` (878), `dive`: `compiler/src/dive.auk` (983 lines, the 3 Rust unit tests as
+      `test` blocks), `auk dive [--quiet]` in the Phase 4 driver; each input's program is
+      generated and JIT-compiled in process (`drive.generate`, `backend.jit` at O0) and runs in a
+      forked child with stdin from `/dev/null` and stdout and stderr merged in one file (new:
+      `posix.run_forked_merged`, Rust's `Redirect { merged, stdin_null }`).
+      `scripts/diff_dive.sh` (in check.sh's pilot step): 23 scripted stdin sessions plus one on
+      a terminal (`script`: banner, prompts, `..`, Ctrl-D) — every `:` command and its aliases,
+      values of every kind, definitions then uses, redefinitions, clause groups waiting for more
+      clauses (`..`, blank line, EOF), type errors mapped to input lines, panics, `fail`,
+      contracts, multi-line inputs (operators, brackets, `"""`, block comments), syntax
+      errors, `:load`/`:save` (the saved files compared too), CRLF, `--quiet`/`-q`, bad flags:
+      **0 differ** (stdout, stderr, exit code). `tests/dive.rs` now runs `$AUK_BIN`: 4 pass
+      against the port. Gaps: pilot-report.md, "Phase 5", dive.
 - [ ] `dap.rs` (521), `debug.rs` (887), `dbg_eval.rs` (149)
 - [ ] `live.rs` (549)
 - [x] `hatch.rs` (484): `compiler/src/hatch.auk`, `compiler hatch <file> [--hole N] [--tries N]

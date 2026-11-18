@@ -1010,6 +1010,56 @@ model command and the default `claude -p`, holes in two modules of a project, a 
    Rust reports E0001. The Specials block (U+FFF0..U+FFFF) is now excluded;
    `compiler/tests/lex/replacement_char.auk` keeps it covered.
 
+### dive
+
+`src/repl.rs` (878 lines, 3 tests) is `compiler/src/dive.auk` (`auk dive [--quiet]`), line by
+line: 983 lines as `auk fmt` lays them out, the three Rust tests as `test` blocks. It is a thin
+layer over the ported pieces: `lexer`/`parser` to classify an input, `resolve.load_source` and
+`check.check_all` (+ `units.erase`) to check the generated program, `diag.render` for the
+errors, `fmt.format` for `:save`, `explain.run` for `:explain`, and the Phase 4 back end to run
+it: `drive.generate` (imprints included), `backend.jit` at O0, `orcjit.run` of `dk_entry` in a
+forked child. The one new driver piece is `posix.run_forked_merged`: the child's stdout and
+stderr both go to one file (in order) and its stdin comes from `/dev/null`, Rust's
+`run_forked` with `Redirect { merged, stdin_null }`.
+
+**Oracle.** `scripts/diff_dive.sh` feeds 23 scripted stdin sessions to each binary in the same
+scratch directory and compares stdout, stderr, exit code and the files left behind (`:save`
+output; the session directory `$TMPDIR/auk-dive-<pid>` normalized), plus one session on a
+terminal through `script` (banner, `🦆> ` and `.. ` prompts, the newline at Ctrl-D). Covered:
+every `:` command with its aliases and bad arguments (`:t` without an expression, `:load`
+of a missing file, a directory, a file with errors, a file with only `main`; `:save` to a
+missing directory; `:explain` of a code, a lower-case code, an unknown code, two codes, none),
+values of every kind (lists, maps, tuples, options, results, closures `<fn>`, tasks
+`<value>`, `()` joining the history, `never`), statements and their replay, definitions then
+uses, redefinitions (struct, function, imprint, test), clause groups waiting for more clauses
+(completed, given up on a blank line, at EOF), errors mapped to the input's lines, panics
+(index, overflow, division, assertion), `fail` and `?` in `main`, multi-line inputs (trailing
+operators, open brackets, `"""` strings with blank lines, block comments), syntax errors, CRLF
+input, EOF inside an input and without a final newline, `--quiet`/`-q`, a bad flag and an extra
+argument (exit 2): **0 differ**, with the port built by Rust and with stage 2.
+`tests/dive.rs` now runs the binary in `$AUK_BIN`: its 4 tests pass against the port.
+
+### Gaps found (dive)
+
+1. **No pointer identity** (`Rc::ptr_eq`): an `Origin` carries an `id` from a counter in the
+   session, and "every error is in this input" compares ids.
+2. **Names**: `Key::Fn` is `Key.Func` (beside `token.Fn` and `types.Ty.Fn` it misreads), and
+   `Session::check` is `check_prog`: a function named like the `check` module would shadow it
+   for this module's own calls (the E0116 trap of hatch's gap 6, for a function).
+3. **No `Drop`**: the session directory is removed by `close(s)` when `run` returns.
+4. **Interpolation in every string**: the scaffold's `{`/`}` are `{{`/`}}`, and Rust's
+   `format!("print({:?})", MARK)` is written out (`print("\u{1}dive-start")`), as Auk has no
+   `Debug` of a string.
+5. **`env.read_line`** strips `\n`/`\r\n` (Rust's loop then trims any `\r`s left; the port does
+   too), and it doesn't fail on invalid UTF-8, where Rust's `read_line` errors and the session
+   ends. Not in the oracle.
+6. **Unicode `trim`**: Auk's `trim`/`split` are ASCII; the port has `trim`, `trim_start`,
+   `trim_end` and `split_whitespace` over `lexer.is_whitespace` (Rust's White_Space), as hatch
+   has its `utrim`s (private there; a shared `ustr` module would serve both).
+7. Not reached by the oracle: a session directory that can't be created, a code generation or
+   JIT error, and an error in a file other than the generated program (core's), which render
+   as Rust's would by construction.
+
 ## Reproduce
 
 ```
@@ -1036,6 +1086,7 @@ scripts/diff_llvm.sh          # LLVM IR: 26 programs, 338 IR texts, 0 differ
 scripts/run_backend.sh        # JIT runs and executables: 48 programs, 0 differ
 scripts/backend_time.sh 7     # code generation, Rust vs Auk
 scripts/diff_hatch.sh         # hatch: 37 commands, 0 differ (--slow: 38, with a 60 s timeout)
+scripts/diff_dive.sh          # dive: 23 sessions and one on a terminal, 0 differ
 scripts/pilot_time.sh 7 20    # the tables above
 auk test compiler             # the ported unit tests
 auk build compiler/bench/cliffs.auk -o /tmp/cliffs && /tmp/cliffs 80000
