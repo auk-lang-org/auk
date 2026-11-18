@@ -301,7 +301,7 @@ static void tasks_many_and_unawaited(void) {
         rel(ts[i]);
     }
     /* releasing a never-awaited task joins it and releases its result */
-    SleepArgs a = {10, s("x")};
+    SleepArgs a = {10, s("x"), NULL};
     AukTask *t = auk_task_spawn(sleep_thunk, &a, sizeof a, sizeof(AukStr *), &auk_ops_str, NULL, NULL, NULL);
     rel(t);
 }
