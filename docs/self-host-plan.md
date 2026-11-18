@@ -395,8 +395,8 @@ numbers: [pilot-report.md](pilot-report.md), "Phase 4".
       (226, linking `auk_rt.bc`), `mod.rs` (252), `backend.rs` (52) → `compiler/src/codegen.auk`,
       `intrin.auk`, `dwarf.auk`, `rtlink.auk`, `backend.auk`, line by line over `packages/llvm`.
       `exec.rs` (138): running the entry in this process (`orcjit.run`), and forked children
-      (`drive.auk`, Phase 4 driver); `jit_eval`/`jit_live` (debugger evaluation, live reload)
-      come with `debug` and `live` (Phase 5).
+      (`drive.auk`, Phase 4 driver); `jit_eval` (debugger evaluation) comes with `debug`
+      (Phase 5); `jit_live` (live reload) is `backend.jit_live` (Phase 5, `live.rs`).
       Oracle: `auk ir --llvm=LEVEL` (`o0` is `auk ir --llvm`; `light`, `o2`, `o3`, `build` = O2
       with the runtime's bitcode; `-raw`: before the pass pipeline). `scripts/diff_llvm.sh`
       compares 13 IR texts per program (o0, o0-raw, light-raw, light, o2, o3; release build and
@@ -426,7 +426,7 @@ numbers: [pilot-report.md](pilot-report.md), "Phase 4".
       `#embed`ded: the binary needs no checkout). `run`, `build`, `test`, `check`, `ir`, `fmt`,
       `holes`, `hatch`, `explain`, `spec`, `lsp`, `mcp`, `__jit` (with `AUK_SOURCES`, so `hatch`
       builds its candidates with itself), same flags, output and exit codes. Imprints run in a
-      forked JIT child (`drive.eval_imprints`). Not yet: `debug`, `dap`, `run --live`
+      forked JIT child (`drive.eval_imprints`). Not yet: `debug`, `dap`
       (Phase 5). `scripts/diff_driver.sh`: 53 cases (usage errors, traces, `-O`, `build -o -g`,
       imprint panics, test filters, flat directories, the leak checker), 0 differ.
 - [x] Diff gate: `scripts/golden.sh --compare` with stage 2: tokens, ast, check, fmt 997 files,
@@ -479,7 +479,20 @@ Port onto the Auk compiler, each with its existing tests passing:
       **0 differ** (stdout, stderr, exit code). `tests/dive.rs` now runs `$AUK_BIN`: 4 pass
       against the port. Gaps: pilot-report.md, "Phase 5", dive.
 - [ ] `dap.rs` (521), `debug.rs` (887), `dbg_eval.rs` (149)
-- [ ] `live.rs` (549)
+- [x] `live.rs` (549): `compiler/src/live.auk` (~650 lines), `auk run --live` in the Phase 4
+      driver, line by line: the live table, slots by `Generated.live_keys`, layouts, the
+      task-use analysis (`Uses`, `Graph`, `Seen`), restart/cancel; `backend.jit_live`
+      (`LiveCode`, Rust's `LiveJit`). The watcher is an Auk task. C can't call back into Auk, so
+      the runtime got four small entry points (`auk__live_running`, `auk__live_cancel`,
+      `auk__live_install`, `auk__live_reloaded` in `runtime/c/task.c`); mtimes are C `stat`'s.
+      **Oracles:** `tests/run.rs` `live_reload_swaps_code_and_keeps_state` and
+      `live_reload_restarts_only_the_tasks_using_a_changed_type` pass against the port (`live`
+      is out of `PORT_LACKS`): 15 of 15 runs, as the Rust `auk` 15 of 15. `scripts/diff_live.sh`
+      (in `check.sh pilot`): 6 scenarios of scripted edits (code swap keeping state, type
+      error, signature change, layout restart; a `sup` project whose task-only type changes
+      and a touched dependency; module deleted/renamed, root renamed; exit, panic, kill while
+      watched, arguments; a missing then ill-typed file; usage) synchronized on the output,
+      **0 differ**, 5 of 5 runs. Gaps: pilot-report.md, "Phase 5", live.
 - [x] `hatch.rs` (484): `compiler/src/hatch.auk`, `compiler hatch <file> [--hole N] [--tries N]
       [--dry-run]`, now `auk hatch` in the Phase 4 driver; the model command via `posix_spawnp`
       (ffi), the candidates' tests built and run by the binary itself (`auk __jit test`, texts in
@@ -502,7 +515,10 @@ Port onto the Auk compiler, each with its existing tests passing:
       Results and gaps: pilot-report.md, "Phase 5", raft.
 - [ ] Threads: tools that use `std::thread` (`dap`, `debug`, `mcp`, `live`, `hatch`) use Auk
       tasks/channels instead. `mcp` done: each tool call is a task. `hatch` needs none: the
-      model's stdin is a file and the tests run in a spawned child.
+      model's stdin is a file and the tests run in a spawned child. `live` done: the child's
+      watcher is a task (started with copies of the slots, files, layouts and `Seen`; it
+      polls, compiles on its own heap and installs while the program's `main` runs on the
+      main thread).
 - [x] Integration tests: `tests/*.rs` (24 files) become an Auk test runner over the same
       fixtures (spawns the binaries, compares output). **`tests/runner/`**, an Auk project of its
       own like `raft/` (no dependencies, so no `.raft/`): `suite/<file>.auk` per

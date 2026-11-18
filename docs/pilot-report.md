@@ -1060,6 +1060,65 @@ argument (exit 2): **0 differ**, with the port built by Rust and with stage 2.
    JIT error, and an error in a file other than the generated program (core's), which render
    as Rust's would by construction.
 
+### live
+
+`src/live.rs` (550 lines) is `compiler/src/live.auk` (`auk run --live <file> [args...]`, from
+`drive.cli`), line by line: the parent compiles, installs and forks; the child runs the program
+on its main thread while a watcher polls the files every 200 ms, recompiles into a new JIT
+module, runs its `dk_init`, points the live table's slots at it, and on a changed layout
+either cancels the tasks that can hold one (`Uses`/`Graph`/`Seen`: what `main` and each task
+thunk can reach, narrowed to a `sup` child's closure) or exits 75 for a restart. ~650 lines
+as written (the Rust is 550 dense ones), plus `backend.jit_live` (45: `LiveCode`, Rust's
+`LiveJit`: every function exported and looked up by name, the slots' entries, `dk_init`). The
+code generator already took the live table (`codegen.Gen.live`), and `Generated.live_keys`
+came with Phase 3's lowering, so nothing else was missing.
+
+**Threads → a task.** Rust's watcher thread is an `async fn watch` started in the child and
+never awaited (the child `_exit`s when `main` returns). It gets copies of the slots, files,
+layouts and `Seen` (tasks share nothing), and compiles on its own heap. Two consequences:
+the module's `dk_init` must not allocate on that heap (its constants are the whole program's),
+so the install switches to no heap first; and the watcher itself is on the runtime's list of
+running tasks, which is harmless (its thunk is the compiler's, never a program's).
+
+**Oracle.** `tests/run.rs`'s two live tests run against the port (`live` is out of
+`PORT_LACKS`): 15 of 15 runs pass, as with the Rust `auk` (15 of 15; ~0.7 s for both tests
+with the port, ~0.8 s with Rust). `scripts/diff_live.sh` (in `check.sh pilot`) runs 6
+scenarios with each binary in the same directory. Its programs print only when a file `step`
+changes, and the script waits for each note or line before the next edit or step (sources are
+written beside and renamed into place), so the output is deterministic but for the reload
+time, which is masked: a swap keeping state, a type error, a signature change (the running
+frame keeps calling the old function), a layout `main` holds; a `sup` project whose
+supervised task alone holds the changed type (`stopped 1 task(s)`, the supervisor's restart
+line, the counter starting over) and a touched dependency file; a module renamed away and
+back, the root file renamed, a module deleted while used; a program that exits 3, panics
+(101) and is killed by a signal while watched, with arguments; a missing then ill-typed file;
+the usage error. **0 differ**, 5 runs of 5. A reload of these small programs takes 8–16 ms
+with the port; the swap program reloads in 10 ms with the port, 7–8 ms with Rust.
+
+### Gaps found (live)
+
+1. **No callbacks from C into Auk**: Rust's `rt::cancel_running(pick)` passes a closure to
+   `auk__cancel_running`. The runtime got `auk__live_running` (the running tasks' (thunk,
+   hint) pairs) and `auk__live_cancel` (cancel the tasks with the chosen pairs); the choice is
+   made in Auk between the two calls, per distinct pair. A task started in between is left
+   alone (as one started after Rust's lock is).
+2. **No atomics in core**: the slot stores (Rust: `Release`) and the reload counter
+   (`fetch_add`) are `auk__live_install` and `auk__live_reloaded` in C.
+3. **No heap control from Auk**: `dk_init` run from a task would put the program's constants
+   on the watcher's heap; `auk__live_install` runs it with no current heap.
+4. **No file modification time in core** (`fs` has no `stat`): C `stat` through `ffi`, the
+   `st_mtim(espec)` offset per OS (48 on macOS arm64, 88 on Linux; x86-64 macOS would need
+   `stat$INODE64`, untested).
+5. **No `HashSet`, no `Arc`**: sets are `{K: bool}` maps; `Seen` keeps every compile's call
+   graph in a list and closures name theirs by index. `sig_key` (Rust: the `Debug` text of a
+   signature) is the `([MTy], MTy)` itself as a map key.
+6. **Rust's output order varies, the port's doesn't**: Rust iterates a `HashMap` of layouts, so
+   with several types changed at once which one the restart note names, and the order of the
+   names in "`A`, `B` changed shape", vary from run to run; the port sorts them by `file::Name`
+   (the oracle changes one type at a time).
+7. **`uses` is a keyword**, so `Build.uses` is `Build.reach`; `else` in a `for` head needs
+   parentheses (E0029).
+
 ## Reproduce
 
 ```
@@ -1087,6 +1146,7 @@ scripts/run_backend.sh        # JIT runs and executables: 48 programs, 0 differ
 scripts/backend_time.sh 7     # code generation, Rust vs Auk
 scripts/diff_hatch.sh         # hatch: 37 commands, 0 differ (--slow: 38, with a 60 s timeout)
 scripts/diff_dive.sh          # dive: 23 sessions and one on a terminal, 0 differ
+scripts/diff_live.sh          # run --live: 6 scenarios, 0 differ; tests/run.rs live tests on the port
 scripts/pilot_time.sh 7 20    # the tables above
 auk test compiler             # the ported unit tests
 auk build compiler/bench/cliffs.auk -o /tmp/cliffs && /tmp/cliffs 80000
