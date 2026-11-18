@@ -104,8 +104,9 @@ fn publish_runtime(out: &Path) {
     if env::var("AUK_RT_SANITIZE").is_ok_and(|s| !s.is_empty()) {
         return;
     }
-    // OUT_DIR is <target>/<profile>/build/<pkg>-<hash>/out
-    let Some(target) = out.ancestors().nth(4) else { return };
+    // OUT_DIR is <target>/<profile>/build/<pkg>-<hash>/out (newer cargo: build/<pkg>/<hash>/out)
+    let Some(build) = out.ancestors().find(|a| a.file_name().is_some_and(|n| n == "build")) else { return };
+    let Some(target) = build.parent().and_then(Path::parent) else { return };
     let dir = target.join("auk-rt");
     let _ = std::fs::create_dir_all(&dir);
     for f in ["libauk_rt.a", "auk_rt.bc"] {
