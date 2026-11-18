@@ -308,3 +308,49 @@ fn missing_libraries_and_symbols_are_named() {
     let o = auk(&["build", main.to_str().unwrap(), "-o", main.parent().unwrap().join("p").to_str().unwrap()]);
     assert!(!o.status.success(), "linking a missing library succeeded");
 }
+
+/// `"(T)"` casts between `ffi.Ptr` and an `extern type`, both ways (no call), in the JIT and built.
+const CASTS: &str = r#"
+extern type Buf = "struct buf *"
+extern fn buf_new(n: int): Buf? = "struct buf *malloc(size_t)"
+extern fn buf_free(b: Buf) = "void free(struct buf *)"
+extern fn buf_ptr(b: Buf): ffi.Ptr = "(void *)"
+extern fn buf_at(p: ffi.Ptr): Buf = "(struct buf *)"
+extern fn maybe_buf(p: ffi.Ptr?): Buf? = "(struct buf *)"
+
+fn main() uses ffi {
+  let b = buf_new(16)!
+  let p = buf_ptr(b)
+  ffi.write_i64(p, 8, 77)
+  let back = buf_at(ffi.offset(p, 0))
+  print("{ffi.read_i64(buf_ptr(back), 8)} {ffi.addr(buf_ptr(back)) == ffi.addr(p)}")
+  print("{maybe_buf(none) == none} {maybe_buf(some(p)) != none}")
+  buf_free(back)
+}
+"#;
+
+#[test]
+fn casts_between_handles_and_pointers() {
+    let main = project("casts", "\"ffi\"", &[], CASTS);
+    let out = run_ok(&main);
+    assert_eq!(out, "77 true\ntrue true\n");
+    assert_eq!(build_ok(&main), out);
+    let bad = r#"extern type Db = "sqlite3 *"
+extern fn a(x: int): ffi.Ptr = "(void *)"
+extern fn b(x: ffi.Ptr): Db = "(void *)"
+extern fn c(x: ffi.Ptr, y: ffi.Ptr): Db = "(sqlite3 *)"
+extern fn d(x: ffi.Ptr): int = "(int)"
+fn main() {}
+"#;
+    let (ok, err) = check("bad_casts", "\"ffi\"", bad);
+    assert!(!ok);
+    for want in [
+        "parameter 1 of `a` is `int`",
+        "a cast `(T)` converts an opaque pointer",
+        "`b` returns `Db`, which doesn't fit the C result type `void *`",
+        "`c` has 2 parameter(s), but a cast takes 1",
+        "a cast converts between pointer types; `int` isn't one",
+    ] {
+        assert!(err.contains(want), "missing {want:?} in:\n{err}");
+    }
+}

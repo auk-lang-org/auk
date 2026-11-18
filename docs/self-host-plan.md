@@ -176,9 +176,10 @@ pass on macOS and Linux; ASan clean; `bench/perf` within ±5% of Phase 0.
       `codegen.rs` (`llvm.codegen`), each operator JIT-compiled and called.
 
 Gaps for Phase 4, found doing 2c:
-- [ ] No conversion between an `extern type` and `ffi.Ptr`. Putting a handle in C memory
-      (`LLVMOrcCSymbolMapPair.Name`) needed a second binding of `LLVMOrcLLJITMangleAndIntern`
-      returning `void *`. A `ffi.ptr_of(x)`/`T.from_ptr(p)` pair would remove that.
+- [x] No conversion between an `extern type` and `ffi.Ptr`. Done as a cast prototype, no call:
+      `extern fn value_ptr(v: Value): ffi.Ptr = "(void *)"`, `extern fn value_at(p: ffi.Ptr):
+      Value = "(LLVMValueRef)"` (`T?` ↔ NULL too). `llvm.kit.define` uses one instead of a second
+      binding of `LLVMOrcLLJITMangleAndIntern` returning `void *`.
 - [ ] `rt_symbols()`: the JIT defines the runtime's addresses as absolute symbols. The Auk
       compiler needs those addresses in its own process: either export the runtime's symbols from
       the compiler binary (`-export_dynamic` / `-rdynamic`, then the process generator finds them)

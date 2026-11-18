@@ -86,6 +86,9 @@ pub struct CSig {
     /// A call through a function pointer (`"int64_t (*)(int64_t, int64_t)"`): `params[0]` is the
     /// function's address (`void *`, an Auk `ffi.Ptr`), the rest are the C function's parameters.
     pub indirect: bool,
+    /// A C cast (`"(LLVMValueRef)"`, `"(void *)"`): the one argument, an opaque pointer, becomes
+    /// the result's pointer type (`ret`); nothing is called. `params[0]` is `void *`.
+    pub cast: bool,
 }
 
 // ---- parsing ------------------------------------------------------------------------------
@@ -323,6 +326,22 @@ pub fn parse_proto(src: &str) -> Result<CSig, String> {
         None => (src, None),
     };
     let toks = lex(proto.trim().trim_end_matches(';'))?;
+    // `(T)`: a cast between opaque pointer types
+    if toks.first() == Some(&Tok::LParen) && toks.last() == Some(&Tok::RParen) && toks.len() > 2 {
+        if free.is_some() {
+            return Err("a cast `(T)` frees nothing: drop `+free`".into());
+        }
+        let mut p = P { toks: toks[1..toks.len() - 1].to_vec(), pos: 0 };
+        let (ret, name) = p.decl("the cast", false)?;
+        if name.is_some() || p.pos < p.toks.len() {
+            return Err("a cast is a single C pointer type in parentheses, e.g. \"(LLVMValueRef)\" or \"(void *)\"".into());
+        }
+        if !matches!(ret, CTy::Ptr { .. } | CTy::Named(_)) {
+            return Err(format!("a cast converts between pointer types; `{}` isn't one", ret.show()));
+        }
+        let params = vec![CTy::Ptr { to: Box::new(CTy::Void), konst: false }];
+        return Ok(CSig { name: "(cast)".into(), ret, params, free: None, indirect: false, cast: true });
+    }
     let mut p = P { toks, pos: 0 };
     let (ret, name) = p.decl("the result type", true)?;
     // `T (*)(params)`: a call through the function pointer passed first
@@ -370,7 +389,7 @@ pub fn parse_proto(src: &str) -> Result<CSig, String> {
     if p.pos < p.toks.len() {
         return Err("unexpected text after the prototype".into());
     }
-    Ok(CSig { name, ret, params, free, indirect })
+    Ok(CSig { name, ret, params, free, indirect, cast: false })
 }
 
 // ---- matching Auk types to C types ----------------------------------------------------------
@@ -582,6 +601,11 @@ mod tests {
         assert_eq!(s.params, vec![CTy::Ptr { to: Box::new(CTy::Void), konst: false }, i(8, true), i(8, true)]);
         assert_eq!(parse_proto("void (*)(void)").unwrap().params.len(), 1);
         assert!(!parse_proto("int abs(int)").unwrap().indirect);
+        let s = parse_proto("(LLVMValueRef)").unwrap();
+        assert!(s.cast && s.ret == CTy::Named("LLVMValueRef".into()) && s.params.len() == 1);
+        assert!(parse_proto("( void * )").unwrap().cast);
+        assert!(parse_proto("(int)").unwrap_err().contains("pointer"));
+        assert!(parse_proto("(void *) +free(f)").is_err());
         assert!(parse_type("struct sqlite3 *").unwrap().same(&parse_type("sqlite3*").unwrap()));
     }
 }

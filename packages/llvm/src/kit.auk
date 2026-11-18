@@ -145,11 +145,8 @@ pub fn jit(): Jit! uses ffi {
   Jit { j: jit, dylib: jd }
 }
 
-// `LLVMOrcLLJITMangleAndIntern` again, its result as a plain pointer to store in C memory.
-extern fn intern(
-  j: llvm.OrcLLJIT,
-  name: str,
-): ffi.Ptr = "void *LLVMOrcLLJITMangleAndIntern(LLVMOrcLLJITRef, const char *)"
+// An interned name as a plain pointer, to store in C memory.
+extern fn entry_ptr(e: llvm.OrcSymbolStringPoolEntry): ffi.Ptr = "(void *)"
 
 /// Define symbols at fixed addresses in the JIT's main dylib (how `auk run` hands the runtime
 /// to JIT code). `LLVMOrcCSymbolMapPair` is laid out by hand: the interned name (8 bytes), the
@@ -161,7 +158,7 @@ pub fn define(jt: Jit, syms: [(str, ffi.Ptr)]): ()! uses ffi {
   let flags = llvm.JIT_SYMBOL_GENERIC_FLAGS_EXPORTED + llvm.JIT_SYMBOL_GENERIC_FLAGS_CALLABLE
   for i in 0..syms.len() {
     let (name, at) = syms[i]
-    ffi.write_ptr(pairs, i * size, intern(jt.j, name))
+    ffi.write_ptr(pairs, i * size, entry_ptr(llvm.orc.orc_lljit_mangle_and_intern(jt.j, name)))
     ffi.write_ptr(pairs, i * size + 8, at)
     ffi.write_u8(pairs, i * size + 16, flags)
   }

@@ -52,7 +52,7 @@ impl Lower<'_, '_> {
         let tp = self.tp;
         let FnKind::Ffi { sig, convs, .. } = &tp.fns[f].kind else { panic!("ffi_call of a non-C function") };
         let sig: &CSig = sig;
-        if !sig.indirect && !self.g.prog.c_syms.contains(&sig.name) {
+        if !sig.indirect && !sig.cast && !self.g.prog.c_syms.contains(&sig.name) {
             self.g.prog.c_syms.push(sig.name.clone());
         }
         let mut cs = Vec::new();
@@ -99,7 +99,10 @@ impl Lower<'_, '_> {
             cs.push(c);
         }
         let rconv = convs.last().expect("result conversion");
-        let call = if sig.indirect {
+        let call = if sig.cast {
+            // no call: the same address, typed as the result
+            cs.remove(0).cast(c_mty(rconv))
+        } else if sig.indirect {
             let code = cs.remove(0);
             Ex::new(K::Call(Callee::CPtr(Box::new(code)), cs), c_mty(rconv))
         } else {

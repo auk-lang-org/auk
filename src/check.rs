@@ -581,7 +581,9 @@ impl Checker {
         if sig.params.len() != params.len() {
             self.err_in(
                 m,
-                if sig.indirect {
+                if sig.cast {
+                    e40(at, format!("`{name}` has {} parameter(s), but a cast takes 1", params.len())).note("a cast `(T)` converts its one argument, an `ffi.Ptr` or an `extern type`, to `T`")
+                } else if sig.indirect {
                     e40(at, format!("`{name}` has {} parameter(s), but a call through a function pointer with this prototype takes {}", params.len(), sig.params.len()))
                         .note("the first parameter is the function's address (`ffi.Ptr`), then one per C parameter")
                 } else {
@@ -608,7 +610,17 @@ impl Checker {
                 if p.ty.has_error() {
                     return None;
                 }
-                match conv(&p.ty, p.var, ct, false, sig.free.is_some(), &ptr_of) {
+                let cv = if sig.cast {
+                    match &p.ty {
+                        _ if p.var => Err("a cast's argument can't be `var`".to_string()),
+                        Ty::Opt(x) if ptr_of(x).is_some() => Ok(crate::ffi::Conv::OptPtr),
+                        t if ptr_of(t).is_some() => Ok(crate::ffi::Conv::Ptr),
+                        _ => Err("a cast `(T)` converts an opaque pointer: an `ffi.Ptr` or an `extern type` (or its `T?`)".to_string()),
+                    }
+                } else {
+                    conv(&p.ty, p.var, ct, false, sig.free.is_some(), &ptr_of)
+                };
+                match cv {
                     Ok(cv) => convs.push(cv),
                     Err(why) => {
                         let span = c.params.get(k).map(|x| x.ty.as_ref().map(|t| t.span).unwrap_or(x.span)).unwrap_or(at);

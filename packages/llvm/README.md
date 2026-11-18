@@ -51,7 +51,8 @@ executable and runs it (`cd example && raft install && auk run src/main.auk`).
   disposed of. Out-parameters are `var`: `var m: llvm.Module? = none`,
   `parse_bitcode_in_context2(c, buf, &m)`.
 - Callbacks and pointers to C structs are `ffi.Ptr` (pass `ffi.null`, or lay the struct out with
-  `ffi.alloc`/`write_*`, as `llvm.kit.define` does for `LLVMOrcCSymbolMapPair`).
+  `ffi.alloc`/`write_*`, as `llvm.kit.define` does for `LLVMOrcCSymbolMapPair`). A handle goes in and out of C memory
+  through a cast: `extern fn entry_ptr(e: llvm.OrcSymbolStringPoolEntry): ffi.Ptr = "(void *)"`.
 
 ## `llvm.kit` (by hand)
 
