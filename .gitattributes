@@ -1,6 +1,9 @@
 # Line endings: normalize text; Auk sources and raft manifests are always LF.
 * text=auto
 *.auk text eol=lf diff=auk
+# GitHub Linguist treats .auk as an Awk extension. Auk isn't a Linguist language, so leave
+# these files out of the language stats rather than counting them as Awk.
+*.auk linguist-detectable=false
 # diff=auk names the enclosing fn/test/struct in hunk headers. Git can't define the driver here;
 # enable it once per clone:
 #   git config diff.auk.xfuncname '^[ \t]*((pub[ \t]+)?((async[ \t]+)?fn|extern[ \t]+(fn|type)|struct|enum|shape|imprint|let)[ \t].*|test[ \t]+".*)$'
