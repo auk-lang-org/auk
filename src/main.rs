@@ -127,6 +127,7 @@ fn main() {
         },
         // hidden debug commands, used by the tests
         "parse" => parse_file(rest),
+        "dump" if rest.first().is_some_and(|w| w == "mir") => build::dump_mir(&rest[1..]),
         "dump" => dump::run(rest),
         "typed" => typed_file(rest),
         "help" | "-h" | "--help" => {

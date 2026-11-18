@@ -108,7 +108,7 @@ source ─▶ lex ─▶ parse ─▶ resolve ─▶ check ─▶ lower ─▶ M
 - `AUK_LEAK_CHECK=1` makes `auk run` / `auk test` programs fail when runtime objects are still live at exit.
 
 ## CLI
-`auk run|build|check|test|fmt|explain|dive|lsp|ir|spec`, plus `raft`. `auk ir [--llvm] [--trace] <file>` prints the program's MIR as C-like text (`--llvm`: the unoptimized LLVM IR). `auk run -O` optimizes fully (see the levels above). `check --json` emits `{file, ok, diagnostics:[{code, severity, line, col, end_line, end_col, message, notes, fixes:[{line, col, end_line, end_col, text}]}]}`.
+`auk run|build|check|test|fmt|explain|dive|lsp|ir|spec`, plus `raft`. `auk ir [--llvm] [--trace] <file>` prints the program's MIR as C-like text (`--llvm`: the unoptimized LLVM IR). For the self-hosted back end (docs/self-host-plan.md, Phase 4): `auk dump mir <file>` (= `auk ir --dump`) writes the MIR machine-readably with the type definitions layouts need (`src/mir/dump.rs`), `--llvm=o0|light|o2|o3|build[-raw]` prints the LLVM IR at a level (`build`: O2 with the runtime's bitcode linked; `-raw`: before the pass pipeline), and `--release`/`-g` generate the MIR `auk build [-g]` compiles. `auk run -O` optimizes fully (see the levels above). `check --json` emits `{file, ok, diagnostics:[{code, severity, line, col, end_line, end_col, message, notes, fixes:[{line, col, end_line, end_col, text}]}]}`.
 
 ## Testing
 `cargo test` runs the compiler's unit tests plus these integration tests:

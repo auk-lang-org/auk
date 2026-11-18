@@ -13,6 +13,7 @@
 //! functions use the back end's own convention; runtime calls follow the C ABI.
 
 pub mod print;
+pub mod dump;
 pub mod layout;
 pub mod exec;
 pub mod backend;

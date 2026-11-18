@@ -124,6 +124,11 @@ struct Built {
 /// Translate, verify and optimize `prog`. `link_runtime`: link the runtime's inlinable functions
 /// into the module first (`rtlink.rs`; `auk build` only: it costs compile time).
 fn build(prog: &Program, info: &TyInfo, ex: &Exports, live: Option<(usize, HashMap<u32, usize>)>, level: Level, link_runtime: bool) -> Result<Built, String> {
+    build_at(prog, info, ex, live, level, link_runtime, false)
+}
+
+/// `build`; `raw`: without the pass pipeline.
+fn build_at(prog: &Program, info: &TyInfo, ex: &Exports, live: Option<(usize, HashMap<u32, usize>)>, level: Level, link_runtime: bool, raw: bool) -> Result<Built, String> {
     let tm = target_machine(level)?;
     unsafe {
         let cx = LLVMContextCreate();
@@ -157,6 +162,7 @@ fn build(prog: &Program, info: &TyInfo, ex: &Exports, live: Option<(usize, HashM
         // AUK_LLVM_PASSES overrides the pass pipeline (tuning; empty: none)
         let custom = std::env::var("AUK_LLVM_PASSES").ok();
         let passes = match &custom {
+            _ if raw => None,
             Some(p) if p.is_empty() => None,
             Some(p) => Some(p.as_str()),
             None => level.passes(),
@@ -241,9 +247,10 @@ fn emit(b: Built) -> Result<Vec<u8>, String> {
     }
 }
 
-/// The program's LLVM IR, unoptimized, as text (`auk ir --llvm`).
-pub fn ir_text(prog: &Program, info: &TyInfo) -> Result<String, String> {
-    let b = build(prog, info, &exports("main"), None, Level::O0, false)?;
+/// The program's LLVM IR at `level` (`link_runtime`: with the runtime's bitcode, as `auk build`;
+/// `raw`: before the pass pipeline), as text.
+pub fn ir_text_at(prog: &Program, info: &TyInfo, level: Level, link_runtime: bool, raw: bool) -> Result<String, String> {
+    let b = build_at(prog, info, &exports("main"), None, level, link_runtime, raw)?;
     unsafe {
         let s = message(LLVMPrintModuleToString(b.m));
         LLVMDisposeModule(b.m);

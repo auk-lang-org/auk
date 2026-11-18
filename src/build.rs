@@ -621,6 +621,48 @@ fn flat_test_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
+/// `auk ir`'s own options (before the file): `--llvm[=LEVEL]` (LLVM IR at a level of
+/// `mir::backend::llvm_ir_at`, default `o0`), `--dump` (`auk dump mir`), `--release` (the MIR
+/// `auk build` compiles: no `ensures`) and `-g` (with source locations, as `auk build -g`).
+#[derive(Debug, Default)]
+struct IrOpts {
+    llvm: Option<String>,
+    dump: bool,
+    release: bool,
+    lines: bool,
+}
+
+impl IrOpts {
+    fn parse(&mut self, args: &[String]) -> Result<Vec<String>, String> {
+        let mut rest = Vec::new();
+        for (i, a) in args.iter().enumerate() {
+            match a.as_str() {
+                "--llvm" => self.llvm = Some("o0".into()),
+                "--dump" => self.dump = true,
+                "--release" => self.release = true,
+                "-g" => self.lines = true,
+                _ if a.starts_with("--llvm=") => self.llvm = Some(a["--llvm=".len()..].to_string()),
+                _ if !a.starts_with('-') => {
+                    rest.extend(args[i..].iter().cloned());
+                    break;
+                }
+                _ => rest.push(a.clone()),
+            }
+        }
+        if self.dump && self.llvm.is_some() {
+            return Err("--llvm and --dump don't go together".into());
+        }
+        Ok(rest)
+    }
+}
+
+/// `auk dump mir [ir options] <file>`: the program's MIR, machine-readable (`mir/dump.rs`).
+pub fn dump_mir(args: &[String]) -> i32 {
+    let mut a = vec!["--dump".to_string()];
+    a.extend(args.iter().cloned());
+    cli("ir", &a)
+}
+
 /// Execution-trace options of `auk run|test|ir` (`--trace=json|<path>`, `--trace-limit N`,
 /// `--trace-core`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -846,13 +888,25 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
             }
         }
         "run" | "build" | "ir" => {
-            // `auk ir --llvm`: the LLVM IR instead of the MIR
-            let llvm_ir = cmd == "ir" && args.first().is_some_and(|a| a == "--llvm");
-            let args = if llvm_ir { &args[1..] } else { &args[..] };
+            // `auk ir --llvm[=LEVEL]`: the LLVM IR instead of the MIR; `--dump`: the MIR as
+            // `auk dump mir` writes it
+            let mut ir_opts = IrOpts::default();
+            let args = if cmd == "ir" {
+                match ir_opts.parse(&args) {
+                    Ok(rest) => rest,
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        return 2;
+                    }
+                }
+            } else {
+                args
+            };
+            let args = &args[..];
             let [file, rest @ ..] = args else {
                 let flags = match cmd {
                     "build" => "",
-                    "ir" => "[--llvm] [--trace=json|<file>] [--trace-core] ",
+                    "ir" => "[--llvm[=LEVEL]|--dump] [--release] [-g] [--trace=json|<file>] [--trace-core] [--debug] ",
                     _ => "[--trace=json|<file>] [--trace-limit N] [--trace-core] ",
                 };
                 eprintln!("usage: auk {cmd} {flags}<file.auk>");
@@ -865,13 +919,16 @@ pub fn cli(cmd: &str, args: &[String]) -> i32 {
                         Ok(t) => t,
                         Err(e) => return fail(e),
                     };
-                    let g = match generate(&tp, Mode::Run, trace.codegen()) {
+                    let mode = if ir_opts.release { Mode::Release } else { Mode::Run };
+                    let g = match generate(&tp, mode, Trace { lines: ir_opts.lines, ..trace.codegen() }) {
                         Ok(g) => g,
                         Err(e) => return fail(e),
                     };
                     let info = TyInfo::new(&tp);
-                    if llvm_ir {
-                        match mir::backend::llvm_ir(&g.prog, &info) {
+                    if ir_opts.dump {
+                        print!("{}", mir::dump::dump(&g.prog, &tp));
+                    } else if let Some(level) = &ir_opts.llvm {
+                        match mir::backend::llvm_ir_at(&g.prog, &info, level) {
                             Ok(t) => print!("{t}"),
                             Err(e) => return fail(format!("error: {e}\n")),
                         }

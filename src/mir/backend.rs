@@ -46,7 +46,21 @@ pub fn object(prog: &Program, info: &TyInfo, opt: bool) -> Result<Vec<u8>, Strin
     llvm::object(prog, info, opt)
 }
 
-/// The program's LLVM IR, as text (`auk ir --llvm`).
-pub fn llvm_ir(prog: &Program, info: &TyInfo) -> Result<String, String> {
-    llvm::ir_text(prog, info)
+/// The program's LLVM IR at `level`: `o0` (what `auk ir --llvm` prints), `light`, `o2`, `o3`
+/// (the in-memory levels), or `build` (`auk build`'s: O2 with the runtime's bitcode linked in);
+/// a `-raw` suffix (`light-raw`) stops before the pass pipeline. For diffing back ends.
+pub fn llvm_ir_at(prog: &Program, info: &TyInfo, level: &str) -> Result<String, String> {
+    let (name, raw) = match level.strip_suffix("-raw") {
+        Some(n) => (n, true),
+        None => (level, false),
+    };
+    let (l, rt) = match name {
+        "o0" => (llvm::Level::O0, false),
+        "light" => (llvm::Level::Light, false),
+        "o2" => (llvm::Level::O2, false),
+        "o3" => (llvm::Level::O3, false),
+        "build" => (llvm::Level::O2, true),
+        _ => return Err(format!("unknown LLVM level `{level}` (o0, light, o2, o3, build, with an optional -raw)")),
+    };
+    llvm::ir_text_at(prog, info, l, rt, raw)
 }
