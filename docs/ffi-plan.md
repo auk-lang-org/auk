@@ -1,5 +1,16 @@
 # Plan: user-level FFI (and the `sqlite` package on top of it)
 
+**Status (2026-11-18): phases 1 and 2 done** (core FFI and linking; spec "C functions",
+`src/ffi.rs`, `src/mir/lower/ffi.rs`, `runtime/c/ffi.c`, `src/prelude/ffi.auk`, tests/ffi.rs).
+Beyond this plan, for the LLVM binding (self-host-plan 2b): `extern type` in user code declares
+distinct opaque C pointer types, lists cross as C arrays (`var [T]` copies back), `var`
+parameters are out-parameters, `T?` of a pointer is NULL-able, and `+free(fn)` frees owned
+`char *` results. Differences from the text below: a `str` argument passes its own bytes (Auk
+strings are already NUL-terminated, so no copy; an embedded NUL ends the C string), and the
+helpers live in `runtime/c/ffi.c`. `ffi.null` is a constant; `null`, `is_null`, `addr`, `ptr`,
+`offset` are pure, the memory helpers `uses ffi`. Phase 3 (the `sqlite` package) and the LSP
+part of phase 4 remain.
+
 Unblocks `sqlite` (docs/packages-next.md #2) and later `crypto`. Decision (2026-11-17): a general
 FFI, option (a) in the packages-next log, rather than a core `sqlite` runtime module.
 

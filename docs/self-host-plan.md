@@ -108,18 +108,24 @@ pass on macOS and Linux; ASan clean; `bench/perf` within ±5% of Phase 0.
 ## Phase 2 — FFI and the LLVM binding
 
 ### 2a. User-level FFI (`docs/ffi-plan.md`)
-- [ ] `extern fn ... = "<C prototype>"` allowed in packages declaring `effects = ["ffi"]`.
-- [ ] C prototype parser, Auk↔C type check (E0040), marshalling (ints, bool, float, `str` ↔
+- [x] `extern fn ... = "<C prototype>"` allowed in packages declaring `effects = ["ffi"]`.
+- [x] C prototype parser, Auk↔C type check (E0040), marshalling (ints, bool, float, `str` ↔
       `const char *`, `ffi.Ptr`, `void`).
-- [ ] JIT resolves user symbols (dlopen/dlsym); `auk build` links named libraries.
+- [x] JIT resolves user symbols (dlopen/dlsym); `auk build` links named libraries.
 
 ### 2b. What the compiler-in-Auk additionally needs
-- [ ] Opaque pointer types per C type (`LLVMValueRef`, `LLVMTypeRef`, …) so they don't mix.
-- [ ] Arrays of pointers passed in (`LLVMTypeRef *params, unsigned n`).
-- [ ] Out-parameters (`char **err`, `LLVMModuleRef *out`).
-- [ ] Owned C strings returned (`LLVMPrintModuleToString` → copy → `LLVMDisposeMessage`).
-- [ ] Byte buffers in/out (`LLVMMemoryBufferRef` for object files and bitcode).
-- [ ] Callbacks? Check whether ORC/DiagnosticHandler needs one; if so, C-ABI function pointers to Auk fns.
+- [x] Opaque pointer types per C type (`LLVMValueRef`, `LLVMTypeRef`, …) so they don't mix:
+      `extern type Value = "LLVMValueRef"`.
+- [x] Arrays of pointers passed in (`LLVMTypeRef *params, unsigned n`): a `[Type]` argument
+      (copied to a C array for the call; `var [Type]` copies back, for `LLVMGetParams`).
+- [x] Out-parameters (`char **err`, `LLVMModuleRef *out`): `var str?`, `var Module?`.
+- [x] Owned C strings returned (`LLVMPrintModuleToString` → copy → `LLVMDisposeMessage`):
+      `"char *LLVMPrintModuleToString(LLVMModuleRef) +free(LLVMDisposeMessage)"`.
+- [x] Byte buffers in/out (`LLVMMemoryBufferRef` for object files and bitcode): `[int]` ↔
+      `const char *`/`void *` in, `ffi.bytes(LLVMGetBufferStart(b), LLVMGetBufferSize(b))` out.
+- [ ] Callbacks: not needed. ORC's symbol lookups and LLVM's diagnostic handler have defaults the
+      Rust back end already relies on (it installs no handler; errors come back as `char **` /
+      `LLVMErrorRef`). Deferred until something requires one.
 
 ### 2c. `llvm` binding package
 - [ ] Bind the ~258 LLVM C functions `src/mir/llvm/` and `src/build.rs` use (generated from a

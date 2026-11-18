@@ -53,11 +53,15 @@ effects = ["net", "fs"]        # the most this package (and its deps) may use
 http = "^0.1"                  # from the registry
 json = "^0.1"
 geo  = { path = "../geo" }     # a local package
+
+[link]
+libs = ["sqlite3"]             # C libraries for `extern fn` (needs the ffi effect)
 ```
 - `name`: lowercase `a-z0-9_`, and it must not collide with a core module.
 - `version`: semver `MAJOR.MINOR.PATCH`.
 - `effects`: a subset of `fs net time rand env proc ffi` (defaults to `[]`). The compiler rejects any `uses` in this package that isn't listed. **raft checks every dependency edge**: each package's effects must be a subset of the effects of the package that depends on it, so a dependency can never exceed what its parent allows, and the root's list bounds the whole tree.
 - Version requirements: `"^1.2"` (>=1.2.0, <2.0.0; for 0.x, `^0.3` means >=0.3.0, <0.4.0; `^0.0.3` means exactly 0.0.3), `"~1.2.3"` (>=1.2.3, <1.3.0), `"=1.2.3"` (needs all three numbers), `"*"`. A bare `"1.2"` means `^1.2`. Pre-release and build suffixes aren't supported in v1.
+- `[link] libs`: C libraries the package's `extern fn`s call (spec "C functions"), named as for `-l` (`"sqlite3"`) or by path. Needs `ffi` in `effects`. The compiler gathers them from the whole dependency graph: `auk run`/`test` `dlopen` each (`lib<name>.dylib`, also under `/opt/homebrew/lib` and `/usr/local/lib`; `lib<name>.so` on Linux), `auk build` passes `-l<name>`.
 - The `[package]` table supports strings, string arrays and inline tables only.
 - Package names can't be core module names: `fs net time rand env proc ffi str int float bool math core`.
 

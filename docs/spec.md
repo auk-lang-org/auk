@@ -145,6 +145,16 @@ imprint T = table()   // computed at compile time (pure fns only)
 `assert (a, b) == (1, 2)` checks the whole comparison.
 To see values without editing code: `auk debug -b f.auk:12 -p x,y f.auk` runs to each breakpoint (`file:line` or a function, `-b "f.auk:12 if n > 3"`) and panic and prints the locals and stack there; `-p`/`-e` take Auk expressions too (`-e "xs.len()"`; `--json`, `--timeout S`).
 
+## C functions
+A package whose raft.toml has `effects = ["ffi"]` binds C with a C prototype; every call needs `uses ffi`. C libraries go in raft.toml `[link] libs = ["sqlite3"]` (libc needs none).
+```
+extern type Db = "sqlite3 *"                     // an opaque C pointer type; types don't mix
+extern fn open(path: str, db: var Db?, flags: int, vfs: str?): int =
+  "int sqlite3_open_v2(const char *, sqlite3 **, int, const char *)"
+extern fn print_module(m: Module): str = "char *LLVMPrintModuleToString(LLVMModuleRef) +free(LLVMDisposeMessage)"
+```
+C integers ↔ `int` (truncated going in, extended coming out) · `bool` · `float`/`double` ↔ `float` · `const char *` ↔ `str` (a result is copied; `str?` when it may be NULL; `+free(fn)` frees an owned `char *` after copying) · other pointers ↔ `ffi.Ptr` or an `extern type`, `T?` when NULL is possible · `T *` ↔ a list `[T]` (copied in; `var [T]` copies back; `[int]` ↔ `void *` is bytes) · a `var` parameter is an out-parameter (`int *`, `T **`, `char **` as `var str?`) · `void` ↔ `()`. No varargs, structs by value or callbacks. `ffi`: `Ptr null is_null addr ptr(n) offset alloc free read_u8/i32/i64/f64/ptr write_* cstr bytes(p, n) from_bytes`. A crash in C can't be caught.
+
 ## Modules, packages, program entry
 A file is a module, a folder a package; refer to anything by path, no imports: `geo.area(s)`, `json.parse(t)`. A local named like a project module or dependency is an error; one named like a core module shadows it (`core.env` still reaches core). `regex(p)` is `regex.regex(p)`. In a package its own name is its root (`http.Resp`). Add dependencies with `raft add http`.
 ```
