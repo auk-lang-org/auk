@@ -1,15 +1,17 @@
 /// The self-hosting port's driver: `compiler tokens|ast|resolve|check|typed [--quiet] [--time]
-/// [--repeat N] [--core] <file>...` prints what `auk dump tokens|ast|resolve|check|typed` prints,
-/// from the Auk port of the front end. `check` is the `auk check --json` report of the type
-/// checker (`check --json <file>` is accepted too); `typed` the typed program (`--core`: core
-/// modules' tables too). For timing: `--quiet` does the work without printing, `--repeat N` does
-/// the whole job N times, and `--time` prints the time per repetition (file reading excluded) to
-/// stderr.
+/// [--repeat N] [--core] [--all] <file>...` prints what `auk dump tokens|ast|resolve|check|typed`
+/// prints, from the Auk port of the front end; `check [--json] <file>` and `holes [--json] <file>`
+/// print what `auk check` and `auk holes` print, with the same exit code (`check` with several
+/// files prints `auk dump check`'s report of the type checker alone); `typed` the typed program
+/// (`--core`: core modules' tables too). For timing: `--quiet` does the work without printing
+/// (`check --quiet` runs the type checker alone, with `--all` all of `auk check`), `--repeat N`
+/// does the whole job N times, and `--time` prints the time per repetition (file reading
+/// excluded) to stderr.
 ///
 /// `resolve`, `check` and `typed` read the core prelude from `$AUK_PRELUDE_DIR`, or else from the
 /// `src/prelude/` of the checkout the binary was built in (found upward from the binary).
 
-let MODES = ["tokens", "ast", "resolve", "check", "typed"]
+let MODES = ["tokens", "ast", "resolve", "check", "typed", "holes"]
 
 fn main(args: [str]): int! uses fs, env, time, ffi {
   if args.len() >= 2 && args[1] == "fmt" { return fmt.run(args.skip(2)) }
@@ -32,16 +34,24 @@ fn main(args: [str]): int! uses fs, env, time, ffi {
     }
   }
   var srcs: [str] = []
-  for f in files { srcs.push(fs.read(f)?) }
+  // `check [--json] <file>` and `holes [--json] <file>`: what `auk check`/`auk holes` print
+  let cli_mode = (what == "check" || what == "holes") && !quiet && !time_it && !rest.contains("--repeat") && files.len() == 1
+  if !cli_mode {
+    for f in files { srcs.push(fs.read(f)?) }
+  }
   var cx = resolve.Sources { prelude: [], overrides: {}, os: "" }
   var cwd = ""
-  if what == "resolve" || what == "check" || what == "typed" {
+  if what == "resolve" || what == "check" || what == "typed" || what == "holes" {
     let dir = prelude_dir(args[0]) else {
       eprint("error: can't find the core prelude (src/prelude/core.auk); set AUK_PRELUDE_DIR")
       return 1
     }
     cx = resolve.sources(dir)?
     cwd = paths.cwd()
+  }
+  if cli_mode {
+    let json = rest.contains("--json")
+    return if what == "check" { cli.check_file(cx, files[0], json) } else { holes.run(cx, files[0], json) }
   }
   let t0 = time.now()
   var out: [str] = []
@@ -53,7 +63,7 @@ fn main(args: [str]): int! uses fs, env, time, ffi {
         let r = resolve.load_in_package(cx, f, src)
         if quiet {
           match r {
-            ok(p) => { let _ = check.check_types(p) }
+            ok(p) => if rest.contains("--all") { let _ = check.check_all(p) } else { let _ = check.check_types(p) }
             err(_) => {}
           }
         } else if what == "check" {

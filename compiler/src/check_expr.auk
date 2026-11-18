@@ -66,7 +66,7 @@ pub fn first_units(t: types.Ty): [(str, int)] {
 
 /// Rust's `{:?}` of a string: in double quotes, with `\\ \" \n \t \r \0` escaped and other
 /// control chars as `\u{hex}`.
-fn debug_str(s: str): str {
+pub fn debug_str(s: str): str {
   var out: [str] = ["\""]
   for ch in s.chars() {
     match ch {

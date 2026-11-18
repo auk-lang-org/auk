@@ -330,6 +330,27 @@ pub fn frame_ret(c: Checker): types.Ty? = c.top_frame()?.ret
 
 // ---- entry points ----
 
+/// Type-check, then check patterns and effects: the typed program (none on errors) and every
+/// diagnostic, sorted, warnings (E0411) included.
+pub fn check_all(prog: resolve.Program): (typed.TypedProgram?, [diag.FileDiag]) uses fs {
+  let (tp, diags) = check_partial(prog)
+  let ok = diags.all(d => d.diag.is_warning())
+  (if ok { tp } else { none }, diags)
+}
+
+/// Like `check_all`, but on errors still returns the program as far as it type-checked, for
+/// tools that want types in broken code (`auk holes`). `none` only when the declarations
+/// themselves don't check. A program returned alongside an error is partial.
+pub fn check_partial(prog: resolve.Program): (typed.TypedProgram?, [diag.FileDiag]) uses fs {
+  let (tp0, errs) = check_types(prog)
+  let tp = match tp0 {
+    some(t) => if errs.len() == 0 { t } else { return (tp0, errs) }
+    none => return (tp0, errs)
+  }
+  let diags = patterns.check(tp) + effect_check.check(tp)
+  (tp, sorted(diags))
+}
+
 /// Types, inference, overloading and shapes only (Rust's private `check_types`, which
 /// `check_partial` follows with patterns.rs and effects.rs): the typed program (partial when
 /// there are errors; `none` when the declarations failed) and the errors.
