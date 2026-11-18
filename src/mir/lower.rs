@@ -1097,6 +1097,15 @@ impl<'g, 'a> Lower<'g, 'a> {
         self.pop();
     }
 
+    /// Statements whose values are dropped (a loop body).
+    fn stmts(&mut self, ss: &[Expr]) {
+        for i in 0..ss.len() {
+            if !self.move_out(&ss[i..]) {
+                self.stmt(&ss[i]);
+            }
+        }
+    }
+
     /// A block's value (owned when it has one).
     fn block(&mut self, b: &Block, tail: bool) -> Val {
         self.push(ScopeKind::Block);
@@ -1104,6 +1113,9 @@ impl<'g, 'a> Lower<'g, 'a> {
         let mut out = Val::unit();
         for (i, s) in b.stmts.iter().enumerate() {
             if i + 1 < n {
+                if self.move_out(&b.stmts[i..]) {
+                    continue;
+                }
                 self.stmt(s);
                 continue;
             }
@@ -1136,6 +1148,95 @@ impl<'g, 'a> Lower<'g, 'a> {
             out = self.coerce(out, &cs, b.id);
         }
         out
+    }
+
+    /// Taking an element out of a list or map to change it and put it back,
+    /// ```text
+    /// var g = items[k]      // stmts[0]
+    /// g.clauses.push(c)     // anything that doesn't mention `items`
+    /// items[k] = g          // the same place, the same index
+    /// ```
+    /// moves the element out (the slot holds a zero until the store), so `g` is unique and
+    /// changes in place instead of being copied. Nothing can tell: the statements in between
+    /// don't mention the container or change the index's variables, can't leave the block early
+    /// (no `return`, `break`, `continue`, `?`, `fail`), and the container is a local of this
+    /// function (not a `var` parameter or a variable captured by `catch`), so a panic in between
+    /// ends every frame that could see it. Returns whether it lowered `stmts[0]` this way.
+    fn move_out(&mut self, stmts: &[Expr]) -> bool {
+        // (a debugger stopped in between would see the hole)
+        if self.f.dbg.is_some() {
+            return false;
+        }
+        let first = &stmts[0];
+        let EK::Let { mutable: true, pat, value, els: None, .. } = &first.kind else { return false };
+        let PatKind::Bind(x) = &pat.kind else { return false };
+        if self.t.variants.contains_key(&pat.id) || self.t.coercions.get(&value.id).is_some_and(|c| !c.is_empty()) {
+            return false;
+        }
+        let EK::Index { expr: cont, index } = &value.kind else { return false };
+        let EK::Name(cname) = &cont.kind else { return false };
+        let Some(NameRef::Local(cl)) = self.t.names.get(&cont.id) else { return false };
+        // a plain variable of this frame (var parameters and catch captures are pointers)
+        if !self.f.locals.get(cl).is_some_and(|sl| sl.c.is_var()) || self.f.var_params.contains(cl) {
+            return false;
+        }
+        let ty = self.ty(value.id);
+        if !matches!(self.ty(cont.id), Ty::List(_) | Ty::Map(..)) || !self.g.needs_rc(&ty) || !self.pure_read(index) {
+            return false;
+        }
+        let Some(&xl) = self.t.binds.get(&pat.id) else { return false };
+        if self.local_ty(xl) != ty {
+            return false;
+        }
+        let mut inames = Scan::default();
+        inames.expr(index);
+        // find the store back
+        let mut between = Scan::default();
+        for (j, st) in stmts.iter().enumerate().skip(1) {
+            if let EK::Assign { op: None, target, value: v } = &st.kind
+                && let EK::Index { expr: c2, index: i2 } = &target.kind
+                && matches!(self.t.names.get(&c2.id), Some(NameRef::Local(l)) if l == cl)
+                && matches!(self.t.names.get(&v.id), Some(NameRef::Local(l)) if *l == xl)
+                && self.same_index(index, i2)
+            {
+                let _ = (j, x);
+                if between.exits || between.names.contains(cname) || inames.names.iter().any(|n| between.changed.contains(n)) {
+                    return false;
+                }
+                self.dbg_hook(first.span, false);
+                self.push(ScopeKind::Stmt);
+                let (pl, _) = self.place(value);
+                let v = self.f.b.decl(pl.clone());
+                let z = self.g.zero(&ty);
+                self.set(pl, z);
+                let val = self.reown(v, ty.clone());
+                self.let_binds();
+                self.bind_value(pat, val);
+                self.pop();
+                return true;
+            }
+            between.expr(st);
+            if between.exits || between.names.contains(cname) {
+                return false;
+            }
+        }
+        false
+    }
+
+    /// Are two index expressions the same value (both evaluated with the same variables)?
+    fn same_index(&self, a: &Expr, b: &Expr) -> bool {
+        match (&a.kind, &b.kind) {
+            (EK::Lit(x), EK::Lit(y)) => x == y,
+            (EK::Name(_), EK::Name(_)) => self.same_operand(a, b),
+            (EK::Binary { op: o1, lhs: l1, rhs: r1 }, EK::Binary { op: o2, lhs: l2, rhs: r2 }) => {
+                o1 == o2 && !self.t.calls.contains_key(&a.id) && self.same_index(l1, l2) && self.same_index(r1, r2)
+            }
+            (EK::Field { expr: x, name: n1 }, EK::Field { expr: y, name: n2 }) => n1.name == n2.name && self.same_index(x, y),
+            (EK::MethodCall { recv: r1, name: n1, args: a1 }, EK::MethodCall { recv: r2, name: n2, args: a2 }) => {
+                n1.name == n2.name && n1.name == "len" && a1.is_empty() && a2.is_empty() && self.same_index(r1, r2)
+            }
+            _ => false,
+        }
     }
 
     // ---- expressions ----
@@ -1325,9 +1426,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 self.push(ScopeKind::Block);
                 let depth = self.f.scopes.len() - 1;
                 self.f.loops.push(LoopCx { depth, result: r.clone().map(|r| (r, ty.clone())) });
-                for s in &b.stmts {
-                    self.stmt(s);
-                }
+                self.stmts(&b.stmts);
                 self.f.loops.pop();
                 self.pop();
                 self.close();
@@ -3241,9 +3340,7 @@ impl<'g, 'a> Lower<'g, 'a> {
     fn loop_body(&mut self, depth: usize, body: &Block) {
         self.f.loops.push(LoopCx { depth, result: None });
         self.push(ScopeKind::Block);
-        for s in &body.stmts {
-            self.stmt(s);
-        }
+        self.stmts(&body.stmts);
         self.pop();
         self.f.loops.pop();
     }
@@ -3846,5 +3943,165 @@ fn int_op(op: BinOp, a: Ex, b: Ex, loc: Ex) -> Ex {
         Shl => rt("auk_shl", vec![a, b, loc]),
         Shr => rt("auk_shr", vec![a, b, loc]),
         _ => Ex::int(0),
+    }
+}
+
+/// What a run of statements does, for the move-out check (`Lower::move_out`): the names it
+/// mentions (any identifier, struct shorthand included), the names it may change (assignment
+/// targets, `&` arguments), and whether it may leave early (`return`, `break`, `continue`, `?`)
+/// or holds an expression kind this scan doesn't know.
+#[derive(Default)]
+struct Scan {
+    names: HashSet<String>,
+    changed: HashSet<String>,
+    exits: bool,
+}
+
+/// The name a place expression is rooted at (`p` for `p.a[i].b`, `&p`).
+fn root_name(e: &Expr) -> Option<&str> {
+    match &e.kind {
+        EK::Name(n) => Some(n),
+        EK::Field { expr, .. } | EK::TupleField { expr, .. } | EK::Index { expr, .. } | EK::Slice { expr, .. } | EK::Ref(expr) => root_name(expr),
+        _ => None,
+    }
+}
+
+impl Scan {
+    fn block(&mut self, b: &Block) {
+        b.stmts.iter().for_each(|x| self.expr(x));
+    }
+    fn expr(&mut self, e: &Expr) {
+        match &e.kind {
+            EK::Lit(_) | EK::Hole => {}
+            EK::Name(n) => {
+                self.names.insert(n.clone());
+            }
+            EK::Measured { expr, .. } | EK::Field { expr, .. } | EK::TupleField { expr, .. } | EK::Unary { expr, .. } => self.expr(expr),
+            EK::Unwrap(x) | EK::Await(x) | EK::AwaitAny(x) | EK::Catch(x) | EK::Assert(x) | EK::Peek(x) => self.expr(x),
+            EK::Ref(x) => {
+                if let Some(r) = root_name(x) {
+                    self.changed.insert(r.to_string());
+                }
+                self.expr(x)
+            }
+            EK::Interp(parts) => {
+                for p in parts {
+                    if let InterpPart::Expr { expr, .. } = p {
+                        self.expr(expr)
+                    }
+                }
+            }
+            EK::Call { callee, args } => {
+                if matches!(&callee.kind, EK::Name(n) if n == "fail") {
+                    self.exits = true;
+                }
+                self.expr(callee);
+                args.iter().for_each(|a| self.expr(a));
+            }
+            EK::MethodCall { recv, args, .. } => {
+                // a dot call may pass its receiver by `var` without `&`
+                if let Some(r) = root_name(recv) {
+                    self.changed.insert(r.to_string());
+                }
+                self.expr(recv);
+                args.iter().for_each(|a| self.expr(a));
+            }
+            EK::Pipe { lhs, callee, args } => {
+                if let Some(r) = root_name(lhs) {
+                    self.changed.insert(r.to_string());
+                }
+                self.expr(lhs);
+                self.expr(callee);
+                args.iter().for_each(|a| self.expr(a));
+            }
+            EK::Index { expr, index } => {
+                self.expr(expr);
+                self.expr(index);
+            }
+            EK::Slice { expr, lo, hi, .. } => {
+                self.expr(expr);
+                self.expr(lo);
+                self.expr(hi);
+            }
+            EK::Binary { lhs, rhs, .. } | EK::Range { lo: lhs, hi: rhs, .. } => {
+                self.expr(lhs);
+                self.expr(rhs);
+            }
+            EK::Is { expr, .. } => self.expr(expr),
+            EK::OptChain { expr, args, .. } => {
+                self.expr(expr);
+                args.iter().flatten().for_each(|a| self.expr(a));
+            }
+            EK::Else { expr, arm } => {
+                self.expr(expr);
+                self.expr(&arm.body);
+            }
+            EK::Closure { body, .. } => self.expr(body),
+            EK::If { cond, then, els } => {
+                self.expr(cond);
+                self.block(then);
+                if let Some(x) = els {
+                    self.expr(x);
+                }
+            }
+            EK::Match { scrut, arms } => {
+                self.expr(scrut);
+                for a in arms {
+                    if let Some(g) = &a.guard {
+                        self.expr(g);
+                    }
+                    self.expr(&a.body);
+                }
+            }
+            EK::Loop(b) | EK::Block(b) => self.block(b),
+            EK::While { cond, body } => {
+                self.expr(cond);
+                self.block(body);
+            }
+            EK::For { iter, body, .. } => {
+                self.expr(iter);
+                self.block(body);
+            }
+            EK::Let { value, els, .. } => {
+                self.expr(value);
+                if let Some(a) = els {
+                    self.expr(&a.body);
+                }
+            }
+            EK::Assign { target, value, .. } => {
+                if let Some(r) = root_name(target) {
+                    self.changed.insert(r.to_string());
+                }
+                self.expr(target);
+                self.expr(value);
+            }
+            EK::Struct { fields, base, .. } => {
+                for f in fields {
+                    match &f.value {
+                        Some(v) => self.expr(v),
+                        None => {
+                            self.names.insert(f.name.name.clone());
+                        }
+                    }
+                }
+                if let Some(b) = base {
+                    self.expr(b);
+                }
+            }
+            EK::List(xs) | EK::Tuple(xs) => xs.iter().for_each(|x| self.expr(x)),
+            EK::Map(kvs) => kvs.iter().for_each(|(k, v)| {
+                self.expr(k);
+                self.expr(v)
+            }),
+            EK::Return(x) | EK::Break(x) => {
+                self.exits = true;
+                if let Some(x) = x {
+                    self.expr(x);
+                }
+            }
+            EK::Continue | EK::Try(_) => self.exits = true,
+            #[allow(unreachable_patterns)]
+            _ => self.exits = true,
+        }
     }
 }
