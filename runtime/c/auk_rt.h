@@ -64,6 +64,7 @@ typedef struct AukTask AukTask;
 typedef struct AukChan AukChan;
 typedef struct AukConn AukConn;
 typedef struct AukListener AukListener;
+typedef struct AukFrame AukFrame;
 
 /* ---- element ops ------------------------------------------------------------------------- */
 
@@ -741,12 +742,12 @@ AUK_API void auk__imprint_value(int64_t c, const AukValue *v);
 /* ---- dbg.c: the debugger engine ---------------------------------------------------------- */
 
 /* A frame record, as generated code lays it out. */
-typedef struct AukFrame {
+typedef struct AukDbgFrame {
     int64_t func;
-    struct AukFrame *parent;
+    struct AukDbgFrame *parent;
     int64_t site;
     void *slots[];
-} AukFrame;
+} AukDbgFrame;
 
 /* An expression compiled for the debugger (src/dbg_eval.rs): a function of the addresses of
  * the locals it uses (in slots order) that returns the value shown, and its type. */
@@ -763,9 +764,9 @@ typedef bool (*AukDbgEvalHook)(uint32_t func, uint32_t site, const char *expr, A
 
 AUK_API extern _Atomic int64_t auk_dbg_armed;
 AUK_API void auk_dbg_set_eval_hook(AukDbgEvalHook h);
-AUK_API void auk_dbg_enter(AukFrame *f);
-AUK_API void auk_dbg_leave(AukFrame *f);
-AUK_API void auk_dbg_hook(AukFrame *f);
+AUK_API void auk_dbg_enter(AukDbgFrame *f);
+AUK_API void auk_dbg_leave(AukDbgFrame *f);
+AUK_API void auk_dbg_hook(AukDbgFrame *f);
 AUK_API void auk_dbg_kid(void *ctx, const char *name, int64_t ty, void *p);
 AUK_API void auk_dbg_kid_arr(void *ctx, void *list, int64_t ty, int64_t elem);
 AUK_API void auk_dbg_kid_map(void *ctx, void *map, int64_t ty);
@@ -773,6 +774,31 @@ AUK_API void auk_dbg_init(const char *text, const AukShowFn *shows, const void *
 void auk__dbg_on_panic(const char *loc, const char *msg, size_t n, bool caught);
 void auk__dbg_save(void **top, int64_t *depth);
 void auk__dbg_restore(void *top, int64_t depth);
+
+/* ---- pixels.c: frames ------------------------------------------------------------------- */
+
+/* A pixels.Frame: w×hgt colors 0xTTRRGGBB (T: transparency, 0 opaque), rows top to bottom,
+ * stored inline after the header. A handle (shared between tasks by reference count, never
+ * tracked by a task's heap) that is copied before a write when shared. */
+struct AukFrame {
+    AukHeader h;
+    int64_t w;
+    int64_t hgt;
+    uint32_t data[];
+};
+
+AUK_API AukFrame *auk_frame_new(int64_t w, int64_t h, int64_t c, const char *loc);
+AUK_API AukFrame *auk_frame_from_list(int64_t w, int64_t h, const AukArr *px, const char *loc);
+AUK_API AukArr *auk_frame_to_list(const AukFrame *f);
+AUK_API int64_t auk_frame_width(const AukFrame *f);
+AUK_API int64_t auk_frame_height(const AukFrame *f);
+AUK_API int64_t auk_frame_get(const AukFrame *f, int64_t x, int64_t y, const char *loc);
+AUK_API void auk_frame_set(AukFrame **pf, int64_t x, int64_t y, int64_t c, const char *loc);
+AUK_API void auk_frame_fill(AukFrame **pf, int64_t x, int64_t y, int64_t w, int64_t h, int64_t c, const char *loc);
+AUK_API void auk_frame_blend(AukFrame **pf, int64_t x, int64_t y, int64_t w, int64_t h, int64_t c, const char *loc);
+AUK_API void auk_frame_blit(AukFrame **pf, int64_t x, int64_t y, const AukFrame *src, int64_t sx, int64_t sy, int64_t w, int64_t h, const char *loc);
+AUK_API void auk_frame_composite(AukFrame **pf, int64_t x, int64_t y, const AukFrame *src, int64_t sx, int64_t sy, int64_t w, int64_t h, const char *loc);
+AUK_API void auk_frame_blit_mask(AukFrame **pf, int64_t x, int64_t y, const AukArr *mask, int64_t mw, int64_t c, const char *loc);
 
 /* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
 

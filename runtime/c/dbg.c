@@ -1,7 +1,7 @@
 /* The debugger engine (`auk run --debug`): breakpoints, stepping, pausing, stack and locals.
  *
  * Only programs compiled with --debug call into this file. Every instrumented Auk function keeps
- * a frame record (AukFrame) on its stack: auk_dbg_enter/auk_dbg_leave link it into the thread's
+ * a frame record (AukDbgFrame) on its stack: auk_dbg_enter/auk_dbg_leave link it into the thread's
  * debugger stack, each named local's address is stored in its slot when the local is bound, and
  * each statement stores its site id in `site` and calls auk_dbg_hook while auk_dbg_armed is set.
  * main calls auk_dbg_init with the debug info (sites, functions, locals, types) and a table of
@@ -261,7 +261,7 @@ static Info *dbg_info;
 static _Atomic bool dbg_attached;
 static _Atomic int64_t dbg_next_thread = 1;
 
-static _Thread_local AukFrame *dbg_top;
+static _Thread_local AukDbgFrame *dbg_top;
 static _Thread_local int64_t dbg_depth;
 static _Thread_local int64_t dbg_tid;
 
@@ -291,7 +291,7 @@ typedef struct Bp {
 /* A thread the debugger knows: its id and where its frame pointer lives. */
 typedef struct ThreadRef {
     int64_t id;
-    AukFrame **top;
+    AukDbgFrame **top;
 } ThreadRef;
 
 /* A command for the stopped focus thread. */
@@ -480,7 +480,7 @@ static char *trimmed(const char *s) {
 
 /* Evaluate an Auk expression in frame f: true with the value shown and its type in *value and
  * *ty, or false with *err (all malloc'd). */
-static bool eval_at(AukFrame *f, const char *expr, char **value, char **ty, char **err) {
+static bool eval_at(AukDbgFrame *f, const char *expr, char **value, char **ty, char **err) {
     if (eval_hook == NULL) {
         *err = dup_s("this program can't evaluate expressions");
         return false;
@@ -552,7 +552,7 @@ static bool eval_at(AukFrame *f, const char *expr, char **value, char **ty, char
 /* ---- frames, locals and parts ------------------------------------------------------------ */
 
 /* {"fn":..,"file":..,"line":..,"col":..} of a frame into t; false for no frame. */
-static bool frame_json(DText *t, AukFrame *f) {
+static bool frame_json(DText *t, AukDbgFrame *f) {
     if (f == NULL || dbg_info == NULL) {
         return false;
     }
@@ -776,7 +776,7 @@ typedef struct LocalRef {
 
 /* The locals in scope at a frame's current statement, in binding order (malloc'd, *n of them).
  * A shadowed name gives only its latest binding. */
-static LocalRef *locals_of(AukFrame *f, int64_t *n) {
+static LocalRef *locals_of(AukDbgFrame *f, int64_t *n) {
     *n = 0;
     Info *info = dbg_info;
     if (info == NULL || f->func < 0 || f->func >= info->nfns || f->site < 0 || f->site >= info->nsites) {
@@ -850,7 +850,7 @@ static bool kids_json(DText *t, uint32_t ty, void *p, uint32_t *path, int64_t np
 
 /* The innermost frame of thread t (stopped: its frames don't change); false if there is no
  * such thread. */
-static bool thread_top(int64_t t, int64_t me, AukFrame **out) {
+static bool thread_top(int64_t t, int64_t me, AukDbgFrame **out) {
     if (t == me) {
         *out = dbg_top;
         return true;
@@ -869,8 +869,8 @@ static bool thread_top(int64_t t, int64_t me, AukFrame **out) {
 }
 
 /* Frame n (0 = innermost) of thread t, or NULL with *err (malloc'd). */
-static AukFrame *frame_at(int64_t t, int64_t n, int64_t me, char **err) {
-    AukFrame *f;
+static AukDbgFrame *frame_at(int64_t t, int64_t n, int64_t me, char **err) {
+    AukDbgFrame *f;
     char b[64];
     if (!thread_top(t, me, &f)) {
         snprintf(b, sizeof b, "no thread %lld", (long long)t);
@@ -935,14 +935,14 @@ static bool serve(const Cmd *cmd, int64_t me, int *kind) {
         resume = true;
     } else if (strcmp(c0, "stack") == 0 || strcmp(c0, "bt") == 0) {
         int64_t t = word_int(w, nw, 1, me);
-        AukFrame *top;
+        AukDbgFrame *top;
         if (thread_top(t, me, &top)) {
             DText r = {0};
             dt_str(&r, ",\"thread\":");
             dt_int(&r, t);
             dt_str(&r, ",\"frames\":[");
             bool first = true;
-            for (AukFrame *f = top; f != NULL; f = f->parent) {
+            for (AukDbgFrame *f = top; f != NULL; f = f->parent) {
                 DText j = {0};
                 if (!frame_json(&j, f)) {
                     break;
@@ -966,7 +966,7 @@ static bool serve(const Cmd *cmd, int64_t me, int *kind) {
         int64_t n = word_int(w, nw, 1, 0);
         int64_t t = word_int(w, nw, 2, me);
         char *err = NULL;
-        AukFrame *f = frame_at(t, n, me, &err);
+        AukDbgFrame *f = frame_at(t, n, me, &err);
         if (f != NULL) {
             DText r = {0};
             dt_str(&r, ",\"thread\":");
@@ -1003,7 +1003,7 @@ static bool serve(const Cmd *cmd, int64_t me, int *kind) {
             }
         }
         char *err = NULL;
-        AukFrame *f = frame_at(t, n, me, &err);
+        AukDbgFrame *f = frame_at(t, n, me, &err);
         if (f == NULL) {
             reply_error(cmd, err);
             free(err);
@@ -1049,7 +1049,7 @@ static bool serve(const Cmd *cmd, int64_t me, int *kind) {
             char *err = NULL;
             char *value = NULL;
             char *ty = NULL;
-            AukFrame *f = frame_at(t, n, me, &err);
+            AukDbgFrame *f = frame_at(t, n, me, &err);
             if (f != NULL && eval_at(f, expr, &value, &ty, &err)) {
                 DText r = {0};
                 dt_str(&r, ",\"value\":");
@@ -1070,7 +1070,7 @@ static bool serve(const Cmd *cmd, int64_t me, int *kind) {
         int64_t nt = st_nthreads;
         ThreadRef *ts = auk__xmalloc((size_t)(nt + 1) * sizeof(ThreadRef));
         memcpy(ts, st_threads, (size_t)nt * sizeof(ThreadRef));
-        AukFrame **tops = auk__xmalloc((size_t)(nt + 1) * sizeof(AukFrame *));
+        AukDbgFrame **tops = auk__xmalloc((size_t)(nt + 1) * sizeof(AukDbgFrame *));
         for (int64_t i = 0; i < nt; i++) {
             tops[i] = *ts[i].top;
         }
@@ -1194,7 +1194,7 @@ static void stop(int64_t me, const char *reason, const char *extra) {
 
 /* ---- generated code's entry points ------------------------------------------------------- */
 
-AUK_API void auk_dbg_enter(AukFrame *f) {
+AUK_API void auk_dbg_enter(AukDbgFrame *f) {
     if (dbg_tid == 0 && atomic_load_explicit(&dbg_attached, memory_order_relaxed)) {
         tid();
     }
@@ -1203,14 +1203,14 @@ AUK_API void auk_dbg_enter(AukFrame *f) {
     dbg_depth++;
 }
 
-AUK_API void auk_dbg_leave(AukFrame *f) {
+AUK_API void auk_dbg_leave(AukDbgFrame *f) {
     dbg_top = f->parent;
     dbg_depth--;
 }
 
 /* Does a breakpoint at site have a condition that holds (or none)? Runs Auk code, without the
  * lock. *extra gets a "cond_error" field when a condition fails to evaluate. */
-static bool bp_hit(AukFrame *f, int64_t site, char **extra) {
+static bool bp_hit(AukDbgFrame *f, int64_t site, char **extra) {
     /* the conditions of the breakpoints at site, in order (NULL: none) */
     pthread_mutex_lock(&st_lock);
     int64_t nc = 0;
@@ -1262,7 +1262,7 @@ static bool bp_hit(AukFrame *f, int64_t site, char **extra) {
 }
 
 /* A statement of an instrumented function, while armed: stop here? */
-AUK_API void auk_dbg_hook(AukFrame *f) {
+AUK_API void auk_dbg_hook(AukDbgFrame *f) {
     if (!atomic_load_explicit(&dbg_attached, memory_order_relaxed) || auk__dbg_busy() || dbg_info == NULL) {
         return;
     }
