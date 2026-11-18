@@ -1,4 +1,2 @@
-fn bad(n: int): int
-  ensures result > n
-{ n }
-fn main() { print(bad(1)) }
+fn d(a: int, b: int): int = a / b
+fn main() { print(d(1, 0)) }

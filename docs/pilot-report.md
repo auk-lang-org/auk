@@ -411,15 +411,16 @@ implementations, `from_value` implementations and vtables. `--core` adds core's 
 once). Unit test: `dump::tests::typed_dump`. The Auk driver takes `compiler check --json <file>`
 and `compiler typed [--core] <file>`.
 
-**Corpus.** The golden corpus has few checker errors, so `tests/checker/` adds 652 small
+**Corpus.** The golden corpus has few checker errors, so `tests/checker/` adds 662 small
 programs extracted from the Rust integration tests' string literals (`tests/*.rs`) and the
-`docs/errors/*.md` examples: they hit nearly every checker code (E0102-E0370, with notes and
+`docs/errors/*.md` examples, plus `tests/checker/ffi_project/` (casts `"(T)"` and `"#embed path"`
+prototypes in a project with the `ffi` effect): they hit nearly every checker code (E0102-E0370, with notes and
 fix-its) and the parse/lex codes, standalone (no project).
 
 ```
-check: 913 files, 0 differ
-typed: 913 files, 0 differ        (typed --core: 0 differ)
-tokens / ast / resolve: 913 files, 0 differ
+check: 924 files, 0 differ
+typed: 924 files, 0 differ        (typed --core: 0 differ)
+tokens / ast / resolve: 924 files, 0 differ
 ```
 
 Like the earlier phases this was at zero on the first full run: the port is line by line (three
@@ -501,11 +502,11 @@ No compiler or runtime bug blocked the port; no compiler or runtime change was n
 ## Reproduce
 
 ```
-scripts/diff_tokens.sh        # tokens: 913 files, 0 differ
-scripts/diff_ast.sh           # ast: 913 files, 0 differ
-scripts/diff_resolve.sh       # resolve: 913 files, 0 differ (254 before tests/checker/)
-scripts/diff_check.sh         # check: 913 files, 0 differ
-scripts/diff_typed.sh         # typed: 913 files, 0 differ, and typed --core
+scripts/diff_tokens.sh        # tokens: 924 files, 0 differ
+scripts/diff_ast.sh           # ast: 924 files, 0 differ
+scripts/diff_resolve.sh       # resolve: 924 files, 0 differ (254 before tests/checker/)
+scripts/diff_check.sh         # check: 924 files, 0 differ
+scripts/diff_typed.sh         # typed: 924 files, 0 differ, and typed --core
 scripts/pilot_time.sh 7 20    # the tables above
 auk test compiler             # the ported unit tests
 auk build compiler/bench/cliffs.auk -o /tmp/cliffs && /tmp/cliffs 80000

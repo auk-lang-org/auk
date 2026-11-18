@@ -1,6 +1,5 @@
 fn main() {
-  let x = 21
-  let y = peek x * 2
-  peek "s{y}"
-  print(y)
+  var x = 9223372036854775800
+  for _ in 0..10 { x += 1 }
+  print(x)
 }

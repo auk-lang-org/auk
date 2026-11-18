@@ -1,7 +1,2 @@
-fn half(n: int): int
-  requires n % 2 == 0
-{ n / 2 }
-fn main() {
-  print(half(4))
-  print(half(3))
-}
+fn big(n: int): int = n * n
+fn main() { print(big(4_000_000_000)) }

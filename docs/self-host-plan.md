@@ -300,9 +300,10 @@ step diffed against the golden corpus before the next starts:
       `check::check_types`, i.e. before patterns.rs/effects.rs) and `auk dump typed [--core]
       <file>` (the typed program MIR lowering consumes: signatures, every node's side-table facts,
       locals, instances with resolved targets, concrete types, shape impls, vtables; unit test
-      `dump::tests::typed_dump`). `scripts/diff_check.sh` and `scripts/diff_typed.sh`: **913
-      files, 0 differ** each, over the corpus plus `tests/checker/` (652 programs extracted from
-      the Rust tests and the `docs/errors/` examples, nearly every checker diagnostic). Checker
+      `dump::tests::typed_dump`). `scripts/diff_check.sh` and `scripts/diff_typed.sh`: **924
+      files, 0 differ** each, over the corpus plus `tests/checker/` (662 programs extracted from
+      the Rust tests and the `docs/errors/` examples, nearly every checker diagnostic, plus
+      `ffi_project/` for FFI casts and `#embed`). Checker
       alone 1.28x Rust after three fixes (pilot-report.md, "3b").
 
   **What the next steps build on**: `check.check_types(prog): (typed.TypedProgram?,

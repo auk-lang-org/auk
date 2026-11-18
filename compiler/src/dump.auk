@@ -917,7 +917,7 @@ fn use_line(out: var [str], p: resolve.Program, m: int, path: [ast.Ident]) {
 
 /// `auk dump check`: the `auk check --json` report of the type checker proper
 /// (`check.check_types`), without patterns.rs and effects.rs.
-pub fn checked(path: str, r: resolve.Program!diag.FileFails): str {
+pub fn checked(path: str, r: resolve.Program!diag.FileFails): str uses fs {
   let diags = match r {
     ok(prog) => check.check_types(prog).1
     err(Many(ds)) => ds
@@ -927,7 +927,7 @@ pub fn checked(path: str, r: resolve.Program!diag.FileFails): str {
 
 /// `auk dump typed`: the checker's errors and the typed program (erased when there were no
 /// errors, as `check::check` returns it).
-pub fn typed_program(out: var [str], cwd: str, r: resolve.Program!diag.FileFails, core: bool) {
+pub fn typed_program(out: var [str], cwd: str, r: resolve.Program!diag.FileFails, core: bool) uses fs {
   let prog = match r {
     ok(p) => p
     err(Many(ds)) => {
@@ -1000,7 +1000,10 @@ fn typed(out: var [str], cwd: str, tp: typed.TypedProgram, core: bool) {
           none => ""
         }
         let cps = sig.params.map(x => cffi.show(x)).join(", ")
-        "ffi {sig.name} ({cps}) -> {cffi.show(sig.ret)}{free}" + flag(sig.indirect, " indirect") +
+        "ffi {sig.name} ({cps}) -> {cffi.show(sig.ret)}{free}" + flag(sig.indirect, " indirect") + flag(sig.cast, " cast") + (match sig.embed {
+          some(e) => " embed=" + esc(rel(cwd, e))
+          none => ""
+        }) +
           " convs=[{convs.map(conv_text).join(", ")}] item={item}"
       }
       Intrinsic(which, item) => "intrinsic {typed.intrinsic_name(which)} item={item}"

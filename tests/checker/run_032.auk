@@ -1,17 +1,23 @@
-fn find(xs: [(str, int)], k: str): (str, int)? = xs.find((a, _) => a == k)
+struct A { v: int, b: B }
+struct B { v: int, c: C, xs: [int] }
+struct C { v: int, a: A? }
+struct Emp { name: str, pay: int, boss: Boss }
+struct Boss { name: str, pay: int, up: Emp? }
+fn raise(e: var Emp) { e.boss.pay += 100 }
 fn main() {
-  let p: (int, str)? = some((1, "one"))
-  let q: (int, str)? = none
-  print("{p?.0} {p?.1} {q?.0} {q?.1}")
-  let xs = [("ab", 1), ("cde", 2)]
-  let ys: [(str, int)] = []
-  print("{xs.first()?.0?.len()} {ys.first()?.0?.len()} {xs.last()?.0?.len() else 0}")
-  print("{find(xs, "cde")?.1 else 0} {find(xs, "z")?.1 else 0}")
-  let nested: ((int, int), str)? = some(((4, 5), "n"))
-  print("{nested?.0?.1} {nested?.1?.len() else -1}")
-  let oo: (int?, str)? = some((none, "x"))
-  print("{oo?.0} {oo?.1} {oo?.0 else 9}")
-  let owned: ([int], str)? = some(([1, 2, 3], "o"))
-  let v = owned?.0 else []
-  print("{v} {owned?.0?.len()}")
+  let x = A { v: 1, b: B { v: 2, c: C { v: 3, a: none }, xs: [1] } }
+  var y = x
+  y.b.c.v += 10
+  y.b.v = 20
+  y.b.xs.push(2)
+  y.b.xs[0] = 9
+  print("{x.b.v} {x.b.c.v} {x.b.xs} | {y.b.v} {y.b.c.v} {y.b.xs}")
+  let e = Emp { name: "ann", pay: 1, boss: Boss { name: "bob", pay: 10, up: none } }
+  var f = e
+  f.boss.name = "carl"
+  raise(&f)
+  var g = f
+  g.boss.pay = 0
+  g.boss = Boss { name: "dee", pay: 5, up: some(e) }
+  print("{e.boss.name} {e.boss.pay} | {f.boss.name} {f.boss.pay} | {g.boss.name} {g.boss.pay}")
 }

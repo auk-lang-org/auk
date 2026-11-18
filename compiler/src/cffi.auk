@@ -27,6 +27,12 @@ pub struct CSig {
   free: str?,
   /// A call through a function pointer: `params[0]` is the function's address.
   indirect: bool,
+  /// A C cast (`"(LLVMValueRef)"`, `"(void *)"`): the one argument, an opaque pointer, becomes
+  /// the result's pointer type (`ret`); nothing is called. `params[0]` is `void *`.
+  cast: bool,
+  /// `"#embed path"` (C23's directive): no C function; the result is the file's contents, read
+  /// at compile time. The checker resolves the path (relative to the source file).
+  embed: str?,
 }
 
 /// How a list's elements are laid out in the C array (the runtime's `AUK_FFI_*` kinds).
@@ -160,6 +166,16 @@ fn lex(s: str): [Tok]!CErr {
 let QUALIFIERS = ["const", "volatile", "restrict", "__restrict", "__restrict__", "_Nonnull", "_Nullable", "__nonnull", "extern", "static", "inline"]
 
 /// A fixed-width or system integer typedef: (bytes, signed).
+/// `s` without leading and trailing `"`, `<` and `>` (Rust's `trim_matches`).
+fn trim_quotes(s: str): str {
+  let cs = s.chars()
+  var a = 0
+  var b = cs.len()
+  while a < b && (cs[a] == '"' || cs[a] == '<' || cs[a] == '>') { a += 1 }
+  while b > a && (cs[b - 1] == '"' || cs[b - 1] == '<' || cs[b - 1] == '>') { b -= 1 }
+  str(cs[a..b])
+}
+
 fn int_typedef(w: str): (int, bool)? = match w {
   "int8_t" => (1, true)
   "uint8_t" => (1, false)
@@ -313,6 +329,14 @@ fn is_ident(f: str): bool {
 
 /// Parse `"<C prototype>"`, with an optional ` +free(fn)` suffix.
 pub fn parse_proto(src: str): CSig!CErr {
+  match src.trim().strip_prefix("#embed") {
+    some(rest) => {
+      let path = trim_quotes(rest.trim())
+      if path == "" { return fail(Bad("`#embed` needs the file's path: \"#embed data/font.ttf\"")) }
+      return CSig { name: "#embed", ret: CTy.Void, params: [], free: none, indirect: false, cast: false, embed: path }
+    }
+    none => {}
+  }
   var proto = src
   var free: str? = none
   match src.find("+free") {
@@ -338,6 +362,20 @@ pub fn parse_proto(src: str): CSig!CErr {
   var body = proto.trim()
   while body.ends_with(";") { body = body[0..body.len() - 1] }
   let toks = lex(body)?
+  // `(T)`: a cast between opaque pointer types
+  if toks.len() > 2 && toks[0] == Tok.LParen && toks[toks.len() - 1] == Tok.RParen {
+    if free is some(_) { return fail(Bad("a cast `(T)` frees nothing: drop `+free`")) }
+    var cp = P { toks: toks[1..toks.len() - 1], pos: 0 }
+    let (cret, cname) = decl(&cp, "the cast", false)?
+    if cname is some(_) || cp.pos < cp.toks.len() {
+      return fail(Bad("a cast is a single C pointer type in parentheses, e.g. \"(LLVMValueRef)\" or \"(void *)\""))
+    }
+    match cret {
+      Ptr(_, _) | Named(_) => {}
+      _ => return fail(Bad("a cast converts between pointer types; `{show(cret)}` isn't one"))
+    }
+    return CSig { name: "(cast)", ret: cret, params: [CTy.Ptr(CTy.Void, false)], free: none, indirect: false, cast: true, embed: none }
+  }
   var p = P { toks, pos: 0 }
   let (ret, name0) = decl(&p, "the result type", true)?
   // `T (*)(params)`: a call through the function pointer passed first
@@ -370,7 +408,7 @@ pub fn parse_proto(src: str): CSig!CErr {
   if p.peek() != some(Tok.RParen) { return fail(Bad("expected `)` to end the parameter list")) }
   p.pos += 1
   if p.pos < p.toks.len() { return fail(Bad("unexpected text after the prototype")) }
-  CSig { name, ret, params, free, indirect }
+  CSig { name, ret, params, free, indirect, cast: false, embed: none }
 }
 
 // ---- matching Auk types to C types ----
@@ -545,5 +583,13 @@ test "prototypes" {
   assert s4.params == [CTy.Ptr(CTy.Void, false), i(8, true), i(8, true)]
   assert parse_proto("void (*)(void)")!.params.len() == 1
   assert !parse_proto("int abs(int)")!.indirect
+  let s5 = parse_proto("(LLVMValueRef)")!
+  assert s5.cast && s5.ret == CTy.Named("LLVMValueRef") && s5.params.len() == 1
+  assert parse_proto("( void * )")!.cast
+  assert proto_err("(int)").contains("pointer")
+  assert parse_proto("(void *) +free(f)") is err(_)
+  assert parse_proto("#embed data/a b.bin")!.embed == some("data/a b.bin")
+  assert parse_proto(" #embed \"x.bc\"")!.embed == some("x.bc")
+  assert parse_proto("#embed") is err(_)
   assert same(parse_type("struct sqlite3 *")!, parse_type("sqlite3*")!)
 }

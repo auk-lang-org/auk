@@ -138,7 +138,7 @@ pub fn read(p: str): str! uses fs {
 }
 
 /// `fs.read <path>: <strerror>` -> `<strerror> (os error <errno>)` for the errors a read hits.
-fn io_error(msg: str): str {
+pub fn io_error(msg: str): str {
   let parts = msg.split(": ")
   let what = parts[parts.len() - 1]
   let code = match what {

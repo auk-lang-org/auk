@@ -1105,12 +1105,14 @@ fn typed(out: &mut String, tp: &TypedProgram, core: bool) {
                 let cs: Vec<String> = convs.iter().map(conv_text).collect();
                 let cps: Vec<String> = sig.params.iter().map(|p| p.show()).collect();
                 format!(
-                    "ffi {} ({}) -> {}{}{} convs=[{}] item={item}",
+                    "ffi {} ({}) -> {}{}{}{}{} convs=[{}] item={item}",
                     sig.name,
                     cps.join(", "),
                     sig.ret.show(),
                     sig.free.as_ref().map(|f| format!(" free={f}")).unwrap_or_default(),
                     if sig.indirect { " indirect" } else { "" },
+                    if sig.cast { " cast" } else { "" },
+                    sig.embed.as_ref().map(|e| format!(" embed={}", esc(&rel(e)))).unwrap_or_default(),
                     cs.join(", ")
                 )
             }
@@ -1511,9 +1513,9 @@ mod tests {
     #[test]
     fn typed_dump() {
         let out = typ("fn f(x: int): int = x + 1\nfn main() { print(\"{f(2)}\") }\n");
-        assert!(out.starts_with("main #224 args=false ret=()\nfn #0 core.show<T: Show>(x: T): str [intrinsic Show item=6] pub\n"), "{out}");
-        assert!(out.contains("fn #223 t.f(x: int): int [auk item=0 clauses=[0]]\n  span 1:4-1:5 uses=[] callees=[] olds=[]\n"), "{out}");
-        assert!(out.contains("  span 2:4-2:8 uses=[] callees=[16, 223] olds=[]\n"), "{out}");
+        assert!(out.starts_with("main #227 args=false ret=()\nfn #0 core.show<T: Show>(x: T): str [intrinsic Show item=6] pub\n"), "{out}");
+        assert!(out.contains("fn #226 t.f(x: int): int [auk item=0 clauses=[0]]\n  span 1:4-1:5 uses=[] callees=[] olds=[]\n"), "{out}");
+        assert!(out.contains("  span 2:4-2:8 uses=[] callees=[16, 226] olds=[]\n"), "{out}");
         assert!(
             out.contains(
                 "module 14 t \"t.auk\"\n  \
@@ -1523,7 +1525,7 @@ mod tests {
                    #7 : int\n  \
                    #8 : int\n  \
                    #12 : int\n  \
-                   #13 : int call=(fn f#223)(#12)\n  \
+                   #13 : int call=(fn f#226)(#12)\n  \
                    #14 : str\n  \
                    #15 : () call=(fn print#16<str>)(#14)\n  \
                    #16 : ()\n  \
@@ -1531,8 +1533,8 @@ mod tests {
             ),
             "{out}"
         );
-        assert!(out.contains("instance 21 fn #224 main\n  #13 -> inst 20\n  #15 -> inst 26\n"), "{out}");
-        assert!(out.contains("instance 26 fn #16 print<str>\n"), "{out}");
+        assert!(out.contains("instance 22 fn #227 main\n  #13 -> inst 21\n  #15 -> inst 27\n"), "{out}");
+        assert!(out.contains("instance 27 fn #16 print<str>\n"), "{out}");
         // errors first, then the partial program
         let e = typ("fn f(x: int): str = x\n");
         assert!(e.starts_with("in \"t.auk\"\nerror E0200 1:21-1:22 \"expected `str`, found `int`\"\n"), "{e}");

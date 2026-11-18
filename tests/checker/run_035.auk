@@ -1,15 +1,8 @@
-fn parse(s: str): int! {
-  let n = int.parse(s) else fail("nan: {s}")
-  n
-}
+fn f(n: int): int
+  ensures result >= 0
+fn f(0): int = 0
+fn f(n: int): int = -n
 fn main() {
-  var names: [str] = []
-  for i in 0..3 {
-    let r = catch {
-      names.push("a{i}")
-      "v{parse("{i}")?}"
-    }
-    print(r)
-  }
-  print("{catch parse("q")} {names}")
+  print(f(0))
+  print(f(3))
 }

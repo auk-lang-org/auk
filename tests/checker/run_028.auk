@@ -1,12 +1,4 @@
-fn sign(0): int
-  ensures result == 0
-{ 0 }
-fn sign(n: int): int when n > 0 { 5 }
-fn sign(n: int): int
-  ensures result == 1
-{ -1 }
-fn main() {
-  print(sign(0))
-  print(sign(5))
-  print(sign(-5))
-}
+fn fact(n: int): int = if n == 0 { 1 } else { n * fact(n - 1) }
+imprint FACTS = (0..=25).map(n => fact(n))
+imprint N = FACTS.len()
+fn main() { print(N) }

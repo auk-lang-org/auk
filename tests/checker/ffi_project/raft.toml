@@ -1,0 +1,4 @@
+[package]
+name = "ffiproj"
+version = "0.1.0"
+effects = ["ffi"]

@@ -1,4 +1,29 @@
-imprint F = (x: int) => x + 1
-imprint T = (1, 2)
-imprint OK = [some(1), none]
-fn main() { print(F(1)) }
+fn main() uses rand, env, proc, time, fs {
+  let r = rand.int(1, 6)
+  print(r >= 1 && r <= 6)
+  print(rand.float() < 1.0)
+  print(env.get("PATH") is some(_))
+  print(env.args().len() > 0)
+  print(proc.run("echo", ["hi"])!.trim())
+  print(time.now() > 0)
+  print(str.from_utf8([104, 105])!)
+  print(int.parse("12")! + 1)
+  print(float.parse("1.5")!)
+  print(fs.write("x.txt", "a\nb")!)
+  print(fs.lines("x.txt")!)
+  print("abc".repeat(2).upper().find("C"))
+  var xs = [1, 2, 3]
+  xs.insert(0, 9)
+  print(xs.remove(1))
+  print(xs.pop())
+  print(xs)
+  var m = {"a": 1}
+  print(m.remove("a"))
+  print(m.get("a"))
+  print(char(65))
+  print(3.7.floor() + abs(-2.0) + (-3).abs().float())
+  print(int(2.9) + int('a'))
+  var s = set([1, 2, 2])
+  s.insert(3)
+  print(s.to_list())
+}

@@ -333,7 +333,7 @@ pub fn frame_ret(c: Checker): types.Ty? = c.top_frame()?.ret
 /// Types, inference, overloading and shapes only (Rust's private `check_types`, which
 /// `check_partial` follows with patterns.rs and effects.rs): the typed program (partial when
 /// there are errors; `none` when the declarations failed) and the errors.
-pub fn check_types(prog: resolve.Program): (typed.TypedProgram?, [diag.FileDiag]) {
+pub fn check_types(prog: resolve.Program): (typed.TypedProgram?, [diag.FileDiag]) uses fs {
   var c = new_checker(prog)
   c.collect()
   if c.errs.len() > 0 { return (none, sorted(c.errs)) }
@@ -528,7 +528,7 @@ pub fn show(c: Checker, t: types.Ty): str {
 
 // ---- collect ----
 
-fn collect(c: var Checker) {
+fn collect(c: var Checker) uses fs {
   let nmods = c.prog.mods.len()
   // types and shapes
   for m in 0..nmods {
@@ -735,9 +735,115 @@ fn ptr_kind(defs: types.Defs, prog: resolve.Program, t: types.Ty): cffi.PtrKind 
   _ => cffi.PtrKind.NotPtr
 }
 
+/// How the argument of a cast `(T)` crosses: an opaque pointer, or its `T?`.
+fn cast_conv(defs: types.Defs, prog: resolve.Program, p: typed.ParamInfo): cffi.Conv!cffi.CErr {
+  if p.var_ { return fail(cffi.CErr.Bad("a cast's argument can't be `var`")) }
+  match p.ty {
+    Opt(x) => if ptr_kind(defs, prog, x) != cffi.PtrKind.NotPtr { return cffi.Conv.OptPtr }
+    _ => {}
+  }
+  if ptr_kind(defs, prog, p.ty) != cffi.PtrKind.NotPtr { return cffi.Conv.Ptr }
+  fail(cffi.CErr.Bad("a cast `(T)` converts an opaque pointer: an `ffi.Ptr` or an `extern type` (or its `T?`)"))
+}
+
+/// Check an `extern fn f(): T = "#embed path"`: no parameters, the file (relative to the source
+/// file) is readable, and `T` is a form of its contents: `[int]`, `str` (valid UTF-8), `ffi.Ptr`
+/// or `int` (the length). The path in the result is the resolved one.
+fn ffi_embed(c: var Checker, m: int, cl: ast.FnClause, sig: cffi.CSig, params: [typed.ParamInfo], ret: types.Ty, at: diag.Span): (cffi.CSig, [cffi.Conv])? uses fs {
+  let name = cl.name.name
+  let rel = sig.embed else ""
+  let path = paths.join(paths.parent(c.prog.mods[m].file) else "", rel)
+  var errs: [diag.Diag] = []
+  if params.len() > 0 { errs.push(diag.new("E0040", at, "`{name}` embeds a file, so it takes no parameters")) }
+  let bytes: [int]? = match fs.read_bytes(path) {
+    ok(b) => b
+    err(e) => {
+      errs.push(
+        diag.new("E0040", at, "`{name}`: cannot read the file to embed, `{path}`: {paths.io_error(e.show())}")
+          .note("the path is relative to this source file"),
+      )
+      none
+    }
+  }
+  let is_ptr = match ret {
+    Named(d, _) => c.defs.types[d].name == "Ptr" && c.prog.is_core(c.defs.types[d].module)
+    _ => false
+  }
+  let fits = match ret {
+    Int => true
+    List(e) => e == types.Ty.Int
+    Str => {
+      match bytes {
+        some(b) => match utf8_error_at(b) {
+          some(at_byte) => errs.push(
+            diag.new("E0040", at, "`{name}` embeds `{rel}` as a `str`, but it isn't UTF-8 (at byte {at_byte})")
+              .note("embed binary files as `[int]` or `ffi.Ptr`"),
+          )
+          none => {}
+        }
+        none => {}
+      }
+      true
+    }
+    _ => is_ptr || ret.has_error()
+  }
+  if !fits {
+    let span = match cl.ret {
+      some(t) => t.span
+      none => cl.name.span
+    }
+    errs.push(
+      diag.new("E0040", span, "`{name}` returns `{c.defs.show(ret)}`, which isn't a form of an embedded file")
+        .note("an embedded file is `[int]` (its bytes), `str` (UTF-8 text), `ffi.Ptr` (the address of its bytes, read-only) or `int` (its length)"),
+    )
+  }
+  if errs.len() > 0 {
+    for d in errs { c.err_in(m, d) }
+    return none
+  }
+  (cffi.CSig { embed: path, ..sig }, [cffi.Conv.Unit])
+}
+
+/// Rust's `str::from_utf8(b).err().map(|e| e.valid_up_to())`: where the first invalid UTF-8
+/// sequence starts, if any.
+fn utf8_error_at(b: [int]): int? {
+  var i = 0
+  while i < b.len() {
+    let x = b[i]
+    if x < 0x80 {
+      i += 1
+      continue
+    }
+    var n = 0
+    var lo = 0x80
+    var hi = 0xbf
+    if x >= 0xc2 && x <= 0xdf {
+      n = 1
+    } else if x >= 0xe0 && x <= 0xef {
+      n = 2
+      if x == 0xe0 { lo = 0xa0 }
+      if x == 0xed { hi = 0x9f }
+    } else if x >= 0xf0 && x <= 0xf4 {
+      n = 3
+      if x == 0xf0 { lo = 0x90 }
+      if x == 0xf4 { hi = 0x8f }
+    } else {
+      return i
+    }
+    for k in 1..n + 1 {
+      if i + k >= b.len() { return i }
+      let y = b[i + k]
+      let (l, h) = if k == 1 { (lo, hi) } else { (0x80, 0xbf) }
+      if y < l || y > h { return i }
+    }
+    i += n + 1
+  }
+  none
+}
+
 /// Check a user `extern fn`: the package allows it, the prototype parses, and every Auk
 /// parameter and the result fit their C types (E0040).
-fn ffi_fn(c: var Checker, m: int, cl: ast.FnClause, proto: str, params: [typed.ParamInfo], ret: types.Ty, is_async: bool, generics: [int]): (cffi.CSig, [cffi.Conv])? {
+fn ffi_fn(c: var Checker, m: int, cl: ast.FnClause, proto: str, params: [typed.ParamInfo], ret: types.Ty, is_async: bool, generics: [int]): (cffi.CSig, [cffi.Conv])? uses fs {
   if !c.ffi_allowed(m, cl.name.span) { return none }
   let at = c.ffi_str_span(m, cl.span)
   let name = cl.name.name
@@ -762,10 +868,14 @@ fn ffi_fn(c: var Checker, m: int, cl: ast.FnClause, proto: str, params: [typed.P
       return none
     }
   }
+  if sig.embed is some(_) { return c.ffi_embed(m, cl, sig, params, ret, at) }
   if sig.params.len() != params.len() {
     c.err_in(
       m,
-      if sig.indirect {
+      if sig.cast {
+        diag.new("E0040", at, "`{name}` has {params.len()} parameter(s), but a cast takes 1")
+          .note("a cast `(T)` converts its one argument, an `ffi.Ptr` or an `extern type`, to `T`")
+      } else if sig.indirect {
         diag.new("E0040", at, "`{name}` has {params.len()} parameter(s), but a call through a function pointer with this prototype takes {sig.params.len()}")
           .note("the first parameter is the function's address (`ffi.Ptr`), then one per C parameter")
       } else {
@@ -783,7 +893,8 @@ fn ffi_fn(c: var Checker, m: int, cl: ast.FnClause, proto: str, params: [typed.P
   for k, p in params {
     let ct = sig.params[k]
     if p.ty.has_error() { return none }
-    match cffi.conv(p.ty, p.var_, ct, false, free, t => ptr_kind(defs, prog, t)) {
+    let cv = if sig.cast { cast_conv(defs, prog, p) } else { cffi.conv(p.ty, p.var_, ct, false, free, t => ptr_kind(defs, prog, t)) }
+    match cv {
       ok(cv) => convs.push(cv)
       err(Bad(why)) => {
         let span = match cl.params.get(k) {
@@ -1389,7 +1500,7 @@ fn clause_key(c: var Checker, m: int, cl: ast.FnClause, inf: var types.Infer, ca
   }
 }
 
-fn declare_fns(c: var Checker, m: int, item: int, g: ast.FnGroup) {
+fn declare_fns(c: var Checker, m: int, item: int, g: ast.FnGroup) uses fs {
   // split the clause group by first-parameter type
   var inf = types.new_infer()
   var canon: {str: int} = {}
@@ -1445,7 +1556,7 @@ fn declare_fns(c: var Checker, m: int, item: int, g: ast.FnGroup) {
   }
 }
 
-fn declare_fn(c: var Checker, m: int, item: int, g: ast.FnGroup, clauses: [int], header: bool) {
+fn declare_fn(c: var Checker, m: int, item: int, g: ast.FnGroup, clauses: [int], header: bool) uses fs {
   let hdr: ast.FnClause? = if header { g.header } else { none }
   let cls = clauses.map(i => g.clauses[i])
   let first = hdr else cls[0]

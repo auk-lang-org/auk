@@ -1,4 +1,4 @@
-fn main(args: [str]): int {
-  print("args: {args.len()}")
-  3
-}
+fn bad(n: int): int
+  ensures result > n
+{ n }
+fn main() { print(bad(1)) }
