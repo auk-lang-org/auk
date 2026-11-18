@@ -45,8 +45,10 @@ What there is to move today:
       `auk dump tokens|ast` (hidden, `src/dump.rs`; added by the 2e pilot).
 - [x] CI job (or `make check`) that runs: cargo tests, `tests/*.rs`, runtime tests, bench smoke.
       `scripts/check.sh`: those plus the pilot diffs and golden self-consistency.
-- [ ] Decide versioning for the transition: the Rust `auk` is "stage 0" and is tagged
-      (`v0-rust-final`) at the end of Phase 4 so it can always rebuild the seed.
+- [x] Versioning for the transition: the Rust `auk` is "stage 0" and is tagged
+      (`v0-rust-final`) on the last commit before Phase 6 deletes it, so it can always rebuild
+      the seed. (First planned for the end of Phase 4; moved because the Rust `auk` stays the
+      reference for the Phase 5 ports and gets their bug fixes until then.)
 
 ## Phase 1 — Runtime to C (Rust compiler unchanged)
 
@@ -371,8 +373,8 @@ step diffed against the golden corpus before the next starts:
       per file (`compiler/src/embedded.auk`, with `docs/spec.md` and the `docs/errors` pages;
       Phase 4). `resolve.sources(dir)` still reads a prelude directory, for tools.
 
-**Language freeze** from here to the end of Phase 4: no language changes (or each one is made in
-both compilers and both golden outputs). Bug fixes allowed, made in both.
+**Language freeze** from here until the Rust compiler is deleted (Phase 6): no language changes
+(or each one is made in both compilers and both golden outputs). Bug fixes allowed, made in both.
 
 ## Phase 4 — Back end and bootstrap
 
@@ -436,7 +438,8 @@ numbers: [pilot-report.md](pilot-report.md), "Phase 4".
       (built by Rust), stage 2 and stage 3 are all bit-identical (5.17 MB).
 - [x] Self-compile time: 26–33 s per stage (Apple M5; `auk build compiler/src/main.auk`, an O2
       release build) — the same as the Rust `auk` building it (~27 s), at the ~30 s target.
-- [ ] Freeze ends. Tag `v0-rust-final`.
+- Freeze and the `v0-rust-final` tag: moved to Phase 6 (the Rust `auk` is still the oracle for
+  the Phase 5 ports).
 
 ## Phase 5 — Tools
 
@@ -498,6 +501,8 @@ Port onto the Auk compiler, each with its existing tests passing:
       plus checked-in LLVM bitcode (or textual IR) of the compiler, so a fresh checkout builds
       with LLVM alone — no previous `auk` needed.
 - [ ] Build script (`make`/`build.sh`): seed → stage 1 → stage 2, runtime, tools, tests.
+- [ ] Tag `v0-rust-final` on the last commit with the Rust `auk` (all diffs 0, suite green); the
+      language freeze ends with the delete.
 - [ ] Delete `Cargo.toml`, `Cargo.lock`, `build.rs`, `src/` (with `src/prelude/` moved, e.g. to
       `compiler/prelude/`, since `embedded.auk` and the tools read it), `tests/*.rs`, `.cargo/`,
       `target/`. `libauk_rt.a`/`auk_rt.bc` are built by `build.rs` today (into `target/auk-rt/`,
@@ -568,7 +573,7 @@ builds and passes everything.
 
 - **Compiler speed in Auk** — refcounting and copies on a ~37k-line program. The Phase 2 pilot
   measures it before the big commitment.
-- **Length of the freeze** — Phases 3–4 are the bulk of the work. Keep them moving; don't run
+- **Length of the freeze** — Phases 3–5 are the bulk of the work. Keep them moving; don't run
   big language work in parallel.
 - **FFI ergonomics** — the LLVM C API is pointer-heavy. Fallback: emit textual LLVM IR and call
   `llc`/`clang`, losing in-process JIT until bindings are ready.
