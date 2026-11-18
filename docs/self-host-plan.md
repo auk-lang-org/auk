@@ -33,7 +33,8 @@ What there is to move today:
 - [ ] **Golden corpus:** a script that runs the Rust `auk` over every `.auk` in `tests/`,
       `examples/`, `packages/`, `src/prelude/` and saves: token dump, diagnostics (JSON),
       `auk ir` MIR text, `auk fmt` output, program stdout/stderr/exit code. Phases 3–5 diff against it.
-- [ ] Add the dump modes the golden corpus needs if missing (`auk tokens`, stable AST dump).
+- [x] Add the dump modes the golden corpus needs if missing (`auk tokens`, stable AST dump):
+      `auk dump tokens|ast` (hidden, `src/dump.rs`; added by the 2e pilot).
 - [ ] CI job (or `make check`) that runs: cargo tests, `tests/*.rs`, runtime tests, bench smoke.
 - [ ] Decide versioning for the transition: the Rust `auk` is "stage 0" and is tagged
       (`v0-rust-final`) at the end of Phase 4 so it can always rebuild the seed.
@@ -134,19 +135,39 @@ pass on macOS and Linux; ASan clean; `bench/perf` within ±5% of Phase 0.
 - [ ] Port one small piece of codegen (e.g. a function that adds two ints) end to end as proof.
 
 ### 2d. Language/runtime gaps the compiler will hit (fix before Phase 3)
-- [ ] In-place mutation of uniquely owned arrays/maps (no copy when rc == 1) — the compiler is
-      all vectors and maps.
-- [ ] Efficient string building (append without O(n²)).
+- [x] In-place mutation of uniquely owned arrays/maps (no copy when rc == 1) — the compiler is
+      all vectors and maps. Measured by the pilot: `h.xs.push(x)` through a `var` parameter,
+      `xs[i].push(x)` and `m[k].push(x)` are O(1). Still missing: moving a value *out* of a
+      container (take, change, put back copies; see below).
+- [ ] Efficient string building (append without O(n²)). The pilot measured `s += "x"` as
+      quadratic (80k appends: 202 ms, 20k: 6 ms; `[str]` + `join`: 3 ms).
 - [ ] Anything else the pilot exposes: big recursive enums (AST/MIR), deep recursion limits,
       hash maps keyed by structs/ints, sorting with a comparator, interning.
+      Found by the pilot (details and snippets in [pilot-report.md](pilot-report.md), "Gaps"):
+  - [ ] `var` parameters in function types (`(var P) => T`), for parser combinators.
+  - [ ] Or-patterns (`A | B =>`).
+  - [ ] Bare variant names of another module's enum in expressions where `T?`/`T!`/`T!E` is
+        expected (and never silently core's `Value.Float`/`Int`/`Str`), or a way to import them.
+  - [ ] Moving a value out of a list/map element (no copy when it goes back).
+  - [ ] Reads without RC: a value read from a container/parameter that isn't mutated while it
+        lives is borrowed (no retain/release); no RC for payload-less enum constants.
+  - [ ] One allocation per AST node: box the recursive edge or the variant payload, not both.
+  - [ ] `match` on `str` dispatches on length/first byte instead of a chain of `auk_str_eq`.
+  - [ ] Stack: deep recursion (Auk parser: 359 nested parens vs Rust's 925) and a "stack
+        overflow" message instead of a bare SIGSEGV.
+  - [ ] Smaller: raw identifiers or keyword field names, `T!E` with a struct `E`, unsigned/narrow
+        ints, `T??`, Unicode char classes, `trim_end`/`strip_prefix`/radix parsing, `{n:x}`.
 - [ ] Process/fs/args/env APIs the driver needs (`auk build` writes temp files, runs the linker,
       `dsymutil`).
 
 ### 2e. Pilot — go/no-go
-- [ ] Port `token.rs` (268) + `lexer.rs` (1077) + `ast.rs` (794) + `parser.rs` (2143) to Auk.
-- [ ] Byte-identical token and AST dumps over the golden corpus.
-- [ ] Time both on the whole corpus. **Go** if the Auk version is within ~2–3× of Rust (and
+- [x] Port `token.rs` (268) + `lexer.rs` (1077) + `ast.rs` (794) + `parser.rs` (2143) to Auk.
+      `compiler/src/` (with the unit parser of `units.rs`); see [pilot-report.md](pilot-report.md).
+- [x] Byte-identical token and AST dumps over the golden corpus (`scripts/diff_tokens.sh`,
+      `scripts/diff_ast.sh`: 0 differences in 221 files, lexer and parser errors included).
+- [x] Time both on the whole corpus. **Go** if the Auk version is within ~2–3× of Rust (and
       profiling shows a path to closer); otherwise fix codegen/runtime first and re-measure.
+      Result: **go** (`scripts/pilot_time.sh`; numbers and profile in the report).
 
 ## Phase 3 — Self-hosted front end (language freeze starts)
 
