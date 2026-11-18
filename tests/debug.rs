@@ -611,19 +611,24 @@ fn native_line_tables() {
     let o = auk_cmd().arg("build").arg("-g").arg(&f).arg("-o").arg(&out).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     assert_eq!(String::from_utf8_lossy(&Command::new(&out).output().unwrap().stdout), "4 5 7\n");
-    if !cfg!(target_os = "macos") || !have("lldb") || !have("dwarfdump") {
-        eprintln!("skipped: needs macOS with lldb and dwarfdump");
+    // Apple's dwarfdump on macOS; elsewhere LLVM's (a `dwarfdump` there may be libdwarf's)
+    let mac = cfg!(target_os = "macos");
+    let dwarfdump = if mac { "dwarfdump" } else { "llvm-dwarfdump" };
+    if !have("lldb") || !have(dwarfdump) {
+        eprintln!("skipped: needs lldb and {dwarfdump}");
         return;
     }
-    let dsym = dir.join("prog.dSYM");
-    assert!(dsym.is_dir(), "no .dSYM");
+    // the DWARF: in a .dSYM next to the executable on macOS (dsymutil), in the executable elsewhere
+    let dwarf = if mac { dir.join("prog.dSYM") } else { out.clone() };
+    assert!(!mac || dwarf.is_dir(), "no .dSYM");
     // a compile unit for the program, with its functions by their Auk names and a line table
-    let info = String::from_utf8_lossy(&Command::new("dwarfdump").arg("--debug-info").arg(&dsym).output().unwrap().stdout).into_owned();
+    let info = String::from_utf8_lossy(&Command::new(dwarfdump).arg("--debug-info").arg(&dwarf).output().unwrap().stdout).into_owned();
     assert!(info.contains("(\"auk ") && info.contains("(\"prog.fact\")") && info.contains("(\"prog.main\")"), "{info:.2000}");
-    // lldb: line and function breakpoints, the backtrace in Auk terms
+    // lldb: line and function breakpoints, the backtrace in Auk terms (with ASLR left on: turning
+    // it off needs personality(2), which containers often deny)
     let o = Command::new("lldb")
         .current_dir(dir)
-        .args(["-b", "-o", "b prog.auk:5", "-o", "b prog.fact", "-o", "run", "-o", "bt 2", "-o", "c", "-o", "bt 2", "-o", "kill"])
+        .args(["-b", "-o", "settings set target.disable-aslr false", "-o", "b prog.auk:5", "-o", "b prog.fact", "-o", "run", "-o", "bt 2", "-o", "c", "-o", "bt 2", "-o", "kill"])
         .arg(&out)
         .output()
         .unwrap();
@@ -646,6 +651,10 @@ fn native_line_tables() {
     let o = auk_cmd().arg("build").arg(&f).arg("-o").arg(dir.join("plain")).output().unwrap();
     assert!(o.status.success());
     assert!(!dir.join("plain.dSYM").exists());
+    if !mac {
+        let info = Command::new(dwarfdump).arg("--debug-info").arg(dir.join("plain")).output().unwrap().stdout;
+        assert!(!String::from_utf8_lossy(&info).contains("(\"auk "), "debug info without -g");
+    }
 }
 
 // ---- expressions at a stop, conditional breakpoints ----
