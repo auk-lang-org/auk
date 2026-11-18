@@ -174,6 +174,7 @@ static void running_remove(AukTask *t) {
 
 static void *task_entry(void *p) {
     AukTask *t = p;
+    auk__stack_thread_begin();
     cur_task = t;
     auk__heap_switch(t->heap);
     running_add(t);
@@ -212,6 +213,7 @@ static void *task_entry(void *p) {
     pthread_mutex_unlock(&state_lock);
     pthread_cond_broadcast(&done_cv);
     cur_task = NULL;
+    auk__stack_thread_end();
     return NULL;
 }
 
@@ -305,8 +307,7 @@ AUK_API AukTask *auk_task_spawn(AukThunk fn, const void *args, size_t args_size,
     t->result_size = result_size;
     t->ops = result_ops;
     pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, (size_t)8 << 20);
+    auk__stack_attr(&attr, AUK_TASK_STACK);
     /* the link to the task that starts it (pruning the ones already finished) */
     AukTask *parent = cur_task;
     if (parent != NULL) {

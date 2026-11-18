@@ -263,7 +263,7 @@ fn a_failing_test_prints_its_trace() {
         ]
     );
     assert_eq!(es[9].get("result").as_str(), Some("FAIL"));
-    // a stack overflow: the last 20 events, then the signal
+    // a stack overflow: the last 20 events, then the panic
     let ov = &out[out.find("FAIL overflow").unwrap()..];
     let lines: Vec<String> = ov.lines().filter_map(|l| l.strip_prefix("    {")).map(|l| format!("{{{l}\n")).collect();
     let es = events(&lines.concat());
@@ -271,7 +271,7 @@ fn a_failing_test_prints_its_trace() {
     assert_eq!(b.len(), 23, "{b:?}");
     assert_eq!(b[0], "truncated");
     assert!(b[1].starts_with("call t.deep("), "{b:?}");
-    assert_eq!(b[21..], ["signal", "test"]);
+    assert_eq!(b[21..], ["panic stack overflow", "test"]);
     // a passing run prints no trace
     let o = auk_cmd().args(["test", "--trace=json", "t.auk", "good"]).current_dir(&d).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&o.stdout), "ok good\n1 passed, 0 failed\n");
@@ -290,7 +290,7 @@ fn per_test_trace_files() {
     assert_eq!(good.last().map(String::as_str), Some("test"));
     let ov = read("overflow.jsonl");
     assert_eq!(ov.len(), 53);
-    assert_eq!(brief(&ov[50..]), ["truncated", "signal", "test"]);
+    assert_eq!(brief(&ov[50..]), ["truncated", "panic stack overflow", "test"]);
     assert_eq!(ov[52].get("result").as_str(), Some("FAIL"));
 }
 

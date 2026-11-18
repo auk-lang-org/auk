@@ -208,8 +208,8 @@ Gaps for Phase 4, found doing 2c:
         lives is borrowed (no retain/release); no RC for payload-less enum constants.
   - [ ] One allocation per AST node: box the recursive edge or the variant payload, not both.
   - [ ] `match` on `str` dispatches on length/first byte instead of a chain of `auk_str_eq`.
-  - [ ] Stack: deep recursion (Auk parser: 359 nested parens vs Rust's 925) and a "stack
-        overflow" message instead of a bare SIGSEGV.
+  - [x] Stack: deep recursion (Auk parser: 359 nested parens vs Rust's 925; now over 10000 on a
+        256 MB main stack) and a "stack overflow" panic instead of a bare SIGSEGV.
   - [ ] Smaller: raw identifiers or keyword field names, `T!E` with a struct `E`, unsigned/narrow
         ints, `T??`, Unicode char classes, `trim_end`/`strip_prefix`/radix parsing, `{n:x}`.
 - [ ] Process/fs/args/env APIs the driver needs (`auk build` writes temp files, runs the linker,

@@ -325,3 +325,65 @@ fn var_parameters_in_function_types_are_checked() {
     let err = check_err(&file("fn f(x: (var int)) {}\n"));
     assert!(err.contains("1:10: error[E0023]: `var` is only for a parameter of a function type"), "{err}");
 }
+
+// ---- 4. stack overflow ----
+
+const OVERFLOW: &str = r#"fn down(n: int): int = if n == 0 { 0 } else { 1 + down(n - 1) }
+
+fn forever(n: int): int = 1 + forever(n + 1)
+
+async fn forever_task(): int = forever(0)
+
+fn main(args: [str]) {
+  print("deep: {down(200000)}")
+  if args.len() > 1 {
+    let r = catch forever(0)
+    print("caught: {r}")
+    let r2 = catch forever(0)
+    print("again: {r2}")
+    let t = forever_task()
+    let r3 = catch await t
+    print("task: {r3}")
+  } else {
+    print(forever(0))
+  }
+}
+"#;
+
+#[test]
+fn stack_overflow_is_a_panic() {
+    let p = file(OVERFLOW);
+    let o = auk(&["run", s(&p)]);
+    assert_eq!(o.status.code(), Some(101), "{o:?}");
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "deep: 200000\n");
+    assert_eq!(String::from_utf8_lossy(&o.stderr), "panic: stack overflow\n  at <unknown>\n");
+    // under a recovery point (`catch`, a task) it is an Err, again and again
+    let o = auk(&["run", s(&p), "catch"]);
+    assert_eq!(o.status.code(), Some(0), "{o:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&o.stdout),
+        "deep: 200000\ncaught: err(panic: stack overflow at <unknown>)\nagain: err(panic: stack overflow at <unknown>)\ntask: err(panic: stack overflow at <unknown>)\n"
+    );
+}
+
+#[test]
+fn stack_overflow_in_a_built_program_names_the_function() {
+    let p = file(OVERFLOW);
+    let exe = p.with_file_name("overflow");
+    let o = auk(&["build", s(&p), "-o", s(&exe)]);
+    assert!(o.status.success(), "{o:?}");
+    let o = Command::new(&exe).output().unwrap();
+    assert_eq!(o.status.code(), Some(101), "{o:?}");
+    assert_eq!(String::from_utf8_lossy(&o.stderr), "panic: stack overflow\n  at forever\n");
+    let o = Command::new(&exe).arg("catch").output().unwrap();
+    assert!(String::from_utf8_lossy(&o.stdout).contains("again: err(panic: stack overflow at forever)"), "{o:?}");
+}
+
+#[test]
+fn stack_overflow_fails_one_test() {
+    let p = file("fn forever(n: int): int = 1 + forever(n + 1)\ntest \"deep\" { assert forever(0) == 1 }\ntest \"fine\" { assert 1 == 1 }\n");
+    let o = auk(&["test", s(&p)]);
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(out.contains("FAIL deep\n    panic: stack overflow\n"), "{out}");
+    assert!(out.contains("ok fine\n1 passed, 1 failed"), "{out}");
+}

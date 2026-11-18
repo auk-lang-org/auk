@@ -377,12 +377,38 @@ static void make_reg_key(void) {
     pthread_key_create(&reg_key, unregister);
 }
 
+static void register_as(int64_t id);
+
 /* This thread's debugger id (registering it on first use). */
 static int64_t tid(void) {
     if (dbg_tid != 0) {
         return dbg_tid;
     }
     int64_t id = atomic_fetch_add(&dbg_next_thread, 1);
+    register_as(id);
+    return id;
+}
+
+/* The thread that starts main on a big stack (stack.c) hands its debugger id to it, so main
+ * stays thread 1: the id (0: none), which this thread no longer has. */
+int64_t auk__dbg_thread_handoff(void) {
+    int64_t id = dbg_tid;
+    if (id != 0) {
+        unregister((void *)(intptr_t)id);
+        pthread_setspecific(reg_key, NULL);
+        dbg_tid = 0;
+    }
+    return id;
+}
+
+/* On the new thread: take over the id. */
+void auk__dbg_thread_adopt(int64_t id) {
+    if (id != 0) {
+        register_as(id);
+    }
+}
+
+static void register_as(int64_t id) {
     dbg_tid = id;
     pthread_once(&reg_once, make_reg_key);
     pthread_setspecific(reg_key, (void *)(intptr_t)id);
@@ -396,7 +422,6 @@ static int64_t tid(void) {
     st_threads[st_nthreads].in_op = &dbg_in_op;
     st_nthreads++;
     pthread_mutex_unlock(&st_lock);
-    return id;
 }
 
 /* A thread's frame chain is read by the stopped focus thread (`stack`, `vars`, `threads`) while

@@ -23,6 +23,8 @@ static _Thread_local CatchFrame *top;
 /* The panic being carried to a recovery point (malloc'd; taken by auk__catch_take). */
 static _Thread_local char *caught_msg;
 static _Thread_local char *caught_loc;
+/* The panic being carried is a stack overflow (its strings are made by auk__catch_take). */
+static _Thread_local bool caught_overflow;
 
 int auk__catch_run(AukThunk f, void *env, void *out) {
     CatchFrame fr;
@@ -42,6 +44,11 @@ int auk__catch_active(void) {
     return top != NULL;
 }
 
+/* Where the innermost recovery point lives (0: none). */
+uintptr_t auk__catch_top_addr(void) {
+    return (uintptr_t)top;
+}
+
 static char *copy_bytes(const char *p, size_t n) {
     char *s = auk__xmalloc(n + 1);
     memcpy(s, p, n);
@@ -57,7 +64,20 @@ _Noreturn void auk__catch_throw(const char *loc, const char *msg, size_t n) {
     siglongjmp(top->jb, 1);
 }
 
+_Noreturn void auk__catch_throw_overflow(void) {
+    caught_overflow = true;
+    siglongjmp(top->jb, 1);
+}
+
 void auk__catch_take(char **msg, char **loc) {
+    if (caught_overflow) {
+        caught_overflow = false;
+        free(caught_msg);
+        free(caught_loc);
+        const char *l = auk__stack_overflow_loc();
+        caught_msg = copy_bytes("stack overflow", 14);
+        caught_loc = copy_bytes(l, strlen(l));
+    }
     *msg = caught_msg;
     *loc = caught_loc;
     caught_msg = NULL;

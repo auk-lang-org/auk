@@ -415,14 +415,34 @@ typedef struct AukPanic {
 /* Run f(env, out); 0 when it finished, 1 when a panic jumped back here. */
 int auk__catch_run(AukThunk f, void *env, void *out);
 int auk__catch_active(void);
+uintptr_t auk__catch_top_addr(void);
 /* Record a panic (copies msg and loc) and jump to the innermost recovery point. */
 _Noreturn void auk__catch_throw(const char *loc, const char *msg, size_t n);
 /* Take the recorded panic: malloc'd strings the caller frees (NULL if none). */
 void auk__catch_take(char **msg, char **loc);
+/* A stack overflow (stack.c's signal handler): jump to the innermost recovery point with the
+ * panic "stack overflow" (allocates nothing). */
+_Noreturn void auk__catch_throw_overflow(void);
 AukPanic *auk__catch_call(AukThunk f, void *env, void *out);
 void auk__panic_free(AukPanic *p);
 AukErr *auk__panic_err(const AukPanic *p);
 AUK_API AukErr *auk_catch(AukThunk f, void *env, void *out);
+
+/* ---- stack.c ----------------------------------------------------------------------------- */
+
+/* The stack of the thread a program's `main` and each test run on, and of each task. */
+#define AUK_MAIN_STACK ((size_t)256 << 20)
+#define AUK_TASK_STACK ((size_t)32 << 20)
+
+/* At the start and end of every Auk thread: stack bounds and an alternate signal stack, so a
+ * stack overflow is a panic. */
+void auk__stack_thread_begin(void);
+void auk__stack_thread_end(void);
+const char *auk__stack_overflow_loc(void);
+/* Run f(arg) on a new thread with an AUK_MAIN_STACK stack and wait for it. */
+void auk__run_on_big_stack(void (*f)(void *), void *arg);
+/* pthread attributes (a pthread_attr_t *) for a stack of `size` bytes with a big guard. */
+void auk__stack_attr(void *attr, size_t size);
 
 /* ---- err.c ------------------------------------------------------------------------------- */
 
@@ -499,6 +519,7 @@ AUK_API void auk_trace_ret(const char *fn, AukStr *shown);
 AUK_API void auk_trace_err(const char *fn, const AukErr *e);
 void auk__trace_peek(const char *loc, const char *src_text, const AukStr *shown);
 void auk__trace_on_panic(const char *loc, const char *msg, size_t n, bool caught);
+void auk__trace_on_overflow(const char *fn);
 void auk__trace_save(int64_t *depth, int *mute);
 void auk__trace_restore(int64_t depth, int mute);
 
@@ -776,6 +797,8 @@ AUK_API void auk_dbg_kid_map(void *ctx, void *map, int64_t ty);
 AUK_API void auk_dbg_init(const char *text, const AukShowFn *shows, const void *kids);
 void auk__dbg_on_panic(const char *loc, const char *msg, size_t n, bool caught);
 void auk__dbg_save(void **top, int64_t *depth);
+int64_t auk__dbg_thread_handoff(void);
+void auk__dbg_thread_adopt(int64_t id);
 void auk__dbg_restore(void *top, int64_t depth);
 
 /* ---- pixels.c: frames ------------------------------------------------------------------- */

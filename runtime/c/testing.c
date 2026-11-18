@@ -135,6 +135,16 @@ static _Noreturn void sys_fail(const char *what) {
     auk__panic3("auk test", what, ": ", strerror(errno));
 }
 
+typedef struct TestRun {
+    AukTestFn fn;
+    AukErr *err;
+} TestRun;
+
+static void run_test(void *p) {
+    TestRun *r = p;
+    r->err = r->fn();
+}
+
 AUK_API int auk_test_main(int argc, char **argv) {
     auk_env_set_args(argc, argv);
     const char *filter = argc > 1 ? argv[1] : NULL;
@@ -176,7 +186,9 @@ AUK_API int auk_test_main(int argc, char **argv) {
             if (traced) {
                 auk__trace_test_begin(t->name, tail_ptr);
             }
-            AukErr *e = t->fn();
+            TestRun tr = {t->fn, NULL};
+            auk__run_on_big_stack(run_test, &tr);
+            AukErr *e = tr.err;
             if (e != NULL) {
                 AukStr *s = auk_err_show(e);
                 fflush(stdout);
@@ -235,13 +247,27 @@ AUK_API int auk_test_main(int argc, char **argv) {
 
 /* ---- program entry ----------------------------------------------------------------------- */
 
+typedef struct MainRun {
+    AukMainFn f;
+    AukArr *args;
+    AukRes_int r;
+} MainRun;
+
+static void run_main(void *p) {
+    MainRun *m = p;
+    m->r = m->f(m->args);
+}
+
 AUK_API int auk_main_wrapper(int argc, char **argv, AukMainFn user_main) {
     /* started by a `gui.open` of this same program to own its windows (gui_host) */
     if (getenv("AUK_GUI_HOST") != NULL) {
         return auk__gui_host_main();
     }
     auk_env_set_args(argc, argv);
-    AukRes_int r = user_main(auk_env_args());
+    /* on a thread with a big stack, where an overflow is a panic */
+    MainRun m = {user_main, auk_env_args(), {0}};
+    auk__run_on_big_stack(run_main, &m);
+    AukRes_int r = m.r;
     fflush(stdout);
     if (!r.ok) {
         AukStr *s = auk_err_show(r.err);

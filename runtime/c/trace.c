@@ -322,6 +322,20 @@ static void dump_locked(void) {
 
 /* ---- crash handler ----------------------------------------------------------------------- */
 
+/* A stack overflow (stack.c's signal handler, which then exits): the trace so far, then the
+ * panic. No lock and no allocation, like on_signal. */
+void auk__trace_on_overflow(const char *fn) {
+    if (trace_mode == T_OFF) {
+        return;
+    }
+    dump_locked();
+    if (out_fd >= 0) {
+        write_str(out_fd, "{\"ev\":\"panic\",\"msg\":\"stack overflow\",\"loc\":\"");
+        write_str(out_fd, fn);
+        write_str(out_fd, "\"}\n");
+    }
+}
+
 static void on_signal(int sig) {
     /* no lock: the crashing thread may hold it; this is best effort */
     dump_locked();
