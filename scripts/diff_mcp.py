@@ -3,8 +3,8 @@
 one session of protocol messages, errors and tool calls, replies compared by id. Each server's
 tools run its own binary, so this covers the commands behind them too.
 
-Left out until the port's driver has them: auk_run, auk_test and auk_debug (they need `run`,
-`test`, `debug`) and auk_holes (it finds `holes` in `help`'s usage).
+auk_debug sessions use compiler/tests/debug/ (breakpoints, conditions, expressions, tasks, a
+compile error); auk_holes is left out (it finds `holes` in `help`'s usage).
 
 usage: diff_mcp.py <auk> <port>   (run from the repository root)
 """
@@ -29,6 +29,10 @@ CALLS = [
     ("auk_run", {"path": "examples/hello.auk", "timeout_seconds": -1}),
     ("auk_run", {"path": "examples/hello.auk", "args": [1]}),
     ("auk_debug", {"path": "examples/hello.auk", "max_stops": 0}),
+    ("auk_debug", {"path": "compiler/tests/debug/eval.auk", "breakpoints": ["compiler/tests/debug/eval.auk:16 if i % 2 == 1", "fact if n == 2"], "print": ["total", "pts[1].x", "dist2(pts[0])", "n * 10"], "max_stops": 4}),
+    ("auk_debug", {"path": "compiler/tests/debug/tasks.auk", "catch": "all", "breakpoints": ["work"]}),
+    ("auk_debug", {"path": "compiler/tests/debug/args.auk", "breakpoints": ["greet"], "args": ["a", "b"]}),
+    ("auk_debug", {"path": "compiler/tests/debug/bad.auk"}),
     ("auk_test", {"path": "examples/no_such_file.auk"}),
     ("auk_nope", {}),
 ]

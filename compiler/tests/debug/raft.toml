@@ -1,0 +1,6 @@
+# Programs for scripts/diff_debug.sh and diff_dap.py (`auk debug`, `auk dap` against the port),
+# each its own program: a project of their own so they don't load compiler/.
+[package]
+name = "debug_tests"
+version = "0.1.0"
+effects = ["time"]
