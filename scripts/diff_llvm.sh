@@ -21,7 +21,12 @@ job() {
   local dump="$out/${f//\//_}${v// /}.dump"
   # shellcheck disable=SC2086  # the variant's options are words
   "$AUK" ir $v --llvm="$lv" "$f" > "$out/$key.rust" 2>&1 || true
-  "$PORT" llvm --level "$lv" "$dump" > "$out/$key.auk" 2>&1 || true
+  # a program the Rust front end rejects (a failing imprint, ...): its error, for both
+  if [ "$(head -c 7 "$dump")" = auk-mir ]; then
+    "$PORT" llvm --level "$lv" "$dump" > "$out/$key.auk" 2>&1 || true
+  else
+    cp "$dump" "$out/$key.auk"
+  fi
   if cmp -s "$out/$key.rust" "$out/$key.auk"; then
     echo "same $f $v $lv $(wc -l < "$out/$key.rust")"
     rm -f "$out/$key.rust" "$out/$key.auk"
