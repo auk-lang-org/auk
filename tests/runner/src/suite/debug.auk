@@ -758,7 +758,7 @@ fn native_line_tables() uses env, fs, ffi, time {
       "-o",
       "b prog.auk:5",
       "-o",
-      "b prog.fact",
+      "breakpoint set -F prog.fact",
       "-o",
       "run",
       "-o",

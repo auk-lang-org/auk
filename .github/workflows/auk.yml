@@ -3,11 +3,12 @@
 # ci     (every push and pull request): ./build.sh --from-seed --check --test on each platform
 #        that has a seed in seed/ (a fresh clone's build: seed -> stage 1 -> stage 2, stage 3
 #        bit-identical, the runtime's C tests and the integration tests).
-# seeds  (run by hand: Actions -> auk -> Run workflow): for the x86-64 platforms, which have no
+# seeds  (run by hand: Actions -> auk -> Run workflow): for Linux x86-64, which has no
 #        seed yet. Builds the Rust auk from the tag v0-rust-final (the last Rust compiler), uses
 #        it to build this commit to the fixed point, cuts seed/<os>-x86_64.bc.gz with
 #        scripts/cut_seed.sh (which checks the seed alone rebuilds the same stage 2) and uploads
-#        it as an artifact, to commit to seed/.
+#        it as an artifact, to commit to seed/. (No macOS x86-64: LLVM 23 has no Intel macOS
+#        build, from LLVM or Homebrew, and macOS itself left Intel after macOS 26.)
 name: auk
 
 on:
@@ -16,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       cut_seeds:
-        description: Cut x86-64 seeds (macOS, Linux) from v0-rust-final
+        description: Cut the Linux x86-64 seed from v0-rust-final
         type: boolean
         default: true
 
@@ -28,7 +29,6 @@ jobs:
       matrix:
         include:
           - { os: macos-15, seed: macos-arm64 }
-          - { os: macos-15-intel, seed: macos-x86_64 }
           - { os: ubuntu-24.04, seed: linux-x86_64 }
           - { os: ubuntu-24.04-arm, seed: linux-arm64 }
     runs-on: ${{ matrix.os }}
@@ -59,7 +59,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-15-intel, seed: macos-x86_64 }
           - { os: ubuntu-24.04, seed: linux-x86_64 }
     runs-on: ${{ matrix.os }}
     steps:
