@@ -238,7 +238,8 @@ pub unsafe extern "C" fn auk_net_tls(host: *const AukStr, port: i64) -> AukRes_c
     }
 }
 
-pub unsafe fn auk__tls_read(tls: *mut c_void, max: i64) -> AukRes_arr {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk__tls_read(tls: *mut c_void, max: i64) -> AukRes_arr {
     let t = unsafe { &mut *(tls as *mut RustlsTls) };
     if t.eof {
         return AukRes::ok(unsafe { crate::core::bytes_to_arr(&[]) });
@@ -258,7 +259,8 @@ pub unsafe fn auk__tls_read(tls: *mut c_void, max: i64) -> AukRes_arr {
     }
 }
 
-pub unsafe fn auk__tls_write(tls: *mut c_void, buf: *const u8, n: i64) -> AukRes_unit {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk__tls_write(tls: *mut c_void, buf: *const u8, n: i64) -> AukRes_unit {
     let t = unsafe { &mut *(tls as *mut RustlsTls) };
     if n <= 0 {
         return AukRes::ok(0);
@@ -274,7 +276,8 @@ pub unsafe fn auk__tls_write(tls: *mut c_void, buf: *const u8, n: i64) -> AukRes
 }
 
 /// Closes the session (best-effort close_notify; the caller then closes the socket) and frees it.
-pub unsafe fn auk__tls_free(tls: *mut c_void) {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk__tls_free(tls: *mut c_void) {
     if tls.is_null() {
         return;
     }

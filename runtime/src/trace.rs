@@ -504,7 +504,8 @@ pub unsafe fn auk__trace_test_end(name: *const c_char, ok: bool, tail_path: *con
     }
 }
 
-pub unsafe fn auk__trace_flush() {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk__trace_flush() {
     unsafe {
         if MODE == T_OFF {
             return;

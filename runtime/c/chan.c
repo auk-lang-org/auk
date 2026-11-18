@@ -107,7 +107,7 @@ static void wait_ms(AukChan *c, int64_t ms) {
 /* `c.recv_for(ms)` (ms < 0: `c.recv()`, no time limit): wait for a message and write a copy to
  * out; false once the channel is closed and empty, or when nothing came in time. Cancellable
  * on a task thread. */
-static bool recv(AukChan *c, int64_t ms, void *out) {
+static bool chan_recv(AukChan *c, int64_t ms, void *out) {
     int64_t end = ms < 0 ? 0 : now_ms() + ms;
     AukTmp tmp;
     uint8_t *buf = auk__tmp_get(&tmp, c->size);
@@ -140,11 +140,11 @@ static bool recv(AukChan *c, int64_t ms, void *out) {
 }
 
 AUK_API bool auk_chan_recv(AukChan *c, void *out) {
-    return recv(c, -1, out);
+    return chan_recv(c, -1, out);
 }
 
 AUK_API bool auk_chan_recv_for(AukChan *c, int64_t ms, void *out) {
-    return recv(c, ms < 0 ? 0 : ms, out);
+    return chan_recv(c, ms < 0 ? 0 : ms, out);
 }
 
 /* `c.close()`: no more sends; receivers drain what is queued, then get none. */

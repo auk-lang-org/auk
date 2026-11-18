@@ -62,6 +62,8 @@ typedef struct AukErr AukErr;
 typedef struct AukObj AukObj;
 typedef struct AukTask AukTask;
 typedef struct AukChan AukChan;
+typedef struct AukConn AukConn;
+typedef struct AukListener AukListener;
 
 /* ---- element ops ------------------------------------------------------------------------- */
 
@@ -227,6 +229,16 @@ typedef struct AukRes_arr {
     AukArr *val;
     AukErr *err;
 } AukRes_arr;
+typedef struct AukRes_conn {
+    bool ok;
+    AukConn *val;
+    AukErr *err;
+} AukRes_conn;
+typedef struct AukRes_listener {
+    bool ok;
+    AukListener *val;
+    AukErr *err;
+} AukRes_listener;
 typedef struct AukRes_value {
     bool ok;
     AukValue val;
@@ -240,6 +252,19 @@ static inline uint8_t *auk__map_key(const AukMap *m, int64_t i) {
 static inline uint8_t *auk__map_val(const AukMap *m, int64_t i) {
     return m->entries + i * m->stride + m->voff;
 }
+
+/* A TCP connection (tls: the TLS session over fd, NULL for plain TCP). */
+struct AukConn {
+    AukHeader h;
+    int fd;
+    void *tls;
+};
+
+struct AukListener {
+    AukHeader h;
+    int fd;
+    int64_t port;
+};
 
 /* Growable string builder; zero-initialized by its owner. Up to AUK_SB_SMALL bytes stay in
  * `small` (buf NULL, cap 0). No pointer into itself, so it may be moved. */
@@ -619,11 +644,65 @@ AUK_API bool auk_chan_recv_for(AukChan *c, int64_t ms, void *out);
 AUK_API void auk_chan_close(AukChan *c);
 void auk__chan_free(AukChan *c);
 
+/* ---- core.c: print, fs, net, time, rand, env, proc ------------------------------------- */
+
+AukArr *auk__bytes_to_arr(const uint8_t *b, int64_t n);
+AUK_API void auk_print(const AukStr *s);
+AUK_API void auk_print_lit(const char *cstr);
+AUK_API void auk_eprint(const AukStr *s);
+AUK_API AukRes_str auk_fs_read(const AukStr *path);
+AUK_API AukRes_unit auk_fs_write(const AukStr *path, const AukStr *content);
+AUK_API AukRes_unit auk_fs_append(const AukStr *path, const AukStr *text);
+AUK_API AukRes_arr auk_fs_lines(const AukStr *path);
+AUK_API bool auk_fs_exists(const AukStr *path);
+AUK_API bool auk_fs_is_dir(const AukStr *path);
+AUK_API AukRes_arr auk_fs_list(const AukStr *dir);
+AUK_API AukRes_unit auk_fs_mkdir(const AukStr *path);
+AUK_API AukRes_unit auk_fs_remove(const AukStr *path);
+AUK_API AukRes_unit auk_fs_rename(const AukStr *from, const AukStr *to);
+AUK_API AukRes_str auk_fs_temp_dir(void);
+AUK_API AukRes_arr auk_fs_read_bytes(const AukStr *path);
+AUK_API AukRes_unit auk_fs_write_bytes(const AukStr *path, const AukArr *bytes);
+extern const int auk__send_flags;
+int auk__tcp_connect(const char *host, const char *port, const char **why, int *err);
+AukConn *auk__conn_new(int fd);
+AUK_API AukRes_conn auk_net_tcp(const AukStr *host, int64_t port);
+AUK_API AukRes_listener auk_net_listen(const AukStr *host, int64_t port);
+AUK_API AukRes_conn auk_listener_accept(AukListener *l);
+AUK_API int64_t auk_listener_port(const AukListener *l);
+AUK_API void auk_listener_close(AukListener *l);
+void auk__listener_free(AukListener *l);
+AUK_API AukRes_arr auk_conn_read(AukConn *c, int64_t max);
+AUK_API AukRes_unit auk_conn_write(AukConn *c, const AukArr *bytes);
+AUK_API void auk_conn_close(AukConn *c);
+void auk__conn_free(AukConn *c);
+AUK_API int64_t auk_time_now(void);
+AUK_API void auk_time_sleep(int64_t ms);
+AUK_API int64_t auk_rand_int(int64_t lo, int64_t hi);
+AUK_API double auk_rand_float(void);
+AUK_API void auk_rand_seed(int64_t seed);
+AUK_API AukArr *auk_rand_bytes(int64_t n, const char *loc);
+AUK_API AukOpt_str auk_env_get(const AukStr *key);
+AUK_API void auk_env_set_args(int argc, char **argv);
+AUK_API AukArr *auk_env_args(void);
+AUK_API bool auk_env_is_terminal(int64_t fd);
+AUK_API AukOpt_int auk_env_columns(void);
+AUK_API AukOpt_str auk_env_read_line(void);
+AUK_API AukRes_str auk_env_read_all(void);
+AUK_API AukArr *auk_env_lines(void);
+AUK_API AukRes_str auk_proc_run(const AukStr *cmd, const AukArr *args);
+AUK_API _Noreturn void auk_proc_exit(int64_t code, const char *loc);
+
 /* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
 
 
-void auk__conn_free(void *c);
-void auk__listener_free(void *l);
+/* TLS sessions (tls.rs). */
+AukRes_arr auk__tls_read(void *tls, int64_t max);
+AukRes_unit auk__tls_write(void *tls, const uint8_t *buf, int64_t n);
+void auk__tls_free(void *tls);
+
+/* Write out the trace (trace.rs). */
+void auk__trace_flush(void);
 
 /* The tracer's and the debugger's per-thread state at a recovery point (trace.rs, dbg.rs). */
 void auk__trace_save(int64_t *depth, int *mute);
