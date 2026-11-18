@@ -21,25 +21,6 @@ static void release_elem(const AukElemOps *ops, void *e) {
     }
 }
 
-static _Noreturn void panic_rt(const char *msg) {
-    auk__panic3("runtime", msg, NULL, NULL);
-}
-
-/* A scratch element buffer: on the stack when it fits, else malloc'd. */
-typedef struct Tmp {
-    uint8_t stack[256];
-    uint8_t *heap;
-} Tmp;
-
-static uint8_t *tmp_get(Tmp *t, size_t size) {
-    t->heap = size <= sizeof t->stack ? NULL : auk__xmalloc(size);
-    return t->heap == NULL ? t->stack : t->heap;
-}
-
-static void tmp_done(Tmp *t) {
-    free(t->heap);
-}
-
 AUK_API int64_t auk_arr_len(const AukArr *a) {
     return a == NULL ? 0 : a->len;
 }
@@ -50,7 +31,7 @@ AUK_API const void *auk_arr_data(const AukArr *a) {
 
 AUK_API AukArr *auk_arr_new(const AukElemOps *ops, int64_t cap) {
     if (ops == NULL) {
-        panic_rt("auk_arr_new: missing element ops");
+        auk__panic_rt("auk_arr_new: missing element ops");
     }
     AukArr *a = auk__alloc(sizeof(AukArr), AUK_K_ARR);
     a->ops = ops;
@@ -138,7 +119,7 @@ static bool is_unique(const AukArr *a) {
 static void ensure_unique_cap(AukArr **pa, int64_t need) {
     AukArr *a = *pa;
     if (a == NULL) {
-        panic_rt("mutating a NULL array");
+        auk__panic_rt("mutating a NULL array");
     }
     if (!is_unique(a)) {
         AukArr *c = copy_with_cap(a, need > a->len ? need : a->len);
@@ -168,30 +149,30 @@ AUK_API void auk_arr_set(AukArr **pa, int64_t i, const void *e, const char *loc)
     }
     size_t sz = (*pa)->ops->size;
     /* copy + retain the new value first: e may point into *pa */
-    Tmp tmp;
-    uint8_t *t = tmp_get(&tmp, sz);
+    AukTmp tmp;
+    uint8_t *t = auk__tmp_get(&tmp, sz);
     memcpy(t, e, sz);
     retain_elem((*pa)->ops, t);
     ensure_unique_cap(pa, n);
     AukArr *a = *pa;
     release_elem(a->ops, elem(a, i));
     memcpy(elem(a, i), t, sz);
-    tmp_done(&tmp);
+    auk__tmp_done(&tmp);
 }
 
 AUK_API void auk_arr_push(AukArr **pa, const void *e) {
     AukArr *a = *pa;
     size_t sz = a->ops->size;
     /* e may point into *pa itself: copy before a possible realloc or copy-on-write */
-    Tmp tmp;
-    uint8_t *t = tmp_get(&tmp, sz);
+    AukTmp tmp;
+    uint8_t *t = auk__tmp_get(&tmp, sz);
     memcpy(t, e, sz);
     retain_elem(a->ops, t);
     ensure_unique_cap(pa, a->len + 1);
     a = *pa;
     memcpy(elem(a, a->len), t, sz);
     a->len++;
-    tmp_done(&tmp);
+    auk__tmp_done(&tmp);
 }
 
 AUK_API bool auk_arr_pop(AukArr **pa, void *out) {
@@ -215,8 +196,8 @@ AUK_API void auk_arr_insert(AukArr **pa, int64_t i, const void *e, const char *l
         oob(loc, i, n);
     }
     size_t sz = (*pa)->ops->size;
-    Tmp tmp;
-    uint8_t *t = tmp_get(&tmp, sz);
+    AukTmp tmp;
+    uint8_t *t = auk__tmp_get(&tmp, sz);
     memcpy(t, e, sz);
     retain_elem((*pa)->ops, t);
     ensure_unique_cap(pa, n + 1);
@@ -224,7 +205,7 @@ AUK_API void auk_arr_insert(AukArr **pa, int64_t i, const void *e, const char *l
     memmove(elem(a, i + 1), elem(a, i), (size_t)(n - i) * sz);
     memcpy(elem(a, i), t, sz);
     a->len++;
-    tmp_done(&tmp);
+    auk__tmp_done(&tmp);
 }
 
 AUK_API void auk_arr_remove(AukArr **pa, int64_t i, void *out, const char *loc) {
@@ -330,8 +311,8 @@ AUK_API void auk_arr_extend(AukArr **pa, const AukArr *b) {
 
 static void reverse_in_place(AukArr *a) {
     size_t sz = a->ops->size;
-    Tmp tmp;
-    uint8_t *t = tmp_get(&tmp, sz);
+    AukTmp tmp;
+    uint8_t *t = auk__tmp_get(&tmp, sz);
     int64_t i = 0;
     int64_t j = a->len - 1;
     while (i < j) {
@@ -341,7 +322,7 @@ static void reverse_in_place(AukArr *a) {
         i++;
         j--;
     }
-    tmp_done(&tmp);
+    auk__tmp_done(&tmp);
 }
 
 AUK_API AukArr *auk_arr_reversed(const AukArr *a) {
@@ -575,7 +556,7 @@ static void merge_perm(int64_t *p, int64_t *tmp, int64_t n, const uint8_t *data,
 AUK_API void auk_arr_sort(AukArr **pa) {
     const AukElemOps *ops = (*pa)->ops;
     if (ops->cmp == NULL) {
-        panic_rt("sort: element type has no cmp");
+        auk__panic_rt("sort: element type has no cmp");
     }
     auk_arr_make_unique(pa);
     AukArr *a = *pa;
@@ -622,7 +603,7 @@ AUK_API AukOpt_int auk_arr_index_of(const AukArr *a, const void *e) {
     AukOpt_int r = {0};
     for (int64_t i = 0; i < auk_arr_len(a); i++) {
         if (a->ops->eq == NULL) {
-            panic_rt("contains: element type has no eq");
+            auk__panic_rt("contains: element type has no eq");
         }
         if (a->ops->eq(elem(a, i), e)) {
             r.some = true;
@@ -647,7 +628,7 @@ AUK_API bool auk_arr_eq(const AukArr *a, const AukArr *b) {
     }
     for (int64_t i = 0; i < n; i++) {
         if (a->ops->eq == NULL) {
-            panic_rt("element type has no eq");
+            auk__panic_rt("element type has no eq");
         }
         if (!a->ops->eq(elem(a, i), elem(b, i))) {
             return false;
@@ -661,7 +642,7 @@ AUK_API int auk_arr_cmp(const AukArr *a, const AukArr *b) {
     int64_t nb = auk_arr_len(b);
     for (int64_t i = 0; i < na && i < nb; i++) {
         if (a->ops->cmp == NULL) {
-            panic_rt("element type has no cmp");
+            auk__panic_rt("element type has no cmp");
         }
         int c = a->ops->cmp(elem(a, i), elem(b, i));
         if (c != 0) {
@@ -675,7 +656,7 @@ AUK_API uint64_t auk_arr_hash(const AukArr *a) {
     uint64_t h = 0x1234;
     for (int64_t i = 0; i < auk_arr_len(a); i++) {
         if (a->ops->hash == NULL) {
-            panic_rt("element type has no hash");
+            auk__panic_rt("element type has no hash");
         }
         h = auk_hash_combine(h, a->ops->hash(elem(a, i)));
     }
@@ -690,7 +671,7 @@ AUK_API AukStr *auk_arr_show(const AukArr *a) {
             auk_sb_lit(&b, ", ");
         }
         if (a->ops->show == NULL) {
-            panic_rt("show: element type has no show");
+            auk__panic_rt("show: element type has no show");
         }
         auk_sb_str_own(&b, a->ops->show(elem(a, i)));
     }
@@ -711,7 +692,7 @@ AUK_API AukStr *auk_arr_join(const AukArr *a, const AukStr *sep) {
             auk_sb_char(&b, *(const uint32_t *)elem(a, i));
         } else {
             if (ops->show == NULL) {
-                panic_rt("element type has no show");
+                auk__panic_rt("element type has no show");
             }
             auk_sb_str_own(&b, ops->show(elem(a, i)));
         }

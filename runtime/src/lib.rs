@@ -235,7 +235,7 @@ pub struct AukMap {
     /// Each entry's full hash (to rebuild the index without hashing again).
     pub hashes: *mut u64,
     pub dead: *mut bool,
-    /// `icap` slots (open addressing, linear probing): 0 empty, `map::TOMB` a removed entry,
+    /// `icap` slots (open addressing, linear probing): 0 empty, `TOMB` (all ones) a removed entry,
     /// else the hash's upper 32 bits over `entry + 1`, so a probe rejects other keys without
     /// touching their entries.
     pub index: *mut u64,

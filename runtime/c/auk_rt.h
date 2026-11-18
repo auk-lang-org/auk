@@ -342,6 +342,17 @@ AUK_API extern const AukElemOps auk_ops_closure;
 AUK_API void auk_closure_retain(AukClosure c);
 AUK_API void auk_closure_release(AukClosure c);
 
+/* Panic at "runtime" with a fixed message (an internal error, not the program's). */
+_Noreturn void auk__panic_rt(const char *msg);
+
+/* A scratch element buffer: on the stack when it fits, else malloc'd. */
+typedef struct AukTmp {
+    uint8_t stack[256];
+    uint8_t *heap;
+} AukTmp;
+uint8_t *auk__tmp_get(AukTmp *t, size_t size);
+void auk__tmp_done(AukTmp *t);
+
 /* ---- heap.c: per-task heaps -------------------------------------------------------------- */
 
 typedef struct AukHeap AukHeap;
@@ -547,13 +558,27 @@ AUK_API AukStr *auk_arr_join(const AukArr *a, const AukStr *sep);
 AUK_API int64_t auk_arr_sum_int(const AukArr *a, const char *loc);
 AUK_API double auk_arr_sum_float(const AukArr *a);
 
-/* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
+/* ---- map.c: maps -------------------------------------------------------------------------- */
 
+AUK_API int64_t auk_map_len(const AukMap *m);
 AUK_API AukMap *auk_map_new(const AukElemOps *kops, const AukElemOps *vops);
+void auk__map_free(AukMap *m);
+AUK_API void *auk_map_find(const AukMap *m, const void *k);
+AUK_API void *auk_map_at(const AukMap *m, const void *k, const char *loc);
+AUK_API bool auk_map_get_opt(const AukMap *m, const void *k, void *out);
+AUK_API bool auk_map_contains(const AukMap *m, const void *k);
+AUK_API AukMap *auk_map_copy(const AukMap *m);
+AUK_API void *auk_map_make_unique(AukMap **pm);
 AUK_API void auk_map_set(AukMap **pm, const void *k, const void *v);
+AUK_API bool auk_map_remove(AukMap **pm, const void *k, void *out);
+AUK_API bool auk_map_next(const AukMap *m, int64_t *it, void **k, void **v);
+AUK_API AukArr *auk_map_keys(const AukMap *m);
+AUK_API AukArr *auk_map_values(const AukMap *m);
 AUK_API bool auk_map_eq(const AukMap *a, const AukMap *b);
 AUK_API AukStr *auk_map_show(const AukMap *m);
-void auk__map_free(AukMap *m);
+
+/* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
+
 
 void auk__task_free(void *t);
 void auk__conn_free(void *c);

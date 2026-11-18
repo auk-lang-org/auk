@@ -260,6 +260,19 @@ _Noreturn void auk__panic3(const char *loc, const char *a, const char *b, const 
     auk__panic(loc, m, na + nb + nc);
 }
 
+_Noreturn void auk__panic_rt(const char *msg) {
+    auk__panic3("runtime", msg, NULL, NULL);
+}
+
+uint8_t *auk__tmp_get(AukTmp *t, size_t size) {
+    t->heap = size <= sizeof t->stack ? NULL : auk__xmalloc(size);
+    return t->heap == NULL ? t->stack : t->heap;
+}
+
+void auk__tmp_done(AukTmp *t) {
+    free(t->heap);
+}
+
 /* The panic entry point for generated code: msg is NUL-terminated. */
 AUK_API _Noreturn void auk_panic_str(const char *loc, const char *msg) {
     auk__panic(loc, msg == NULL ? "" : msg, msg == NULL ? 0 : strlen(msg));

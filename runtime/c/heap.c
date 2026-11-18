@@ -50,7 +50,7 @@ static const int64_t DYING = INT64_MAX / 4;
 
 static _Thread_local AukHeap *current;
 
-static uint64_t slot_of(uintptr_t key, int64_t cap) {
+static uint64_t ledger_slot(uintptr_t key, int64_t cap) {
     return auk_hash_int((int64_t)key) & (uint64_t)(cap - 1);
 }
 
@@ -79,7 +79,7 @@ static int64_t *ledger_entry(Ledger *l, uintptr_t key) {
         ledger_grow(l);
     }
     uint64_t mask = (uint64_t)(l->cap - 1);
-    uint64_t i = slot_of(key, l->cap);
+    uint64_t i = ledger_slot(key, l->cap);
     while (l->keys[i] != 0) {
         if (l->keys[i] == key) {
             return &l->counts[i];
