@@ -262,6 +262,10 @@ static void on_fault(int sig, siginfo_t *si, void *uc) {
 
 static void install(void) {
     struct sigaction sa;
+    /* already in front: keep the handler it passes other faults on to */
+    if (sigaction(SIGSEGV, NULL, &sa) == 0 && (sa.sa_flags & SA_SIGINFO) != 0 && sa.sa_sigaction == on_fault) {
+        return;
+    }
     memset(&sa, 0, sizeof sa);
     sa.sa_sigaction = on_fault;
     /* SA_NODEFER: a recovery point jumps out of the handler, which must leave SIGSEGV
@@ -270,6 +274,15 @@ static void install(void) {
     sigemptyset(&sa.sa_mask);
     sigaction(SIGSEGV, &sa, &old_segv);
     sigaction(SIGBUS, &sa, &old_bus);
+}
+
+/* Put the overflow handler back in front of a crash handler installed after it (the tracer's),
+ * which then gets the faults that aren't overflows. The first Auk thread installs it once, so
+ * in a process whose runtime started before the program (the self-hosted compiler running the
+ * program it compiled) the tracer's handler would otherwise come first, and an overflow would
+ * end as a bare signal instead of a panic. */
+void auk__stack_handlers_first(void) {
+    install();
 }
 
 /* At the start of an Auk thread: record its stack and give it an alternate signal stack. */

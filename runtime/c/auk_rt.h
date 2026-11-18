@@ -442,6 +442,8 @@ AUK_API AukErr *auk_catch(AukThunk f, void *env, void *out);
 void auk__stack_thread_begin(void);
 void auk__stack_thread_end(void);
 const char *auk__stack_overflow_loc(void);
+/* After installing another SIGSEGV/SIGBUS handler: the overflow handler goes back in front. */
+void auk__stack_handlers_first(void);
 /* Run f(arg) on a new thread with an AUK_MAIN_STACK stack and wait for it. */
 void auk__run_on_big_stack(void (*f)(void *), void *arg);
 /* pthread attributes (a pthread_attr_t *) for a stack of `size` bytes with a big guard. */

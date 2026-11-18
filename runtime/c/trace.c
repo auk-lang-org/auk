@@ -373,6 +373,8 @@ static void install_handlers(void) {
     for (int i = 0; i < 5; i++) {
         sigaction(sigs[i], &sa, NULL);
     }
+    /* a stack overflow is still a panic (which ends the trace), other faults come here */
+    auk__stack_handlers_first();
 }
 
 /* ---- configuration ----------------------------------------------------------------------- */
