@@ -401,7 +401,7 @@ static void str_format_specs(void) {
 
 static void bad_spec(void *ctx) {
     (void)ctx;
-    auk_fmt_int(1, ">x");
+    auk_fmt_int(1, ">q"); /* x is hex now; q is no format */
 }
 
 static void str_bad_spec_panics(void) { EXPECT_PANIC(bad_spec, NULL, "bad format spec"); }
