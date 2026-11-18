@@ -175,6 +175,14 @@ AUK_API void auk_arr_push(AukArr **pa, const void *e) {
     auk__tmp_done(&tmp);
 }
 
+AUK_API void auk_arr_push_own(AukArr **pa, const void *e) {
+    /* e is the caller's own value (never an element of *pa): moved in, no retain */
+    ensure_unique_cap(pa, (*pa)->len + 1);
+    AukArr *a = *pa;
+    memcpy(elem(a, a->len), e, a->ops->size);
+    a->len++;
+}
+
 AUK_API bool auk_arr_pop(AukArr **pa, void *out) {
     if (auk_arr_len(*pa) == 0) {
         return false;

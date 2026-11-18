@@ -157,6 +157,28 @@ impl Gen<'_, '_> {
                     V::None
                 }
             }
+            ("auk_arr_push_own", [_, e]) => {
+                // moving an owned value in: a plain copy of its bytes, whatever the type
+                let MTy::Ptr(et) = (if let K::Cast(x) = &e.k { &x.ty } else { &e.ty }).clone() else { return None };
+                let size = self.lay.lay(&et).size as u64;
+                let vals = self.eval_args(args);
+                let (pa, ep) = (vals[0], vals[1]);
+                unsafe {
+                    let (a, slow, done) = self.unique_list(pa);
+                    let n = self.load_ty(self.t_i64, self.gep(a, ARR_LEN));
+                    let cap = self.load_ty(self.t_i64, self.gep(a, ARR_CAP));
+                    let room = LLVMBuildICmp(self.b, LLVMIntPredicate::LLVMIntSLT, n, cap, NONAME);
+                    let store = self.new_block(c"push.store");
+                    LLVMBuildCondBr(self.b, self.likely(room), store, slow);
+                    self.switch_to(store);
+                    let at = self.elem_addr(a, n, LLVMConstInt(self.t_i64, size, 0));
+                    self.copy(at, ep, &et);
+                    let n1 = LLVMBuildAdd(self.b, n, LLVMConstInt(self.t_i64, 1, 0), NONAME);
+                    self.store(n1, self.gep(a, ARR_LEN));
+                    self.slow_and_join(slow, done, sym, args, &vals, ret);
+                    V::None
+                }
+            }
             ("auk_retain", [_]) => {
                 let vals = self.eval_args(args);
                 let p = vals[0];

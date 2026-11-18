@@ -1207,26 +1207,24 @@ impl<'g, 'a> Lower<'g, 'a> {
                 if self.t.names.contains_key(&e.id) {
                     return self.name_ref(e);
                 }
-                let b = self.expr(expr);
-                let bt = b.ty.clone();
-                let ft = self.ty(e.id);
-                if let Ty::Named(..) = bt {
-                    if b.is_never() {
-                        return Val::never();
-                    }
-                    let Some(i) = self.field_index(&bt, &name.name) else { return Val::never() };
-                    let c = self.g.field_get(&bt, i, &b.c);
-                    return Val { c, ty: ft, owned: false };
+                // a field of an element read: retain the field, not the element
+                if self.borrowable(expr) {
+                    let b = self.expr_borrow(expr);
+                    let v = self.field_val(e, b, &name.name);
+                    return self.own_tmp(v);
                 }
-                Val::never()
+                let b = self.expr(expr);
+                self.field_val(e, b, &name.name)
             }
             EK::TupleField { expr, index } => {
-                let b = self.expr(expr);
+                let borrowed = self.borrowable(expr);
+                let b = if borrowed { self.expr_borrow(expr) } else { self.expr(expr) };
                 if b.is_never() {
                     return Val::never();
                 }
                 let ty = self.ty(e.id);
-                Val { c: self.fld(&b.c, Sel::F(*index)), ty, owned: false }
+                let v = Val { c: self.fld(&b.c, Sel::F(*index)), ty, owned: false };
+                if borrowed { self.own_tmp(v) } else { v }
             }
             EK::Call { .. } | EK::MethodCall { .. } | EK::Pipe { .. } => self.call(e, None, tail),
             EK::Index { expr, index } => self.index(e, expr, index),
@@ -1286,7 +1284,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                 xs
             }
             EK::Is { expr, pat } => {
-                let v = self.expr(expr);
+                let v = self.expr_borrow(expr);
                 let vc = self.lvalue(&v, &v.ty.clone());
                 let c = self.pat_test(pat, &vc);
                 self.tmp(&Ty::Bool, c)
@@ -1619,7 +1617,19 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let (lv, ty) = self.place(inner);
                 args.push(ArgV::Addr(lv.addr(), ty));
             } else {
-                let mut v = self.expr(x);
+                // borrowed when the arguments after this one can't change anything
+                let rest_pure = !any_ref && exprs.iter().filter(|y| call.args[k + 1..].iter().any(|b| b.node == y.id)).all(|y| self.pure_read(y));
+                let mut v = self.expr_borrow_if(x, rest_pure);
+                // a value read from a variable that a `var` argument may change during the call
+                // (`f(p.name, &p)`): an owned copy, so the change can't free it under the callee
+                if any_ref && !v.owned && !v.is_never() && self.g.needs_rc(&v.ty) {
+                    let root = self.root_local(x);
+                    let shared = root.is_some()
+                        && call.args.iter().filter(|a| a.by_ref).any(|a| exprs.iter().find(|y| y.id == a.node).is_some_and(|y| self.root_local(y) == root));
+                    if shared {
+                        v = self.own_tmp(v);
+                    }
+                }
                 if any_ref && !v.owned && !v.c.is_var() {
                     let ty = v.ty.clone();
                     let c = self.val_as(&v, &ty);
@@ -1673,6 +1683,18 @@ impl<'g, 'a> Lower<'g, 'a> {
                 self.result(&rt, call)
             }
             Target::Extern { symbol, loc: wants_loc } => {
+                // `xs.push(x)` with an owned `x` (a fresh value): the list takes it, no retain
+                if symbol == "auk_arr_push"
+                    && let [ArgV::Addr(pa, _), ArgV::Val(v)] = &args[..]
+                    && v.owned
+                    && v.c.is_var()
+                    && self.g.needs_rc(&v.ty)
+                {
+                    self.unregister(&v.c);
+                    let e = v.c.clone().addr().cast(MTy::void_ptr());
+                    self.do_(Ex::rt("auk_arr_push_own", vec![pa.clone(), e], MTy::Void));
+                    return Val::unit();
+                }
                 let info = func.map(|f| &tp.fns[f]);
                 let mut cs = Vec::new();
                 for (k, a) in args.iter().enumerate() {
@@ -2150,8 +2172,8 @@ impl<'g, 'a> Lower<'g, 'a> {
                 return Val::plain(res, Ty::Bool);
             }
             Eq | Ne | Lt | Le | Gt | Ge => {
-                let lv = self.expr(l);
-                let rv = self.expr(r);
+                let lv = self.expr_borrow_if(l, self.pure_read(r));
+                let rv = self.expr_borrow(r);
                 let c = self.compare(e, op, &lv, &rv);
                 return self.tmp(&Ty::Bool, c);
             }
@@ -2160,8 +2182,8 @@ impl<'g, 'a> Lower<'g, 'a> {
         if self.t.calls.contains_key(&e.id) {
             return self.call(e, None, false);
         }
-        let lv = self.expr(l);
-        let rv = self.expr(r);
+        let lv = self.expr_borrow_if(l, self.pure_read(r));
+        let rv = self.expr_borrow(r);
         if lv.is_never() || rv.is_never() {
             return Val::never();
         }
@@ -2262,15 +2284,150 @@ impl<'g, 'a> Lower<'g, 'a> {
         }
     }
 
+    // ---- borrowed reads ----
+    //
+    // An element read (`xs[i]`, `m[k]`) is normally an owned copy: the element is retained so
+    // the value stays valid whatever runs next. Where the value is consumed before anything can
+    // change the container (a field read off the element, a comparison, a `match` scrutinee, a
+    // call argument when the arguments after it can't mutate anything), the element is read as a
+    // *borrowed* snapshot: no retain, no release. Nothing can mutate a local except an
+    // assignment, a `var` (`&`) argument or a `catch` (closures capture by value), so an
+    // expression without those (`pure_read`) can run between the read and its use.
+
+    /// Can evaluating `e` change a variable (or free anything a borrowed read points into)?
+    /// Conservative: only reads, operators and calls without `var` arguments are pure.
+    fn pure_read(&self, e: &Expr) -> bool {
+        match &e.kind {
+            EK::Lit(_) | EK::Name(_) => true,
+            EK::Measured { expr, .. } | EK::Field { expr, .. } | EK::TupleField { expr, .. } | EK::Unary { expr, .. } => self.pure_read(expr),
+            EK::Index { expr, index } => self.pure_read(expr) && self.pure_read(index),
+            EK::Slice { expr, lo, hi, .. } => self.pure_read(expr) && self.pure_read(lo) && self.pure_read(hi),
+            EK::Binary { lhs, rhs, .. } => !self.t.calls.contains_key(&e.id) && self.pure_read(lhs) && self.pure_read(rhs),
+            EK::Interp(parts) => parts.iter().all(|p| match p {
+                InterpPart::Expr { expr, .. } => self.pure_read(expr),
+                _ => true,
+            }),
+            EK::Call { .. } | EK::MethodCall { .. } | EK::Pipe { .. } => {
+                if self.t.fails.contains_key(&e.id) {
+                    return false;
+                }
+                let Some(call) = self.t.calls.get(&e.id) else { return false };
+                if call.args.iter().any(|a| a.by_ref) {
+                    return false;
+                }
+                let callee_pure = match &e.kind {
+                    EK::Call { callee, .. } | EK::Pipe { callee, .. } => self.pure_read(callee),
+                    _ => true,
+                };
+                callee_pure && arg_exprs(e).iter().all(|x| self.pure_read(x))
+            }
+            _ => false,
+        }
+    }
+
+    /// Is `e` an element read (or a field of one) that `expr_borrow` can read without RC?
+    fn borrowable(&self, e: &Expr) -> bool {
+        if self.t.coercions.get(&e.id).is_some_and(|c| !c.is_empty()) {
+            return false;
+        }
+        match &e.kind {
+            EK::Index { expr, index } => {
+                matches!(self.ty(expr.id), Ty::List(_) | Ty::Map(..)) && self.pure_read(index)
+            }
+            EK::Field { expr, .. } | EK::TupleField { expr, .. } => !self.t.names.contains_key(&e.id) && self.borrowable(expr),
+            _ => false,
+        }
+    }
+
+    /// `e` as a borrowed value where possible (see above): the caller uses it before anything
+    /// can change a variable, and owns it (`own`) if it keeps it.
+    fn expr_borrow(&mut self, e: &Expr) -> Val {
+        if !self.borrowable(e) {
+            return self.expr(e);
+        }
+        match &e.kind {
+            EK::Index { expr, index } => {
+                let xv = self.expr_borrow(expr);
+                let iv = self.expr(index);
+                self.index_val(e, xv, iv, true)
+            }
+            EK::Field { expr, name } => {
+                let b = self.expr_borrow(expr);
+                self.field_val(e, b, &name.name)
+            }
+            EK::TupleField { expr, index } => {
+                let b = self.expr_borrow(expr);
+                if b.is_never() {
+                    return Val::never();
+                }
+                let ty = self.ty(e.id);
+                Val { c: self.fld(&b.c, Sel::F(*index)), ty, owned: false }
+            }
+            _ => self.expr(e),
+        }
+    }
+
+    /// The local a place-like expression reads from (`p` for `p.a[i].b`, `&p`).
+    fn root_local(&self, e: &Expr) -> Option<LocalId> {
+        match &e.kind {
+            EK::Name(_) => match self.t.names.get(&e.id) {
+                Some(NameRef::Local(l)) => Some(*l),
+                _ => None,
+            },
+            EK::Field { expr, .. } if !self.t.names.contains_key(&e.id) => self.root_local(expr),
+            EK::TupleField { expr, .. } | EK::Index { expr, .. } | EK::Slice { expr, .. } | EK::Ref(expr) => self.root_local(expr),
+            _ => None,
+        }
+    }
+
+    /// `expr_borrow` when everything evaluated after `e` (before its use) is pure.
+    fn expr_borrow_if(&mut self, e: &Expr, rest_pure: bool) -> Val {
+        if rest_pure { self.expr_borrow(e) } else { self.expr(e) }
+    }
+
+    /// Field `name` of the struct value `b` (borrowed from it).
+    fn field_val(&mut self, e: &Expr, b: Val, name: &str) -> Val {
+        let bt = b.ty.clone();
+        let ft = self.ty(e.id);
+        if let Ty::Named(..) = bt {
+            if b.is_never() {
+                return Val::never();
+            }
+            let Some(i) = self.field_index(&bt, name) else { return Val::never() };
+            let c = self.g.field_get(&bt, i, &b.c);
+            return Val { c, ty: ft, owned: false };
+        }
+        Val::never()
+    }
+
+    /// An owned copy of a value borrowed from a borrowed element read.
+    fn own_tmp(&mut self, v: Val) -> Val {
+        if v.owned || v.is_never() {
+            return v;
+        }
+        let ty = v.ty.clone();
+        let c = self.f.b.decl(v.c.clone());
+        let o = self.own(Val::plain(c, ty.clone()));
+        self.adopt(&ty, o)
+    }
+
     fn index(&mut self, e: &Expr, x: &Expr, i: &Expr) -> Val {
-        let xv = self.expr(x);
+        let xv = self.expr_borrow_if(x, self.pure_read(i));
         let iv = self.expr(i);
+        self.index_val(e, xv, iv, false)
+    }
+
+    /// Element `iv` of `xv`: an owned copy, or a borrowed snapshot when `borrow`.
+    fn index_val(&mut self, e: &Expr, xv: Val, iv: Val, borrow: bool) -> Val {
         let loc = self.loc(e.span);
         match xv.ty.clone() {
             Ty::List(et) => {
                 let el = Ex::rt("auk_arr_at", vec![xv.c, iv.c, loc], MTy::void_ptr()).cast(MTy::ptr(d(&et))).deref(d(&et));
                 let el = self.f.b.decl(el);
                 let v = Val::plain(el, (*et).clone());
+                if borrow {
+                    return v;
+                }
                 let o = self.own(v);
                 self.adopt(&et, o)
             }
@@ -2279,6 +2436,9 @@ impl<'g, 'a> Lower<'g, 'a> {
                 let p = Ex::rt("auk_map_at", vec![xv.c, k.addr().cast(MTy::void_ptr()), loc], MTy::void_ptr()).cast(MTy::ptr(d(&vt))).deref(d(&vt));
                 let p = self.f.b.decl(p);
                 let v = Val::plain(p, (*vt).clone());
+                if borrow {
+                    return v;
+                }
                 let o = self.own(v);
                 self.adopt(&vt, o)
             }
@@ -2845,7 +3005,9 @@ impl<'g, 'a> Lower<'g, 'a> {
 
     fn match_(&mut self, e: &Expr, scrut: &Expr, arms: &[crate::ast::Arm], tail: bool) -> Val {
         let ty = self.ty(e.id);
-        let sv = self.expr(scrut);
+        // arms bind owned copies before their bodies run, and guards are pure
+        let guards_pure = arms.iter().all(|a| a.guard.as_ref().is_none_or(|g| self.pure_read(g)));
+        let sv = self.expr_borrow_if(scrut, guards_pure);
         if sv.is_never() {
             return sv;
         }

@@ -615,6 +615,8 @@ AUK_API bool auk_arr_get_opt(const AukArr *a, int64_t i, void *out);
 AUK_API void *auk_arr_make_unique(AukArr **pa);
 AUK_API void auk_arr_set(AukArr **pa, int64_t i, const void *e, const char *loc);
 AUK_API void auk_arr_push(AukArr **pa, const void *e);
+/* push an owned value: the list takes the caller's reference (no retain) */
+AUK_API void auk_arr_push_own(AukArr **pa, const void *e);
 AUK_API bool auk_arr_pop(AukArr **pa, void *out);
 AUK_API void auk_arr_insert(AukArr **pa, int64_t i, const void *e, const char *loc);
 AUK_API void auk_arr_remove(AukArr **pa, int64_t i, void *out, const char *loc);

@@ -714,7 +714,7 @@ impl<'a> Gen<'a> {
 
     /// A statement that retains the value `v` (None if the type holds no references).
     pub fn retain(&mut self, t: &Ty, v: &Ex) -> Option<Stmt> {
-        if !self.needs_rc(t) {
+        if !self.needs_rc(t) || holds_no_refs(v) {
             return None;
         }
         let ptr = |p: Ex| Stmt::Do(Ex::rt("auk_retain", vec![p], MTy::void_ptr()));
@@ -733,7 +733,7 @@ impl<'a> Gen<'a> {
 
     /// A statement that releases the value `v` (None if the type holds no references).
     pub fn release(&mut self, t: &Ty, v: &Ex) -> Option<Stmt> {
-        if !self.needs_rc(t) {
+        if !self.needs_rc(t) || holds_no_refs(v) {
             return None;
         }
         let ptr = |p: Ex| Stmt::Do(Ex::rt("auk_release", vec![p], MTy::Void));
@@ -1407,6 +1407,18 @@ impl<'a> Gen<'a> {
 
     /// Equality of two values of type `t` (a bool expression).
     pub fn eq_expr(&mut self, t: &Ty, a: Ex, b: Ex) -> Ex {
+        // against a variant without fields (`tok == Tok.LParen`): the tags decide
+        if let Ty::Named(dd, _) = t
+            && self.tp.defs.is_enum(*dd)
+            && !self.is_value(t)
+            && (holds_no_refs(&a) && !matches!(a.k, K::Zero) || holds_no_refs(&b) && !matches!(b.k, K::Zero))
+        {
+            let tag = |g: &Self, x: &Ex| match &x.k {
+                K::Agg(parts) => parts.iter().find(|(s, _)| matches!(s, Sel::Tag)).map(|(_, t)| t.clone()).unwrap_or(Ex::int_as(0, MTy::I32)),
+                _ => g.fld(x, Sel::Tag),
+            };
+            return Ex::bin(BOp::Eq, tag(self, &a), tag(self, &b));
+        }
         match t {
             Ty::Int | Ty::Float | Ty::Bool | Ty::Char => Ex::bin(BOp::Eq, a, b),
             Ty::Never => Ex::bool(true),
@@ -2178,5 +2190,15 @@ impl<'a> Gen<'a> {
     /// Record a hole for `auk build`'s refusal.
     pub fn note_hole(&mut self, loc: String, expected: String) {
         self.holes.push(format!("{loc}: unfilled hole (expected {expected})"));
+    }
+}
+
+/// Is `v` a constant that holds no references: a zero, or an enum variant without fields
+/// (`Tok.LParen`), whose retain and release do nothing?
+fn holds_no_refs(v: &Ex) -> bool {
+    match &v.k {
+        K::Zero => true,
+        K::Agg(parts) => matches!(v.ty, MTy::D(_)) && parts.iter().all(|(s, x)| matches!(s, Sel::Tag) && matches!(x.k, K::Int(_))),
+        _ => false,
     }
 }

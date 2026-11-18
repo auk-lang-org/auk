@@ -85,6 +85,26 @@ static void arr_str_elements_lifetimes(void) {
     rel(t);
 }
 
+static void arr_push_own_moves(void) {
+    AukArr *a = auk_arr_new(&auk_ops_str, 0);
+    for (int i = 0; i < 20; i++) {
+        AukStr *x = s("owned"); /* refcount 1, handed to the list */
+        auk_arr_push_own(&a, &x);
+        CHECK_INT(auk_refcount(x), 1);
+    }
+    /* a shared list is copied first; the copy takes the value */
+    AukArr *b = ret(a);
+    AukStr *y = s("new");
+    auk_arr_push_own(&b, &y);
+    CHECK(a != b);
+    CHECK_INT(auk_arr_len(a), 20);
+    CHECK_INT(auk_arr_len(b), 21);
+    CHECK_INT(auk_refcount(y), 1);
+    CHECK_INT(auk_refcount(AT(AukStr *, a, 0)), 2);
+    rel(b);
+    rel(a);
+}
+
 static void arr_copy_on_write(void) {
     AukArr *a = ints((int64_t[]){1, 2, 3}, 3);
     AukArr *b = ret(a); /* `let b = a` */
@@ -313,6 +333,7 @@ const TestCase arr_tests[] = {
     {"arr_basic_ops", arr_basic_ops},
     {"arr_bounds_panics", arr_bounds_panics},
     {"arr_str_elements_lifetimes", arr_str_elements_lifetimes},
+    {"arr_push_own_moves", arr_push_own_moves},
     {"arr_copy_on_write", arr_copy_on_write},
     {"arr_cow_nested_strings", arr_cow_nested_strings},
     {"arr_slices_share", arr_slices_share},
