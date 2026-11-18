@@ -59,12 +59,29 @@ fn main(args: [str]): int uses fs, env, ffi {
 
 fn bad<T>(e: res.Error): T!res.Fail = fail(res.Bad(e))
 
-/// The registry directory: `$RAFT_REGISTRY`, else the `packages/` folder of the Auk installation.
+/// The registry directory: `$RAFT_REGISTRY`, else the `packages/` folder of the checkout the
+/// binary is in, else the directory named in `raft.registry` next to the binary (written by
+/// `build.sh --install`).
 fn registry(): str uses fs, env, ffi {
   match env.get("RAFT_REGISTRY") {
-    some(r) => r
-    none => paths.join(checkout() else ".", "packages")
+    some(r) => return r
+    none => {}
   }
+  match checkout() {
+    some(c) => return paths.join(c, "packages")
+    none => {}
+  }
+  match paths.exe() {
+    some(x) => match fs.read(paths.join(paths.parent(x) else ".", "raft.registry")) {
+      ok(t) => {
+        let d = t.trim()
+        if d != "" { return d }
+      }
+      err(_) => {}
+    }
+    none => {}
+  }
+  "packages"
 }
 
 /// The Auk checkout the running binary was built in: the first directory above the executable

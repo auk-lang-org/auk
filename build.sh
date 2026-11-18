@@ -2,7 +2,7 @@
 # Build Auk without Rust (docs/self-host-plan.md, Phase 6): the runtime (C), then the compiler
 # and raft (Auk), from a seed `auk`.
 #
-#   ./build.sh [--check] [--test] [--seed <auk> | --from-seed]
+#   ./build.sh [--check] [--test] [--install [<dir>]] [--seed <auk> | --from-seed]
 #
 # Steps:
 #   1. runtime   runtime/c → target/auk-rt/libauk_rt.a and auk_rt.bc, with the clang of the LLVM
@@ -18,6 +18,7 @@
 #   --test       then the tests: the runtime's C tests (runtime/c/test/run.sh) and the
 #                integration tests (tests/runner/, built by stage 2) against target/bin/auk and
 #                target/bin/raft.
+#   --install    then copy auk and raft to <dir> (default ~/.auk/bin; put it on your PATH).
 #
 # The seed: --seed, else $AUK_SEED, else the target/bin/auk of an earlier build, else `auk` on
 # the PATH, else (or with --from-seed) the checked-in seed: seed/<os>-<arch>.bc.gz, the
@@ -28,14 +29,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-CHECK=0 TEST=0 FROM_SEED=0 SEED="${AUK_SEED:-}"
+CHECK=0 TEST=0 INSTALL="" FROM_SEED=0 SEED="${AUK_SEED:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK=1 ;;
     --test) TEST=1 ;;
+    --install)
+      if [ $# -gt 1 ] && [ "${2#-}" = "$2" ]; then INSTALL="$2"; shift; else INSTALL="$HOME/.auk/bin"; fi ;;
     --seed) SEED="$2"; shift ;;
     --from-seed) FROM_SEED=1 ;;
-    -h|--help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "build.sh: unknown argument $1" >&2; exit 2 ;;
   esac
   shift
@@ -175,5 +178,20 @@ if [ "$TEST" = 1 ]; then
     tail -1 "$log"
     die "integration tests failed (the whole output: ${log#"$ROOT"/})"
   fi
+fi
+if [ -n "$INSTALL" ]; then
+  say "install ($INSTALL)"
+  mkdir -p "$INSTALL"
+  for b in auk raft; do
+    # a new file, then a rename: a running auk keeps its old binary
+    cp "target/bin/$b" "$INSTALL/.$b.tmp$$" && mv "$INSTALL/.$b.tmp$$" "$INSTALL/$b"
+  done
+  # raft's package registry: this checkout's packages/ (raft finds it through this file)
+  echo "$ROOT/packages" > "$INSTALL/raft.registry"
+  echo "   $INSTALL/auk, $INSTALL/raft (registry: $ROOT/packages)"
+  case ":$PATH:" in
+    *":$INSTALL:"*) ;;
+    *) echo "   $INSTALL is not on your PATH: add  export PATH=\"$INSTALL:\$PATH\"  to your shell profile" ;;
+  esac
 fi
 say "done: target/bin/auk, target/bin/raft"
