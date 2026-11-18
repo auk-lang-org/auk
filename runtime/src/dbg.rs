@@ -450,6 +450,20 @@ pub unsafe extern "C" fn auk__dbg_on_panic(loc: *const std::ffi::c_char, msg: *c
     on_panic(&loc, &msg, caught)
 }
 
+/// catch.c saves and restores this thread's debugger stack at a recovery point.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk__dbg_save(top: *mut *mut std::ffi::c_void, depth: *mut i64) {
+    let (t, d) = save_state();
+    unsafe {
+        *top = t.cast();
+        *depth = d;
+    }
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn auk__dbg_restore(top: *mut std::ffi::c_void, depth: i64) {
+    restore_state((top.cast(), depth))
+}
+
 /// The debugger stack of a recovery point (`catch`, a task), restored when a panic jumps back
 /// past frames that never got to leave.
 pub fn save_state() -> (*mut Frame, i64) {

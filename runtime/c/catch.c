@@ -63,3 +63,60 @@ void auk__catch_take(char **msg, char **loc) {
     caught_msg = NULL;
     caught_loc = NULL;
 }
+
+/* Run f(env, out) under a recovery point: NULL if it finished, the panic (malloc'd; free it
+ * with auk__panic_free) if one jumped back. The tracer's and the debugger's per-thread state
+ * is put back as it was here. */
+AukPanic *auk__catch_call(AukThunk f, void *env, void *out) {
+    int64_t tdepth;
+    int tmute;
+    void *dtop;
+    int64_t ddepth;
+    auk__trace_save(&tdepth, &tmute);
+    auk__dbg_save(&dtop, &ddepth);
+    if (auk__catch_run(f, env, out) == 0) {
+        return NULL;
+    }
+    auk__trace_restore(tdepth, tmute);
+    auk__dbg_restore(dtop, ddepth);
+    AukPanic *p = auk__xmalloc(sizeof(AukPanic));
+    auk__catch_take(&p->msg, &p->loc);
+    if (p->msg == NULL) {
+        p->msg = copy_bytes("panic", 5);
+        p->loc = copy_bytes("<unknown>", 9);
+    }
+    return p;
+}
+
+void auk__panic_free(AukPanic *p) {
+    free(p->msg);
+    free(p->loc);
+    free(p);
+}
+
+/* The Err a recovered panic becomes: "panic: <msg> at <loc>". */
+AukErr *auk__panic_err(const AukPanic *p) {
+    AukStrBuf b = {0};
+    auk__sb_put_cstr(&b, "panic: ");
+    auk__sb_put_cstr(&b, p->msg);
+    auk__sb_put_cstr(&b, " at ");
+    auk__sb_put_cstr(&b, p->loc);
+    return auk__err_sb(&b);
+}
+
+/* `catch e`: run the thunk (it writes e's value to out); NULL when it finished, else the panic
+ * as a new (owned) Err and out untouched. */
+AUK_API AukErr *auk_catch(AukThunk f, void *env, void *out) {
+    AukPanic *p = auk__catch_call(f, env, out);
+    if (p == NULL) {
+        return NULL;
+    }
+    if (auk__task_cancelled()) {
+        /* a cancelled task must end: pass the panic on to the next recovery point out (the
+         * task's own, at the latest) */
+        auk__catch_throw(p->loc, p->msg, strlen(p->msg));
+    }
+    AukErr *e = auk__panic_err(p);
+    auk__panic_free(p);
+    return e;
+}

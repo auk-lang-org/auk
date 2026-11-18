@@ -662,6 +662,20 @@ pub unsafe extern "C" fn auk__trace_on_panic(loc: *const c_char, msg: *const u8,
     auk__trace_panic(loc, &msg, caught)
 }
 
+/// catch.c saves and restores this thread's state at a recovery point.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn auk__trace_save(depth: *mut i64, mute: *mut c_int) {
+    let (d, m) = save_state();
+    unsafe {
+        *depth = d;
+        *mute = m;
+    }
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn auk__trace_restore(depth: i64, mute: c_int) {
+    restore_state((depth, mute))
+}
+
 /// This thread's call depth and mute count, saved at a recovery point (`catch`, a task) and put
 /// back when a panic jumps past traced frames that never got to exit.
 pub fn save_state() -> (i64, c_int) {

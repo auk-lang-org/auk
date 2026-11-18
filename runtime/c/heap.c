@@ -48,7 +48,7 @@ struct AukHeap {
 /* A reference count no release can bring to zero while a heap is swept. */
 static const int64_t DYING = INT64_MAX / 4;
 
-static _Thread_local AukHeap *current;
+static _Thread_local AukHeap *cur_heap;
 
 static uint64_t ledger_slot(uintptr_t key, int64_t cap) {
     return auk_hash_int((int64_t)key) & (uint64_t)(cap - 1);
@@ -93,7 +93,7 @@ static int64_t *ledger_entry(Ledger *l, uintptr_t key) {
 }
 
 void auk__note_handle(const void *p, int64_t delta) {
-    AukHeap *h = current;
+    AukHeap *h = cur_heap;
     if (h == NULL) {
         return;
     }
@@ -113,12 +113,12 @@ AukHeap *auk__heap_new(void) {
 }
 
 AukHeap *auk__heap_current(void) {
-    return current;
+    return cur_heap;
 }
 
 AukHeap *auk__heap_switch(AukHeap *h) {
-    AukHeap *old = current;
-    current = h;
+    AukHeap *old = cur_heap;
+    cur_heap = h;
     return old;
 }
 
@@ -137,7 +137,7 @@ AUK_API void *auk_heap_new(void) {
  * is none, or for a handle kind). Returns the header's address. */
 AukHeader *auk__heap_alloc(size_t size, uint32_t kind) {
     bool handle = auk__is_handle(kind);
-    AukHeap *heap = handle ? NULL : current;
+    AukHeap *heap = handle ? NULL : cur_heap;
     if (heap == NULL) {
         AukHeader *h = auk__xcalloc(1, size);
         h->kind = kind;

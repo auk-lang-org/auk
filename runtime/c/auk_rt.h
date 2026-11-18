@@ -60,6 +60,8 @@ typedef struct AukArr AukArr;
 typedef struct AukMap AukMap;
 typedef struct AukErr AukErr;
 typedef struct AukObj AukObj;
+typedef struct AukTask AukTask;
+typedef struct AukChan AukChan;
 
 /* ---- element ops ------------------------------------------------------------------------- */
 
@@ -375,6 +377,12 @@ AUK_API void *auk_heap_new(void);
 
 typedef void (*AukThunk)(void *env, void *out);
 
+/* A recovered panic: its message and where it happened (malloc'd strings). */
+typedef struct AukPanic {
+    char *msg;
+    char *loc;
+} AukPanic;
+
 /* Run f(env, out); 0 when it finished, 1 when a panic jumped back here. */
 int auk__catch_run(AukThunk f, void *env, void *out);
 int auk__catch_active(void);
@@ -382,6 +390,10 @@ int auk__catch_active(void);
 _Noreturn void auk__catch_throw(const char *loc, const char *msg, size_t n);
 /* Take the recorded panic: malloc'd strings the caller frees (NULL if none). */
 void auk__catch_take(char **msg, char **loc);
+AukPanic *auk__catch_call(AukThunk f, void *env, void *out);
+void auk__panic_free(AukPanic *p);
+AukErr *auk__panic_err(const AukPanic *p);
+AUK_API AukErr *auk_catch(AukThunk f, void *env, void *out);
 
 /* ---- err.c ------------------------------------------------------------------------------- */
 
@@ -577,13 +589,47 @@ AUK_API AukArr *auk_map_values(const AukMap *m);
 AUK_API bool auk_map_eq(const AukMap *a, const AukMap *b);
 AUK_API AukStr *auk_map_show(const AukMap *m);
 
+/* ---- task.c: tasks ------------------------------------------------------------------------ */
+
+AUK_API extern _Atomic int64_t auk_cancel_pending;
+extern _Atomic int64_t auk__live_reloads;
+int64_t auk__cancel_running(bool (*pick)(void *ctx, uintptr_t entry, uintptr_t hint), void *ctx);
+bool auk__task_cancelled(void);
+bool auk__on_task(void);
+void auk__check_cancel(const char *loc);
+AUK_API void auk_cancel_check(const char *loc);
+void auk__wait_fd(int fd, bool write);
+void auk__sleep_ms(int64_t ms);
+AUK_API bool auk_task_done(AukTask *t);
+AUK_API int64_t auk_live_reloads(void);
+AUK_API void auk_task_cancel(AukTask *t);
+AUK_API int64_t auk_task_await_any(AukTask **ts, int64_t n, void *out, AukErr **err, const char *loc);
+AUK_API AukTask *auk_task_spawn(AukThunk fn, const void *args, size_t args_size, size_t result_size, const AukElemOps *result_ops, void *heap, void (*args_drop)(void *args), const void *hint);
+AUK_API void auk_task_await(AukTask *t, void *out);
+AUK_API void auk_task_join_all(AukTask **ts, int64_t n);
+AUK_API void auk_task_await_all(AukTask **ts, int64_t n, void *outs);
+void auk__task_free(AukTask *t);
+
+/* ---- chan.c: channels -------------------------------------------------------------------- */
+
+AUK_API AukChan *auk_chan_new(AukArr *proto);
+AUK_API void auk_chan_send(AukChan *c, const void *x, const char *loc);
+AUK_API bool auk_chan_recv(AukChan *c, void *out);
+AUK_API bool auk_chan_recv_for(AukChan *c, int64_t ms, void *out);
+AUK_API void auk_chan_close(AukChan *c);
+void auk__chan_free(AukChan *c);
+
 /* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
 
 
-void auk__task_free(void *t);
 void auk__conn_free(void *c);
 void auk__listener_free(void *l);
-void auk__chan_free(void *c);
+
+/* The tracer's and the debugger's per-thread state at a recovery point (trace.rs, dbg.rs). */
+void auk__trace_save(int64_t *depth, int *mute);
+void auk__trace_restore(int64_t depth, int mute);
+void auk__dbg_save(void **top, int64_t *depth);
+void auk__dbg_restore(void *top, int64_t depth);
 
 /* Is tracing on? (trace.rs) */
 extern _Atomic bool auk_trace_live;
