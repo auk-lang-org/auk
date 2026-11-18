@@ -67,7 +67,7 @@ environment:
 fn usage(): str = USAGE_TEXT.strip_suffix("\n") else USAGE_TEXT
 
 /// The commands of the Rust `auk` that the port doesn't have yet (Phase 5).
-let NOT_PORTED = ["debug", "dap", "dive"]
+let NOT_PORTED = ["debug", "dap"]
 
 /// The port's dump modes (`compiler <mode>`, or `auk dump <mode>`).
 let MODES = ["tokens", "ast", "resolve", "check", "typed"]
@@ -87,6 +87,7 @@ fn main(args: [str]): int! uses fs, env, time, ffi, proc {
     "mcp" => return mcp.run(args[0])
     "fmt" => return fmt.run(rest)
     "hatch" => return hatch.run(args[0], cx, rest)
+    "dive" => return dive.run(cx, rest)
     "holes" => {
       if rest.len() == 1 { return holes.run(cx, rest[0], false) }
       if rest.len() == 2 && rest[1] == "--json" { return holes.run(cx, rest[0], true) }
