@@ -92,10 +92,14 @@ libc/pthreads/system frameworks; setjmp/longjmp only in `catch.c`; no Objective-
 runtime calls `objc_msgSend` from C).
 
 ### 1d. Tests and safety
-- [ ] Port `runtime/tests/{arr,map,str,io,net,core}.rs` + `common/mod.rs` to C tests in
-      `runtime/c/test/` with a tiny assert harness; `make rt-test`.
-- [ ] ASan + UBSan build of the runtime; run the whole suite under it once per module port
-      and at the end. TSan run for `task`/`chan`/`heap`.
+- [x] Port `runtime/tests/*.rs` (62 tests) to C in `runtime/c/test/`: `sh runtime/c/test/run.sh
+      [filter]`, `ASAN=1` for AddressSanitizer + UBSan (clean; LeakSanitizer stays on, with
+      suppressions only for one-time allocations inside macOS frameworks).
+- [ ] TLS on Network.framework: badssl.com sometimes answers with a connection reset instead
+      of the certificate error (about 1 in 12–1 in 3 attempts; rustls saw none in 12). Find out
+      whether a reset before the verify block should be retried or reported differently.
+- [x] ASan + UBSan build of the runtime tests (above). Still to do: the whole suite under
+      ASan, and a TSan run for `task`/`chan`/`heap`.
 - [ ] Linux build and test (pthreads/`-ldl -lrt`, OpenSSL path).
 
 **Done when:** `runtime/` has no `.rs`; rustls/ring/webpki-roots/`cc`-for-catch gone; all tests
