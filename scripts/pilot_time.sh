@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Time the Rust front end against its Auk port (compiler/) on the golden corpus: lexing alone,
 # then lexing + parsing, each in-process (`--time`, file reading excluded, `--repeat` passes
-# per run) and as whole-process wall time with the dump written to /dev/null. Best of RUNS.
+# per run) and as whole-process wall time with the dump written to /dev/null; then loading every
+# file's program (`resolve`: the prelude, the project, its dependencies), REPEAT/10 passes per
+# run. Best of RUNS.
 # Usage: scripts/pilot_time.sh [RUNS] [REPEAT]
 
 source "$(dirname "$0")/pilot_common.sh"
@@ -30,15 +32,16 @@ ratio() { awk -v a="$1" -v b="$2" 'BEGIN { if (b > 0) printf "%.2fx", a / b; els
 
 # Rust and Auk runs alternate, so a busy machine slows both alike; each keeps its best.
 printf '%-34s %12s %12s %8s\n' "measure" "Rust" "Auk" "Auk/Rust"
-for mode in tokens ast; do
-  r="" a=""
+for mode in tokens ast resolve; do
+  r="" a="" n="$REPEAT"
+  if [ "$mode" = resolve ]; then n=$(((REPEAT + 9) / 10)); fi
   for _ in $(seq "$RUNS"); do
-    r=$(min "$r" "$(one_us "$AUK" dump "$mode" --quiet --time --repeat "$REPEAT" "${FILES[@]}")")
-    a=$(min "$a" "$(one_us "$PORT" "$mode" --quiet --time --repeat "$REPEAT" "${FILES[@]}")")
+    r=$(min "$r" "$(one_us "$AUK" dump "$mode" --quiet --time --repeat "$n" "${FILES[@]}")")
+    a=$(min "$a" "$(one_us "$PORT" "$mode" --quiet --time --repeat "$n" "${FILES[@]}")")
   done
   printf '%-34s %10s us %10s us %8s\n' "$mode, in-process (per pass)" "$r" "$a" "$(ratio "$a" "$r")"
 done
-for mode in tokens ast; do
+for mode in tokens ast resolve; do
   r="" a=""
   for _ in $(seq "$RUNS"); do
     r=$(min "$r" "$(one_ms "$AUK" dump "$mode" "${FILES[@]}")")

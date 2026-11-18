@@ -1,11 +1,14 @@
-/// The self-hosting pilot's driver: `compiler tokens|ast [--quiet] [--time] [--repeat N]
-/// <file>...` prints what `auk dump tokens|ast` prints, from the Auk port of the lexer and
-/// parser. For timing: `--quiet` lexes or parses without printing, `--repeat N` does the whole
-/// job N times, and `--time` prints the time per repetition (file reading excluded) to stderr.
+/// The self-hosting port's driver: `compiler tokens|ast|resolve [--quiet] [--time] [--repeat N]
+/// <file>...` prints what `auk dump tokens|ast|resolve` prints, from the Auk port of the front
+/// end. For timing: `--quiet` does the work without printing, `--repeat N` does the whole job N
+/// times, and `--time` prints the time per repetition (file reading excluded) to stderr.
+///
+/// `resolve` reads the core prelude from `$AUK_PRELUDE_DIR`, or else from the `src/prelude/` of
+/// the checkout the binary was built in (found upward from the binary).
 
-fn main(args: [str]): int! uses fs, time {
-  if args.len() < 3 || (args[1] != "tokens" && args[1] != "ast") {
-    eprint("usage: compiler tokens|ast [--quiet] [--time] [--repeat N] <file>...")
+fn main(args: [str]): int! uses fs, env, time, ffi {
+  if args.len() < 3 || (args[1] != "tokens" && args[1] != "ast" && args[1] != "resolve") {
+    eprint("usage: compiler tokens|ast|resolve [--quiet] [--time] [--repeat N] <file>...")
     return 2
   }
   let what = args[1]
@@ -23,13 +26,26 @@ fn main(args: [str]): int! uses fs, time {
   }
   var srcs: [str] = []
   for f in files { srcs.push(fs.read(f)?) }
+  var cx = resolve.Sources { prelude: [], overrides: {}, os: "" }
+  var cwd = ""
+  if what == "resolve" {
+    let dir = prelude_dir(args[0]) else {
+      eprint("error: can't find the core prelude (src/prelude/core.auk); set AUK_PRELUDE_DIR")
+      return 1
+    }
+    cx = resolve.sources(dir)?
+    cwd = paths.cwd()
+  }
   let t0 = time.now()
   var out: [str] = []
   for _ in 0..repeat {
     for i, f in files {
       let src = srcs[i]
       if files.len() > 1 && !quiet { out.push("== {f}") }
-      if what == "tokens" {
+      if what == "resolve" {
+        let r = resolve.load_in_package(cx, f, src)
+        if !quiet { dump.resolved(&out, cwd, r) }
+      } else if what == "tokens" {
         match lexer.lex(src) {
           ok(lx) => if !quiet { dump.tokens(&out, lx.module_doc, lx.toks) }
           err(Bad(d)) => if !quiet { dump.diag_dump(&out, d) }
@@ -49,4 +65,19 @@ fn main(args: [str]): int! uses fs, time {
   if out.len() > 0 { print(out.join("\n")) }
   if time_it { eprint("time: {(time.now() - t0) * 1000 / repeat} us") }
   0
+}
+
+/// `$AUK_PRELUDE_DIR`, or the first `src/prelude` with a `core.auk` above the binary `exe`.
+fn prelude_dir(exe: str): str? uses fs, env, ffi {
+  match env.get("AUK_PRELUDE_DIR") {
+    some(d) => return d
+    none => {}
+  }
+  var d = paths.parent(paths.canonicalize(exe) else exe)
+  loop {
+    let x = d else return none
+    let p = paths.join(x, "src/prelude")
+    if paths.is_file(paths.join(p, "core.auk")) { return p }
+    d = paths.parent(x)
+  }
 }

@@ -1,0 +1,12 @@
+[package]
+name = "app" # the package root is `app.`
+version = "0.1.0"
+effects = ["fs", "net"]
+
+[deps]
+util = "^0.1"
+
+[link]
+libs = ["z"]
+macos = ["mac"]
+linux = ["lin"]

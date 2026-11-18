@@ -1,0 +1,1 @@
+pub fn zero(): int = 0

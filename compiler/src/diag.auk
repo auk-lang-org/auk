@@ -20,6 +20,13 @@ pub struct Fix { span: Span, text: str }
 
 pub struct Diag { code: str, span: Span, message: str, notes: [str], fixes: [Fix] }
 
+/// A diagnostic in a particular file (a program spans many files: the root, its project's other
+/// modules, dependencies and the core prelude).
+pub struct FileDiag { file: str, diag: Diag }
+
+/// What loading and checking a program fail with (`T!E` needs an enum).
+pub enum FileFails { Many(ds: [FileDiag]) }
+
 /// What the lexer and parser fail with (`T!E` needs an enum).
 pub enum Fail { Bad(d: Diag) }
 

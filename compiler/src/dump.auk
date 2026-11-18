@@ -1,4 +1,4 @@
-/// The `auk dump tokens|ast` text (src/dump.rs): one node per line, children indented by two
+/// The `auk dump tokens|ast|resolve` text (src/dump.rs): one node per line, children indented by two
 /// spaces, strings escaped by `esc`, floats as their IEEE bits, chars as code points.
 
 /// A string in double quotes: `\\ \" \n \t \r` escaped, other control chars as `\u{hex}`,
@@ -655,4 +655,260 @@ fn expr(out: var [str], d: int, e: ast.Expr) {
       exprs(&out, d + 1, xs)
     }
   }
+}
+
+// ---- module tree and paths (resolve) ----
+
+/// `file` relative to the current directory `cwd` (when under it).
+fn rel(cwd: str, file: str): str {
+  if cwd == "" { return file }
+  file.strip_prefix(cwd + "/") else file
+}
+
+pub fn resolved(out: var [str], cwd: str, r: resolve.Program!diag.FileFails) {
+  match r {
+    ok(p) => program(&out, cwd, p)
+    err(Many(ds)) => for d in ds {
+      line(&out, 0, "in {esc(rel(cwd, d.file))}")
+      diag_dump(&out, d.diag)
+    }
+  }
+}
+
+fn program(out: var [str], cwd: str, p: resolve.Program) {
+  line(&out, 0, "root {p.root} focus {p.focus} core {p.core_pkg} {p.core_root}")
+  for i, k in p.pkgs {
+    let dir = match k.dir {
+      some(d) => esc(rel(cwd, d))
+      none => "-"
+    }
+    line(&out, 0, "pkg {i} {esc(k.name)} root={k.root} dir={dir}{flag(k.is_core, " core")}")
+    for n in resolve.sorted_keys(k.deps) { line(&out, 1, "dep {n} {k.deps[n]}") }
+    if k.effects.len() > 0 { line(&out, 1, "effects {k.effects.map(esc).join(" ")}") }
+    if k.links.len() > 0 { line(&out, 1, "links {k.links.map(esc).join(" ")}") }
+  }
+  for i, m in p.mods {
+    line(
+      &out,
+      0,
+      "mod {i} {resolve.name(p, i)} pkg={m.pkg} file={esc(rel(cwd, m.file))} items={m.ast.items.len()}",
+    )
+    for n in resolve.sorted_keys(m.children) { line(&out, 1, "child {n} {m.children[n]}") }
+    if resolve.is_core(p, i) { continue }
+    let name = resolve.name(p, i)
+    for it in m.ast.items { item_line(&out, name, it) }
+    var paths: [[ast.Ident]] = []
+    for it in m.ast.items { item_paths(it, &paths) }
+    for path in paths { use_line(&out, p, i, path) }
+  }
+}
+
+fn item_line(out: var [str], m: str, it: ast.Item) {
+  let (kind, n, public) = match it {
+    Fn(g) => {
+      var public = false
+      match g.header {
+        some(h) => public = h.public
+        none => {}
+      }
+      for c in g.clauses { public = public || c.public }
+      ("fn/{g.arity}", g.name, public)
+    }
+    Struct(d) => ("struct", d.name.name, d.public)
+    Enum(d) => ("enum", d.name.name, d.public)
+    Shape(d) => ("shape", d.name.name, d.public)
+    Test(t) => {
+      line(&out, 1, "item test {esc(t.name)} {m}")
+      return
+    }
+    Let(c) => ("let", c.name.name, c.public)
+    Imprint(c) => ("imprint", c.name.name, c.public)
+    ExternType(t) => ("extern-type", t.name.name, t.public)
+  }
+  line(&out, 1, "item {kind} {m}.{n}{vis(public)}")
+  match it {
+    Enum(d) => for v in d.variants { line(&out, 2, "variant {m}.{n}.{v.name.name}") }
+    _ => {}
+  }
+}
+
+/// The module paths an item mentions, in order: its signature's type and pattern paths, then
+/// those of its expressions (`visit.visit_item_exprs` order): `a.b.c` field chains, a method
+/// call's receiver name, and the qualifier of struct literals, types and patterns (`m.T`).
+fn item_paths(it: ast.Item, acc: var [[ast.Ident]]) {
+  match it {
+    Fn(g) => {
+      match g.header {
+        some(h) => clause_paths(h, &acc)
+        none => {}
+      }
+      for c in g.clauses { clause_paths(c, &acc) }
+    }
+    Struct(d) => {
+      generic_paths(d.generics, &acc)
+      for f in d.fields { ty_paths(f.ty, &acc) }
+    }
+    Enum(d) => {
+      generic_paths(d.generics, &acc)
+      for v in d.variants {
+        for f in v.fields { ty_paths(f.ty, &acc) }
+      }
+    }
+    Shape(d) => {
+      generic_paths(d.generics, &acc)
+      for c in d.methods { clause_paths(c, &acc) }
+    }
+    Let(c) | Imprint(c) => match c.ty {
+      some(t) => ty_paths(t, &acc)
+      none => {}
+    }
+    Test(_) | ExternType(_) => {}
+  }
+  var es: [ast.Expr] = []
+  visit.visit_item_exprs(it, &es)
+  for e in es { expr_paths(e, &acc) }
+}
+
+fn clause_paths(c: ast.FnClause, acc: var [[ast.Ident]]) {
+  generic_paths(c.generics, &acc)
+  for p in c.params { param_paths(p, &acc) }
+  match c.ret {
+    some(t) => ty_paths(t, &acc)
+    none => {}
+  }
+}
+
+fn generic_paths(gs: [ast.Generic], acc: var [[ast.Ident]]) {
+  for g in gs {
+    for b in g.bounds { ty_paths(b, &acc) }
+  }
+}
+
+fn param_paths(p: ast.Param, acc: var [[ast.Ident]]) {
+  pat_paths(p.pat, &acc)
+  match p.ty {
+    some(t) => ty_paths(t, &acc)
+    none => {}
+  }
+}
+
+/// The qualifier of `m.x` (nothing for a bare name).
+fn qualifier(path: [ast.Ident], acc: var [[ast.Ident]]) {
+  if path.len() >= 2 { acc.push(path.take(path.len() - 1)) }
+}
+
+fn ty_paths(t: ast.Type, acc: var [[ast.Ident]]) {
+  match t.kind {
+    Named(path, args) => {
+      qualifier(path, &acc)
+      for a in args { ty_paths(a, &acc) }
+    }
+    List(x) | Optional(x) | Any(x) | Var(x) => ty_paths(x, &acc)
+    Measured(b, _) => ty_paths(b, &acc)
+    Map(k, v) => {
+      ty_paths(k, &acc)
+      ty_paths(v, &acc)
+    }
+    Tuple(ts) => for x in ts { ty_paths(x, &acc) }
+    Fallible(ok_, err_) => {
+      ty_paths(ok_, &acc)
+      match err_ {
+        some(e) => ty_paths(e, &acc)
+        none => {}
+      }
+    }
+    Fn(params, ret) => {
+      for x in params { ty_paths(x, &acc) }
+      ty_paths(ret, &acc)
+    }
+  }
+}
+
+fn pat_paths(p: ast.Pat, acc: var [[ast.Ident]]) {
+  match p.kind {
+    Wild | Bind(_) | Lit(_, _) | None => {}
+    Tuple(ps) | Or(ps) => for x in ps { pat_paths(x, &acc) }
+    List(head, rest, tail) => {
+      for x in head { pat_paths(x, &acc) }
+      match rest {
+        some(r) => match r.pat {
+          some(x) => pat_paths(x, &acc)
+          none => {}
+        }
+        none => {}
+      }
+      for x in tail { pat_paths(x, &acc) }
+    }
+    Variant(path, args) => {
+      qualifier(path, &acc)
+      match args {
+        some(a) => for x in a { pat_paths(x, &acc) }
+        none => {}
+      }
+    }
+    Struct(path, fields, _) => {
+      qualifier(path, &acc)
+      for f in fields {
+        match f.pat {
+          some(x) => pat_paths(x, &acc)
+          none => {}
+        }
+      }
+    }
+    Map(es) => for (_, x) in es { pat_paths(x, &acc) }
+    StrPrefix(_, rest) => pat_paths(rest, &acc)
+    Some(x) | Ok(x) | Err(x) => pat_paths(x, &acc)
+  }
+}
+
+/// The paths of one expression node (not its sub-expressions: the visitor reaches those).
+fn expr_paths(e: ast.Expr, acc: var [[ast.Ident]]) {
+  match e.kind {
+    Field(_, _) => match visit.as_path(e) {
+      some(p) => acc.push(p)
+      none => {}
+    }
+    MethodCall(recv, _, _) => match recv.kind {
+      Name(n) => acc.push([ast.Ident { name: n, span: recv.span }])
+      _ => {}
+    }
+    Struct(path, _, _) => qualifier(path, &acc)
+    Is(_, pat) => pat_paths(pat, &acc)
+    Match(_, arms) => for a in arms { pat_paths(a.pat, &acc) }
+    For(index, pat, _, _) => {
+      match index {
+        some(i) => pat_paths(i, &acc)
+        none => {}
+      }
+      pat_paths(pat, &acc)
+    }
+    Let(_, pat, ty, _, _) => {
+      pat_paths(pat, &acc)
+      match ty {
+        some(t) => ty_paths(t, &acc)
+        none => {}
+      }
+    }
+    Closure(params, _) => for p in params { param_paths(p, &acc) }
+    _ => {}
+  }
+}
+
+/// `use <span> a.b.c -> <module> k/n`: the module the first `k` of the path's `n` segments
+/// name. Nothing when the first segment names no module.
+fn use_line(out: var [str], p: resolve.Program, m: int, path: [ast.Ident]) {
+  var cur = resolve.first_segment(p, m, path[0].name) else return
+  var k = 1
+  while k < path.len() {
+    match resolve.child(p, cur, path[k].name) {
+      some(c) => cur = c
+      none => break
+    }
+    k += 1
+  }
+  let a = path[0].span
+  let b = path[path.len() - 1].span
+  let span = diag.Span { line: a.line, col: a.col, end_line: b.end_line, end_col: b.end_col }
+  let text = path.map(i => i.name).join(".")
+  line(&out, 1, "use {sp(span)} {text} -> {resolve.name(p, cur)} {k}/{path.len()}")
 }

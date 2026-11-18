@@ -1,4 +1,4 @@
-# Shared by scripts/diff_tokens.sh and scripts/diff_ast.sh (the self-hosting pilot).
+# Shared by scripts/diff_tokens.sh, diff_ast.sh and diff_resolve.sh (the self-hosting port).
 # Builds the Rust `auk` and the Auk port (compiler/), and lists the corpus.
 
 set -euo pipefail
@@ -18,7 +18,7 @@ corpus() {
   find tests examples packages src/prelude compiler/src compiler/tests -name '*.auk' -not -path '*/.raft/*' 2>/dev/null | LC_ALL=C sort
 }
 
-# diff_mode tokens|ast: dump every corpus file with both and report the files that differ.
+# diff_mode tokens|ast|resolve: dump every corpus file with both and report the files that differ.
 diff_mode() {
   local mode="$1" out="$ROOT/target/pilot/$1" n=0 bad=0
   build_both

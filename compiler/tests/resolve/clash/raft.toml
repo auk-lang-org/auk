@@ -1,0 +1,7 @@
+[package]
+name = "clash"
+version = "0.1.0"
+
+[deps]
+util = "^0.1"
+ghost = { path = "../ghost" }
