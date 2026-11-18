@@ -426,7 +426,7 @@ numbers: [pilot-report.md](pilot-report.md), "Phase 4".
       `#embed`ded: the binary needs no checkout). `run`, `build`, `test`, `check`, `ir`, `fmt`,
       `holes`, `hatch`, `explain`, `spec`, `lsp`, `mcp`, `__jit` (with `AUK_SOURCES`, so `hatch`
       builds its candidates with itself), same flags, output and exit codes. Imprints run in a
-      forked JIT child (`drive.eval_imprints`). Not yet: `debug`, `dap`, `dive`, `run --live`
+      forked JIT child (`drive.eval_imprints`). Not yet: `debug`, `dap`, `run --live`
       (Phase 5). `scripts/diff_driver.sh`: 53 cases (usage errors, traces, `-O`, `build -o -g`,
       imprint panics, test filters, flat directories, the leak checker), 0 differ.
 - [x] Diff gate: `scripts/golden.sh --compare` with stage 2: tokens, ast, check, fmt 997 files,
