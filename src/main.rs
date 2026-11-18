@@ -14,6 +14,7 @@ mod dbg_eval;
 mod debug;
 mod diag;
 mod effects;
+mod ffi;
 mod explain;
 mod fmt;
 mod hatch;

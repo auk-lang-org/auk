@@ -171,7 +171,7 @@ impl<'a> Gen<'a> {
             tp,
             mode,
             info: TyInfo::new(tp),
-            prog: Program::default(),
+            prog: Program { links: tp.program.pkgs.iter().flat_map(|p| p.links.iter().cloned()).fold(Vec::new(), |mut v, l| { if !v.contains(&l) { v.push(l) } v }), ..Program::default() },
             memo: HashMap::new(),
             memo2: HashMap::new(),
             lits: HashMap::new(),
@@ -1125,6 +1125,7 @@ impl<'a> Gen<'a> {
             t if self.is_value(t) => rt("auk_value_show"),
             t if self.is_err_ty(t) => rt("auk_err_show"),
             Ty::Fn(..) | Ty::Task(_) => None,
+            t if self.info.is_foreign(t) => rt("auk_ffi_ptr_show"),
             t if self.info.is_opaque(t) => None,
             _ => {
                 let t2 = t.clone();
@@ -1353,6 +1354,13 @@ impl<'a> Gen<'a> {
         let rt = |s: &str| Some(FRef::Rt(s.to_string()));
         match t {
             Ty::Fn(..) | Ty::Task(_) => return None,
+            t if self.info.is_foreign(t) => {
+                return Some(FRef::Fn(self.helper("eq", t, vec![d(t), d(t)], MTy::D(Ty::Bool), |g, f| {
+                    let (mut b, ps) = g.body_for(f);
+                    b.emit(Stmt::Ret(Some(Ex::bin(BOp::Eq, ps[0].clone(), ps[1].clone()))));
+                    b
+                })));
+            }
             t if self.info.is_opaque(t) && !self.is_err_ty(t) => return None,
             t if self.is_value(t) => return rt("auk_value_eq"),
             Ty::Str => return rt("auk_str_eq"),
@@ -1388,7 +1396,7 @@ impl<'a> Gen<'a> {
                 }
                 let s = self.tp.defs.subst_of(*dd, args);
                 match self.tp.defs.types[*dd].kind.clone() {
-                    TypeDefKind::Opaque { .. } => b == Builtin::Eq && self.is_err_ty(t),
+                    TypeDefKind::Opaque { .. } => b == Builtin::Eq && (self.is_err_ty(t) || self.info.is_foreign(t)),
                     TypeDefKind::Struct { fields } => fields.iter().all(|f| self.can(&f.ty.subst(&s), b, seen)),
                     TypeDefKind::Enum { variants } => variants.iter().all(|v| v.fields.iter().all(|(_, ft)| self.can(&ft.subst(&s), b, seen))),
                 }
@@ -1590,6 +1598,13 @@ impl<'a> Gen<'a> {
             Ty::Str => return Some(FRef::Rt("auk_str_hash".into())),
             Ty::List(_) => return Some(FRef::Rt("auk_arr_hash".into())),
             Ty::Map(..) | Ty::Fn(..) | Ty::Task(_) | Ty::Any(_) => return None,
+            t if self.info.is_foreign(t) => {
+                return Some(FRef::Fn(self.helper("hash", t, vec![d(t)], MTy::U64, |g, f| {
+                    let (mut b, ps) = g.body_for(f);
+                    b.emit(Stmt::Ret(Some(Ex::rt("auk_hash_int", vec![ps[0].clone().cast(MTy::D(Ty::Int))], MTy::U64))));
+                    b
+                })));
+            }
             _ => {}
         }
         if !self.can(t, Builtin::Eq, &mut HashSet::new()) || self.is_err_ty(t) {

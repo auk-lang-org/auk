@@ -39,6 +39,12 @@ pub enum MTy {
     U32,
     I64,
     U64,
+    /// C-only widths and `float`, for calls to user C functions (FFI marshalling).
+    I8,
+    U8,
+    I16,
+    U16,
+    F32,
     /// A pointer to a value of the given type (`Ptr(Void)` is `void *`).
     Ptr(Box<MTy>),
     /// A static NUL-terminated string (`const char *`).
@@ -396,6 +402,10 @@ pub struct Program {
     /// The Auk name of each function that holds an Auk body (`mod.f`, `mod.f.<fn:12>`,
     /// `test "t"`): debug info names functions by it. Set with `locs`.
     pub names: std::collections::HashMap<FuncId, String>,
+    /// C libraries to load (JIT) or link (`auk build`): `[link] libs` of every package.
+    pub links: Vec<String>,
+    /// The user C functions the program calls (`extern fn` with a C prototype).
+    pub c_syms: Vec<String>,
 }
 
 // ---- building function bodies -----------------------------------------------------------

@@ -89,10 +89,11 @@ pub const CODES: &[(&str, &str)] = &[
     ("E0033", "invalid list pattern"),
     ("E0034", "invalid map pattern"),
     ("E0035", "return types use `:`, not `->`"),
-    ("E0036", "`extern` outside the core prelude"),
+    ("E0036", "`extern` in a package without the `ffi` effect"),
     ("E0037", "malformed unit of measure"),
     ("E0038", "bitwise operator mixed with a comparison without parentheses"),
     ("E0039", "`??` used as a default operator (use `else`)"),
+    ("E0040", "an `extern` declaration doesn't fit its C prototype"),
     // ---- E0100-E0199: modules, names and declarations (resolve.rs, check.rs) ----
     ("E0100", "dependency or file not found"),
     ("E0101", "module name collides with a dependency"),

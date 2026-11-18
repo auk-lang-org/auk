@@ -14,9 +14,11 @@ use crate::types::Ty;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Sc {
     I8,
+    I16,
     I32,
     I64,
     F64,
+    F32,
     Ptr,
 }
 
@@ -24,7 +26,8 @@ impl Sc {
     pub fn bytes(self) -> u32 {
         match self {
             Sc::I8 => 1,
-            Sc::I32 => 4,
+            Sc::I16 => 2,
+            Sc::I32 | Sc::F32 => 4,
             Sc::I64 | Sc::F64 | Sc::Ptr => 8,
         }
     }
@@ -32,7 +35,7 @@ impl Sc {
         self.bytes() * 8
     }
     pub fn is_float(self) -> bool {
-        self == Sc::F64
+        matches!(self, Sc::F64 | Sc::F32)
     }
 }
 
@@ -68,7 +71,9 @@ impl<'p, 'a> Layouts<'p, 'a> {
     pub fn scalar(&self, t: &MTy) -> Option<Sc> {
         Some(match t {
             MTy::Void => return None,
-            MTy::Bool => Sc::I8,
+            MTy::Bool | MTy::I8 | MTy::U8 => Sc::I8,
+            MTy::I16 | MTy::U16 => Sc::I16,
+            MTy::F32 => Sc::F32,
             MTy::I32 | MTy::U32 => Sc::I32,
             MTy::I64 | MTy::U64 => Sc::I64,
             MTy::Ptr(_) | MTy::CStr | MTy::Code => Sc::Ptr,
@@ -91,7 +96,7 @@ impl<'p, 'a> Layouts<'p, 'a> {
 
     /// Is the scalar signed (sign-extended when widened)?
     pub fn signed(t: &MTy) -> bool {
-        matches!(t, MTy::I32 | MTy::I64 | MTy::D(Ty::Int))
+        matches!(t, MTy::I8 | MTy::I16 | MTy::I32 | MTy::I64 | MTy::D(Ty::Int))
     }
 
     /// The members of a struct-like aggregate (not enums).

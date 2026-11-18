@@ -74,3 +74,56 @@ impl Code {
         Ok(a as usize as *const u8)
     }
 }
+
+/// The file names `dlopen` tries for the C library `l` (`[link] libs`): `lib<l>.dylib` (also
+/// under Homebrew's prefixes) on macOS, `lib<l>.so` (and `.so.0`, `.so.1`) elsewhere; a name
+/// with a `/` is a path.
+pub fn lib_files(l: &str) -> Vec<String> {
+    if l.contains('/') {
+        vec![l.to_string()]
+    } else if cfg!(target_os = "macos") {
+        ["", "/opt/homebrew/lib/", "/usr/local/lib/"].iter().map(|d| format!("{d}lib{l}.dylib")).collect()
+    } else {
+        vec![format!("lib{l}.so"), format!("lib{l}.so.0"), format!("lib{l}.so.1")]
+    }
+}
+
+/// Load the C libraries a program names (`[link] libs`, `RTLD_GLOBAL`) and check that every C
+/// function it calls (`extern fn` with a C prototype) resolves in this process; the JIT then
+/// finds them through its process symbol generator.
+pub fn open_libs(links: &[String], syms: &[String]) -> Result<(), String> {
+    for l in links {
+        let names = lib_files(l);
+        let mut last = String::new();
+        let found = names.iter().any(|n| {
+            let c = CString::new(n.as_str()).unwrap_or_default();
+            let h = unsafe { libc::dlopen(c.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) };
+            if h.is_null() {
+                let e = unsafe { libc::dlerror() };
+                if !e.is_null() {
+                    last = unsafe { CStr::from_ptr(e) }.to_string_lossy().into_owned();
+                }
+            }
+            !h.is_null()
+        });
+        if !found {
+            let hint = if cfg!(target_os = "macos") { format!("brew install {l}") } else { format!("install the {l} development package (e.g. lib{l}-dev)") };
+            return Err(format!("error: cannot load the C library `{l}` (raft.toml [link] libs; tried {}): {last}\n  help: {hint}\n", names.join(", ")));
+        }
+    }
+    let mut missing = Vec::new();
+    for s in syms {
+        let c = CString::new(s.as_str()).unwrap_or_default();
+        if unsafe { libc::dlsym(libc::RTLD_DEFAULT, c.as_ptr()) }.is_null() {
+            missing.push(format!("`{s}`"));
+        }
+    }
+    if !missing.is_empty() {
+        let libs = if links.is_empty() { "no libraries are linked".to_string() } else { format!("linked: {}", links.join(", ")) };
+        return Err(format!(
+            "error: C function {} not found ({libs})\n  help: name the library that defines it in raft.toml: [link] libs = [\"name\"]\n",
+            missing.join(", ")
+        ));
+    }
+    Ok(())
+}

@@ -478,6 +478,13 @@ impl Checker {
                 self.defs.params.len() - 1
             })
             .collect();
+        if let Item::ExternType(d) = item
+            && !self.prog.is_core(m)
+        {
+            let d = d.clone();
+            self.ffi_type(m, &d);
+        }
+        let item = &self.prog.mods[m].ast.items[i];
         let kind = match item {
             Item::ExternType(d) => TypeDefKind::Opaque { c_type: d.c_type.clone() },
             Item::Struct(_) => TypeDefKind::Struct { fields: Vec::new() },
@@ -486,6 +493,148 @@ impl Checker {
         let id = self.defs.types.len();
         self.defs.types.push(TypeDef { name: name.name.clone(), module: m, public, doc, params, kind, span, node });
         self.items[m].types.insert(name.name, TypeItem::Def(id));
+    }
+
+    // ---- user-level FFI (docs/ffi-plan.md) ----
+
+    /// E0036 unless `m`'s package declares the `ffi` effect in its raft.toml.
+    fn ffi_allowed(&mut self, m: ModId, at: Span) -> bool {
+        let pkg = &self.prog.pkgs[self.prog.mods[m].pkg];
+        if pkg.dir.is_some() && pkg.effects.iter().any(|e| e == "ffi") {
+            return true;
+        }
+        let mut d = Diag::new("E0036", at, "`extern` declarations need the `ffi` effect in the package's raft.toml");
+        d = match &pkg.dir {
+            Some(dir) => d.note(format!("help: add \"ffi\" to `effects` under [package] in {}", dir.join("raft.toml").display())),
+            None => d.note("C functions can only be bound inside a project: create a raft.toml with `effects = [\"ffi\"]` under [package]"),
+        };
+        self.err_in(m, d.note("calling C is unchecked (a crash can't be caught), so a package says so in its manifest; callers then need `uses ffi`"));
+        false
+    }
+
+    /// The span of the string literal that ends an item spanning `end` (its C prototype or C
+    /// type).
+    fn ffi_str_span(&self, m: ModId, end: Span) -> Span {
+        let src = &self.prog.mods[m].src;
+        let Some(line) = src.lines().nth(end.end_line as usize - 1) else { return end };
+        let cs: Vec<char> = line.chars().collect();
+        let stop = (end.end_col as usize).saturating_sub(1).min(cs.len());
+        let Some(close) = cs[..stop].iter().rposition(|&c| c == '"') else { return end };
+        let Some(open) = cs[..close].iter().rposition(|&c| c == '"') else { return end };
+        Span { line: end.end_line, col: open as u32 + 1, end_line: end.end_line, end_col: close as u32 + 2 }
+    }
+
+    /// Check a user `extern type` (an opaque C pointer type).
+    fn ffi_type(&mut self, m: ModId, d: &ast::ExternTypeDef) {
+        if !self.ffi_allowed(m, d.span) {
+            return;
+        }
+        let at = self.ffi_str_span(m, d.span);
+        let why = match crate::ffi::parse_type(&d.c_type) {
+            Ok(_) if d.c_type.trim_start().starts_with("Auk") => Some("`Auk...` types belong to the runtime".to_string()),
+            Ok(crate::ffi::CTy::Ptr { .. } | crate::ffi::CTy::Named(_)) => None,
+            Ok(t) => Some(format!("`{}` is not a pointer: an `extern type` is an opaque C pointer type (`T *`, or a typedef of one)", t.show())),
+            Err(e) => Some(e),
+        };
+        if let Some(why) = why {
+            self.err_in(
+                m,
+                Diag::new("E0040", at, format!("`{}` can't be an `extern type`", d.c_type))
+                    .note(why)
+                    .note("write the C pointer type, e.g. `extern type Db = \"sqlite3 *\"` or `extern type Module = \"LLVMModuleRef\"`"),
+            );
+        }
+    }
+
+    /// Check a user `extern fn`: the package allows it, the prototype parses, and every Auk
+    /// parameter and the result fit their C types (E0040).
+    #[allow(clippy::too_many_arguments)]
+    fn ffi_fn(&mut self, m: ModId, c: &FnClause, proto: &str, params: &[ParamInfo], ret: &Ty, is_async: bool, generics: &[ParamId]) -> Option<(crate::ffi::CSig, Vec<crate::ffi::Conv>)> {
+        use crate::ffi::{CTy, conv, parse_proto};
+        if !self.ffi_allowed(m, c.name.span) {
+            return None;
+        }
+        let at = self.ffi_str_span(m, c.span);
+        let name = &c.name.name;
+        let e40 = |span: Span, msg: String| Diag::new("E0040", span, msg);
+        if is_async || !generics.is_empty() {
+            let what = if is_async { "`async`" } else { "generic" };
+            self.err_in(m, e40(c.name.span, format!("the C function `{name}` can't be {what}")).note("a C function has one fixed signature and returns when it's done"));
+            return None;
+        }
+        let sig = match parse_proto(proto) {
+            Ok(s) => s,
+            Err(e) => {
+                self.err_in(
+                    m,
+                    e40(at, format!("`{name}`: can't read the C prototype")).note(e).note("write the C declaration, e.g. `extern fn abs(n: int): int = \"int abs(int)\"`"),
+                );
+                return None;
+            }
+        };
+        if sig.params.len() != params.len() {
+            self.err_in(
+                m,
+                e40(at, format!("`{name}` has {} parameter(s), but the C prototype of `{}` has {}", params.len(), sig.name, sig.params.len()))
+                    .note("each Auk parameter matches the C parameter in the same position"),
+            );
+            return None;
+        }
+        let mut convs = Vec::new();
+        let mut errs = Vec::new();
+        {
+            let defs = &self.defs;
+            let prog = &self.prog;
+            let ptr_of = |t: &Ty| -> Option<Option<CTy>> {
+                let Ty::Named(d, _) = t else { return None };
+                let TypeDefKind::Opaque { c_type } = &defs.types[*d].kind else { return None };
+                if c_type.starts_with("Auk") {
+                    return None;
+                }
+                if prog.is_core(defs.types[*d].module) { Some(None) } else { crate::ffi::parse_type(c_type).ok().map(Some) }
+            };
+            for (k, (p, ct)) in params.iter().zip(&sig.params).enumerate() {
+                if p.ty.has_error() {
+                    return None;
+                }
+                match conv(&p.ty, p.var, ct, false, sig.free.is_some(), &ptr_of) {
+                    Ok(cv) => convs.push(cv),
+                    Err(why) => {
+                        let span = c.params.get(k).map(|x| x.ty.as_ref().map(|t| t.span).unwrap_or(x.span)).unwrap_or(at);
+                        let var = if p.var { "var " } else { "" };
+                        errs.push(
+                            e40(span, format!("parameter {} of `{name}` is `{var}{}`, which doesn't fit the C type `{}`", k + 1, defs.show(&p.ty), ct.show()))
+                                .note(why),
+                        );
+                    }
+                }
+            }
+            if ret.has_error() {
+                return None;
+            }
+            match conv(ret, false, &sig.ret, true, sig.free.is_some(), &ptr_of) {
+                Ok(cv) => convs.push(cv),
+                Err(why) => {
+                    let span = c.ret.as_ref().map(|t| t.span).unwrap_or(c.name.span);
+                    errs.push(e40(span, format!("`{name}` returns `{}`, which doesn't fit the C result type `{}`", defs.show(ret), sig.ret.show())).note(why));
+                }
+            }
+        }
+        let owned = convs.iter().any(|cv| {
+            use crate::ffi::Conv::*;
+            matches!(cv, Str { owned: true } | OptStr { owned: true }) || matches!(cv, Out(x) if matches!(**x, OptStr { owned: true }))
+        });
+        if sig.free.is_some() && !owned && errs.is_empty() {
+            errs.push(
+                e40(at, format!("`+free` in `{name}`'s prototype, but it hands over no `char *` string"))
+                    .note("`+free(fn)` names the function that frees a returned `char *` (or a `char **` out-parameter) once it's copied"),
+            );
+        }
+        let ok = errs.is_empty();
+        for d in errs {
+            self.err_in(m, d);
+        }
+        ok.then_some((sig, convs))
     }
 
     fn find_builtins(&mut self) {
@@ -1160,15 +1309,26 @@ impl Checker {
         generics.extend(gs.implicit_params.iter().copied());
         let is_async = all.iter().any(|c| c.is_async);
         let public = all.iter().any(|c| c.public);
-        let uses = first.uses.iter().map(|u| u.name.clone()).collect();
+        let mut uses: Vec<String> = first.uses.iter().map(|u| u.name.clone()).collect();
         let doc = all.iter().find_map(|c| c.doc.clone());
         let ext = cls.iter().find_map(|c| if let Some(FnBody::Extern(s)) = &c.body { Some(s.clone()) } else { None });
         let kind = match ext {
+            Some(proto) if !self.prog.is_core(m) => {
+                // a user C function: implicitly `uses ffi`
+                if !uses.iter().any(|u| u == "ffi") {
+                    uses.push("ffi".into());
+                }
+                let c = cls.iter().find(|c| matches!(c.body, Some(FnBody::Extern(_)))).copied().unwrap_or(first);
+                match self.ffi_fn(m, c, &proto, &params, &ret, is_async, &generics) {
+                    Some((sig, convs)) => FnKind::Ffi { sig: Box::new(sig), convs, item },
+                    None => FnKind::Extern { symbol: String::new(), loc: false, item },
+                }
+            }
             Some(sym) if sym.starts_with('@') => match Intrinsic::from_symbol(&sym) {
                 Some(which) => FnKind::Intrinsic { which, item },
                 None => {
-                    // Internal: only the prelude may declare `extern` (E0036 rejects it in user
-                    // code), so this fires only for a broken prelude declaration.
+                    // Internal: only prelude externs name runtime symbols (user ones are C
+                    // prototypes), so this fires only for a broken prelude declaration.
                     self.err_in(m, Diag::new("E0114", first.name.span, format!("unknown compiler intrinsic `{sym}`")));
                     FnKind::Extern { symbol: sym, loc: false, item }
                 }

@@ -9,7 +9,7 @@
 //!   `src/lib.auk` and `src/x.auk` is `d.x`. Its own `[deps]` are found in the same `.raft/`
 //!   (raft installs the whole tree flat).
 //! - **core**: the prelude compiled into the compiler (`src/prelude/*.auk`): the root `core`
-//!   module, always in scope, plus the modules `fs net time rand env proc str int float`.
+//!   module, always in scope, plus the modules `fs net time rand env proc audio_out gui pixels str int float ffi`.
 //!
 //! Paths (spec "Modules, packages"): a path's first segment names, in this order, a top-level
 //! module of the current package, the current package itself (its root), a dependency, or a
@@ -48,6 +48,7 @@ pub const PRELUDE: &[(&str, &str)] = &[
     ("str", include_str!("prelude/str.auk")),
     ("int", include_str!("prelude/int.auk")),
     ("float", include_str!("prelude/float.auk")),
+    ("ffi", include_str!("prelude/ffi.auk")),
 ];
 
 thread_local! {
@@ -93,6 +94,8 @@ pub struct Package {
     /// `[package] effects` from the manifest (the ceiling that effects.rs enforces).
     #[allow(dead_code)]
     pub effects: Vec<String>,
+    /// `[link] libs` from the manifest: C libraries its `extern fn`s need (ffi-plan.md §4).
+    pub links: Vec<String>,
     pub is_core: bool,
 }
 
@@ -161,9 +164,11 @@ pub struct Manifest {
     pub name: String,
     pub deps: Vec<String>,
     pub effects: Vec<String>,
+    /// `[link] libs`.
+    pub links: Vec<String>,
 }
 
-/// Read the `[package]` name and effects and the `[deps]` names. (raft validates manifests
+/// Read the `[package]` name and effects, the `[deps]` names and `[link] libs`. (raft validates manifests
 /// fully; the compiler only needs these keys.)
 pub fn parse_manifest(text: &str) -> Manifest {
     let mut m = Manifest::default();
@@ -181,19 +186,17 @@ pub fn parse_manifest(text: &str) -> Manifest {
         let (key, val) = (key.trim().trim_matches('"'), val.trim());
         match (section.as_str(), key) {
             ("package", "name") => m.name = val.trim_matches('"').to_string(),
-            ("package", "effects") => {
-                m.effects = val
-                    .trim_matches(|c| c == '[' || c == ']')
-                    .split(',')
-                    .map(|s| s.trim().trim_matches('"').to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            }
+            ("package", "effects") => m.effects = str_list(val),
+            ("link", "libs") => m.links = str_list(val),
             ("deps", _) => m.deps.push(key.to_string()),
             _ => {}
         }
     }
     m
+}
+
+fn str_list(val: &str) -> Vec<String> {
+    val.trim_matches(|c| c == '[' || c == ']').split(',').map(|s| s.trim().trim_matches('"').to_string()).filter(|s| !s.is_empty()).collect()
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -265,7 +268,7 @@ impl Loader {
 
     fn load_core(&mut self) -> PkgId {
         let pkg = self.pkgs.len();
-        self.pkgs.push(Package { name: "core".into(), dir: None, root: 0, deps: BTreeMap::new(), effects: Vec::new(), is_core: true });
+        self.pkgs.push(Package { name: "core".into(), dir: None, root: 0, deps: BTreeMap::new(), effects: Vec::new(), links: Vec::new(), is_core: true });
         let mut root = None;
         for (name, src) in PRELUDE {
             let path = if *name == "core" { vec!["core".to_string()] } else { vec!["core".to_string(), name.to_string()] };
@@ -361,6 +364,7 @@ impl Loader {
             root: 0,
             deps: BTreeMap::new(),
             effects: manifest.effects.clone(),
+            links: manifest.links.clone(),
             is_core: false,
         });
         self.loaded.insert(name.to_string(), pkg);
@@ -444,6 +448,7 @@ pub fn load_source(path: &Path, src: String) -> Result<Program, Vec<FileDiag>> {
         root: 0,
         deps: BTreeMap::new(),
         effects: manifest.as_ref().map(|m| m.effects.clone()).unwrap_or_default(),
+        links: manifest.as_ref().map(|m| m.links.clone()).unwrap_or_default(),
         is_core: false,
     });
     let root = l.add_module(pkg, vec![name.clone()], file.clone(), src, false);

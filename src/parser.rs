@@ -404,13 +404,10 @@ impl Parser {
         })
     }
 
-    /// `extern fn ... = "symbol"` or `extern type Name = "CType"` (prelude only).
+    /// `extern fn ... = "symbol"` or `extern type Name = "CType"`. In the prelude the string is a
+    /// runtime symbol; elsewhere it is a C prototype or C type, allowed only in a package with the
+    /// `ffi` effect (checked with the manifest: E0036, check.rs).
     fn extern_item(&mut self, doc: Option<String>, public: bool, start: Span) -> PResult<Raw> {
-        let kw = self.span();
-        if !self.prelude {
-            return Err(Diag::new("E0036", kw, "`extern` declarations are only allowed in the core prelude")
-                .note("Auk code calls the runtime through the core library; there is no FFI syntax in user code"));
-        }
         self.bump();
         if matches!(self.peek(), Tok::Ident(n) if n == "type") {
             self.bump();
@@ -420,8 +417,9 @@ impl Parser {
             return Ok(Raw::Item(Item::ExternType(ExternTypeDef { id: self.id(), span: start.to(self.prev), name, doc, public, c_type })));
         }
         let mut c = self.fn_signature(doc, public, start)?;
-        self.expect(&Tok::Eq, "and the runtime symbol in quotes")?;
-        c.body = Some(FnBody::Extern(self.extern_str("the runtime symbol")?));
+        let what = if self.prelude { "the runtime symbol" } else { "the C prototype" };
+        self.expect(&Tok::Eq, &format!("and {what} in quotes"))?;
+        c.body = Some(FnBody::Extern(self.extern_str(what)?));
         c.span = start.to(self.prev);
         Ok(Raw::Clause(c))
     }

@@ -113,6 +113,8 @@ impl Checker {
                 let fields: Vec<Ty> = match &self.defs.types[d].kind {
                     TypeDefKind::Struct { fields } => fields.iter().map(|f| f.ty.subst(&s)).collect(),
                     TypeDefKind::Enum { variants } => variants.iter().flat_map(|vr| vr.fields.iter().map(|(_, t)| t.subst(&s))).collect(),
+                    // C pointers compare and print by address
+                    TypeDefKind::Opaque { c_type } if !c_type.starts_with("Auk") && (shape == self.b.show || shape == self.b.eq) => return Ok(()),
                     TypeDefKind::Opaque { .. } => {
                         return Err(format!("`{ts}` is a runtime type without a `{}` instance", self.defs.shapes[shape].name));
                     }
@@ -317,6 +319,7 @@ impl Checker {
         match self.fns[f].kind.clone() {
             FnKind::Auk { .. } => Target::Instance(self.instance_of(BodyRef::Fn(f), args, index, work)),
             FnKind::Extern { symbol, loc, .. } => Target::Extern { symbol, loc },
+            FnKind::Ffi { .. } => Target::Ffi(f),
             FnKind::Intrinsic { which, .. } => {
                 let ty = args.first().cloned().unwrap_or_else(Ty::unit);
                 let shape = match which {

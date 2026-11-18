@@ -178,6 +178,7 @@ fn exports(entry: &str) -> Exports {
 
 /// Compile a program in memory.
 pub fn jit(prog: &Program, info: &TyInfo, level: Level) -> Result<Jit, String> {
+    jit::open_libs(&prog.links, &prog.c_syms)?;
     let b = build(prog, info, &exports("dk_entry"), None, level, false)?;
     let code = jit::Code::load(&emit(b)?)?;
     let entry = code.lookup("dk_entry")?;
@@ -187,6 +188,7 @@ pub fn jit(prog: &Program, info: &TyInfo, level: Level) -> Result<Jit, String> {
 /// The debugger's evaluation module, compiled in memory for good: (entry, `dk_init`).
 pub fn jit_eval(prog: &Program, info: &TyInfo) -> Result<(*const u8, *const u8), String> {
     let ex = Exports { entry: "dk_entry".into(), names: vec!["dk_init".into()], all: false };
+    jit::open_libs(&prog.links, &prog.c_syms)?;
     let b = build(prog, info, &ex, None, Level::O0, false)?;
     let code = jit::Code::load(&emit(b)?)?;
     let entry = code.lookup("dk_entry")?;
@@ -199,6 +201,7 @@ pub fn jit_eval(prog: &Program, info: &TyInfo) -> Result<(*const u8, *const u8),
 /// at `table` (8-byte code pointers).
 pub fn jit_live(prog: &Program, info: &TyInfo, table: usize, slots: &HashMap<u32, usize>) -> Result<LiveJit, String> {
     let ex = Exports { entry: "dk_entry".into(), names: Vec::new(), all: true };
+    jit::open_libs(&prog.links, &prog.c_syms)?;
     let b = build(prog, info, &ex, Some((table, slots.clone())), Level::O0, false)?;
     let code = jit::Code::load(&emit(b)?)?;
     let entry = code.lookup("dk_entry")?;

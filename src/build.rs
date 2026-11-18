@@ -34,6 +34,26 @@ pub const LINK_LIBS: &[&str] = if cfg!(target_os = "macos") {
     &["-ldl", "-lpthread"]
 };
 
+/// Linker arguments for the C libraries of `[link] libs`: `-l<name>` (a name with a `/` is a
+/// path to the library), plus Homebrew's library directories on macOS.
+fn user_libs(links: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    if links.is_empty() {
+        return out;
+    }
+    if cfg!(target_os = "macos") {
+        for d in ["/opt/homebrew/lib", "/usr/local/lib"] {
+            if Path::new(d).is_dir() {
+                out.push(format!("-L{d}"));
+            }
+        }
+    }
+    for l in links {
+        out.push(if l.contains('/') { l.clone() } else { format!("-l{l}") });
+    }
+    out
+}
+
 /// A generated program (MIR), plus the holes found in it.
 pub struct Generated {
     pub prog: Program,
@@ -496,6 +516,7 @@ pub fn build_native(path: &Path, out: &Path, debuginfo: bool) -> Result<(), Stri
         let output = Command::new(&linker)
             .arg(&o)
             .arg(&lib)
+            .args(user_libs(&g.prog.links))
             .args(LINK_LIBS)
             .args(["-lm", "-lpthread"])
             .arg("-o")

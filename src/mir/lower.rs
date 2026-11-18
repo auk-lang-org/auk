@@ -16,6 +16,7 @@
 //! Patterns (clauses, `match`, `let`, `for`, closure parameters, `is`) compile to a pure test
 //! expression plus a binding step; clauses and arms are tried top to bottom.
 
+mod ffi;
 mod pat;
 
 use std::collections::{HashMap, HashSet};
@@ -1724,6 +1725,7 @@ impl<'g, 'a> Lower<'g, 'a> {
                     }
                 }
             }
+            Target::Ffi(f) => self.ffi_call(*f, args, ret, loc),
             Target::Intrinsic { which, ty } => self.intrinsic(*which, ty, args, ret),
             Target::Derived { shape, ty } => {
                 let which = match shape {

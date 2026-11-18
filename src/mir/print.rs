@@ -94,6 +94,11 @@ impl Printer<'_, '_> {
         match t {
             MTy::Void => "void".into(),
             MTy::Bool => "bool".into(),
+            MTy::I8 => "int8_t".into(),
+            MTy::U8 => "uint8_t".into(),
+            MTy::I16 => "int16_t".into(),
+            MTy::U16 => "uint16_t".into(),
+            MTy::F32 => "float".into(),
             MTy::I32 => "int32_t".into(),
             MTy::U32 => "uint32_t".into(),
             MTy::I64 => "int64_t".into(),
@@ -398,7 +403,7 @@ impl Printer<'_, '_> {
     // ---- expressions ----
 
     fn is_int(t: &MTy) -> bool {
-        matches!(t, MTy::I32 | MTy::U32 | MTy::I64 | MTy::U64 | MTy::D(Ty::Int) | MTy::D(Ty::Char))
+        matches!(t, MTy::I8 | MTy::U8 | MTy::I16 | MTy::U16 | MTy::I32 | MTy::U32 | MTy::I64 | MTy::U64 | MTy::D(Ty::Int) | MTy::D(Ty::Char))
     }
 
     fn ex(&mut self, e: &Ex) -> String {

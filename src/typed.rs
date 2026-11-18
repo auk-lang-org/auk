@@ -190,6 +190,9 @@ pub enum FnKind {
     Auk { item: usize, clauses: Vec<usize>, header: bool },
     /// A C function of the runtime. `loc` = append the call site's "file:line:col".
     Extern { symbol: String, loc: bool, item: usize },
+    /// A user C function (`extern fn` with a C prototype, docs/ffi-plan.md): `sig` is the
+    /// prototype, `convs` how each parameter and (last) the result cross the call.
+    Ffi { sig: Box<crate::ffi::CSig>, convs: Vec<crate::ffi::Conv>, item: usize },
     /// Implemented by the compiler.
     Intrinsic { which: Intrinsic, item: usize },
 }
@@ -300,6 +303,8 @@ pub enum Target {
     Instance(InstId),
     /// Call a runtime C function (`loc`: append the call site location).
     Extern { symbol: String, loc: bool },
+    /// Call a user C function (`FnKind::Ffi`), marshalling the arguments.
+    Ffi(FnId),
     /// A compiler intrinsic at a concrete type argument (`Show` etc. at a type with a
     /// user-defined instance resolve to `Instance` instead).
     Intrinsic { which: Intrinsic, ty: Ty },
@@ -626,6 +631,7 @@ impl TypedProgram {
             let kind = match &f.kind {
                 FnKind::Auk { clauses, .. } => format!("{} clause(s)", clauses.len()),
                 FnKind::Extern { symbol, .. } => format!("extern {symbol}"),
+                FnKind::Ffi { sig, .. } => format!("extern C {}", sig.name),
                 FnKind::Intrinsic { which, .. } => format!("intrinsic {which:?}"),
             };
             s += &format!("fn {}.{} [{kind}]\n", self.program.name(f.module), sig(f));

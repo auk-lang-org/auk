@@ -118,6 +118,8 @@ pub struct Gen<'p, 'a> {
     t_i32: LLVMTypeRef,
     t_i64: LLVMTypeRef,
     t_f64: LLVMTypeRef,
+    t_i16: LLVMTypeRef,
+    t_f32: LLVMTypeRef,
     t_ptr: LLVMTypeRef,
     t_void: LLVMTypeRef,
 }
@@ -225,6 +227,8 @@ impl<'p, 'a> Gen<'p, 'a> {
                 t_i32: LLVMInt32TypeInContext(cx),
                 t_i64: LLVMInt64TypeInContext(cx),
                 t_f64: LLVMDoubleTypeInContext(cx),
+                t_i16: LLVMInt16TypeInContext(cx),
+                t_f32: LLVMFloatTypeInContext(cx),
                 t_ptr: LLVMPointerTypeInContext(cx, 0),
                 t_void: LLVMVoidTypeInContext(cx),
             }
@@ -236,6 +240,8 @@ impl<'p, 'a> Gen<'p, 'a> {
     fn lt(&self, s: Sc) -> LLVMTypeRef {
         match s {
             Sc::I8 => self.t_i8,
+            Sc::I16 => self.t_i16,
+            Sc::F32 => self.t_f32,
             Sc::I32 => self.t_i32,
             Sc::I64 => self.t_i64,
             Sc::F64 => self.t_f64,
@@ -914,6 +920,8 @@ impl<'p, 'a> Gen<'p, 'a> {
                         LLVMBuildTrunc(self.b, v, tt, NONAME)
                     }
                 }
+                (LLVMFloatTypeKind, LLVMDoubleTypeKind) => LLVMBuildFPExt(self.b, v, tt, NONAME),
+                (LLVMDoubleTypeKind, LLVMFloatTypeKind) => LLVMBuildFPTrunc(self.b, v, tt, NONAME),
                 (LLVMIntegerTypeKind, LLVMDoubleTypeKind) => {
                     if signed {
                         LLVMBuildSIToFP(self.b, v, tt, NONAME)
@@ -1198,7 +1206,7 @@ impl<'p, 'a> Gen<'p, 'a> {
                     _ => panic!("llvm: float {op:?}"),
                 };
             }
-            let unsigned = matches!(a.ty, MTy::U32 | MTy::U64 | MTy::D(Ty::Char) | MTy::Ptr(_) | MTy::CStr | MTy::Code);
+            let unsigned = matches!(a.ty, MTy::U8 | MTy::U16 | MTy::U32 | MTy::U64 | MTy::D(Ty::Char) | MTy::Ptr(_) | MTy::CStr | MTy::Code);
             use LLVMIntPredicate::*;
             let cc = |s, u| if unsigned { u } else { s };
             let cmp = |p| self.bool8(LLVMBuildICmp(bld, p, x, y, NONAME));

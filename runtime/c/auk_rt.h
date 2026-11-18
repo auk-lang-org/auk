@@ -878,6 +878,44 @@ AUK_API AukArr *auk_gui_next_event(int64_t win, int64_t ms, const char *loc);
 /* Run the window process (AUK_GUI_HOST is set). Returns an exit code only if it can't start. */
 int auk__gui_host_main(void);
 
+/* ---- ffi.c: the core `ffi` module and C marshalling -------------------------------------- */
+
+/* How a list's elements are laid out in a C array (src/ffi.rs `Elem`): RAW is the element's
+ * own bytes (int64_t, double, bool, pointers); the rest narrow ints (or doubles to float). */
+enum {
+    AUK_FFI_RAW = 0,
+    AUK_FFI_I8 = 1,
+    AUK_FFI_U8 = 2,
+    AUK_FFI_I16 = 3,
+    AUK_FFI_U16 = 4,
+    AUK_FFI_I32 = 5,
+    AUK_FFI_U32 = 6,
+    AUK_FFI_F32 = 7,
+};
+
+AUK_API void *auk_ffi_ptr(int64_t addr);
+AUK_API int64_t auk_ffi_addr(const void *p);
+AUK_API AukStr *auk_ffi_ptr_show(const void *p);
+AUK_API void *auk_ffi_alloc(int64_t n, const char *loc);
+AUK_API void auk_ffi_free(void *p);
+AUK_API int64_t auk_ffi_read_u8(const uint8_t *p, int64_t off, const char *loc);
+AUK_API int64_t auk_ffi_read_i32(const uint8_t *p, int64_t off, const char *loc);
+AUK_API int64_t auk_ffi_read_i64(const uint8_t *p, int64_t off, const char *loc);
+AUK_API double auk_ffi_read_f64(const uint8_t *p, int64_t off, const char *loc);
+AUK_API void *auk_ffi_read_ptr(const uint8_t *p, int64_t off, const char *loc);
+AUK_API void auk_ffi_write_u8(uint8_t *p, int64_t off, int64_t v, const char *loc);
+AUK_API void auk_ffi_write_i32(uint8_t *p, int64_t off, int64_t v, const char *loc);
+AUK_API void auk_ffi_write_i64(uint8_t *p, int64_t off, int64_t v, const char *loc);
+AUK_API void auk_ffi_write_f64(uint8_t *p, int64_t off, double v, const char *loc);
+AUK_API void auk_ffi_write_ptr(uint8_t *p, int64_t off, void *v, const char *loc);
+AUK_API AukStr *auk_ffi_cstr(const char *p, const char *loc);
+AUK_API AukArr *auk_ffi_bytes(const uint8_t *p, int64_t n, const char *loc);
+AUK_API void *auk_ffi_from_bytes(const AukArr *a);
+AUK_API AukStr *auk_ffi_str(const char *p, const char *fn, const char *loc);
+AUK_API AukStr *auk_ffi_str_or_null(const char *p);
+AUK_API void *auk_ffi_arr_in(const AukArr *a, int32_t kind);
+AUK_API void auk_ffi_arr_out(AukArr **pa, void *buf, int32_t kind);
+
 /* ---- the layouts the compiler assumes ---------------------------------------------------
  * src/mir/layout.rs computes the same layouts, and src/mir/llvm/intrin.rs reads these fields by
  * offset in generated code: a change here must change there too. */

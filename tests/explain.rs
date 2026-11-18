@@ -8,9 +8,13 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Codes whose wrong example can't produce them from user code (the page explains why).
-/// E0114: only an `extern` in the core prelude can name an intrinsic, and user code can't write
-/// `extern` (E0036).
+/// E0114: only an `extern` in the core prelude can name an intrinsic (a user `extern fn`'s
+/// string is a C prototype).
 const UNREACHABLE: &[&str] = &["E0114"];
+
+/// Codes below E0100 that `auk check` reports, not the parser: they need the manifest (E0036,
+/// the `ffi` effect) or the types (E0040, C prototypes).
+const CHECKED: &[&str] = &["E0036", "E0040"];
 
 /// Codes reported while building, not by `auk check`: E0420 (an imprint panicked while it was
 /// computed at compile time). Their wrong example checks clean and fails `auk ir` with the
@@ -168,7 +172,7 @@ fn examples_trigger_their_code_and_fixes_check_clean() {
         }
         assert!(wrong.iter().any(|(p, _)| p.is_empty()), "{code}: the wrong example has no main block");
 
-        let (got, out) = diagnose(&wrong, code.as_str() < "E0100");
+        let (got, out) = diagnose(&wrong, code.as_str() < "E0100" && !CHECKED.contains(&code.as_str()));
         let want = vec![code.clone()];
         if BUILD_TIME.contains(&code.as_str()) {
             if !got.is_empty() {

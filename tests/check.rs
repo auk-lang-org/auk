@@ -1124,8 +1124,9 @@ fn dependency_paths_and_name_rule() {
 }
 
 #[test]
-fn extern_only_in_prelude() {
-    one("extern fn f(): int = \"x\"\n", "E0036", "`extern` declarations are only allowed in the core prelude");
+fn extern_needs_the_ffi_effect() {
+    // a standalone file has no raft.toml to declare `ffi` in (projects: tests/ffi.rs)
+    one("extern fn f(): int = \"int f(void)\"\n", "E0036", "`extern` declarations need the `ffi` effect in the package's raft.toml");
 }
 
 #[test]

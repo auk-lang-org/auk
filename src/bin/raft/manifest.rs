@@ -77,6 +77,21 @@ impl Manifest {
         if let Some(e) = effects.iter().find(|e| !EFFECTS.contains(&e.as_str())) {
             return Err(err(format!("unknown effect `{e}`")).help(format!("effects are {}", EFFECTS.join(" "))));
         }
+        // [link] libs: C libraries for `extern fn` (the compiler loads or links them)
+        if let Some(link) = table("link") {
+            for (k, v) in &link.entries {
+                if k != "libs" {
+                    return Err(err(format!("unknown key `{k}` in [link]")).help("[link] has one key: libs = [\"name\"]"));
+                }
+                let libs = v.as_strs().ok_or_else(|| err("[link] libs must be an array of strings"))?;
+                if let Some(l) = libs.iter().find(|l| l.is_empty() || l.chars().any(char::is_whitespace)) {
+                    return Err(err(format!("invalid library name `{l}` in [link] libs")).help("a library is named as in `-lname` (\"sqlite3\"), or by its path"));
+                }
+                if !libs.is_empty() && !effects.iter().any(|e| e == "ffi") {
+                    return Err(err("[link] libs needs the `ffi` effect").help("add \"ffi\" to effects under [package]"));
+                }
+            }
+        }
         let mut deps = Vec::new();
         for (dep, v) in table("deps").map_or(&[][..], |t| &t.entries) {
             if let Some(msg) = bad_name(dep) {
@@ -256,6 +271,12 @@ mod tests {
             bad("[package]\nname = \"a\"\nversion = \"0.1.0\"\n[deps]\nb = \">1\""),
             "invalid version requirement `>1` for b"
         );
+        let ffi = "[package]\nname = \"a\"\nversion = \"0.1.0\"\neffects = [\"ffi\"]\n[link]\n";
+        assert!(Manifest::parse(&format!("{ffi}libs = [\"sqlite3\", \"/opt/x/libz.dylib\"]")).is_ok());
+        assert_eq!(bad(&format!("{ffi}libs = \"z\"")), "[link] libs must be an array of strings");
+        assert_eq!(bad(&format!("{ffi}libs = [\"\"]")), "invalid library name `` in [link] libs");
+        assert_eq!(bad(&format!("{ffi}dirs = []")), "unknown key `dirs` in [link]");
+        assert_eq!(bad("[package]\nname = \"a\"\nversion = \"0.1.0\"\n[link]\nlibs = [\"z\"]"), "[link] libs needs the `ffi` effect");
     }
 
     #[test]

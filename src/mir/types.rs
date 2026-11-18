@@ -55,6 +55,12 @@ impl<'a> TyInfo<'a> {
         matches!(t, Ty::Named(d, _) if matches!(self.tp.defs.types[*d].kind, TypeDefKind::Opaque { .. }))
     }
 
+    /// Is it a C pointer type (`ffi.Ptr`, or a user `extern type`)? A plain address: no
+    /// reference count.
+    pub fn is_foreign(&self, t: &Ty) -> bool {
+        self.opaque_c(t).is_some_and(|c| !c.starts_with("Auk"))
+    }
+
     /// Is it an opaque type the runtime changes in place, copying it first when shared (a
     /// `pixels.Frame`)? An extern's `var` parameter of such a type gets the variable's address,
     /// as lists and maps do, so the runtime can swap in the copy. Other opaque types are handles
@@ -107,7 +113,7 @@ impl<'a> TyInfo<'a> {
                     true
                 } else {
                     match &self.tp.defs.types[*d].kind {
-                        TypeDefKind::Opaque { .. } => true,
+                        TypeDefKind::Opaque { c_type } => c_type.starts_with("Auk"),
                         TypeDefKind::Struct { .. } => {
                             let layout = self.struct_layout(t);
                             self.rc.borrow_mut().insert(t.clone(), false);
