@@ -1,0 +1,7 @@
+[package]
+name = "llvm"
+version = "0.1.0"
+effects = ["ffi"]
+
+[link]
+libs = ["/opt/homebrew/opt/llvm@23/lib/libLLVM.dylib"]
