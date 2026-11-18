@@ -95,8 +95,8 @@ pub unsafe extern "C" fn duck_map_copy_deep(m: *mut DuckMap) -> *mut DuckMap {
             if *(*m).dead.add(i as usize) {
                 continue;
             }
-            copy_elem(kops, (*m).keys.add(i as usize * (*kops).size), kb.as_mut_ptr());
-            copy_elem(vops, (*m).vals.add(i as usize * (*vops).size), vb.as_mut_ptr());
+            copy_elem(kops, crate::map::key(m, i), kb.as_mut_ptr());
+            copy_elem(vops, crate::map::val(m, i), vb.as_mut_ptr());
             // the map retains its own copies of borrowed elements
             crate::map::duck_map_set(&mut out, kb.as_ptr().cast(), vb.as_ptr().cast());
             if let Some(r) = (*kops).release {

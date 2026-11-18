@@ -6,16 +6,36 @@ use std::ptr::{self, null_mut};
 use crate::rc::{duck__alloc, duck__free_obj, duck__xmalloc, duck__xrealloc, duck_refcount, duck_release};
 use crate::*;
 
-const EMPTY: i64 = -1;
-const TOMB: i64 = -2;
+/// An index slot: 0 is empty; a removed entry's slot is `TOMB`; any other is
+/// `(hash >> 32) << 32 | (entry + 1)`.
+const EMPTY: u64 = 0;
+pub const TOMB: u64 = u64::MAX;
+/// The most entries a map holds (the entry number must fit the slot's low 32 bits).
+const MAX_ENTRIES: i64 = u32::MAX as i64 - 2;
 
 #[inline]
-unsafe fn key(m: *const DuckMap, i: i64) -> *mut u8 {
-    unsafe { (*m).keys.add(i as usize * (*(*m).kops).size) }
+fn slot_of(h: u64, e: i64) -> u64 {
+    (h & !0xffff_ffff) | (e as u64 + 1)
+}
+/// The entry a live slot points to.
+#[inline]
+fn entry_of(x: u64) -> i64 {
+    (x as u32) as i64 - 1
 }
 #[inline]
-unsafe fn val(m: *const DuckMap, i: i64) -> *mut u8 {
-    unsafe { (*m).vals.add(i as usize * (*(*m).vops).size) }
+fn live(x: u64) -> bool {
+    x != EMPTY && x != TOMB
+}
+
+/// The key of entry `i`.
+#[inline]
+pub(crate) unsafe fn key(m: *const DuckMap, i: i64) -> *mut u8 {
+    unsafe { (*m).entries.add((i * (*m).stride) as usize) }
+}
+/// The value of entry `i`.
+#[inline]
+pub(crate) unsafe fn val(m: *const DuckMap, i: i64) -> *mut u8 {
+    unsafe { (*m).entries.add((i * (*m).stride + (*m).voff) as usize) }
 }
 
 fn panic_rt(msg: &str) -> ! {
@@ -62,6 +82,10 @@ pub unsafe extern "C" fn duck_map_new(kops: *const DuckElemOps, vops: *const Duc
         let m = duck__alloc(size_of::<DuckMap>(), DUCK_K_MAP) as *mut DuckMap;
         (*m).kops = kops;
         (*m).vops = vops;
+        // every Duck value's alignment is at most 8: the value starts at the key's size rounded up
+        let r8 = |n: usize| n.div_ceil(8) as i64 * 8;
+        (*m).voff = r8((*kops).size);
+        (*m).stride = ((*m).voff + r8((*vops).size)).max(8);
         m
     }
 }
@@ -79,8 +103,7 @@ pub unsafe fn duck__map_free(m: *mut DuckMap) {
                 r(val(m, i).cast());
             }
         }
-        libc::free((*m).keys.cast());
-        libc::free((*m).vals.cast());
+        libc::free((*m).entries.cast());
         libc::free((*m).hashes.cast());
         libc::free((*m).dead.cast());
         libc::free((*m).index.cast());
@@ -92,20 +115,19 @@ unsafe fn rebuild_index(m: *mut DuckMap, icap: i64) {
     unsafe {
         libc::free((*m).index.cast());
         (*m).icap = icap;
-        (*m).index = duck__xmalloc(icap as usize * size_of::<i64>()) as *mut i64;
-        for i in 0..icap {
-            *(*m).index.add(i as usize) = EMPTY;
-        }
+        (*m).index = duck__xmalloc(icap as usize * size_of::<u64>()) as *mut u64;
+        ptr::write_bytes((*m).index, 0, icap as usize);
         let mask = icap as u64 - 1;
         for e in 0..(*m).n {
             if *(*m).dead.add(e as usize) {
                 continue;
             }
-            let mut s = *(*m).hashes.add(e as usize) & mask;
+            let h = *(*m).hashes.add(e as usize);
+            let mut s = h & mask;
             while *(*m).index.add(s as usize) != EMPTY {
                 s = (s + 1) & mask;
             }
-            *(*m).index.add(s as usize) = e;
+            *(*m).index.add(s as usize) = slot_of(h, e);
         }
     }
 }
@@ -114,14 +136,13 @@ unsafe fn rebuild_index(m: *mut DuckMap, icap: i64) {
 unsafe fn compact(m: *mut DuckMap) {
     unsafe {
         let mut k: i64 = 0;
-        let (ks, vs) = ((*(*m).kops).size, (*(*m).vops).size);
+        let stride = (*m).stride as usize;
         for e in 0..(*m).n {
             if *(*m).dead.add(e as usize) {
                 continue;
             }
             if k != e {
-                ptr::copy_nonoverlapping(key(m, e), key(m, k), ks);
-                ptr::copy_nonoverlapping(val(m, e), val(m, k), vs);
+                ptr::copy_nonoverlapping(key(m, e), key(m, k), stride);
                 *(*m).hashes.add(k as usize) = *(*m).hashes.add(e as usize);
                 *(*m).dead.add(k as usize) = false;
             }
@@ -133,9 +154,11 @@ unsafe fn compact(m: *mut DuckMap) {
 
 unsafe fn set_cap(m: *mut DuckMap, cap: i64) {
     unsafe {
+        if cap > MAX_ENTRIES {
+            panic_rt("a map can't hold more than 4294967293 entries");
+        }
         let cap_u = cap as usize;
-        (*m).keys = duck__xrealloc((*m).keys.cast(), cap_u * (*(*m).kops).size) as *mut u8;
-        (*m).vals = duck__xrealloc((*m).vals.cast(), cap_u * (*(*m).vops).size) as *mut u8;
+        (*m).entries = duck__xrealloc((*m).entries.cast(), cap_u * (*m).stride as usize) as *mut u8;
         (*m).hashes = duck__xrealloc((*m).hashes.cast(), cap_u * size_of::<u64>()) as *mut u64;
         (*m).dead = duck__xrealloc((*m).dead.cast(), cap_u * size_of::<bool>()) as *mut bool;
         (*m).cap = cap;
@@ -158,13 +181,14 @@ unsafe fn find_slot(m: *const DuckMap, k: *const c_void, h: u64) -> i64 {
         }
         let mask = (*m).icap as u64 - 1;
         let eq = (*(*m).kops).eq.unwrap_unchecked();
+        let fp = h >> 32;
         let mut s = h & mask;
         loop {
-            let e = *(*m).index.add(s as usize);
-            if e == EMPTY {
+            let x = *(*m).index.add(s as usize);
+            if x == EMPTY {
                 return -1;
             }
-            if e >= 0 && *(*m).hashes.add(e as usize) == h && eq(key(m, e).cast(), k) {
+            if x != TOMB && x >> 32 == fp && eq(key(m, entry_of(x)).cast(), k) {
                 return s as i64;
             }
             s = (s + 1) & mask;
@@ -179,7 +203,7 @@ pub unsafe extern "C" fn duck_map_find(m: *const DuckMap, k: *const c_void) -> *
             return null_mut();
         }
         let s = find_slot(m, k, ((*(*m).kops).hash.unwrap_unchecked())(k));
-        if s < 0 { null_mut() } else { val(m, *(*m).index.add(s as usize)).cast() }
+        if s < 0 { null_mut() } else { val(m, entry_of(*(*m).index.add(s as usize))).cast() }
     }
 }
 
@@ -230,15 +254,14 @@ pub unsafe extern "C" fn duck_map_copy(m: *const DuckMap) -> *mut DuckMap {
         let c = duck_map_new((*m).kops, (*m).vops);
         if (*m).len != 0 {
             set_cap(c, (*m).len);
-            let (ks, vs) = ((*(*m).kops).size, (*(*m).vops).size);
+            let stride = (*m).stride as usize;
             for e in 0..(*m).n {
                 if *(*m).dead.add(e as usize) {
                     continue;
                 }
                 let k = (*c).n;
                 (*c).n += 1;
-                ptr::copy_nonoverlapping(key(m, e), key(c, k), ks);
-                ptr::copy_nonoverlapping(val(m, e), val(c, k), vs);
+                ptr::copy_nonoverlapping(key(m, e), key(c, k), stride);
                 if let Some(r) = (*(*m).kops).retain {
                     r(key(c, k).cast());
                 }
@@ -287,7 +310,7 @@ pub unsafe extern "C" fn duck_map_set(pm: *mut *mut DuckMap, k_in: *const c_void
         let h = ((*(*m).kops).hash.unwrap_unchecked())(k.cast());
         let s = find_slot(m, k.cast(), h);
         if s >= 0 {
-            let e = *(*m).index.add(s as usize);
+            let e = entry_of(*(*m).index.add(s as usize));
             if let Some(r) = (*(*m).vops).release {
                 r(val(m, e).cast());
             }
@@ -316,10 +339,10 @@ pub unsafe extern "C" fn duck_map_set(pm: *mut *mut DuckMap, k_in: *const c_void
             (*m).len += 1;
             let mask = (*m).icap as u64 - 1;
             let mut slot = h & mask;
-            while *(*m).index.add(slot as usize) >= 0 {
+            while live(*(*m).index.add(slot as usize)) {
                 slot = (slot + 1) & mask;
             }
-            *(*m).index.add(slot as usize) = e;
+            *(*m).index.add(slot as usize) = slot_of(h, e);
         }
     }
 }
@@ -340,7 +363,7 @@ pub unsafe extern "C" fn duck_map_remove(pm: *mut *mut DuckMap, k_in: *const c_v
         duck_map_make_unique(pm);
         let m = *pm;
         let s = find_slot(m, k.cast(), ((*(*m).kops).hash.unwrap_unchecked())(k.cast()));
-        let e = *(*m).index.add(s as usize);
+        let e = entry_of(*(*m).index.add(s as usize));
         *(*m).index.add(s as usize) = TOMB;
         *(*m).dead.add(e as usize) = true;
         (*m).len -= 1;

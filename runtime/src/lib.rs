@@ -222,14 +222,23 @@ pub struct DuckMap {
     pub h: DuckHeader,
     pub kops: *const DuckElemOps,
     pub vops: *const DuckElemOps,
+    /// Live entries.
     pub len: i64,
+    /// Entries used, dead ones included (they keep insertion order until compacted).
     pub n: i64,
     pub cap: i64,
-    pub keys: *mut u8,
-    pub vals: *mut u8,
+    /// `cap` entries of `stride` bytes: the key, then the value at `voff` (one cache line
+    /// for both, usually).
+    pub entries: *mut u8,
+    pub voff: i64,
+    pub stride: i64,
+    /// Each entry's full hash (to rebuild the index without hashing again).
     pub hashes: *mut u64,
     pub dead: *mut bool,
-    pub index: *mut i64,
+    /// `icap` slots (open addressing, linear probing): 0 empty, `map::TOMB` a removed entry,
+    /// else the hash's upper 32 bits over `entry + 1`, so a probe rejects other keys without
+    /// touching their entries.
+    pub index: *mut u64,
     pub icap: i64,
 }
 
