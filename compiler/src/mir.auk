@@ -12,9 +12,11 @@
 /// generated functions use `Callee.Fn`. Aggregates passed to or returned from *generated*
 /// functions use the back end's own convention; runtime calls follow the C ABI.
 ///
-/// The port reads a program written by the Rust compiler (`auk dump mir`, `mir.reader`) instead
-/// of lowering one, so the builder (`Body`) and `retype` are not here yet. Rust's `VarId`,
-/// `FuncId`, `GlobalId`, `AggId` and `LabelId` are `int`s; a `CStr` is its bytes.
+/// The back end reads a program written by the Rust compiler (`auk dump mir`, `mir.reader`) or
+/// one lowered here (`mir.lower`, with the builder `Body` and `retype` below). Rust's `VarId`,
+/// `FuncId`, `GlobalId`, `AggId` and `LabelId` are `int`s; a `CStr` is its bytes. Rust's
+/// `Ex::new`, `Ex::var`, `Ex::int`, `Ex::bool`, `Ex::float` are `ex`, `var_`, `int_`, `bool_`,
+/// `float_`; the others keep their names (`e.field(..)`, `e.cast(..)` are dot calls).
 
 /// A machine-level type.
 pub enum MTy {
@@ -246,4 +248,187 @@ pub fn bug<T>(msg: str): T {
   eprint("internal error: {msg}")
   let x: T? = none
   x!
+}
+
+// ---- building expressions (Rust's `impl Ex`) ----
+
+pub fn ex(k: K, ty: MTy): Ex = Ex { k, ty }
+
+pub fn var_(v: int, ty: MTy): Ex = Ex { k: K.Var(v), ty }
+
+pub fn int_(n: int): Ex = Ex { k: K.Int(n), ty: MTy.D(types.Ty.Int) }
+
+pub fn i64(n: int): Ex = Ex { k: K.Int(n), ty: MTy.I64 }
+
+pub fn int_as(n: int, ty: MTy): Ex = Ex { k: K.Int(n), ty }
+
+pub fn bool_(b: bool): Ex = Ex { k: K.Int(if b { 1 } else { 0 }), ty: MTy.D(types.Ty.Bool) }
+
+pub fn float_(x: float): Ex = Ex { k: K.Float(x), ty: MTy.D(types.Ty.Float) }
+
+pub fn cstr(s: str): Ex = Ex { k: K.CStr(s.bytes()), ty: MTy.CStr }
+
+pub fn zero(ty: MTy): Ex = Ex { k: K.Zero, ty }
+
+pub fn null(): Ex = Ex { k: K.Zero, ty: void_ptr() }
+
+pub fn unit(): Ex = Ex { k: K.Int(0), ty: MTy.D(types.unit()) }
+
+pub fn fn_addr(f: int): Ex = Ex { k: K.FnAddr(FRef.Fn(f)), ty: MTy.Code }
+
+pub fn rt_global(s: str, ty: MTy): Ex = Ex { k: K.RtGlobalAddr(s), ty: ptr(ty) }
+
+pub fn field(e: Ex, s: Sel, ty: MTy): Ex = Ex { k: K.Field(e, s), ty }
+
+pub fn deref(e: Ex, ty: MTy): Ex = Ex { k: K.Deref(e), ty }
+
+pub fn addr(e: Ex): Ex = Ex { k: K.Addr(e), ty: ptr(e.ty) }
+
+pub fn cast(e: Ex, ty: MTy): Ex {
+  if e.ty == ty { return e }
+  Ex { k: K.Cast(e), ty }
+}
+
+pub fn bin(op: BOp, a: Ex, b: Ex): Ex {
+  let ty = match op {
+    Eq | Ne | Lt | Le | Gt | Ge => MTy.D(types.Ty.Bool)
+    _ => a.ty
+  }
+  Ex { k: K.Bin(op, a, b), ty }
+}
+
+pub fn not(e: Ex): Ex = Ex { k: K.Un(UOp.Not, e), ty: MTy.D(types.Ty.Bool) }
+
+pub fn and(xs: [Ex]): Ex = match xs.len() {
+  0 => bool_(true)
+  1 => xs[0]
+  _ => Ex { k: K.And(xs), ty: MTy.D(types.Ty.Bool) }
+}
+
+pub fn cond(c: Ex, a: Ex, b: Ex): Ex = Ex { k: K.Cond(c, a, b), ty: a.ty }
+
+pub fn rt(sym: str, args: [Ex], ret: MTy): Ex = Ex { k: K.Call(Callee.Rt(sym), args), ty: ret }
+
+pub fn call(f: int, args: [Ex], ret: MTy): Ex = Ex { k: K.Call(Callee.Fn(f), args), ty: ret }
+
+pub fn agg(ty: MTy, members: [(Sel, Ex)]): Ex = Ex { k: K.Agg(members), ty }
+
+pub fn elem(arr: Ex, i: Ex, ty: MTy): Ex = Ex { k: K.Elem(arr, i), ty }
+
+pub fn rt_field(e: Ex, f: RtF): Ex {
+  let ty = match f {
+    ArrLen => MTy.D(types.Ty.Int)
+    ArrData => void_ptr()
+    ErrMsg => MTy.D(types.Ty.Str)
+  }
+  Ex { k: K.RtField(e, f), ty }
+}
+
+pub fn size_of(t: MTy): Ex = Ex { k: K.SizeOf(t), ty: MTy.U64 }
+
+// ---- building function bodies ----
+
+enum Frame {
+  If(c: Ex),
+  Else(c: Ex, then: [Stmt]),
+  Loop(latch: [Stmt]),
+}
+
+/// Builds one function body: a stack of open statement lists (`if` branches, loop bodies).
+pub struct Body {
+  vars: [MTy],
+  out: [[Stmt]],
+  frames: [Frame],
+  next_label: int,
+}
+
+/// `Body::new()`.
+pub fn new_body(): Body = Body { vars: [], out: [[]], frames: [], next_label: 0 }
+
+/// A fresh (undeclared) variable.
+pub fn new_var(b: var Body, ty: MTy): Ex {
+  b.vars.push(ty)
+  var_(b.vars.len() - 1, ty)
+}
+
+/// Declare a variable initialized to `init`.
+pub fn decl(b: var Body, init: Ex): Ex {
+  let v = b.new_var(init.ty)
+  b.emit(Stmt.Let(b.vars.len() - 1, init))
+  v
+}
+
+/// Declare a variable of type `ty` initialized to `init` (converted).
+pub fn decl_as(b: var Body, ty: MTy, init: Ex): Ex {
+  let v = b.new_var(ty)
+  b.emit(Stmt.Let(b.vars.len() - 1, retype(init, ty)))
+  v
+}
+
+pub fn label(b: var Body): int {
+  b.next_label += 1
+  b.next_label
+}
+
+pub fn emit(b: var Body, s: Stmt) {
+  let n = b.out.len()
+  b.out[n - 1].push(s)
+}
+
+pub fn set(b: var Body, place: Ex, v: Ex) {
+  let v2 = retype(v, place.ty)
+  b.emit(Stmt.Set(place, v2))
+}
+
+pub fn do_(b: var Body, e: Ex) { b.emit(Stmt.Do(e)) }
+
+pub fn open_if(b: var Body, c: Ex) {
+  b.frames.push(Frame.If(c))
+  b.out.push([])
+}
+
+/// Switch from the `then` branch of the innermost `if` to its `else` branch.
+pub fn else_(b: var Body) {
+  let then = b.out.pop()!
+  match b.frames.pop() {
+    some(If(c)) => b.frames.push(Frame.Else(c, then))
+    _ => { let _: int = bug("mir: else without if") }
+  }
+  b.out.push([])
+}
+
+/// Open a loop whose `Continue` runs `latch` first.
+pub fn open_loop(b: var Body, latch: [Stmt]) {
+  b.frames.push(Frame.Loop(latch))
+  b.out.push([])
+}
+
+/// Close the innermost `if` / `else` / loop.
+pub fn close(b: var Body) {
+  let inner = b.out.pop()!
+  let s = match b.frames.pop() {
+    some(If(c)) => Stmt.If(c, inner, [])
+    some(Else(c, then)) => Stmt.If(c, then, inner)
+    some(Loop(latch)) => Stmt.Loop(inner, latch)
+    none => bug("mir: close without open")
+  }
+  b.emit(s)
+}
+
+/// The finished statements and variables (Rust's `finish(self)`).
+pub fn finish(b: var Body): ([Stmt], [MTy]) {
+  while b.frames.len() > 0 { b.close() }
+  (b.out.pop()!, b.vars)
+}
+
+/// `e` as a value of type `ty`: integer literals and zeros take the type; other expressions are
+/// converted only between distinct machine types (Auk types of the same representation are
+/// interchangeable).
+pub fn retype(e: Ex, ty: MTy): Ex {
+  if e.ty == ty { return e }
+  let lit = match e.k {
+    Int(_) | Zero | Float(_) => !(ty is MTy.Agg(_)) || (e.k is K.Zero)
+    _ => false
+  }
+  if lit { Ex { k: e.k, ty } } else { e.cast(ty) }
 }

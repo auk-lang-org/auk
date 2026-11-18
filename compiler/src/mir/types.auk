@@ -162,3 +162,100 @@ fn d_member_ty(info: TyInfo, t: types.Ty, sel: mir.Sel): mir.MTy = match (t, sel
   }
   _ => mir.bug("mir: no member {sel} of {show_ty(info, t)}")
 }
+
+// ---- for lowering (the parts of src/mir/types.rs the reader doesn't need) ----
+
+/// `TyInfo::new`: the type facts of a typed program.
+pub fn new(tp: typed.TypedProgram): TyInfo {
+  var value_def: int? = none
+  var err_def: int? = none
+  for i, d in tp.defs.types {
+    if value_def == none && d.name == "Value" && resolve.is_core(tp.program, d.module) &&
+      d.kind is types.TypeDefKind.Enum(_) {
+      value_def = some(i)
+    }
+    if err_def == none && d.name == "Err" && d.kind is types.TypeDefKind.Opaque(_) { err_def = some(i) }
+  }
+  TyInfo { defs: tp.defs, value_def, err_def: err_def else 0 }
+}
+
+/// Is it a C pointer type (`ffi.Ptr`, or a user `extern type`)? A plain address: no
+/// reference count.
+pub fn is_foreign(info: TyInfo, t: types.Ty): bool = match opaque_c(info, t) {
+  some(c) => !c.starts_with("Auk")
+  none => false
+}
+
+/// Is it an opaque type the runtime changes in place, copying it first when shared (a
+/// `pixels.Frame`)? An extern's `var` parameter of such a type gets the variable's address,
+/// as lists and maps do, so the runtime can swap in the copy. Other opaque types are handles
+/// (`net.Conn`): a `var` one is passed by value.
+pub fn is_cow_opaque(info: TyInfo, t: types.Ty): bool = opaque_c(info, t) == some("AukFrame *")
+
+/// Does a value of this type hold references? `rc` is the memo (Rust's `RefCell` in `TyInfo`):
+/// a struct or enum is `false` there while its fields are looked at.
+pub fn needs_rc(info: TyInfo, rc: var {types.Ty: bool}, t: types.Ty): bool {
+  match rc.get(t) {
+    some(b) => return b
+    none => {}
+  }
+  let b = match t {
+    Int | Float | Bool | Char | Never => false
+    Str | List(_) | Map(_, _) | Task(_) | Fn(_, _) | Any(_) => true
+    Tuple(ts) => {
+      rc[t] = false
+      var any = false
+      for x in ts {
+        if needs_rc(info, &rc, x) {
+          any = true
+          break
+        }
+      }
+      any
+    }
+    Opt(x) => needs_rc(info, &rc, x)
+    Res(_, _) => true
+    Named(d, _) => {
+      if some(d) == info.value_def {
+        true
+      } else {
+        match info.defs.types[d].kind {
+          Opaque(c) => c.starts_with("Auk")
+          Struct(_) => {
+            let layout = struct_layout(info, t)
+            rc[t] = false
+            var any = false
+            for (ft, boxed) in layout {
+              if boxed || needs_rc(info, &rc, ft) {
+                any = true
+                break
+              }
+            }
+            any
+          }
+          Enum(_) => {
+            let layout = enum_layout(info, t)
+            rc[t] = false
+            var any = false
+            for fs in layout {
+              for (ft, boxed) in fs {
+                if !any && (boxed || needs_rc(info, &rc, ft)) { any = true }
+              }
+              if any { break }
+            }
+            any
+          }
+        }
+      }
+    }
+    _ => false
+  }
+  rc[t] = b
+  b
+}
+
+/// A shape method's parameter or return type, with `Self` (unsupported for `any`) as `()`.
+pub fn method_ty(info: TyInfo, t: types.Ty, s: int): types.Ty {
+  let sp = info.defs.shapes[s].self_param
+  types.map_ty(t, x => if x == types.Ty.Param(sp) { types.unit() } else { x })
+}
