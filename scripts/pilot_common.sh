@@ -31,7 +31,7 @@ diff_mode() {
     n=$((n + 1))
     local key="${f//\//_}"
     "$AUK" dump "$mode" "$f" > "$out/$key.rust" 2>&1 || true
-    "$PORT" "$mode" "$f" > "$out/$key.auk" 2>&1 || true
+    "$PORT" dump "$mode" "$f" > "$out/$key.auk" 2>&1 || true
     if ! cmp -s "$out/$key.rust" "$out/$key.auk"; then
       bad=$((bad + 1))
       echo "DIFF $f ($(diff "$out/$key.rust" "$out/$key.auk" | grep -c '^[<>]') lines; diff $out/$key.rust $out/$key.auk)"

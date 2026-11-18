@@ -1,12 +1,14 @@
 /// The Auk compiler written in Auk: the `auk` command (src/main.rs) with the commands the port
 /// has — `run`, `build`, `test`, `check`, `ir`, `fmt`, `holes`, `explain`, `spec`, `lsp`, `mcp`,
-/// and the hidden `__jit` and `dump tokens|ast|resolve|check|typed` — with the Rust CLI's flags,
-/// output and exit codes. The prelude (`embedded`), the language reference (`mcp.spec_main`) and
-/// the error pages (`error_pages`) are compiled in, so the binary needs no checkout.
+/// and the hidden `__jit`, `parse`, `typed` and `dump tokens|ast|resolve|check|typed` — with the
+/// Rust CLI's flags, output and exit codes. The prelude (`embedded`), the language reference
+/// (`mcp.spec_main`) and the error pages (`error_pages`) are compiled in, so the binary needs no
+/// checkout.
 ///
 /// The port's own oracles and timing commands:
-/// - `compiler tokens|ast|resolve|check|typed [--quiet] [--time] [--repeat N] [--core] [--all]
-///   <file>...` prints what `auk dump tokens|ast|resolve|check|typed` prints (`check` with
+/// - `compiler dump tokens|ast|resolve|check|typed [--quiet] [--time] [--repeat N] [--core]
+///   [--all] <file>...` (`dump` may be left out, except for `typed`, which is Rust's hidden
+///   command) prints what `auk dump tokens|ast|resolve|check|typed` prints (`check` with
 ///   several files, or with a timing option, prints `auk dump check`'s report of the type
 ///   checker alone; `typed --core`: core modules' tables too). `--quiet` does the work without
 ///   printing (`check --quiet` runs the type checker alone, with `--all` all of `auk check`),
@@ -105,6 +107,21 @@ fn main(args: [str]): int! uses fs, env, time, ffi, proc {
       return 2
     }
     "run" | "build" | "ir" | "test" => return drive.cli(cx, cmd, rest)
+    // hidden debug commands, used by the tests (the port's `typed` dump mode is `auk dump typed`)
+    "parse" => {
+      match cli.parse_file(rest) {
+        some(code) => return code
+        none => {
+          eprint(usage())
+          return 2
+        }
+      }
+    }
+    "typed" => {
+      if rest.len() == 1 { return cli.typed_file(cx, rest[0]) }
+      eprint(usage())
+      return 2
+    }
     "__jit" => return drive.jit_cli(cx, rest)
     "dump" => {
       let mode = rest.get(0) else ""

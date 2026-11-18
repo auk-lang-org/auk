@@ -337,3 +337,70 @@ pub struct FormatSpec {
   precision: int?,
   radix: char?,
 }
+
+/// Invariants codegen relies on (src/typed.rs `validate`): no inference variables or error
+/// types anywhere in the tables, every call node of an emitted instance resolved. Returns the
+/// violations (a table's nodes in id order).
+pub fn validate(tp: TypedProgram): [str] {
+  var out: [str] = []
+  let bad = (t: types.Ty) => types.has_vars(t) || types.has_error(t)
+  for m, t in tp.tables {
+    let file = tp.program.mods[m].file
+    for n in t.types.keys().sort() {
+      let ty = t.types[n]
+      if bad(ty) { out.push("{file}: node {n} has type {types.show(tp.defs, ty)}") }
+    }
+    for i, l in t.locals {
+      if bad(l.ty) { out.push("{file}: local {i} `{l.name}` has type {types.show(tp.defs, l.ty)}") }
+    }
+    for n in t.calls.keys().sort() {
+      match t.calls[n].callee {
+        Fn(_, type_args) when type_args.any(bad) =>
+          out.push("{file}: call {n} has unresolved type arguments")
+        _ => {}
+      }
+    }
+  }
+  for i, inst in tp.instances {
+    if inst.type_args.any(t => bad(t) || types.has_params(t)) {
+      out.push("instance {i} has non-concrete type arguments")
+    }
+  }
+  for f in tp.fns {
+    if f.params.any(p => bad(p.ty)) || bad(f.ret) { out.push("fn {f.name} has a bad signature") }
+  }
+  out
+}
+
+/// A readable summary for debugging (`auk typed <file>`, src/typed.rs `dump`): every non-core
+/// function with its signature, then the instances to emit (each line ends in `\n`).
+pub fn dump(tp: TypedProgram): str {
+  var s: [str] = []
+  let d = tp.defs
+  for f in tp.fns {
+    if tp.program.is_core(f.module) { continue }
+    let ps = f.params.map(p => "{if p.var_ { "var " } else { "" }}{types.show(d, p.ty)}")
+    let gs = f.generics.map(g => d.params[g].name)
+    let g = if gs.len() == 0 { "" } else { "<{gs.join(", ")}>" }
+    let a = if f.is_async { "async " } else { "" }
+    let kind = match f.kind {
+      Auk(_, clauses, _) => "{clauses.len()} clause(s)"
+      Extern(symbol, _, _) => "extern {symbol}"
+      Ffi(sig, _, _) => "extern C {sig.name}"
+      Intrinsic(which, _) => "intrinsic {intrinsic_name(which)}"
+    }
+    s.push("fn {tp.program.name(f.module)}.{a}{f.name}{g}({ps.join(", ")}): {types.show(d, f.ret)} [{kind}]\n")
+  }
+  for i, inst in tp.instances {
+    let what = match inst.body {
+      Fn(f) => "{tp.program.name(tp.fns[f].module)}.{tp.fns[f].name}"
+      Test(t) => "test {ast_dump.debug_str(tp.tests[t].name)}"
+      Const(c) => "const {tp.consts[c].name}"
+    }
+    if inst.type_args.len() > 0 {
+      s.push("instance {i}: {what}<{inst.type_args.map(t => types.show(d, t)).join(", ")}>\n")
+    }
+  }
+  s.push("{tp.instances.len()} instances, {tp.types_used.len()} concrete types, {tp.shape_impls.len()} shape impls, {tp.vtables.len()} vtables\n")
+  s.join("")
+}

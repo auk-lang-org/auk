@@ -68,7 +68,7 @@ for mode in tokens ast resolve typed; do
   r="" a=""
   for _ in $(seq "$RUNS"); do
     r=$(min "$r" "$(one_ms "$AUK" dump "$mode" "${FILES[@]}")")
-    a=$(min "$a" "$(one_ms "$PORT" "$mode" "${FILES[@]}")")
+    a=$(min "$a" "$(one_ms "$PORT" dump "$mode" "${FILES[@]}")")
   done
   printf '%-34s %10s ms %10s ms %8s\n' "$mode + dump, whole process" "$r" "$a" "$(ratio "$a" "$r")"
 done

@@ -6,7 +6,7 @@ source "$(dirname "$0")/pilot_common.sh"
 diff_mode typed
 out="$ROOT/target/pilot/typed"
 "$AUK" dump typed --core examples/hello.auk > "$out/core.rust" 2>&1 || true
-"$PORT" typed --core examples/hello.auk > "$out/core.auk" 2>&1 || true
+"$PORT" dump typed --core examples/hello.auk > "$out/core.auk" 2>&1 || true
 if cmp -s "$out/core.rust" "$out/core.auk"; then
   echo "typed --core: 0 differ"
 else
