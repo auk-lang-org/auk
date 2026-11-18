@@ -354,8 +354,8 @@ step diffed against the golden corpus before the next starts:
       variants (run, --release, --release -g, --trace=json, --debug) and 27 imprint helpers, 0
       differ** (the back end's corpus plus `compiler/tests/ir/`; E0115/E0420 imprint failures
       included). The compiler
-      itself (`compiler/src/main.auk`, 7.9 MB of MIR) lowers identically. Not ported:
-      `lower::emit_eval` (the debugger's expression evaluation, `auk run --debug` only). Lowering
+      itself (`compiler/src/main.auk`, 7.9 MB of MIR) lowers identically. `lower::emit_eval`
+      (the debugger's expression evaluation) came with `debug` in Phase 5. Lowering
       alone is 1.54x Rust as ported (`scripts/ir_time.sh`; pilot-report.md, "3c").
 
   **What Phase 4 builds on**: `mir.build.generate(tp, mode, trace, imprints, embeds):
@@ -395,8 +395,8 @@ numbers: [pilot-report.md](pilot-report.md), "Phase 4".
       (226, linking `auk_rt.bc`), `mod.rs` (252), `backend.rs` (52) → `compiler/src/codegen.auk`,
       `intrin.auk`, `dwarf.auk`, `rtlink.auk`, `backend.auk`, line by line over `packages/llvm`.
       `exec.rs` (138): running the entry in this process (`orcjit.run`), and forked children
-      (`drive.auk`, Phase 4 driver); `jit_eval` (debugger evaluation) comes with `debug`
-      (Phase 5); `jit_live` (live reload) is `backend.jit_live` (Phase 5, `live.rs`).
+      (`drive.auk`, Phase 4 driver); `jit_eval` (debugger evaluation) is `backend.jit_eval`
+      (Phase 5, with `debug`); `jit_live` (live reload) is `backend.jit_live` (Phase 5, `live.rs`).
       Oracle: `auk ir --llvm=LEVEL` (`o0` is `auk ir --llvm`; `light`, `o2`, `o3`, `build` = O2
       with the runtime's bitcode; `-raw`: before the pass pipeline). `scripts/diff_llvm.sh`
       compares 13 IR texts per program (o0, o0-raw, light-raw, light, o2, o3; release build and
@@ -426,8 +426,8 @@ numbers: [pilot-report.md](pilot-report.md), "Phase 4".
       `#embed`ded: the binary needs no checkout). `run`, `build`, `test`, `check`, `ir`, `fmt`,
       `holes`, `hatch`, `explain`, `spec`, `lsp`, `mcp`, `__jit` (with `AUK_SOURCES`, so `hatch`
       builds its candidates with itself), same flags, output and exit codes. Imprints run in a
-      forked JIT child (`drive.eval_imprints`). Not yet: `debug`, `dap`
-      (Phase 5). `scripts/diff_driver.sh`: 53 cases (usage errors, traces, `-O`, `build -o -g`,
+      forked JIT child (`drive.eval_imprints`). `debug`, `dap`, `dive` and `run --live` came in
+      Phase 5. `scripts/diff_driver.sh`: 53 cases (usage errors, traces, `-O`, `build -o -g`,
       imprint panics, test filters, flat directories, the leak checker), 0 differ.
 - [x] Diff gate: `scripts/golden.sh --compare` with stage 2: tokens, ast, check, fmt 997 files,
       ir 213, run 46 entries, 0 differ. `tests/*.rs` against stage 2 (`AUK_BIN`): 505 pass, 0
@@ -478,7 +478,27 @@ Port onto the Auk compiler, each with its existing tests passing:
       errors, `:load`/`:save` (the saved files compared too), CRLF, `--quiet`/`-q`, bad flags:
       **0 differ** (stdout, stderr, exit code). `tests/dive.rs` now runs `$AUK_BIN`: 4 pass
       against the port. Gaps: pilot-report.md, "Phase 5", dive.
-- [ ] `dap.rs` (521), `debug.rs` (887), `dbg_eval.rs` (149)
+- [x] `dap.rs` (521), `debug.rs` (887), `dbg_eval.rs` (149): `compiler/src/dap.auk` (567),
+      `debug.auk` (1215 as `auk fmt` lays it out; ~250 lines of it the FFI Rust's `std` gives:
+      Unix sockets, `poll`, pipes, `posix_spawnp`), `dbg_eval.auk` (227), with
+      `lower::emit_eval` → `mir.lower.emit_eval` and `jit_eval` → `backend.jit_eval`; `auk
+      debug` and `auk dap` in the driver. C can't call Auk, so the engine's eval hook gained a
+      mailbox form in `runtime/c/dbg.c` (`auk_dbg_eval_mailbox`/`next`/`ok`/`err`/`close`),
+      served by a task of `auk run --debug`; and a Ctrl-C flag (`auk_dbg_catch_sigint`).
+      **Oracles:** `tests/debug.rs` (now on `$AUK_BIN`; 20/20 with the port) and MCP's
+      `auk_debug` test (`tests/mcp.rs` 16/16); `scripts/diff_debug.sh` (in check.sh's pilot
+      step): 66 `auk debug` commands over `compiler/tests/debug/` (usage errors, batch text and
+      `--json`, breakpoints by file:line and function, conditions and failing conditions,
+      `--print`/`--eval` expressions incl. assignments, closures, generic instances and
+      panicking ones, panics and `--catch`, tasks, program arguments, `--timeout`, compile
+      errors, 10 scripted `--repl` sessions), stdout, stderr and exit code: **0 differ**; and
+      `scripts/diff_dap.py`, 8 DAP sessions (initialize, launch with stopOnEntry/args/cwd,
+      line/function/conditional/exception breakpoints, threads, stackTrace, scopes, variables
+      expanded 4 deep, evaluate of paths and expressions, setVariable, continue/next/stepIn/
+      stepOut, pause, terminate, disconnect, EOF, protocol errors), 212 messages: **0 differ**
+      (output events compared per stream, since their place among engine events is up to the
+      scheduler). `scripts/diff_mcp.py` gained 4 `auk_debug` calls: 33 replies, 0 differ.
+      Gaps: pilot-report.md, "Phase 5", debug/dap.
 - [x] `live.rs` (549): `compiler/src/live.auk` (~650 lines), `auk run --live` in the Phase 4
       driver, line by line: the live table, slots by `Generated.live_keys`, layouts, the
       task-use analysis (`Uses`, `Graph`, `Seen`), restart/cancel; `backend.jit_live`
@@ -513,9 +533,11 @@ Port onto the Auk compiler, each with its existing tests passing:
       separate project rather than a second binary of `compiler/`: it shares no code with the
       compiler beyond `paths.auk` (copied), and it builds without a `.raft/` of its own.
       Results and gaps: pilot-report.md, "Phase 5", raft.
-- [ ] Threads: tools that use `std::thread` (`dap`, `debug`, `mcp`, `live`, `hatch`) use Auk
+- [x] Threads: tools that use `std::thread` (`dap`, `debug`, `mcp`, `live`, `hatch`) use Auk
       tasks/channels instead. `mcp` done: each tool call is a task. `hatch` needs none: the
-      model's stdin is a file and the tests run in a spawned child. `live` done: the child's
+      model's stdin is a file and the tests run in a spawned child. `debug`/`dap` done: the
+      socket, output, stdin/request and Ctrl-C readers and the `--timeout` timer are tasks
+      sending to one `Chan<In>`; `run --debug`'s expression compiler is a task too. `live` done: the child's
       watcher is a task (started with copies of the slots, files, layouts and `Seen`; it
       polls, compiles on its own heap and installs while the program's `main` runs on the
       main thread).
@@ -536,8 +558,8 @@ Port onto the Auk compiler, each with its existing tests passing:
         `POSIX_SPAWN_CLOEXEC_DEFAULT` on macOS (a child never holds another test's pipe), SIGPIPE
         ignored in the runner and reset in children; unix sockets for `AUK_DEBUG`.
       - `t.auk`: `t.check`/`t.fail`, `t.skip_if_lacks(cmd, what)` and `t.lacks` (the
-        `auk_bin::lacks` mechanism: `$AUK_BIN_LACKS`, default for an `$AUK_BIN` binary
-        `debug,dap,dive,live,parse,typed`), `t.scratch` (under `target/test-tmp/<pid>`, removed
+        `auk_bin::lacks` mechanism: `$AUK_BIN_LACKS`, default for an `$AUK_BIN` binary what
+        the port lacks: `parse,typed` since the Phase 5 ports), `t.scratch` (under `target/test-tmp/<pid>`, removed
         after a green run) and `t.temp` (`$TMPDIR`), `t.install` (raft install, stale lock
         regenerated). JSON through `json.auk`, copied from compiler/src (as raft copies
         `paths.auk`; so is `paths.auk`).

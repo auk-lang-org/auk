@@ -1119,6 +1119,80 @@ with the port; the swap program reloads in 10 ms with the port, 7–8 ms with Ru
 7. **`uses` is a keyword**, so `Build.uses` is `Build.reach`; `else` in a `for` head needs
    parentheses (E0029).
 
+### debug/dap
+
+| Rust | Auk (`compiler/src/`) |
+|---|---|
+| `debug.rs` (887) | `debug.auk` (1215 as `auk fmt` lays it out; ~250 lines are the C plumbing below) |
+| `dap.rs` (521) | `dap.auk` (567) |
+| `dbg_eval.rs` (149) + `rt.rs`'s hook adapter | `dbg_eval.auk` (227) |
+| `lower::emit_eval`, `llvm::jit_eval` | `mir.lower.emit_eval`, `backend.jit_eval` |
+
+`auk debug` (batch report, `--json`, interactive prompt) and `auk dap` are the Rust commands
+line by line, with Rust's names, texts, JSON and exit codes; `auk run --debug` now evaluates
+expressions (`eval`, conditional breakpoints, `--print`/`--eval`, DAP `evaluate`/`setVariable`).
+
+**Threads became tasks.** Rust's front ends wait on one mpsc channel fed by threads (the
+engine's socket, the program's stdout/stderr pipes, stdin or the DAP requests, a Ctrl-C poller,
+the `--timeout` grace timer). Here each is a task sending to one `Chan<In>`; `recv_for` gives
+`next_until`'s deadline. A task blocked in `read` can't be cancelled or joined (dropping a task
+joins it), so the prompt and the DAP server end with `_exit` after flushing stdout, where Rust's
+detached threads just die with the process.
+
+**The eval hook is a mailbox.** In Rust the runtime calls `dbg_eval::hook` (a Rust function)
+on the stopped thread. Auk can't hand C a function pointer (no callbacks), so `dbg.c` got a
+mailbox form of the hook: the stopped thread posts (function, site, expression) and waits;
+`dbg_eval.serve`, a task `drive.jit_run` starts for `--debug`, takes it
+(`auk_dbg_eval_next`), checks the edited copy of the program and compiles the expression, and
+answers with the code's address, slots and type (`auk_dbg_eval_ok`) or the error; `dbg.c` then
+runs the code's initializer on the stopped thread, as Rust does in the hook. Requests are one at
+a time (conditions on several threads queue). A panic while compiling (a compiler bug) becomes
+the expression's error.
+
+**Oracles.** `tests/debug.rs` ran only the cargo-built `auk`; it now runs `$AUK_BIN`, and
+`debug` left `PORT_LACKS`: with the port 20/20 pass (both stepping and native `-g` line tables
+under lldb included), `tests/mcp.rs` 16/16 (`auk_debug` no longer skipped).
+`scripts/diff_debug.sh` (check.sh's pilot step) runs 66 `auk debug` commands with each binary in
+`compiler/tests/debug/` (a project of its own, so the programs don't load `compiler/`) and
+compares stdout, stderr and exit code: **0 differ**. It normalizes only where `--timeout` stops
+an endless loop. `scripts/diff_dap.py` plays 8 DAP sessions to both servers (212 messages):
+**0 differ**, also with `--repeat 2`; output events are compared as one text per stream and the
+rest in order without `seq`, since where the program's output lands among engine events is up to
+the scheduler (Rust against itself differs there). `scripts/diff_mcp.py` gained 4 `auk_debug`
+calls (breakpoints with conditions and expressions, tasks, arguments, a compile error): 33
+replies, 0 differ. Not covered by the diffs: Ctrl-C at the prompt (needs a terminal), and two
+cases where Rust differs from itself or hangs (`quit` typed ahead while the program runs; EOF
+at the prompt before `run`, where both wait forever for the never-started program).
+
+### Gaps found (debug/dap)
+
+1. **No callbacks from C into Auk.** The debugger's eval hook and the Ctrl-C handler both had
+   to become C in the runtime (`auk_dbg_eval_mailbox` & co., `auk_dbg_catch_sigint` /
+   `auk_dbg_sigint_taken`, polled every 50 ms as Rust polls its flag). An `export fn` with the C
+   ABI (Phase 7a) would make both plain Auk.
+2. **No Unix sockets, `poll`, pipes or a child process with piped output in core.** `debug.auk`
+   binds `socket`/`bind`/`listen`/`accept`/`poll`/`pipe`/`read`/`write`, builds `sockaddr_un`
+   per OS (macOS has a length byte), spawns with `posix_spawnp` (file actions for `/dev/null`,
+   the pipes or the report's files; its own process group; an empty signal mask) and decodes
+   `waitpid` statuses: the hatch/mcp gap 1 again, plus sockets. `SIGPIPE` is ignored with C
+   `signal`, as Rust's runtime does.
+3. **No `errno`**: `os_error()` calls `__error`/`__errno_location` through a function pointer
+   from `ffi.symbol` to print Rust's `io::Error` text (`No such file or directory (os error 2)`).
+4. **Dropping a task joins it**, and a task blocked in a C `read` (stdin) never ends: front ends
+   that leave such a task behind must `_exit`. A detached task (or cancelling one blocked in
+   FFI) would remove that.
+5. **C stdio and `exit`**: `exit()` flushes every `FILE`, and a task blocked reading C's `stdin`
+   holds its lock, so `exit` would hang; hence `_exit` after flushing stdout.
+6. **No mutable module state**: Rust's per-process socket counter (`N`) is gone (one launch per
+   process); the eval context is the server task's argument instead of a `Mutex`ed global.
+7. Smaller: Rust's `"\` line continuation drops the next line's leading spaces (the prompt's
+   `help` text starts `run, r`, not `  run, r`); Rust's `f64` Display (`--timeout 2` shows
+   `2s`) is `show_float`; `u32` parsing for `break 12` is `parse_u32`; the collected output of a
+   batch run goes through files and `hatch.lossy` (Rust's `read_to_string` would drop a stream
+   with invalid UTF-8).
+
+No compiler bug was hit; the runtime change is additive (Rust doesn't use the new functions).
+
 ## Reproduce
 
 ```
@@ -1147,6 +1221,7 @@ scripts/backend_time.sh 7     # code generation, Rust vs Auk
 scripts/diff_hatch.sh         # hatch: 37 commands, 0 differ (--slow: 38, with a 60 s timeout)
 scripts/diff_dive.sh          # dive: 23 sessions and one on a terminal, 0 differ
 scripts/diff_live.sh          # run --live: 6 scenarios, 0 differ; tests/run.rs live tests on the port
+scripts/diff_debug.sh         # debug: 66 commands, 0 differ; dap (diff_dap.py): 8 sessions, 212 messages, 0 differ
 scripts/pilot_time.sh 7 20    # the tables above
 auk test compiler             # the ported unit tests
 auk build compiler/bench/cliffs.auk -o /tmp/cliffs && /tmp/cliffs 80000
