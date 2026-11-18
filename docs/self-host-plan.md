@@ -420,7 +420,8 @@ numbers: [pilot-report.md](pilot-report.md), "Phase 4".
       casts, `#embed`) compiled from the dump by the port and run in its own process (`auk run`'s
       level; tests at O0), and every `run` program also built by both into executables: **48
       programs, 0 differ** (stdout, stderr, exit code). The port compiling the Auk compiler's own
-      MIR (`pilot_tokens`/`pilot_ast`) is among them.
+      MIR (`pilot_tokens`/`pilot_ast`) is among them. On Linux (AArch64, the CI image) too:
+      diff_mir 130 dumps, diff_llvm 78 IR texts, run_backend 48 programs, 0 differ.
 - [ ] Driver: `main.rs` (214) — `run`, `build`, `check`, `test`, `ir`; same flags and exit codes.
       For now `compiler mir|llvm|build|run <dump>` (`compiler/src/driver.auk`) on the Rust
       compiler's MIR; the real commands need the checker and lowering (Phase 3).

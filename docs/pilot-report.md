@@ -955,8 +955,11 @@ compiler gained `auk dump mir`, `auk ir --llvm=LEVEL`/`--release`/`-g`/`--test`/
 - `exec.rs`'s forked runs (`run_forked`, `spawn`), `jit_eval` (the debugger's evaluations) and
   `jit_live` (`auk run --live`): they need the front end to be useful.
 - The bootstrap fixed point and self-compile time.
-- Linux: the oracles were run on macOS (AArch64); the port selects the C ABI by the target
-  triple and the `dlopen` flags and clock by OS, but its diff scripts haven't run on Linux yet.
+- x86-64: the oracles ran on macOS and on Linux (both AArch64; on Linux in the CI image with
+  the target directory in a volume of its own: `docker run --rm -v "$PWD:/src" -v
+  auk-linux-target-p4:/src/target -w /src auk-linux scripts/run_backend.sh`): diff_mir 130
+  dumps, diff_llvm 6 programs / 78 IR texts, run_backend 48 programs, 0 differ. The x86-64 C
+  ABI rules (`c_pass`'s float eightbytes) are ported but unexercised.
 
 ## Reproduce
 
