@@ -16,11 +16,11 @@ What there is to move today:
 | Part | Where | Size |
 |---|---|---|
 | Runtime | `runtime/c/*.c` + `auk_rt.h` (was `runtime/src/*.rs`) | ~14k lines C, 21 files (Phase 1 done) |
-| Runtime tests | `runtime/tests/*.rs` | ~2.7k lines |
-| Compiler | `src/` (lexer → check → MIR → LLVM) | ~37k lines Rust |
-| Tools | `fmt repl lsp dap debug mcp live hatch explain dive`, `raft` | inside the 37k |
-| Integration tests | `tests/*.rs` (24 files) + fixtures | drive the binaries |
-| Build | `Cargo.toml`, `build.rs`, `runtime/build.rs`, `.cargo/config.toml` | |
+| Runtime tests | `runtime/c/test/*.c` (was `runtime/tests/*.rs`) | ~3.2k lines C (Phase 1 done) |
+| Compiler | `src/` (lexer → check → MIR → LLVM); its Auk port `compiler/src/` | ~42k lines Rust; ~39k lines Auk (self-hosting since Phase 4) |
+| Tools | `fmt repl lsp dap debug mcp live hatch explain dive`, `raft` | inside the 42k |
+| Integration tests | `tests/*.rs` (25 files) + fixtures | drive the binaries (any `auk` via `$AUK_BIN`) |
+| Build | `Cargo.toml`, `build.rs`, `.cargo/config.toml` (`runtime/build.rs` went with Phase 1) | |
 | Rust deps | `llvm-sys`, `libc`, `cc` (rustls and webpki-roots went with Phase 1) | |
 | Auk code already | `src/prelude/*.auk`, `packages/` (24), `examples/` | 135 `.auk` files under tests/examples/packages |
 
@@ -241,8 +241,9 @@ Gaps for Phase 4, found doing 2c:
         `c.is_digit(radix)`, `min(a, b)`/`max(a, b)`, `{n:x}`/`X`/`o`/`b`, tuple assignment.
   - [ ] Deferred (see pilot-report.md, "Gaps"): raw identifiers or keyword field names, `T!E` with
         a struct `E`, unsigned/narrow ints, `T??`, Unicode char classes (1b).
-- [ ] Process/fs/args/env APIs the driver needs (`auk build` writes temp files, runs the linker,
-      `dsymutil`).
+- [x] Process/fs/args/env APIs the driver needs (`auk build` writes temp files, runs the linker,
+      `dsymutil`): core's `fs`/`proc`/`env` plus `compiler/src/posix.auk` (fork with redirected
+      streams, `waitpid`, `exit`) over `ffi` (Phase 4).
 
 ### 2e. Pilot — go/no-go
 - [x] Port `token.rs` (268) + `lexer.rs` (1077) + `ast.rs` (794) + `parser.rs` (2143) to Auk.
@@ -258,7 +259,7 @@ Gaps for Phase 4, found doing 2c:
 Auk compiler lives in `compiler/`, built by the Rust `auk` (stage 0). Pipeline order, each
 step diffed against the golden corpus before the next starts:
 
-- [ ] Shared: `diag.rs` (385) diagnostics + fix-its, `json.rs` (434), `types.rs` (554).
+- [x] Shared: `diag.rs` (385) diagnostics + fix-its, `json.rs` (434), `types.rs` (554).
       `types.rs` done (3a): `compiler/src/types.auk`. `diag.rs`: `Span`/`Diag`/`Fix`, `FileDiag`,
       the warning list and the `check --json` report (`json_report_files`, 3b); the text
       rendering (`render`, with the fmt port) is diffed through `auk check`'s human output (3c);
@@ -288,8 +289,8 @@ step diffed against the golden corpus before the next starts:
     path, file, src, ast, children }`, `Package`, `first_segment`/`child`/`name`/`is_core`,
     `load`/`load_source`/`load_in_package`/`source_of`, `parse_manifest`. Everything that reads
     files takes a `Sources` (prelude texts, `with_sources` overrides, the OS): the prelude texts
-    are compiled in (`embedded.prelude()`, one `#embed` per file; read from `src/prelude/` at
-    start-up until Phase 4). Rust's `BTreeMap` iteration is `sorted_keys(m)`.
+    are compiled in (`embedded.prelude()`, one `#embed` per file). Rust's `BTreeMap` iteration
+    is `sorted_keys(m)`.
   - `visit.auk`: `visit_item_exprs`/`visit_expr` (check.rs) push every expression, pre-order,
     onto a `var [ast.Expr]`; `as_path` (check/expr.rs).
   - `paths.auk`: `std::path` on `str` (`join`, `parent`, `file_stem`, `extension`, component
@@ -337,15 +338,6 @@ step diffed against the golden corpus before the next starts:
   `patterns::children`); `cli.print_diags(cx, diags)` renders diagnostics to stderr against each
   file's text (`resolve.source_of`); `holes.discover(tp)`/`holes.brief_text`/`holes.hole_json`
   for `auk hatch` and the MCP tools.
-- [ ] MIR: `mir/mod.rs` (511), `types.rs` (234), `layout.rs` (278), `lower.rs` (3577),
-      `lower/pat.rs` (342), `progen.rs` (2167), `print.rs` (581)
-- [ ] Diff gates: tokens → AST → diagnostics (codes, messages, spans, fix-its) for every file,
-      including `tests/errors/` and `docs/errors/` examples → MIR text. Done through the type
-      checker's diagnostics (all of `auk check`, JSON and text) and typed program, and
-      `auk holes` (`scripts/check.sh` pilot step runs every diff); MIR text remains.
-- [ ] `patterns.rs` (901) exhaustiveness, `effects.rs` (647), `holes.rs` (690): then `check_all`
-      (sorted, deduplicated diagnostics after the type check) and the oracle becomes
-      `auk check --json` itself (`compiler check --json` prints `check_types`' report today).
 - [x] MIR: `mir/mod.rs` (511), `types.rs` (234), `layout.rs` (278), `lower.rs` (3577),
       `lower/pat.rs` (342), `progen.rs` (2167), `print.rs` (581) (3c). The data model, layouts
       and printer came with the back-end port (`mir.auk`, `mir/types.auk`, `mir/layout.auk`,
@@ -370,10 +362,11 @@ step diffed against the golden corpus before the next starts:
   no `fs`) and `mir.build.imprint_program(tp, embeds)` (the helper to JIT-run; then
   `imprint_results(tp, records, code, stderr)`). `Program::live_keys` is `Generated.live_keys`
   (the reader's `mir.Program` has no field for it).
-- [ ] Diff gates: tokens → AST → diagnostics (codes, messages, spans, fix-its) for every file,
-      including `tests/errors/` and `docs/errors/` examples → MIR text. Done through the type
-      checker's diagnostics, typed program and MIR text (`scripts/check.sh` pilot step runs
-      every diff, `diff_ir.sh` included); patterns/effects diagnostics remain.
+- [x] Diff gates: tokens → AST → diagnostics (codes, messages, spans, fix-its) for every file,
+      including `tests/errors/` and `docs/errors/` examples → MIR text: `diff_tokens`, `diff_ast`,
+      `diff_resolve`, `diff_check` (all of `auk check --json`, patterns and effects included),
+      `diff_check_text`, `diff_holes`, `diff_typed`, `diff_ir`, all in `scripts/check.sh`'s pilot
+      step, 0 differ.
 - [x] Prelude (`src/prelude/*.auk`) is embedded the same way: one `extern fn ..: str = "#embed .."`
       per file (`compiler/src/embedded.auk`, with `docs/spec.md` and the `docs/errors` pages;
       Phase 4). `resolve.sources(dir)` still reads a prelude directory, for tools.
@@ -399,8 +392,9 @@ numbers: [pilot-report.md](pilot-report.md), "Phase 4".
 - [x] `mir/llvm/codegen.rs` (1436), `intrin.rs` (336), `debug.rs` (150, DWARF), `rtlink.rs`
       (226, linking `auk_rt.bc`), `mod.rs` (252), `backend.rs` (52) → `compiler/src/codegen.auk`,
       `intrin.auk`, `dwarf.auk`, `rtlink.auk`, `backend.auk`, line by line over `packages/llvm`.
-      `exec.rs` (138): only running the entry in this process (`orcjit.run`); `run_forked`/
-      `spawn` and `jit_eval`/`jit_live` (debugger evaluation, live reload) wait for the driver.
+      `exec.rs` (138): running the entry in this process (`orcjit.run`), and forked children
+      (`drive.auk`, Phase 4 driver); `jit_eval`/`jit_live` (debugger evaluation, live reload)
+      come with `debug` and `live` (Phase 5).
       Oracle: `auk ir --llvm=LEVEL` (`o0` is `auk ir --llvm`; `light`, `o2`, `o3`, `build` = O2
       with the runtime's bitcode; `-raw`: before the pass pipeline). `scripts/diff_llvm.sh`
       compares 13 IR texts per program (o0, o0-raw, light-raw, light, o2, o3; release build and
@@ -435,12 +429,13 @@ numbers: [pilot-report.md](pilot-report.md), "Phase 4".
       imprint panics, test filters, flat directories, the leak checker), 0 differ.
 - [x] Diff gate: `scripts/golden.sh --compare` with stage 2: tokens, ast, check, fmt 997 files,
       ir 213, run 46 entries, 0 differ. `tests/*.rs` against stage 2 (`AUK_BIN`): 505 pass, 0
-      fail (tests needing `debug`, `live`, `parse`, `typed` skip, `tests/auk_bin`). `bench/perf`:
-      all 7 executables byte-identical to the Rust `auk`'s.
+      fail (the count includes tests that return early because they need `debug`, `live`,
+      `parse` or `typed`, which the port lacks: `PORT_LACKS` in `tests/auk_bin/mod.rs`).
+      `bench/perf`: all 7 executables byte-identical to the Rust `auk`'s.
 - [x] **Bootstrap fixed point** (`scripts/bootstrap.sh [--perf]`; `check.sh bootstrap`): stage 1
       (built by Rust), stage 2 and stage 3 are all bit-identical (5.17 MB).
-- [x] Self-compile time: 26–33 s per stage on an M-series Mac (Rust builds the same compiler in
-      ~27 s), at the ~30 s target.
+- [x] Self-compile time: 26–33 s per stage (Apple M5; `auk build compiler/src/main.auk`, an O2
+      release build) — the same as the Rust `auk` building it (~27 s), at the ~30 s target.
 - [ ] Freeze ends. Tag `v0-rust-final`.
 
 ## Phase 5 — Tools
@@ -463,16 +458,17 @@ Port onto the Auk compiler, each with its existing tests passing:
       0 differ** (918k messages; `compiler/src` every 8th column); `scripts/diff_mcp.py`: one session of
       protocol errors and tool calls, 29 replies, 0 differ. `tests/lsp.rs`, `tests/mcp.rs`,
       `tests/explain.rs` run against any binary named by `$AUK_BIN` (`tests/auk_bin/mod.rs`):
-      with the port, lsp 4/4, explain 6/6, mcp 12/12 pass; skipped (with a note) until the
-      port's driver has the commands: `auk_run`, `auk_test`, `auk_debug` (4 MCP tests: `run`,
-      `test`, `debug`), and in explain the wrong examples of lexing/parsing codes (`parse`) and
-      the build-time code E0420 (`ir` with the imprint helper). Gaps: pilot-report.md, "Phase 5".
+      with the port all pass. Since the Phase 4 driver the MCP `auk_run`/`auk_test` tests and
+      explain's E0420 example run too; still skipped (with a note): MCP `auk_debug` (`debug`)
+      and explain's wrong examples of lexing/parsing codes (`parse`). Gaps: pilot-report.md,
+      "Phase 5".
 - [ ] `repl.rs` (878), `dive`
 - [ ] `dap.rs` (521), `debug.rs` (887), `dbg_eval.rs` (149)
 - [ ] `live.rs` (549)
 - [x] `hatch.rs` (484): `compiler/src/hatch.auk`, `compiler hatch <file> [--hole N] [--tries N]
-      [--dry-run]`; the model command via `posix_spawnp` (ffi), the candidates' tests still built
-      and run by the Rust back end (`auk __jit test`, texts in `AUK_SOURCES`) until Phase 4 lands.
+      [--dry-run]`, now `auk hatch` in the Phase 4 driver; the model command via `posix_spawnp`
+      (ffi), the candidates' tests built and run by the binary itself (`auk __jit test`, texts in
+      `AUK_SOURCES`; `$AUK_BIN` picks another).
       `scripts/diff_hatch.sh`: 37 commands with a scripted model (every flag and usage error,
       retries, contracts, traces, model failures, a project, a write error): 0 differ, prompts
       included. Gaps: pilot-report.md, "Phase 5", hatch.
@@ -490,7 +486,8 @@ Port onto the Auk compiler, each with its existing tests passing:
       compiler beyond `paths.auk` (copied), and it builds without a `.raft/` of its own.
       Results and gaps: pilot-report.md, "Phase 5", raft.
 - [ ] Threads: tools that use `std::thread` (`dap`, `debug`, `mcp`, `live`, `hatch`) use Auk
-      tasks/channels instead. `mcp` done: each tool call is a task.
+      tasks/channels instead. `mcp` done: each tool call is a task. `hatch` needs none: the
+      model's stdin is a file and the tests run in a spawned child.
 - [ ] Integration tests: `tests/*.rs` (24 files) become an Auk test runner over the same
       fixtures (spawns the binaries, compares output).
 - [ ] VS Code extension (`editors/vscode`) still works against the new `lsp`/`dap`.
@@ -501,7 +498,10 @@ Port onto the Auk compiler, each with its existing tests passing:
       plus checked-in LLVM bitcode (or textual IR) of the compiler, so a fresh checkout builds
       with LLVM alone — no previous `auk` needed.
 - [ ] Build script (`make`/`build.sh`): seed → stage 1 → stage 2, runtime, tools, tests.
-- [ ] Delete `Cargo.toml`, `Cargo.lock`, `build.rs`, `runtime/build.rs`, `src/`, `.cargo/`, `target/`.
+- [ ] Delete `Cargo.toml`, `Cargo.lock`, `build.rs`, `src/` (with `src/prelude/` moved, e.g. to
+      `compiler/prelude/`, since `embedded.auk` and the tools read it), `tests/*.rs`, `.cargo/`,
+      `target/`. `libauk_rt.a`/`auk_rt.bc` are built by `build.rs` today (into `target/auk-rt/`,
+      which `compiler/` `#embed`s): the build script takes that over first.
 - [ ] Install moves off `~/.cargo/bin` (e.g. `~/.auk/bin` or `/usr/local`); update README, docs,
       `site/index.html`, editor settings.
 - [ ] Release process: how a new seed is cut (every release, from the fixed point).
