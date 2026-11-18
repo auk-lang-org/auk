@@ -1,5 +1,55 @@
-/// Units of measure (the parsing half of src/units.rs): the text between `<` and `>` in
-/// canonical form, base names sorted with non-zero integer exponents.
+/// Units of measure (src/units.rs; `erase` is the checker's): a unit is its canonical list
+/// `[(str, int)]` (Rust's `Units`), base names sorted with non-zero integer exponents. Empty
+/// means dimensionless.
+
+pub fn is_none(u: [(str, int)]): bool = u.len() == 0
+
+/// Multiply (`k = 1`) or divide (`k = -1`) by `o`.
+pub fn combine(u: [(str, int)], o: [(str, int)], k: int): [(str, int)] {
+  var v = u
+  for (n, e) in o {
+    match v.find_index(x => x.0 == n) {
+      some(j) => v[j] = (n, v[j].1 + k * e)
+      none => v.push((n, k * e))
+    }
+  }
+  canon(v)
+}
+
+/// Raise to an integer power.
+pub fn pow(u: [(str, int)], k: int): [(str, int)] = canon(u.map(x => (x.0, x.1 * k)))
+
+/// The `k`-th root, when every exponent is divisible by `k`.
+pub fn root(u: [(str, int)], k: int): [(str, int)]? {
+  if !u.all(x => x.1 % k == 0) { return none }
+  u.map(x => (x.0, x.1 / k))
+}
+
+fn canon(v: [(str, int)]): [(str, int)] = v.filter(x => x.1 != 0).sort()
+
+/// When `u` and `o` have the same base names and differ only in exponents, a phrase
+/// saying so (`m^2` vs `m`), for diagnostics.
+pub fn exponent_hint(u: [(str, int)], o: [(str, int)]): str? {
+  if u.map(x => x.0) == o.map(x => x.0) && u != o {
+    "they differ only in an exponent"
+  } else {
+    none
+  }
+}
+
+/// Rust's `Display`: `kg*m/s^2`: positive exponents first (joined with `*`), then each negative
+/// one as `/u^n`; `1/s` when nothing is positive; `1` when dimensionless.
+pub fn text(u: [(str, int)]): str {
+  let pos = u.filter(x => x.1 > 0).map(x => power(x.0, x.1))
+  let neg = u.filter(x => x.1 < 0).map(x => power(x.0, -x.1))
+  var out = if pos.len() == 0 { "1" } else { pos.join("*") }
+  for n in neg { out += "/{n}" }
+  out
+}
+
+fn power(n: str, e: int): str = if e == 1 { n } else { "{n}^{e}" }
+
+/// The text between `<` and `>` in canonical form.
 
 /// Parse `kg*m/s^2`: names or `1`, joined by `*` and `/` (left to right), each optionally
 /// raised to an integer power `^n` (`n` may be negative). Fails with the reason.
