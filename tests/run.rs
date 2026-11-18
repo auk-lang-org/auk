@@ -380,6 +380,51 @@ fn expect_out(name: &str, src: &str, want: &str) {
     assert_eq!(out, want, "{name}: stderr:\n{err}");
 }
 
+/// The counting idiom `m[k] = (m.get(k) else d) op x` is compiled as one lookup (an update in
+/// place) when the key is present: the same results as the plain form, including copy-on-write
+/// (a snapshot keeps its value), floats, a missing key, an overflow under `catch` that leaves the
+/// map unchanged, and a default with a call (not fused).
+#[test]
+fn map_counting_idiom_updates_in_place() {
+    setup();
+    expect_out(
+        "map_update",
+        r#"fn bump(): int = 100
+
+fn main() {
+    var counts: {str: int} = {}
+    for w in "a b a c b a".split(" ") {
+        counts[w] = (counts.get(w) else 0) + 1
+    }
+    print(counts)
+    var f: {int: float} = {}
+    let k = 3
+    let half = 0.5
+    f[k] = (f.get(k) else 1.0) * half
+    f[k] = (f.get(k) else 1.0) * half
+    f[7] = (f.get(7) else 2.0) - half
+    print(f)
+    var m: {int: int} = {1: 10}
+    let snapshot = m
+    let one = 1
+    m[one] = (m.get(one) else 0) + 5
+    m[2] = (m.get(2) else 40) + 2
+    print("{m} {snapshot}")
+    var big: {int: int} = {5: 9223372036854775807}
+    let r = catch {
+        big[5] = (big.get(5) else 0) + 1
+        0
+    }
+    print("{r is err(_)} {big}")
+    var g: {int: int} = {}
+    g[1] = (g.get(1) else bump()) + 1
+    print(g)
+}
+"#,
+        "{\"a\": 3, \"b\": 2, \"c\": 1}\n{3: 0.25, 7: 1.5}\n{1: 15, 2: 42} {1: 10}\ntrue {5: 9223372036854775807}\n{1: 101}\n",
+    );
+}
+
 fn expect_panic(name: &str, src: &str, msg: &str) {
     let o = run_src(name, src);
     let (out, err) = text(&o);

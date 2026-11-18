@@ -2350,6 +2350,9 @@ impl<'g, 'a> Lower<'g, 'a> {
     }
 
     fn assign(&mut self, e: &Expr, op: Option<BinOp>, target: &Expr, value: &Expr) {
+        if op.is_none() && self.fused_map_update(target, value) {
+            return;
+        }
         if op.is_some() && self.t.calls.contains_key(&e.id) {
             // a user operator: target = op(target, value)
             let v = self.call(e, None, false);
@@ -2450,7 +2453,93 @@ impl<'g, 'a> Lower<'g, 'a> {
         }
     }
 
-    // ---- ?, else, ?., await ----
+/// Is `e` a local variable or a literal (cheap, pure, the same every time it's evaluated)?
+    fn simple_operand(&self, e: &Expr) -> bool {
+        match &e.kind {
+            EK::Lit(_) => true,
+            EK::Name(_) => matches!(self.t.names.get(&e.id), Some(NameRef::Local(_))),
+            _ => false,
+        }
+    }
+
+    /// Do `a` and `b` denote the same value: the same local, or equal literals?
+    fn same_operand(&self, a: &Expr, b: &Expr) -> bool {
+        match (&a.kind, &b.kind) {
+            (EK::Lit(x), EK::Lit(y)) => x == y,
+            (EK::Name(_), EK::Name(_)) => match (self.t.names.get(&a.id), self.t.names.get(&b.id)) {
+                (Some(NameRef::Local(x)), Some(NameRef::Local(y))) => x == y,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// The counting idiom `m[k] = (m.get(k) else d) op x` with one lookup when `k` is present:
+    /// the value is updated in place (after the copy-on-write check); a missing key gets `d op x`
+    /// through the usual insert. `m` must be a local map of ints or floats, `k` the same local or
+    /// literal both times, and `d` and `x` locals or literals, so nothing between the lookup and
+    /// the store can touch the map, and evaluation order can't be observed. Nothing is written
+    /// before `op` succeeds, so a panic in it (overflow) leaves the map as it was.
+    fn fused_map_update(&mut self, target: &Expr, value: &Expr) -> bool {
+        let EK::Index { expr: m1, index: k1 } = &target.kind else { return false };
+        let EK::Binary { op, lhs, rhs } = &value.kind else { return false };
+        let EK::Else { expr: got, arm } = &lhs.kind else { return false };
+        let EK::MethodCall { recv: m2, name, args } = &got.kind else { return false };
+        if name.name != "get" || args.len() != 1 || arm.binder.is_some() || self.t.calls.contains_key(&value.id) {
+            return false;
+        }
+        let core_get = matches!(self.tp.instances[self.inst].resolved.get(&got.id), Some(Target::Extern { symbol, .. }) if symbol == "duck_map_get_opt");
+        if !core_get || !self.same_operand(m1, m2) || !self.same_operand(k1, &args[0]) || !self.simple_operand(k1) || !self.simple_operand(&arm.body) || !self.simple_operand(rhs) {
+            return false;
+        }
+        // no implicit conversions anywhere in it
+        if [value.id, lhs.id, got.id, rhs.id, arm.body.id, k1.id, args[0].id].iter().any(|id| self.t.coercions.contains_key(id)) {
+            return false;
+        }
+        let Ty::Map(kt, vt) = self.ty(m1.id) else { return false };
+        let vt = *vt;
+        let float = match vt {
+            Ty::Int => false,
+            Ty::Float if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div) => true,
+            _ => return false,
+        };
+        if !float && !matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::AddWrap | BinOp::SubWrap | BinOp::MulWrap | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor) {
+            return false;
+        }
+        let loc = self.loc(value.span);
+        let combine = |a: Ex, b: Ex, loc: Ex| -> Ex {
+            if float {
+                let bop = match op {
+                    BinOp::Add => BOp::Add,
+                    BinOp::Sub => BOp::Sub,
+                    BinOp::Mul => BOp::Mul,
+                    _ => BOp::Div,
+                };
+                Ex::bin(bop, a, b)
+            } else {
+                int_op(*op, a, b, loc)
+            }
+        };
+        let (b, _) = self.place(m1);
+        let kv = self.expr(k1);
+        let k = self.lvalue(&kv, &kt);
+        self.do_(Ex::rt("duck_map_make_unique", vec![b.clone().addr()], MTy::void_ptr()));
+        let p = self.f.b.decl(Ex::rt("duck_map_find", vec![b.clone(), k.clone().addr().cast(MTy::void_ptr())], MTy::void_ptr()).cast(MTy::ptr(d(&vt))));
+        self.open_if(Ex::bin(BOp::Ne, p.clone(), Ex::null().cast(MTy::ptr(d(&vt)))));
+        let x = self.expr(rhs);
+        let cur = p.clone().deref(d(&vt));
+        let n = self.decl(&vt, combine(cur.clone(), x.c, loc.clone()));
+        self.set(cur, n);
+        self.else_();
+        let dv = self.expr(&arm.body);
+        let x = self.expr(rhs);
+        let n = self.decl(&vt, combine(dv.c, x.c, loc));
+        self.do_(Ex::rt("duck_map_set", vec![b.addr(), k.addr().cast(MTy::void_ptr()), n.addr().cast(MTy::void_ptr())], MTy::Void));
+        self.close();
+        true
+    }
+
+        // ---- ?, else, ?., await ----
 
     fn try_(&mut self, e: &Expr, x: &Expr) -> Val {
         let info = self.t.tries[&e.id].clone();
