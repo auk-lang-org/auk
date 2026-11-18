@@ -1367,12 +1367,17 @@ AUK_API void auk_dbg_hook(AukDbgFrame *f) {
         bool hit = bp_hit(f, site, &extra);
         pthread_mutex_lock(&st_lock);
         wait_not_stopped();
-        if (hit) {
+        /* the breakpoint may have been deleted while another thread was stopped (the
+         * condition ran without the lock, and the wait above may have spanned a stop) */
+        if (hit && atomic_load_explicit(&dbg_info->bp[site], memory_order_relaxed) > 0) {
             reason = "breakpoint";
         } else if (step_done(site)) {
             reason = "step";
+            free(extra);
+            extra = NULL;
         } else {
             pthread_mutex_unlock(&st_lock);
+            free(extra);
             return;
         }
     } else if (step_done(site)) {
