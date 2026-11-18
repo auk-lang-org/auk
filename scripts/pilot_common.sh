@@ -15,7 +15,7 @@ build_both() {
 
 # Every .auk the pilot is checked on: the golden corpus plus compiler/tests/ (error cases).
 corpus() {
-  find tests examples packages src/prelude compiler/src compiler/tests -name '*.auk' 2>/dev/null | LC_ALL=C sort
+  find tests examples packages src/prelude compiler/src compiler/tests -name '*.auk' -not -path '*/.raft/*' 2>/dev/null | LC_ALL=C sort
 }
 
 # diff_mode tokens|ast: dump every corpus file with both and report the files that differ.
