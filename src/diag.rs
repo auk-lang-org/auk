@@ -112,6 +112,7 @@ pub const CODES: &[(&str, &str)] = &[
     ("E0114", "unknown compiler intrinsic"),
     ("E0115", "constant depends on itself"),
     ("E0116", "a local named like a module or dependency is used as a path"),
+    ("E0117", "a bare variant name would be core's `Value` variant where another enum is meant"),
     ("E0120", "private item"),
     ("E0121", "private field"),
     // ---- E0200-E0299: types ----

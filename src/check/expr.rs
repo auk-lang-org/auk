@@ -748,6 +748,12 @@ impl Checker {
             let t = self.fresh();
             return Ty::opt(t);
         }
+        if m != core {
+            let hint = self.variant_hint(exp);
+            if self.value_variant_clash(e.span, n, hint.as_ref()) {
+                return Ty::Error;
+            }
+        }
         if let Some(t) = self.item_value(e, m, core, n, exp) {
             return t;
         }
@@ -794,12 +800,78 @@ impl Checker {
             bn.fn_refs.push(e.id);
             return Some(Ty::func(ps, r));
         }
-        let hint = exp.ty().map(|t| self.shallow(t));
+        let hint = self.variant_hint(exp);
         let vs = self.variant_candidates(target, n, hint.as_ref(), target != m);
         if let Some((d, i)) = vs {
             return Some(self.variant_value(e, d, i, hint.as_ref()));
         }
         None
+    }
+
+    /// The type that picks a bare variant name: the expected type, looking through `T?`, `T!`
+    /// and `T!E` (a plain value converts to them), so `fn f(): tok.Tok? = Eof` finds `Tok.Eof`.
+    fn variant_hint(&self, exp: &Exp) -> Option<Ty> {
+        let mut t = self.shallow(exp.ty()?);
+        loop {
+            match t {
+                Ty::Opt(inner) | Ty::Res(inner, _) => t = self.shallow(&inner),
+                _ => return Some(t),
+            }
+        }
+    }
+
+    /// A bare `n` that would resolve to core's `Value.n` (`Int`, `Float`, `Str`, ...) while the
+    /// expected type is another enum, or while nothing is expected and an enum of this package
+    /// has a variant `n` too: report it (E0117) instead of silently building a `Value`. Returns
+    /// whether it reported.
+    fn value_variant_clash(&mut self, span: Span, n: &str, hint: Option<&Ty>) -> bool {
+        let core = self.prog.core_root;
+        let value = self.b.value;
+        let is_value_variant = self.items[core].variants.get(n).is_some_and(|vs| vs.iter().any(|&(d, _)| d == value));
+        if !is_value_variant {
+            return false;
+        }
+        match hint {
+            Some(Ty::Named(d, _)) if *d != value && self.defs.is_enum(*d) => {
+                let tn = self.defs.types[*d].name.clone();
+                let names: Vec<String> = self.defs.variants(*d).iter().map(|v| v.name.clone()).collect();
+                let mut dg = Diag::new("E0117", span, format!("`{tn}` has no variant `{n}`"))
+                    .note(format!("a bare `{n}` is core's `Value.{n}` only where a `Value` is expected; write `Value.{n}` for that"));
+                if let Some(s) = similar(n, &names) {
+                    dg = dg.note(format!("did you mean `{s}`?")).fix(span, s);
+                }
+                self.err(dg);
+                true
+            }
+            None | Some(Ty::Var(_)) => {
+                let m = self.cur_module();
+                let pkg = self.prog.mods[m].pkg;
+                let root = self.prog.pkgs[pkg].root;
+                let mut found: Option<(ModId, String)> = None;
+                for (o, md) in self.prog.mods.iter().enumerate() {
+                    if md.pkg != pkg || o == m {
+                        continue;
+                    }
+                    if let Some(vs) = self.items[o].variants.get(n)
+                        && let Some(&(d, _)) = vs.iter().find(|(d, _)| self.defs.types[*d].public)
+                    {
+                        found = Some((o, self.defs.types[d].name.clone()));
+                        break;
+                    }
+                }
+                let Some((o, tn)) = found else { return false };
+                let rp = &self.prog.mods[root].path;
+                let op = &self.prog.mods[o].path;
+                let rel = if op.starts_with(rp) && op.len() > rp.len() { op[rp.len()..].join(".") } else { op.join(".") };
+                self.err(
+                    Diag::new("E0117", span, format!("`{n}` could be `{rel}.{n}` (a `{tn}`) or core's `Value.{n}`"))
+                        .note(format!("nothing here says which type is expected; write `{rel}.{n}`, or `Value.{n}` for core's `Value`"))
+                        .fix(span, format!("{rel}.{n}")),
+                );
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Variants named `n` in module `target` (or core's when `target` is core), preferring one
@@ -1032,7 +1104,7 @@ impl Checker {
     fn named_call(&mut self, e: &Expr, callee: &Expr, n: &str, args: &[ArgSrc], exp: &Exp, direct: bool) -> Ty {
         let m = self.cur_module();
         let core = self.prog.core_root;
-        let hint = exp.ty().map(|t| self.shallow(t));
+        let hint = self.variant_hint(exp);
         let mut local_fns = self.fns_in(m, m, n);
         if !local_fns.is_empty() {
             // A module function overloads a same-named core function instead of hiding it
@@ -1066,6 +1138,9 @@ impl Checker {
                 return self.fail_call(e, args);
             }
             return self.call_fns(e, callee.span, n, core_fns, args, exp, direct);
+        }
+        if m != core && self.value_variant_clash(callee.span, n, hint.as_ref()) {
+            return self.quiet_args(args);
         }
         if let Some((d, i)) = self.variant_candidates(core, n, hint.as_ref(), m != core) {
             return self.variant_call(e, d, i, args, hint.as_ref());
@@ -1103,7 +1178,7 @@ impl Checker {
         if !fs.is_empty() {
             return self.call_fns(e, name.span, &name.name, fs, args, exp, direct);
         }
-        let hint = exp.ty().map(|t| self.shallow(t));
+        let hint = self.variant_hint(exp);
         if let Some((d, i)) = self.variant_candidates(target, &name.name, hint.as_ref(), target != m) {
             return self.variant_call(e, d, i, args, hint.as_ref());
         }

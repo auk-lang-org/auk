@@ -69,6 +69,7 @@ fn max(a: Ord, b: Ord): Ord = if a > b { a } else { b }   // same shape name = s
 fn pair<A: Show, B: Show>(a: A, b: B): str = a.show() + b.show()
 ```
 Built-in shapes: `Show { fn show(self): str }`, `Ord { fn cmp(self, o: Self): int }` (negative, 0 or positive), `Eq { fn eq(self, o: Self): bool }`, `Data` (anything with `to_value`/`from_value`: primitives, lists, maps, `T?`, structs, enums). `sort min max <` need `Ord`.
+A bare variant name is found through the expected type, also through `T?`/`T!`/`T!E` and for another module's `pub` enum (`fn next(): tok.Tok! = Eof`); otherwise write `tok.Eof`, and `Value.Int(3)` for core's `Value`.
 A `pub struct`'s fields are public unless their type is private to the module.
 Define `add sub mul div mod eq cmp` and `+ - * / % == <` work. `==` is automatic for structs, enums and tuples.
 

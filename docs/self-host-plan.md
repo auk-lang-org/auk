@@ -201,8 +201,8 @@ Gaps for Phase 4, found doing 2c:
       Found by the pilot (details and snippets in [pilot-report.md](pilot-report.md), "Gaps"):
   - [ ] `var` parameters in function types (`(var P) => T`), for parser combinators.
   - [ ] Or-patterns (`A | B =>`).
-  - [ ] Bare variant names of another module's enum in expressions where `T?`/`T!`/`T!E` is
-        expected (and never silently core's `Value.Float`/`Int`/`Str`), or a way to import them.
+  - [x] Bare variant names of another module's enum in expressions where `T?`/`T!`/`T!E` is
+        expected (and never silently core's `Value.Float`/`Int`/`Str`: E0117), or a way to import them.
   - [ ] Moving a value out of a list/map element (no copy when it goes back).
   - [ ] Reads without RC: a value read from a container/parameter that isn't mutated while it
         lives is borrowed (no retain/release); no RC for payload-less enum constants.
