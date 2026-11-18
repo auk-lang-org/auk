@@ -20,12 +20,7 @@ while read -r f; do
     fi
     # shellcheck disable=SC2086
     "$AUK" ir $v "$f" > "$out/$key.rust" 2>&1 || true
-    # a program the Rust front end rejects (a failing imprint, ...): its error, for both
-    if [ "$(head -c 7 "$out/$key.dump")" = auk-mir ]; then
-      "$PORT" mir "$out/$key.dump" > "$out/$key.auk" 2>&1 || true
-    else
-      cp "$out/$key.dump" "$out/$key.auk"
-    fi
+    "$PORT" mir "$out/$key.dump" > "$out/$key.auk" 2>&1 || true
     if ! cmp -s "$out/$key.rust" "$out/$key.auk"; then
       bad=$((bad + 1))
       echo "DIFF $f $v (diff $out/$key.rust $out/$key.auk)"
