@@ -480,10 +480,7 @@ fn ir_opts(args: [str]): (IrOpts, [str])! {
 /// `auk run|build|ir|test ...`. Returns the exit code (`run` and `test` exit themselves when
 /// the program ran).
 pub fn cli(cx: resolve.Sources, cmd: str, args0: [str]): int uses fs, env, proc, time, ffi {
-  if cmd == "run" && args0.get(0) == some("--live") {
-    eprint("error: `auk run --live` is not in the self-hosted compiler yet")
-    return 2
-  }
+  if cmd == "run" && args0.get(0) == some("--live") { return live.cli(cx, args0.skip(1)) }
   // `auk ir`'s own options, mixed with the trace flags before the file
   var io = IrOpts { llvm: none, dump: false, release: false, lines: false, imprint_eval: false, time: false, quiet: false, repeat: 1 }
   var args = args0

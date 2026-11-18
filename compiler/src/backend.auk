@@ -166,6 +166,53 @@ pub fn jit(
   orcjit.load(emit(b)?, syms)
 }
 
+/// A program compiled for `auk run --live` (Rust's `LiveJit`): every call to a function in the
+/// live slots goes through the live table, so a later compile can replace bodies.
+pub struct LiveCode {
+  code: orcjit.Code,
+  entry: ffi.Ptr,
+  /// (slot, code address) of each function in the slots, to store into the table.
+  entries: [(int, ffi.Ptr)],
+  /// The program's `dk_init` (literals, imprints, constants), to run before a reloaded module's
+  /// code is used.
+  init: ffi.Ptr,
+  /// Each function's code address, by name (to tell which code a running task started in).
+  addrs: {str: ffi.Ptr},
+}
+
+/// A program for `auk run --live`: calls to the functions in `slots` go through the live table
+/// at `table` (8-byte code pointers).
+pub fn jit_live(
+  prog: mir.Program,
+  info: mir.types.TyInfo,
+  table: int,
+  slots: {int: int},
+): LiveCode! uses fs, env, proc, ffi {
+  let ex = codegen.Exports { entry: "dk_entry", names: [], all: true }
+  orcjit.open_libs(prog.links, prog.c_syms)?
+  let b = build(prog, info, ex, some((table, slots)), Level.O0, false, false)?
+  let syms = b.rt_syms
+  let code = orcjit.load(emit(b)?, syms)?
+  let entry = orcjit.lookup(code, "dk_entry")?
+  var addrs: {str: ffi.Ptr} = {}
+  for i, f in prog.funcs {
+    if prog.entry == some(i) {
+      addrs[f.name] = entry
+    } else {
+      addrs[f.name] = orcjit.lookup(code, f.name)?
+    }
+  }
+  var entries: [(int, ffi.Ptr)] = []
+  for f, slot in slots {
+    match addrs.get(prog.funcs[f].name) {
+      some(a) => entries.push((slot, a))
+      none => {}
+    }
+  }
+  let init = addrs.get("dk_init") else return fail("no dk_init")
+  LiveCode { code, entry, entries, init, addrs }
+}
+
 /// Compile a program to an object file whose `main` is the entry point; `opt`: optimize (O2,
 /// with the runtime's inlinable functions).
 pub fn object(prog: mir.Program, info: mir.types.TyInfo, opt: bool): [int]! uses fs, env, ffi {
