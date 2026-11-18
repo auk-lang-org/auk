@@ -601,6 +601,7 @@ typedef struct SslApi {
     long (*SSL_get_verify_result)(const SSL *s);
     const char *(*X509_verify_cert_error_string)(long n);
     unsigned long (*ERR_get_error)(void);
+    unsigned long (*ERR_peek_error)(void);
     void (*ERR_error_string_n)(unsigned long e, char *buf, size_t len);
     void (*ERR_clear_error)(void);
 } SslApi;
@@ -614,6 +615,8 @@ enum {
     SSL_VERIFY_PEER = 1,
     SSL_CTRL_SET_MIN_PROTO_VERSION = 123,
     SSL_CTRL_SET_TLSEXT_HOSTNAME = 55,
+    SSL_CTRL_SET_GROUPS_LIST = 92,
+    SSL_R_UNEXPECTED_EOF_WHILE_READING = 294,
     TLSEXT_NAMETYPE_host_name = 0,
     TLS1_2_VERSION = 0x0303,
     SSL_ERROR_SSL = 1,
@@ -670,6 +673,7 @@ static void ssl_load(void) {
     ssl.SSL_get_verify_result = sym(lib, "SSL_get_verify_result", &ok);
     ssl.X509_verify_cert_error_string = sym(lib, "X509_verify_cert_error_string", &ok);
     ssl.ERR_get_error = sym(lib, "ERR_get_error", &ok);
+    ssl.ERR_peek_error = sym(lib, "ERR_peek_error", &ok);
     ssl.ERR_error_string_n = sym(lib, "ERR_error_string_n", &ok);
     ssl.ERR_clear_error = sym(lib, "ERR_clear_error", &ok);
     if (!ok) {
@@ -758,6 +762,52 @@ static int ssl_drive(SslTls *t, int which, void *buf, int n, int *saved) {
     }
 }
 
+/* A connected, handshaken session, or NULL with *err. classic: offer only classical key
+ * exchange groups (see auk_net_tls). *retry says the handshake ended in an EOF or reset before
+ * any certificate verdict, which a classical retry may get past. */
+static SslTls *ssl_open(const char *h, const char *ports, int64_t port, bool classic, AukErr **err, bool *retry) {
+    *retry = false;
+    const char *why;
+    int code;
+    int fd = auk__tcp_connect(h, ports, &why, &code);
+    if (fd < 0) {
+        AukStrBuf m = {0};
+        tls_prefix(&m, h, port);
+        *err = prefixed(&m, ": ", why, code);
+        return NULL;
+    }
+    SslTls *t = auk__xcalloc(1, sizeof(SslTls));
+    t->fd = fd;
+    t->s = ssl.SSL_new(ssl_ctx);
+    ssl.SSL_set_fd(t->s, fd);
+    if (classic) {
+        ssl.SSL_ctrl(t->s, SSL_CTRL_SET_GROUPS_LIST, 0, (void *)"X25519:P-256:P-384");
+    }
+    unsigned char addr[16];
+    bool ip = inet_pton(AF_INET, h, addr) == 1 || inet_pton(AF_INET6, h, addr) == 1;
+    if (!ip) {
+        /* SNI for DNS names only */
+        ssl.SSL_ctrl(t->s, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, (void *)h);
+    }
+    ssl.SSL_set1_host(t->s, h);
+    int saved = 0;
+    int r = ssl_drive(t, 0, NULL, 0, &saved);
+    if (r > 0) {
+        return t;
+    }
+    int e = ssl.SSL_get_error(t->s, r);
+    unsigned long top = ssl.ERR_peek_error();
+    bool eof = e == SSL_ERROR_SYSCALL || (e == SSL_ERROR_SSL && (top & 0xFFF) == SSL_R_UNEXPECTED_EOF_WHILE_READING);
+    *retry = eof && ssl.SSL_get_verify_result(t->s) == X509_V_OK && (saved == 0 || saved == ECONNRESET);
+    AukStrBuf m = {0};
+    tls_prefix(&m, h, port);
+    *err = ssl_err(&m, t->s, r, saved);
+    ssl.SSL_free(t->s);
+    close(fd);
+    free(t);
+    return NULL;
+}
+
 AUK_API AukRes_conn auk_net_tls(const AukStr *host, int64_t port) {
     const char *h = auk_str_cstr(host);
     AukErr *bad = check_args(h, port);
@@ -772,37 +822,21 @@ AUK_API AukRes_conn auk_net_tls(const AukStr *host, int64_t port) {
     }
     char ports[24];
     snprintf(ports, sizeof ports, "%lld", (long long)port);
-    const char *why;
-    int code;
-    int fd = auk__tcp_connect(h, ports, &why, &code);
-    if (fd < 0) {
-        AukStrBuf m = {0};
-        tls_prefix(&m, h, port);
-        return tls_conn_err(prefixed(&m, ": ", why, code));
+    AukErr *err = NULL;
+    bool retry = false;
+    SslTls *t = ssl_open(h, ports, port, false, &err, &retry);
+    if (t == NULL && retry) {
+        /* Some servers (TLS 1.2-only ones among them) drop a ClientHello that offers a
+         * post-quantum key share (X25519MLKEM768, OpenSSL 3.5's default): it spans two TCP
+         * segments. An EOF or reset before any certificate verdict gets one more try offering
+         * only classical groups, still TLS 1.3 when the server has it, with full verification. */
+        auk_release(err);
+        t = ssl_open(h, ports, port, true, &err, &retry);
     }
-    SslTls *t = auk__xcalloc(1, sizeof(SslTls));
-    t->fd = fd;
-    t->s = ssl.SSL_new(ssl_ctx);
-    ssl.SSL_set_fd(t->s, fd);
-    unsigned char addr[16];
-    bool ip = inet_pton(AF_INET, h, addr) == 1 || inet_pton(AF_INET6, h, addr) == 1;
-    if (!ip) {
-        /* SNI for DNS names only */
-        ssl.SSL_ctrl(t->s, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, (void *)h);
+    if (t == NULL) {
+        return tls_conn_err(err);
     }
-    ssl.SSL_set1_host(t->s, h);
-    int saved = 0;
-    int r = ssl_drive(t, 0, NULL, 0, &saved);
-    if (r <= 0) {
-        AukStrBuf m = {0};
-        tls_prefix(&m, h, port);
-        AukErr *e = ssl_err(&m, t->s, r, saved);
-        ssl.SSL_free(t->s);
-        close(fd);
-        free(t);
-        return tls_conn_err(e);
-    }
-    AukConn *c = auk__conn_new(fd);
+    AukConn *c = auk__conn_new(t->fd);
     c->tls = t;
     AukRes_conn res = {0};
     res.ok = true;

@@ -247,17 +247,38 @@ _Noreturn void auk__panic(const char *loc, const char *msg, size_t n) {
     _exit(101);
 }
 
+/* The text of the panic being raised on this thread: messages are bounded at 2047 bytes
+ * (auk__panic), and a caught panic doesn't leak a buffer (catch.c copies what it keeps). */
+static _Thread_local char panic_buf[2048];
+
+/* Panic with the n bytes at p (anything past the bound is dropped here; auk__panic then cuts
+ * the message at a UTF-8 boundary). */
+_Noreturn void auk__panic_bytes(const char *loc, const char *p, size_t n) {
+    if (n > sizeof panic_buf - 1) {
+        n = sizeof panic_buf - 1;
+    }
+    if (n > 0 && p != panic_buf) {
+        memmove(panic_buf, p, n);
+    }
+    panic_buf[n] = 0;
+    auk__panic(loc, panic_buf, n);
+}
+
 _Noreturn void auk__panic3(const char *loc, const char *a, const char *b, const char *c) {
-    size_t na = a == NULL ? 0 : strlen(a);
-    size_t nb = b == NULL ? 0 : strlen(b);
-    size_t nc = c == NULL ? 0 : strlen(c);
-    char *m = auk__xmalloc(na + nb + nc + 1);
-    memcpy(m, a, na);
-    memcpy(m + na, b, nb);
-    memcpy(m + na + nb, c, nc);
-    m[na + nb + nc] = 0;
-    /* m leaks if a recovery point catches the panic (bounded per panic, like the rest) */
-    auk__panic(loc, m, na + nb + nc);
+    const char *parts[3] = {a, b, c};
+    size_t n = 0;
+    for (int i = 0; i < 3; i++) {
+        size_t k = parts[i] == NULL ? 0 : strlen(parts[i]);
+        if (k > sizeof panic_buf - 1 - n) {
+            k = sizeof panic_buf - 1 - n;
+        }
+        if (k > 0) {
+            memcpy(panic_buf + n, parts[i], k);
+        }
+        n += k;
+    }
+    panic_buf[n] = 0;
+    auk__panic(loc, panic_buf, n);
 }
 
 _Noreturn void auk__panic_rt(const char *msg) {
@@ -293,13 +314,13 @@ AUK_API _Noreturn void auk_unwrap_none(const char *loc) {
 AUK_API _Noreturn void auk_unwrap_err(const char *loc, AukErr *e) {
     AukStr *s = auk_err_show(e);
     static const char prefix[] = "unwrapped an error: ";
+    char m[2048];
     size_t np = sizeof prefix - 1;
-    size_t ns = (size_t)s->len_bytes;
-    char *m = auk__xmalloc(np + ns + 1);
+    size_t ns = (size_t)s->len_bytes < sizeof m - np ? (size_t)s->len_bytes : sizeof m - np;
     memcpy(m, prefix, np);
     memcpy(m + np, s->data, ns);
-    m[np + ns] = 0;
-    auk__panic(loc, m, np + ns);
+    auk_release(s);
+    auk__panic_bytes(loc, m, np + ns);
 }
 
 /* ---- arithmetic -------------------------------------------------------------------------- */

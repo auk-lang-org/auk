@@ -309,12 +309,12 @@ AUK_API void auk_sb_free(AukStrBuf *b) {
 
 /* Panic with the builder's text (it is consumed). */
 _Noreturn void auk__panic_sb(const char *loc, AukStrBuf *b) {
-    int64_t n = b->len;
-    char *m = auk__xmalloc((size_t)n + 1);
-    memcpy(m, sb_data(b), (size_t)n);
-    m[n] = 0;
+    /* copied out (bounded like every panic message) so the builder can be freed first */
+    char m[2048];
+    size_t n = b->len < (int64_t)sizeof m ? (size_t)b->len : sizeof m;
+    memcpy(m, sb_data(b), n);
     auk_sb_free(b);
-    auk__panic(loc, m, (size_t)n);
+    auk__panic_bytes(loc, m, n);
 }
 
 /* A new error with the builder's text (it is consumed). */

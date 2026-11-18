@@ -299,6 +299,9 @@ AUK_API int64_t auk_refcount(const void *p);
 /* Panic with a message of n bytes: print `panic: <msg>\n  at <loc>` and exit 101, or jump to
  * this thread's recovery point (catch.c). */
 _Noreturn void auk__panic(const char *loc, const char *msg, size_t n);
+/* Panic with the n bytes at p, copied into a per-thread buffer first (so p may be freed or go
+ * out of scope; a caught panic leaks nothing). */
+_Noreturn void auk__panic_bytes(const char *loc, const char *p, size_t n);
 /* Panic with `<a><b><c>` (any may be NULL): messages built without varargs. */
 _Noreturn void auk__panic3(const char *loc, const char *a, const char *b, const char *c);
 
