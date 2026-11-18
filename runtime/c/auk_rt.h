@@ -811,6 +811,68 @@ void auk__tls_free(void *tls);
 
 AUK_API AukRes_unit auk_audio_out_play(const AukArr *samples, int64_t channels, int64_t rate, const char *loc);
 
+/* ---- gui.c: windows (the client side) and the wire protocol to the window process -------- */
+
+enum {
+    /* client → host: w, h, title → REPLY id, w, h, scale (physical pixels) */
+    AUK_WIRE_OPEN = 1,
+    /* client → host: id. No reply. */
+    AUK_WIRE_CLOSE = 2,
+    /* client → host: id, fw, fh, buf, seq, n, then n rectangles x, y, w, h: show shared buffer
+     * buf (0 or 1, an fw×fh frame of 0xffRRGGBB; its fd comes along whenever it is new), of which
+     * those rectangles changed. → PRESENTED as soon as the host has taken it. */
+    AUK_WIRE_PRESENT = 3,
+    /* client → host: close my windows; I'm ending normally. No reply. */
+    AUK_WIRE_BYE = 4,
+    /* host → client: status (0 ok, 1 error), then the result, or the error message */
+    AUK_WIRE_REPLY = 100,
+    /* host → client: id, then the event's ints (as gui.next_event decodes them) */
+    AUK_WIRE_EVENT = 101,
+    /* host → client: id, w, h, scale: the window's current size */
+    AUK_WIRE_METRICS = 102,
+    /* host → client: id, seq, status (0 ok, 1 error, then the message): PRESENT seq is done */
+    AUK_WIRE_PRESENTED = 103,
+};
+
+/* A message being built (fields appended to sb). */
+typedef struct AukWireBuf {
+    AukStrBuf sb;
+} AukWireBuf;
+
+/* Reading a message's fields. */
+typedef struct AukWireReader {
+    const uint8_t *b;
+    int64_t n;
+    int64_t i;
+} AukWireReader;
+
+/* A received message: op, its body (malloc'd; the fields start at body + 1), an fd that came
+ * with it (or -1), and a reader over the fields. */
+typedef struct AukWireMsg {
+    uint8_t op;
+    uint8_t *body;
+    int64_t n;
+    int fd;
+    AukWireReader r;
+} AukWireMsg;
+
+void auk__wire_put_i64(AukWireBuf *b, int64_t v);
+void auk__wire_put_f64(AukWireBuf *b, double v);
+void auk__wire_put_str(AukWireBuf *b, const char *s, int64_t n);
+int64_t auk__wire_i64(AukWireReader *r);
+double auk__wire_f64(AukWireReader *r);
+void auk__wire_no_sigpipe(int fd);
+int auk__wire_send(int fd, uint8_t op, const uint8_t *body, int64_t n, int pass);
+int auk__wire_recv(int fd, AukWireMsg *m);
+void auk_gui_shutdown(void);
+AUK_API AukRes_int auk_gui_open(const AukStr *title, int64_t w, int64_t h);
+AUK_API void auk_gui_close(int64_t win);
+AUK_API int64_t auk_gui_width(int64_t win);
+AUK_API int64_t auk_gui_height(int64_t win);
+AUK_API double auk_gui_scale(int64_t win);
+AUK_API AukRes_unit auk_gui_present_rects(int64_t win, const AukFrame *f, const AukArr *rects);
+AUK_API AukArr *auk_gui_next_event(int64_t win, int64_t ms, const char *loc);
+
 /* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
 
 
