@@ -76,12 +76,16 @@ fn main(args: [str]) uses time {
   let j = parts.join("")
   bench("parts.push + join ({j.len()})", t)
 
-  // 7. str of chars
-  t = time.now()
+  // 7. str of chars: one big, and many short slices (identifiers in a lexer)
   var cs: [char] = []
   for i in 0..n { cs.push('x') }
+  t = time.now()
   let s2 = str(cs)
   bench("str([char]) ({s2.len()})", t)
+  t = time.now()
+  var idents = 0
+  for i in 0..n * 10 { idents += str(cs[0..8]).len() }
+  bench("str(cs[0..8]) x {n * 10} ({idents})", t)
 
   // 8. match on str: 20 keyword arms
   t = time.now()

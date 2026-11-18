@@ -207,7 +207,26 @@ static void str_chars_bytes_utf8(void) {
     CHECK(AT(uint32_t, cs, 2) == 0x1F986);
     CHECK_STR(auk_str_from_chars(cs), "aé🦆");
     CHECK_STR(auk_arr_show(cs), "['a', 'é', '🦆']");
+    AukStr *back = auk_str_from_chars(cs);
+    CHECK(back->len_bytes == 7 && back->len_chars == 3 && !back->is_ascii);
+    rel(back);
     rel(cs);
+    /* ASCII, empty, and chars that aren't scalar values (U+FFFD each) */
+    AukStr *abs = s("ab");
+    AukArr *as = auk_str_chars(abs);
+    AukStr *ab = auk_str_from_chars(as);
+    CHECK(ab->len_bytes == 2 && ab->len_chars == 2 && ab->is_ascii);
+    CHECK_STR(ab, "ab");
+    rel(as);
+    rel(abs);
+    AukArr *none = auk_arr_new(&auk_ops_char, 0);
+    CHECK_STR(auk_str_from_chars(none), "");
+    uint32_t bad[] = {0xD800, 'x', 0x110000};
+    for (int i = 0; i < 3; i++) auk_arr_push(&none, &bad[i]);
+    AukStr *rep = auk_str_from_chars(none);
+    CHECK(rep->len_chars == 3 && rep->len_bytes == 7 && !rep->is_ascii);
+    CHECK_STR(rep, "\xEF\xBF\xBDx\xEF\xBF\xBD");
+    rel(none);
     AukArr *bs = auk_str_bytes(x);
     CHECK(auk_arr_len(bs) == 7);
     CHECK(AT(int64_t, bs, 1) == 0xC3);

@@ -863,14 +863,64 @@ AUK_API AukArr *auk_str_bytes(const AukStr *s) {
     return out;
 }
 
-AUK_API AukStr *auk_str_from_chars(AukArr *chars) {
-    AukStrBuf b = {0};
-    int64_t n = arr_len(chars);
-    const uint32_t *cs = n > 0 ? (const uint32_t *)chars->data : NULL;
-    for (int64_t i = 0; i < n; i++) {
-        auk_sb_char(&b, cs[i]);
+/* The UTF-8 length of char c (a surrogate or out-of-range value becomes U+FFFD: 3 bytes). */
+static int utf8_len(uint32_t c) {
+    if (c < 0x80) {
+        return 1;
     }
-    return auk_sb_finish(&b);
+    if (c < 0x800) {
+        return 2;
+    }
+    if (c < 0x10000 || c > 0x10FFFF) {
+        return 3;
+    }
+    return 4;
+}
+
+/* One pass to size the string, one to encode straight into it (no builder, no copy). */
+static AukStr *str_of_chars(const uint32_t *cs, int64_t n) {
+    int64_t bytes = 0;
+    uint32_t any = 0;
+    for (int64_t i = 0; i < n; i++) {
+        any |= cs[i];
+    }
+    bool ascii = any < 0x80;
+    if (ascii) {
+        bytes = n;
+    } else {
+        for (int64_t i = 0; i < n; i++) {
+            bytes += utf8_len(cs[i]);
+        }
+    }
+    AukStr *s = auk__alloc(sizeof(AukStr) + (size_t)bytes + 1, AUK_K_STR);
+    uint8_t *d = s->data;
+    if (ascii) {
+        for (int64_t i = 0; i < n; i++) {
+            d[i] = (uint8_t)cs[i];
+        }
+    } else {
+        for (int64_t i = 0; i < n; i++) {
+            d += utf8_encode(cs[i], d);
+        }
+    }
+    s->data[bytes] = 0;
+    s->len_bytes = bytes;
+    s->len_chars = n;
+    s->is_ascii = ascii;
+    return s;
+}
+
+AUK_API AukStr *auk_str_from_chars(AukArr *chars) {
+    int64_t n = arr_len(chars);
+    return str_of_chars(n > 0 ? (const uint32_t *)chars->data : NULL, n);
+}
+
+AUK_API AukStr *auk_str_from_char_range(AukArr *chars, int64_t lo, int64_t hi, const char *loc) {
+    int64_t n = arr_len(chars);
+    if (lo < 0 || hi < lo || hi > n) {
+        auk_arr_slice(chars, lo, hi, loc); /* panics with the slice's message */
+    }
+    return str_of_chars(hi > lo ? (const uint32_t *)chars->data + lo : NULL, hi - lo);
 }
 
 /* ---- parsing ----------------------------------------------------------------------------- */

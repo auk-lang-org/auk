@@ -1589,6 +1589,21 @@ impl<'g, 'a> Lower<'g, 'a> {
             return self.tail_call(e);
         }
         let exprs = arg_exprs(e);
+        // `str(cs[a..b])`: the string straight from the char range, no slice in between
+        if let Target::Extern { symbol, .. } = &target
+            && symbol == "auk_str_from_chars"
+            && let [x] = exprs[..]
+            && let EK::Slice { expr, lo, hi, inclusive } = &x.kind
+            && self.t.coercions.get(&x.id).is_none_or(|c| c.is_empty())
+        {
+            let xv = self.expr(expr);
+            let l = self.expr(lo);
+            let h = self.expr(hi);
+            let loc = self.loc(x.span);
+            let hc = if *inclusive { Ex::rt("auk_add", vec![h.c.clone(), Ex::int(1), loc.clone()], MTy::D(Ty::Int)) } else { h.c.clone() };
+            let c = Ex::rt("auk_str_from_char_range", vec![xv.c, l.c, hc, loc], MTy::D(Ty::Str));
+            return self.tmp(&Ty::Str, c);
+        }
         // the closure value is evaluated before its arguments
         let callee_val = if let Target::Closure = target {
             let cx = match &e.kind {

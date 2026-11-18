@@ -589,6 +589,8 @@ AUK_API AukStr *auk_str_repeat(const AukStr *s, int64_t n, const char *loc);
 AUK_API AukArr *auk_str_chars(const AukStr *s);
 AUK_API AukArr *auk_str_bytes(const AukStr *s);
 AUK_API AukStr *auk_str_from_chars(AukArr *chars);
+/* str(chars[lo..hi]) without the slice */
+AUK_API AukStr *auk_str_from_char_range(AukArr *chars, int64_t lo, int64_t hi, const char *loc);
 AUK_API AukRes_int auk_int_parse(const AukStr *s);
 AUK_API AukRes_float auk_float_parse(const AukStr *s);
 AUK_API bool auk_char_is_digit(uint32_t c);

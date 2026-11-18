@@ -553,6 +553,24 @@ fn main() {
     );
 }
 
+/// `str(cs)` and `str(cs[a..b])` (built straight from the char range, no slice) give the same
+/// strings as before, non-ASCII, empty, of a slice view, and the same out-of-range panic.
+#[test]
+fn str_of_chars_and_char_ranges() {
+    expect_out(
+        "str_chars",
+        r#"fn main() {
+  let cs = "aé🦆xyz".chars()
+  let v = cs[1..5]
+  print([str(cs), str(cs[0..3]), str(cs[1..=2]), str(cs[2..2]), str(v[1..3]), str(cs[3..cs.len()])])
+  let r = catch str(cs[4..9])
+  print("{r}".contains("slice 4..9 out of range for length 6"))
+}
+"#,
+        "[\"aé🦆xyz\", \"aé🦆\", \"é🦆\", \"\", \"🦆x\", \"xyz\"]\ntrue\n",
+    );
+}
+
 #[test]
 fn closures_capture_values() {
     expect_out(
