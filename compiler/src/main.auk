@@ -13,7 +13,7 @@
 
 let MODES = ["tokens", "ast", "resolve", "check", "typed", "holes"]
 
-fn main(args: [str]): int! uses fs, env, time, ffi {
+fn main(args: [str]): int! uses fs, env, time, ffi, proc {
   if args.len() >= 2 && args[1] == "fmt" { return fmt.run(args.skip(2)) }
   if args.len() >= 2 && args[1] == "explain" { return explain.run(args.skip(2)) }
   if args.len() >= 2 && args[1] == "lsp" { return lsp.start(prelude_dir(args[0])) }
