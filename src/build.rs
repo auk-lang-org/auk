@@ -297,6 +297,10 @@ pub fn eval_imprints(tp: &TypedProgram) -> Result<HashMap<ConstId, CVal>, String
     g.define(entry, b);
     g.prog.entry = Some(entry);
     let info = TyInfo::new(tp);
+    // for the self-hosted port's diffs (scripts/diff_ir.sh): the helper program's MIR text
+    if let Ok(p) = env::var("AUK_IMPRINT_EVAL_IR") {
+        let _ = fs::write(p, mir::print::print(&g.prog, &info));
+    }
     let dir = scratch()?;
     let records = dir.join("imprints.out");
     let errs = dir.join("imprints.err");
@@ -308,6 +312,10 @@ pub fn eval_imprints(tp: &TypedProgram) -> Result<HashMap<ConstId, CVal>, String
         Ok((code, fs::read_to_string(&errs).unwrap_or_default()))
     };
     let res = run().and_then(|(code, stderr)| imprint_results(tp, &records, code, &stderr));
+    // ... and its records, which the port reads instead of running the helper itself
+    if let Ok(p) = env::var("AUK_IMPRINT_RECORDS") {
+        let _ = fs::copy(&records, p);
+    }
     let _ = fs::remove_dir_all(&dir);
     res
 }
