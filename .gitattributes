@@ -1,0 +1,11 @@
+# Line endings: normalize text; Auk sources and raft manifests are always LF.
+* text=auto
+*.auk text eol=lf diff=auk
+# diff=auk names the enclosing fn/test/struct in hunk headers. Git can't define the driver here;
+# enable it once per clone:
+#   git config diff.auk.xfuncname '^[ \t]*((pub[ \t]+)?((async[ \t]+)?fn|extern[ \t]+(fn|type)|struct|enum|shape|imprint|let)[ \t].*|test[ \t]+".*)$'
+raft.toml text eol=lf
+raft.lock text eol=lf linguist-generated
+
+# Built binaries.
+bench/bin/* binary
