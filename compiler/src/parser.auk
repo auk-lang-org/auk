@@ -505,18 +505,10 @@ fn item(p: var Parser): Raw!diag.Fail {
   }
 }
 
-/// `extern fn ... = "symbol"` or `extern type Name = "CType"` (prelude only).
+/// `extern fn ... = "symbol"` or `extern type Name = "CType"`. In the prelude the string is a
+/// runtime symbol; elsewhere a C prototype or C type, allowed only in a package with the `ffi`
+/// effect (checked with the manifest: E0036).
 fn extern_item(p: var Parser, doc: str?, public: bool, start: diag.Span): Raw!diag.Fail {
-  let kw = p.span()
-  if !p.prelude {
-    fail(
-      bad(
-        diag
-          .new("E0036", kw, "`extern` declarations are only allowed in the core prelude")
-          .note("Auk code calls the runtime through the core library; there is no FFI syntax in user code"),
-      ),
-    )
-  }
   p.bump()
   if p.peek() == token.Ident("type") {
     p.bump()
@@ -535,8 +527,9 @@ fn extern_item(p: var Parser, doc: str?, public: bool, start: diag.Span): Raw!di
     )
   }
   var c = fn_signature(&p, doc, public, start)?
-  p.expect(token.Eq, "and the runtime symbol in quotes")?
-  c.body = ast.FnBody.Extern(extern_str(&p, "the runtime symbol")?)
+  let what = if p.prelude { "the runtime symbol" } else { "the C prototype" }
+  p.expect(token.Eq, "and {what} in quotes")?
+  c.body = ast.FnBody.Extern(extern_str(&p, what)?)
   c.span = start.to(p.prev)
   RClause(c)
 }
