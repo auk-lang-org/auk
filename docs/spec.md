@@ -15,6 +15,7 @@ Assignment copies values (copy-on-write); memory is reference-counted.
 let x = 1            // immutable
 var n: int = 0
 n += 1
+(a, b) = (b, a)      // assigns each target (the value is computed first)
 ```
 A top-level `let` is a module constant. Trailing commas are allowed everywhere.
 

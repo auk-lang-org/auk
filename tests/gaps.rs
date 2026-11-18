@@ -450,3 +450,33 @@ fn hex_octal_binary_formats() {
     assert!(err.contains("error[E0282]: malformed format spec `xx`: unexpected `x`"), "{err}");
 }
 
+
+#[test]
+fn tuple_assignment() {
+    let p = file(
+        r#"struct P { x: int, ys: [str] }
+fn main() {
+  var a = "one"
+  var b = "two"
+  (a, b) = (b, a)
+  print("{a} {b}")
+  var p = P { x: 1, ys: ["k"] }
+  var xs = [10, 20, 30]
+  (p.x, xs[2], (a, b)) = (5, 99, ("x", "y"))
+  print("{p.x} {xs} {a} {b}")
+  (p.ys, b) = (["m", a], p.ys[0])
+  print("{p.ys} {b}")
+  var m = {"k": 1}
+  (m["k"], m["j"]) = (2, 3)
+  print(m)
+}
+"#,
+    );
+    assert_eq!(run_leak_free(&p), "two one\n5 [10, 20, 99] x y\n[\"m\", \"x\"] k\n{\"k\": 2, \"j\": 3}\n");
+    let err = check_err(&file("fn f() {\n  var a = 1\n  let b = 2\n  (a, b) = (b, a)\n}\n"));
+    assert!(err.contains("error[E0320]: can't assign to `b`: it isn't mutable"), "{err}");
+    let err = check_err(&file("fn f() {\n  var a = 1\n  var b = 2\n  (a, b) += (1, 1)\n}\n"));
+    assert!(err.contains("4:3: error[E0027]: can't assign to this expression"), "{err}");
+    let err = check_err(&file("fn f() {\n  var a = 1\n  var b = 2\n  (a, b) = (1, \"x\")\n}\n"));
+    assert!(err.contains("E0200"), "{err}");
+}

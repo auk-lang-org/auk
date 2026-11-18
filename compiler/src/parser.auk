@@ -204,10 +204,14 @@ fn compound_op(t: token.Tok): ast.BinOp? = match t {
 
 fn is_lvalue(e: ast.Expr): bool = match e.kind {
   Name(_) => true
-  Field(x, _) => is_lvalue(x)
-  TupleField(x, _) => is_lvalue(x)
-  Index(x, _) => is_lvalue(x)
+  Field(x, _) | TupleField(x, _) | Index(x, _) => is_lvalue(x)
   _ => false
+}
+
+/// An assignment target: an lvalue, or for a plain `=` a tuple of targets (`(a, b) = (b, a)`).
+fn is_target(e: ast.Expr, plain: bool): bool = match e.kind {
+  Tuple(xs) => plain && xs.len() > 0 && xs.all(x => is_target(x, true))
+  _ => is_lvalue(e)
 }
 
 fn bad(d: diag.Diag): diag.Fail = diag.Bad(d)
@@ -1205,12 +1209,12 @@ fn stmt_expr(p: var Parser): ast.Expr!diag.Fail {
   let shr_eq = p.shr_ahead() == some(true)
   if !shr_eq && !is_assign(p.peek()) { return target }
   let op: ast.BinOp? = if shr_eq { ast.BinOp.Shr } else { compound_op(p.peek()) }
-  if !is_lvalue(target) {
+  if !is_target(target, op == none) {
     fail(
       bad(
         diag
           .new("E0027", target.span, "can't assign to this expression")
-          .note("an assignment target is a variable, a field or an index, like `a.b[i].c`"),
+          .note("an assignment target is a variable, a field or an index, like `a.b[i].c`, or for `=` a tuple of them: `(a, b) = (b, a)`"),
       ),
     )
   }

@@ -3555,7 +3555,22 @@ impl Checker {
         }
     }
 
+    /// The type of an assignment target: a place, or a tuple of them (`(a, b) = (b, a)`).
+    fn assign_target(&mut self, target: &Expr) -> Ty {
+        if let K::Tuple(xs) = &target.kind {
+            let t = Ty::Tuple(xs.iter().map(|x| self.assign_target(x)).collect());
+            self.record(target.id, &t);
+            return t;
+        }
+        self.place(target, true, PlaceUse::Assign)
+    }
+
     fn assign(&mut self, e: &Expr, op: Option<BinOp>, target: &Expr, value: &Expr) {
+        if op.is_none() && matches!(target.kind, K::Tuple(_)) {
+            let t = self.assign_target(target);
+            self.check(value, &t);
+            return;
+        }
         let t = self.place(target, true, PlaceUse::Assign);
         match op {
             None => {

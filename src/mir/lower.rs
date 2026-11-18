@@ -2377,6 +2377,71 @@ impl<'g, 'a> Lower<'g, 'a> {
         (n, ty)
     }
 
+    /// `target = v` for a plain `=`; a tuple target takes the tuple's elements in turn (the whole
+    /// value is computed first, so `(a, b) = (b, a)` swaps).
+    fn assign_to(&mut self, target: &Expr, v: Val) {
+        if let EK::Tuple(xs) = &target.kind {
+            let Ty::Tuple(ets) = v.ty.clone() else { return };
+            let ty = v.ty.clone();
+            let w = self.lvalue(&v, &ty);
+            for (i, (x, et)) in xs.iter().zip(&ets).enumerate() {
+                let el = Val::plain(self.fld(&w, Sel::F(i as u32)), et.clone());
+                self.assign_to(x, el);
+            }
+            return;
+        }
+        // `m[k] = v` inserts
+        if let EK::Index { expr, index } = &target.kind {
+            let (b, bt) = self.place(expr);
+            if let Ty::Map(kt, vt) = bt {
+                let kv = self.expr(index);
+                let k = self.lvalue(&kv, &kt);
+                let vc = self.lvalue(&v, &vt);
+                self.do_(Ex::rt("auk_map_set", vec![b.addr(), k.addr().cast(MTy::void_ptr()), vc.addr().cast(MTy::void_ptr())], MTy::Void));
+                return;
+            }
+            if let Ty::List(et) = bt {
+                let iv = self.expr(index);
+                let vc = self.lvalue(&v, &et);
+                let loc = self.loc(target.span);
+                self.do_(Ex::rt("auk_arr_set", vec![b.addr(), iv.c, vc.addr().cast(MTy::void_ptr()), loc], MTy::Void));
+                return;
+            }
+        }
+        let (lv, lty) = match &target.kind {
+            EK::Field { expr, name } if !self.t.names.contains_key(&target.id) => {
+                let (b, bt) = self.place(expr);
+                // a boxed (recursive) struct field gets a fresh box
+                if let Some(i) = self.field_index(&bt, &name.name)
+                    && self.g.field_raw(&bt, i, &b).1
+                {
+                    let ft = self.g.info.struct_layout(&bt)[i].0.clone();
+                    let o = self.own_as(v, &ft);
+                    let put = self.g.field_put(&bt, i, o);
+                    let (raw, _) = self.g.field_raw(&bt, i, &b);
+                    let old = self.f.b.decl(raw.clone());
+                    self.set(raw, put);
+                    self.do_(Ex::rt("auk_release", vec![old], MTy::Void));
+                    return;
+                }
+                self.place_field(target, &b, &bt, &name.name)
+            }
+            _ => self.place(target),
+        };
+        let ty = v.ty.clone();
+        let o = self.own_as(v, &ty);
+        let nv = self.decl(&ty, o);
+        if self.g.needs_rc(&lty) {
+            let old = self.decl(&lty, lv.clone());
+            self.set(lv, nv);
+            if let Some(r) = self.g.release(&lty, &old) {
+                self.emit(r);
+            }
+        } else {
+            self.set(lv, nv);
+        }
+    }
+
     fn assign(&mut self, e: &Expr, op: Option<BinOp>, target: &Expr, value: &Expr) {
         if op.is_none() && self.fused_map_update(target, value) {
             return;
@@ -2398,58 +2463,7 @@ impl<'g, 'a> Lower<'g, 'a> {
             return;
         }
         match op {
-            None => {
-                // `m[k] = v` inserts
-                if let EK::Index { expr, index } = &target.kind {
-                    let (b, bt) = self.place(expr);
-                    if let Ty::Map(kt, vt) = bt {
-                        let kv = self.expr(index);
-                        let k = self.lvalue(&kv, &kt);
-                        let vc = self.lvalue(&v, &vt);
-                        self.do_(Ex::rt("auk_map_set", vec![b.addr(), k.addr().cast(MTy::void_ptr()), vc.addr().cast(MTy::void_ptr())], MTy::Void));
-                        return;
-                    }
-                    if let Ty::List(et) = bt {
-                        let iv = self.expr(index);
-                        let vc = self.lvalue(&v, &et);
-                        let loc = self.loc(target.span);
-                        self.do_(Ex::rt("auk_arr_set", vec![b.addr(), iv.c, vc.addr().cast(MTy::void_ptr()), loc], MTy::Void));
-                        return;
-                    }
-                }
-                let (lv, lty) = match &target.kind {
-                    EK::Field { expr, name } if !self.t.names.contains_key(&target.id) => {
-                        let (b, bt) = self.place(expr);
-                        // a boxed (recursive) struct field gets a fresh box
-                        if let Some(i) = self.field_index(&bt, &name.name)
-                            && self.g.field_raw(&bt, i, &b).1
-                        {
-                            let ft = self.g.info.struct_layout(&bt)[i].0.clone();
-                            let o = self.own_as(v, &ft);
-                            let put = self.g.field_put(&bt, i, o);
-                            let (raw, _) = self.g.field_raw(&bt, i, &b);
-                            let old = self.f.b.decl(raw.clone());
-                            self.set(raw, put);
-                            self.do_(Ex::rt("auk_release", vec![old], MTy::Void));
-                            return;
-                        }
-                        self.place_field(target, &b, &bt, &name.name)
-                    }
-                    _ => self.place(target),
-                };
-                let ty = v.ty.clone();
-                let o = self.own_as(v, &ty);
-                let nv = self.decl(&ty, o);
-                if self.g.needs_rc(&lty) {
-                    let old = self.decl(&lty, lv.clone());
-                    self.set(lv, nv);
-                    if let Some(r) = self.g.release(&lty, &old) {
-                        self.emit(r);
-                    }
-                } else {
-                    self.set(lv, nv);
-                }
-            }
+            None => self.assign_to(target, v),
             Some(op) => {
                 let rc = v.c.clone();
                 let (lv, lty) = self.place(target);

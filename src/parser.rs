@@ -206,6 +206,14 @@ fn is_lvalue(e: &Expr) -> bool {
     }
 }
 
+/// An assignment target: an lvalue, or for a plain `=` a tuple of targets (`(a, b) = (b, a)`).
+fn is_target(e: &Expr, plain: bool) -> bool {
+    match &e.kind {
+        ExprKind::Tuple(xs) => plain && !xs.is_empty() && xs.iter().all(|x| is_target(x, true)),
+        _ => is_lvalue(e),
+    }
+}
+
 impl Parser {
     // ---- token helpers ----
 
@@ -930,9 +938,9 @@ impl Parser {
         let target = self.expr()?;
         let shr_eq = self.shr_ahead() == Some(true);
         let op = if shr_eq { Some(BinOp::Shr) } else if let Some(op) = assign_op(self.peek()) { op } else { return Ok(target) };
-        if !is_lvalue(&target) {
+        if !is_target(&target, op.is_none()) {
             return Err(Diag::new("E0027", target.span, "can't assign to this expression")
-                .note("an assignment target is a variable, a field or an index, like `a.b[i].c`"));
+                .note("an assignment target is a variable, a field or an index, like `a.b[i].c`, or for `=` a tuple of them: `(a, b) = (b, a)`"));
         }
         self.bump();
         if shr_eq {
