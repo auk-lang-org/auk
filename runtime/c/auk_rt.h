@@ -291,6 +291,7 @@ AUK_API int64_t auk_live_objects(void);
 AUK_API void auk_make_immortal(void *p);
 AUK_API void auk_set_cleanup(void (*f)(void));
 AUK_API int64_t auk_leak_check(void);
+AUK_API void auk_leak_baseline(void);
 AUK_API void *auk_retain(void *p);
 AUK_API void auk_release(void *p);
 AUK_API void auk__free_last(void *p);

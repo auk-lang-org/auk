@@ -16,6 +16,15 @@ AUK_API int64_t auk_live_objects(void) {
     return atomic_load(&live_objects);
 }
 
+/* The live objects that aren't the program's: a compiler written in Auk runs the programs it
+ * compiles in its own process, where its own objects stay live, so it marks them just before
+ * calling the program's entry point, and the leak check counts from there. */
+static _Atomic int64_t leak_baseline;
+
+AUK_API void auk_leak_baseline(void) {
+    atomic_store(&leak_baseline, atomic_load(&live_objects));
+}
+
 static _Noreturn void oom(void) {
     fputs("panic: out of memory\n", stderr);
     _exit(101);
@@ -94,7 +103,7 @@ AUK_API int64_t auk_leak_check(void) {
     if (f != NULL) {
         f();
     }
-    int64_t n = auk_live_objects();
+    int64_t n = auk_live_objects() - atomic_load(&leak_baseline);
     if (n != 0) {
         fflush(stdout);
         fprintf(stderr, "leak: %lld runtime object(s) still live at exit\n", (long long)n);

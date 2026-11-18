@@ -60,9 +60,11 @@ pub fn close(c: Code) uses ffi {
 }
 
 extern fn c_call_entry(f: ffi.Ptr, argc: int, argv: ffi.Ptr): int = "int (*)(int, void *)"
+extern fn c_leak_baseline() = "void auk_leak_baseline(void)"
 
 /// Call the entry point `int f(int argc, char **argv)` with these arguments (`argv[0]` first);
-/// returns its exit code.
+/// returns its exit code. The program shares this process's runtime, so its leak check
+/// (`AUK_LEAK_CHECK=1`) counts the objects live from the call on: the compiler's own aren't its.
 pub fn run(entry: ffi.Ptr, args: [str]): int uses ffi {
   let argv = ffi.alloc(8 * (args.len() + 1))
   var cs: [ffi.Ptr] = []
@@ -72,6 +74,7 @@ pub fn run(entry: ffi.Ptr, args: [str]): int uses ffi {
     ffi.write_ptr(argv, 8 * i, c)
   }
   ffi.write_ptr(argv, 8 * args.len(), ffi.null)
+  c_leak_baseline()
   let code = c_call_entry(entry, args.len(), argv)
   for c in cs { ffi.free(c) }
   ffi.free(argv)
