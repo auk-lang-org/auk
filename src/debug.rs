@@ -1,7 +1,7 @@
 //! `auk debug`: the debugger's command-line front end.
 //!
 //! It starts the program with `auk run --debug` in a child process and drives the debug engine
-//! (runtime/src/dbg.rs) over a private Unix socket (`AUK_DEBUG`). Two modes:
+//! (runtime/c/dbg.c) over a private Unix socket (`AUK_DEBUG`). Two modes:
 //!
 //! - **batch** (`--json`, `--batch`, or stdin not a terminal): set the `--break` points, run,
 //!   and at every stop record where it is, the locals (`--print` names, or all) and the stack,

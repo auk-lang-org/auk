@@ -3,7 +3,7 @@
 //! the slow or failing path. A failing path calls the *same* runtime function with the same
 //! arguments (which then panics), so messages and edge cases are exactly the runtime's.
 //!
-//! Layouts used here (runtime/src/lib.rs): `AukHeader { rc: i64 @0, kind: u32 @8 }`,
+//! Layouts used here (runtime/c/auk_rt.h): `AukHeader { rc: i64 @0, kind: u32 @8 }`,
 //! `AukArr { h @0, ops @16, len @24, cap @32, data @40, base @48 }`, `AukElemOps { size @0 }`.
 //! Handle kinds (`heap::is_handle`): 6..=10.
 

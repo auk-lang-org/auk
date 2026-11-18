@@ -49,7 +49,7 @@ pub enum MTy {
     D(Ty),
     /// A generated aggregate (box cell, closure environment, task arguments, vtable).
     Agg(AggId),
-    /// A runtime struct (see runtime/src/lib.rs).
+    /// A runtime struct (see runtime/c/auk_rt.h).
     Rt(Rt),
 }
 

@@ -5,7 +5,7 @@
  * the JIT's symbol table. The struct layouts are fixed: `src/mir/layout.rs` computes the same
  * ones, and `src/mir/llvm/intrin.rs` inlines field accesses by offset.
  *
- * Ownership conventions (see also runtime/src/lib.rs while the port is under way):
+ * Ownership conventions:
  * 1. Heap objects start with an AukHeader and are reference counted; a new object has rc 1.
  * 2. Arguments are borrowed, returned objects are owned (+1), results inside AukOpt_* and
  *    AukRes_* too.
@@ -763,7 +763,7 @@ typedef struct AukDbgCompiled {
 typedef bool (*AukDbgEvalHook)(uint32_t func, uint32_t site, const char *expr, AukDbgCompiled *out, char **err);
 
 AUK_API extern _Atomic int64_t auk_dbg_armed;
-AUK_API void auk_dbg_set_eval_hook(AukDbgEvalHook h);
+void auk_dbg_set_eval_hook(AukDbgEvalHook h);
 AUK_API void auk_dbg_enter(AukDbgFrame *f);
 AUK_API void auk_dbg_leave(AukDbgFrame *f);
 AUK_API void auk_dbg_hook(AukDbgFrame *f);
@@ -878,10 +878,16 @@ AUK_API AukArr *auk_gui_next_event(int64_t win, int64_t ms, const char *loc);
 /* Run the window process (AUK_GUI_HOST is set). Returns an exit code only if it can't start. */
 int auk__gui_host_main(void);
 
-/* ---- still in Rust (runtime/src): declarations shrink as modules move to C -------------- */
-
-
-
-
+/* ---- the layouts the compiler assumes ---------------------------------------------------
+ * src/mir/layout.rs computes the same layouts, and src/mir/llvm/intrin.rs reads these fields by
+ * offset in generated code: a change here must change there too. */
+_Static_assert(sizeof(AukHeader) == 16 && offsetof(AukHeader, kind) == 8, "AukHeader layout");
+_Static_assert(offsetof(AukArr, ops) == 16 && offsetof(AukArr, len) == 24 && offsetof(AukArr, cap) == 32 &&
+                   offsetof(AukArr, data) == 40 && offsetof(AukArr, base) == 48,
+               "AukArr layout");
+_Static_assert(offsetof(AukElemOps, size) == 0, "AukElemOps layout");
+_Static_assert(AUK_K_TASK == 6 && AUK_K_FRAME == 10, "handle kinds are 6..=10");
+_Static_assert(offsetof(AukStrBuf, small) == 24 && sizeof(AukStrBuf) == 64, "AukStrBuf layout");
+_Static_assert(sizeof(AukValue) == 16 && sizeof(AukClosure) == 16, "Value and closure size");
 
 #endif

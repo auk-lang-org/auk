@@ -2,7 +2,7 @@
 //!
 //! It launches the program with `auk run --debug` (src/debug.rs `launch`, output streamed as
 //! `output` events) and translates DAP requests into debug engine commands
-//! (runtime/src/dbg.rs). Supported: launch (program, args, cwd, stopOnEntry), line and function
+//! (runtime/c/dbg.c). Supported: launch (program, args, cwd, stopOnEntry), line and function
 //! breakpoints, panics as exception breakpoints (`uncaught`, `all`), threads, stack traces,
 //! locals with expandable parts (struct fields, variants, elements, entries), continue / next /
 //! stepIn / stepOut / pause, `evaluate` of a local or a path into it (`p.x`, `xs.2`), terminate.

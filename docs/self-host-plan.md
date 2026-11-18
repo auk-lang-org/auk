@@ -15,13 +15,13 @@ What there is to move today:
 
 | Part | Where | Size |
 |---|---|---|
-| Runtime | `runtime/src/*.rs` (+ `catch.c`) | ~11k lines Rust, 22 modules |
+| Runtime | `runtime/c/*.c` + `auk_rt.h` (was `runtime/src/*.rs`) | ~14k lines C, 21 files (Phase 1 done) |
 | Runtime tests | `runtime/tests/*.rs` | ~2.7k lines |
 | Compiler | `src/` (lexer → check → MIR → LLVM) | ~37k lines Rust |
 | Tools | `fmt repl lsp dap debug mcp live hatch explain dive`, `raft` | inside the 37k |
 | Integration tests | `tests/*.rs` (24 files) + fixtures | drive the binaries |
 | Build | `Cargo.toml`, `build.rs`, `runtime/build.rs`, `.cargo/config.toml` | |
-| Rust deps | `llvm-sys`, `libc`, `rustls`, `webpki-roots`, `cc` | |
+| Rust deps | `llvm-sys`, `libc`, `cc` (rustls and webpki-roots went with Phase 1) | |
 | Auk code already | `src/prelude/*.auk`, `packages/` (24), `examples/` | 135 `.auk` files under tests/examples/packages |
 
 ---
@@ -40,53 +40,56 @@ What there is to move today:
 
 ## Phase 1 — Runtime to C (Rust compiler unchanged)
 
-C lives in `runtime/c/`, one header `auk_rt.h` mirroring the `#[repr(C)]` types in
-`value.rs`/`lib.rs`. **Started:** `auk_rt.h` and `heap.c` exist (untracked).
+C lives in `runtime/c/`, one header `auk_rt.h` (the layouts generated code relies on; `AUK_API`
+marks every entry point it calls). **Status:** all modules ported (commits c44691e..c1221ca, one
+per module, suite green after each) and the `auk_rt` crate removed; tests and sanitizers below.
 
 ### 1a. Build plumbing
-- [ ] `runtime/build.rs`: compile `runtime/c/*.c` with the `cc` crate and link them into `auk_rt`
-      while Rust and C modules coexist (already does this for `catch.c`).
-- [ ] Root `build.rs`: once the runtime is all C, replace the nested `cargo rustc` with
-      `clang -O2 -c` → `ar` for `libauk_rt.a`, and `clang -emit-llvm` + `llvm-link` for `auk_rt.bc`
-      (keeps small runtime functions inlining into programs).
-- [ ] Generate `rt_symbols.rs` (the JIT's symbol table) from `auk_rt.h` instead of scanning
-      `#[no_mangle]` in `.rs` files.
+- [x] `runtime/build.rs`: compile `runtime/c/*.c` with the `cc` crate and link them into `auk_rt`
+      while Rust and C modules coexist. Compiled as **one translation unit** (a file including
+      every source) so cross-file calls inline; files including system framework headers are
+      marked `auk: own translation unit` and compile alone. `-fno-stack-protector`.
+- [x] Root `build.rs`: the nested `cargo rustc` is gone; the cc crate (with the back end's clang)
+      builds `libauk_rt.a`, and `clang -emit-llvm` + `llvm-link` build `auk_rt.bc`.
+- [x] Generate `rt_symbols.rs` (the JIT's symbol table) from `auk_rt.h` (`AUK_API` lines).
 - [ ] A check that `auk_rt.h` matches the layouts the compiler assumes (`src/mir/layout.rs`):
       `_Static_assert` on sizes/offsets in C, and a test that compares them to the compiler's.
 
 ### 1b. Replacements for Rust std (shared C helpers)
-- [ ] Locks/threads: `pthread_mutex`, `pthread_cond`, `pthread_create`; `_Thread_local` for
+- [x] Locks/threads: `pthread_mutex`, `pthread_cond`, `pthread_create`; `_Thread_local` for
       `thread_local!`/`Cell`; C11 `<stdatomic.h>` for atomics and `Arc`-style counts.
-- [ ] A growable byte buffer (`Vec<u8>`/`String` stand-in) and a small `buf_printf` replacing
-      every `format!` (≈40 uses: error messages, trace/dbg JSON, test output).
-- [ ] Panics → one `auk_fatal(loc, msg)` that prints and aborts, same text as today.
-- [ ] UTF-8 encode/decode helpers (`.chars()`, char boundaries) for `str` and `rc`.
-- [ ] Float formatting: vendor **Ryu** for shortest round-trip, matching Rust's `{}` output
-      exactly (incl. `inf`, `NaN`, `-0`, exponent thresholds) — write a test table first.
-- [ ] Float parsing: `strtod` with a wrapper that rejects what Rust's `parse::<f64>` rejects
-      (hex floats, `infinity` spellings, leading `+`, whitespace).
-- [ ] Unicode case/class tables if `str` uses `to_uppercase`/`is_alphabetic`/`is_whitespace`
-      on non-ASCII: generate compact tables from UnicodeData once, check them in.
-- [ ] Time (`clock_gettime`), env (`getenv`/`environ`), process (`posix_spawn`, pipes,
-      `waitpid`), fs (POSIX), sockets (BSD), error text (`strerror`, matching Rust's io messages).
+- [x] A growable byte buffer and message building without varargs: messages are built in an
+      `AukStrBuf` (`auk__sb_put`, `auk_sb_int`, then `auk__panic_sb` / `auk__err_sb`).
+- [x] Panics → one `auk__panic(loc, msg, n)` (and `auk__panic3`), same text as before.
+- [x] UTF-8 encode/decode helpers (`.chars()`, char boundaries) for `str` and `rc`.
+- [x] Float formatting: no Ryu needed — binary search for the smallest `%.*e` precision that
+      round-trips gives the same output (checked identical on 480k values).
+- [x] Float parsing: `strtod` with the same rejections as before (the runtime already used it).
+- [x] Unicode tables: not needed (the runtime's case and class functions are ASCII-only).
+- [x] Time (`clock_gettime`), env (`getenv`/`environ`), process (`posix_spawn`, pipes,
+      `waitpid`), fs (POSIX), sockets (BSD), error text (`strerror`).
 
 ### 1c. Port modules, leaf first (suite after each)
 Each: write the C, delete the `.rs`, run runtime tests + full suite, compare perf.
-- [ ] `value` (221), `err` (149), `copy` (181), `heap` (205 — **in progress**), `rc` (750)
-- [ ] `catch` (73 + 37 C): fold into C entirely; setjmp/longjmp stays in one file
-- [ ] `str` (1303), `arr` (676), `map` (497)
-- [ ] `chan` (154), `task` (417)
-- [ ] `core` (1102): fs, net, proc, time, env, rand
-- [ ] `tls` (284): **Network.framework** on macOS; **OpenSSL via dlopen** on Linux. Keep:
-      verification always on, same error messages. Drops `rustls`, `ring`, `webpki-roots`.
-- [ ] `trace` (694), `dbg` (1113), `testing` (255), `compiler` (131)
-- [ ] `pixels` (431), `audio_out` (314 → `.m`, CoreAudio)
-- [ ] `gui` (835), `gui_host` (1171 → `.m`, AppKit)
-- [ ] `lib.rs` (417): the remaining glue; then the crate is a thin shell around C
+- [x] `value`, `err`, `copy`, `heap`, `rc`
+- [x] `catch`: folded into C entirely; setjmp/longjmp only in `catch.c`
+- [x] `str`, `arr` (int sort: LSD radix over the varying bits, faster than Rust's), `map`
+- [x] `chan`, `task`
+- [x] `core`: fs, net, proc, time, env, rand
+- [x] `tls`: **Network.framework** on macOS; **OpenSSL via dlopen** elsewhere. Verification
+      always on, same error messages (checked against badssl.com). Drops `rustls`, `ring`,
+      `webpki-roots`.
+- [x] `trace`, `dbg` (the compiler's eval hook through a C interface, `src/rt.rs`), `testing`,
+      `compiler`
+- [x] `pixels`, `audio_out` — no `.m`: AudioToolbox via `dlopen`, as before
+- [x] `gui`, `gui_host` — no `.m`: AppKit via `dlopen` and `objc_msgSend` through exactly-typed
+      pointers, as before
+- [x] `lib.rs`: gone with the crate; the compiler's few runtime adapters live in `src/rt.rs`
 
 **Write C that will translate to Auk later (Phase 7):** plain functions and structs; no
 macro-generated code; no varargs in the runtime's own API; no bit-fields; nothing beyond
-libc/pthreads/system frameworks; setjmp/longjmp only in `catch.c`; ObjC confined to the two `.m` files.
+libc/pthreads/system frameworks; setjmp/longjmp only in `catch.c`; no Objective-C sources (the
+runtime calls `objc_msgSend` from C).
 
 ### 1d. Tests and safety
 - [ ] Port `runtime/tests/{arr,map,str,io,net,core}.rs` + `common/mod.rs` to C tests in

@@ -4,15 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-auk_rt = { path = "runtime" }
 libc = "0.2"
 # The LLVM back end (C API; LLVM 23, linked dynamically: see .cargo/config.toml)
 llvm-sys = { version = "231", features = ["prefer-dynamic"] }
 
-[workspace]
-members = [".", "runtime"]
-
-# The runtime staticlib (built by build.rs for linking generated programs) never unwinds.
-[profile.rt]
-inherits = "release"
-panic = "abort"
+[build-dependencies]
+# compiles the runtime (runtime/c)
+cc = "1"

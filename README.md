@@ -141,8 +141,8 @@ source ─▶ lexer ─▶ parser ─▶ resolve ─▶ checker ─▶ patterns/
 - **lower / MIR / LLVM** (`src/mir/`, `src/build.rs`): each program becomes MIR, a
   structured IR with explicit reference counting, then machine code with LLVM: compiled in
   memory and run in-process for `run`/`test`, or an object file linked into an executable for
-  `build`. The runtime is [`runtime/`](runtime/), the Rust crate `auk_rt` (linked into the
-  `auk` binary for the JIT, and embedded as a static library for `build`).
+  `build`. The runtime is [`runtime/c`](runtime/c/), written in C (linked into the `auk`
+  binary for the JIT, and embedded as a static library for `build`).
 - **diagnostics** (`src/diag.rs`): stable codes, notes and fix-its; every code has a page in
   [`docs/errors/`](docs/errors/) (`auk explain E0400`).
 

@@ -49,7 +49,7 @@
 //! is an empty block, as in `_ => {}`); ranges (in `for` heads and slices, or as a
 //! materialized `[int]` elsewhere); `x is pat`; `peek e` (prints `[file:line] <src> = <show>`,
 //! see `shows` for the show); holes (`auk_hole`, with `tables.types[hole.id]` as the expected
-//! type); `assert`. Runtime representations follow the runtime (runtime/src, see
+//! type); `assert`. Runtime representations follow the runtime (runtime/c/auk_rt.h, see
 //! `mir/types.rs`): `T?` is `AukOpt_*`, `T!`/`T!E` is
 //! `AukRes_*` (a typed error enum value travels as a `AukErr` payload), `Ty::Task` is a
 //! `AukTask *`, closures are `AukClosure`, `Err` / `net.Conn` are their `extern type` C types.

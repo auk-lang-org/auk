@@ -272,7 +272,7 @@ impl<'g, 'a> Lower<'g, 'a> {
     }
 
     /// A cancellation point at the top of every iteration of a user loop: one load of
-    /// `auk_cancel_pending` while no task is cancelled (runtime/src/task.rs).
+    /// `auk_cancel_pending` while no task is cancelled (runtime/c/task.c).
     fn cancel_point(&mut self, span: crate::diag::Span) {
         let pending = Ex::rt_global("auk_cancel_pending", MTy::D(Ty::Int)).deref(MTy::D(Ty::Int));
         self.open_if(Ex::bin(BOp::Ne, pending, Ex::int(0)));

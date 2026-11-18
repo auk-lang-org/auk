@@ -2,7 +2,7 @@
 //! fields are boxed, and the members (`Sel`) of each aggregate. Shared by the MIR generator and
 //! the back ends.
 //!
-//! Representations (the C names are the runtime's `#[repr(C)]` types, runtime/src/lib.rs):
+//! Representations (the C names are the runtime's types, runtime/c/auk_rt.h):
 //! - `int float bool char` → i64, f64, bool (1 byte), u32; `()` and `never` → a byte.
 //! - `str`, `[T]`, `{K: V}`, `Task<T>` and opaque runtime types → pointers to runtime objects.
 //! - tuple → members `F(i)`; struct → `F(i)` per field (a boxed field is a `AukObj *` cell

@@ -1,88 +1,100 @@
-//! Builds the runtime (`runtime/`, the `auk_rt` crate) as a static library and puts it in
-//! `OUT_DIR/libauk_rt.a`, which the compiler embeds (`include_bytes!`) and links into every
-//! program it builds, plus the runtime's own LLVM bitcode (`OUT_DIR/auk_rt.bc`, one codegen
-//! unit), which `auk build` links into the program so small runtime functions can inline. A nested `cargo build` with its own target directory (so it never waits
-//! on the outer build's lock) and the `rt` profile (release, `panic = "abort"`).
+//! Builds the runtime (`runtime/c`, C) three ways, with the clang of the LLVM the back end links
+//! (`LLVM_SYS_231_PREFIX`, see .cargo/config.toml):
+//! - `OUT_DIR/libauk_rt.a`, linked into the compiler (the JIT resolves generated code's runtime
+//!   calls in this process) and embedded in it (`include_bytes!`) to link into every program
+//!   `auk build` makes;
+//! - `OUT_DIR/auk_rt.bc`, its LLVM bitcode, which `auk build` links into a program so small
+//!   runtime functions can inline;
+//! - `OUT_DIR/rt_symbols.rs`, the table of its entry points (the `AUK_API` lines of auk_rt.h)
+//!   and their addresses, for the JIT.
+//!
+//! The C compiles as one translation unit (a file that includes every source), so calls between
+//! the runtime's files inline. Files marked `auk: own translation unit` (they include system
+//! framework headers, whose names would clash with the runtime's) are compiled on their own.
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let target = env::var("TARGET").unwrap();
-    println!("cargo:rerun-if-changed=runtime/src");
+    let apple = env::var("CARGO_CFG_TARGET_VENDOR").as_deref() == Ok("apple");
     println!("cargo:rerun-if-changed=runtime/c");
-    println!("cargo:rerun-if-changed=runtime/Cargo.toml");
-    println!("cargo:rerun-if-changed=Cargo.lock");
+    println!("cargo:rerun-if-env-changed=LLVM_SYS_231_PREFIX");
+    let prefix = PathBuf::from(env::var("LLVM_SYS_231_PREFIX").expect("LLVM_SYS_231_PREFIX (see .cargo/config.toml)"));
+    let cdir = manifest.join("runtime/c");
+    let units = units(&cdir, &out);
 
-    let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let tdir = out.join("rt-target");
-    let mut cmd = Command::new(cargo);
-    cmd.current_dir(&manifest)
-        .args(["rustc", "-p", "auk_rt", "--lib", "--crate-type", "staticlib", "--profile", "rt", "--target", &target])
-        .arg("--target-dir")
-        .arg(&tdir)
-        .args(["--", "--emit=link,llvm-bc", "-C", "codegen-units=1"]);
-    // Don't leak the outer build's settings (e.g. RUSTFLAGS for coverage) into the runtime.
-    for (k, _) in env::vars() {
-        if k.starts_with("CARGO_") && k != "CARGO_HOME" || k == "RUSTFLAGS" || k == "RUSTC_WRAPPER" {
-            cmd.env_remove(&k);
+    // the static library (cc also links it into this crate's binaries)
+    let mut b = cc::Build::new();
+    b.compiler(prefix.join("bin/clang"))
+        .files(&units)
+        .include(&cdir)
+        .std("c11")
+        .opt_level(2)
+        .flag("-fno-strict-aliasing")
+        .flag("-fno-stack-protector")
+        .flag("-Wall")
+        .flag("-Wextra")
+        .flag("-Wno-unused-parameter");
+    if apple {
+        // blocks: Network.framework's callbacks (tls.c)
+        b.flag("-fblocks");
+        for fw in ["Network", "Security", "CoreFoundation"] {
+            println!("cargo:rustc-link-lib=framework={fw}");
         }
     }
-    if env::var_os("CARGO_ENCODED_RUSTFLAGS").is_some() {
-        cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
+    b.compile("auk_rt");
+
+    // the bitcode
+    let mut bcs = Vec::new();
+    for (i, u) in units.iter().enumerate() {
+        let o = out.join(format!("rt_{i}.bc"));
+        let status = Command::new(prefix.join("bin/clang"))
+            .args(["-c", "-emit-llvm", "-O2", "-std=c11", "-fno-strict-aliasing", "-fno-stack-protector"])
+            .args(if apple { &["-fblocks"][..] } else { &[] })
+            .arg("-I")
+            .arg(&cdir)
+            .arg(u)
+            .arg("-o")
+            .arg(&o)
+            .status()
+            .expect("could not run clang");
+        assert!(status.success(), "compiling the runtime to bitcode failed: {}", u.display());
+        bcs.push(o);
     }
-    let status = cmd.status().expect("could not run cargo to build the runtime");
-    assert!(status.success(), "building the runtime (auk_rt) failed");
-    let lib = tdir.join(&target).join("rt").join("libauk_rt.a");
-    std::fs::copy(&lib, out.join("libauk_rt.a")).unwrap_or_else(|e| panic!("copying {}: {e}", lib.display()));
-    // the bitcode is `deps/auk_rt-<hash>.bc`: the newest one
-    let deps = tdir.join(&target).join("rt").join("deps");
-    let bc = std::fs::read_dir(&deps)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|e| e == "bc") && p.file_name().unwrap().to_string_lossy().starts_with("auk_rt-"))
-        .max_by_key(|p| p.metadata().and_then(|m| m.modified()).unwrap())
-        .unwrap_or_else(|| panic!("no auk_rt bitcode in {}", deps.display()));
-    c_bitcode(&manifest.join("runtime/c"), &bc, &out, &target);
-    symbols(&manifest.join("runtime/src"), &manifest.join("runtime/c/auk_rt.h"), &out.join("rt_symbols.rs"));
+    let status = Command::new(prefix.join("bin/llvm-link")).args(&bcs).arg("-o").arg(out.join("auk_rt.bc")).status().expect("could not run llvm-link");
+    assert!(status.success(), "llvm-link of the runtime bitcode failed");
+
+    symbols(&cdir.join("auk_rt.h"), &out.join("rt_symbols.rs"));
 }
 
-/// Write the table of the runtime's exported symbols (`#[unsafe(no_mangle)]` functions and
-/// statics) with their addresses in the `auk_rt` library linked into the compiler: the JIT
-/// resolves generated code's runtime calls with it.
-fn symbols(src: &std::path::Path, header: &std::path::Path, out: &std::path::Path) {
-    let mut files: Vec<_> = std::fs::read_dir(src).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "rs")).collect();
+/// The translation units: the files marked to stand alone, then one that includes the rest.
+fn units(cdir: &Path, out: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(cdir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "c")).collect();
     files.sort();
-    let mut body = String::new();
-    for f in files {
-        let module = f.file_stem().unwrap().to_string_lossy().into_owned();
-        let text = std::fs::read_to_string(&f).unwrap();
-        let mut pending = false;
-        for line in text.lines() {
-            let t = line.trim();
-            if t.starts_with("#[unsafe(no_mangle)]") {
-                pending = true;
-                continue;
-            }
-            if !pending || t.starts_with("#[") || t.starts_with("//") {
-                continue;
-            }
-            pending = false;
-            let words: Vec<&str> = t.split(|c: char| c.is_whitespace() || c == '(' || c == ':' || c == '<').filter(|w| !w.is_empty()).collect();
-            if let Some(i) = words.iter().position(|w| *w == "fn") {
-                let name = words[i + 1];
-                body += &format!("        (\"{name}\", auk_rt::{module}::{name} as *const u8),\n");
-            } else if let Some(i) = words.iter().position(|w| *w == "static") {
-                let name = if words[i + 1] == "mut" { words[i + 2] } else { words[i + 1] };
-                body += &format!("        (\"{name}\", (&raw const auk_rt::{module}::{name}).cast::<u8>()),\n");
-            }
+    let mut unity = String::new();
+    let mut units = Vec::new();
+    for f in &files {
+        if std::fs::read_to_string(f).unwrap().contains("auk: own translation unit") {
+            units.push(f.clone());
+        } else {
+            unity += &format!("#include \"{}\"\n", f.display());
         }
     }
-    // the C runtime's entry points: `AUK_API` lines in auk_rt.h
+    let all = out.join("auk_rt_all.c");
+    std::fs::write(&all, unity).unwrap();
+    units.push(all);
+    units
+}
+
+/// Write the table of the runtime's entry points (the `AUK_API` lines of auk_rt.h: functions,
+/// and `extern` data) with their addresses in the runtime linked into the compiler: the JIT
+/// resolves generated code's runtime calls with it.
+fn symbols(header: &Path, out: &Path) {
     let mut decls = String::new();
+    let mut body = String::new();
     for line in std::fs::read_to_string(header).unwrap().lines() {
         let Some(rest) = line.trim().strip_prefix("AUK_API ") else { continue };
         let name_end = rest.find(['(', ';']).unwrap_or(rest.len());
@@ -99,45 +111,4 @@ fn symbols(src: &std::path::Path, header: &std::path::Path, out: &std::path::Pat
         "unsafe extern \"C\" {{\n{decls}}}\n\n/// The runtime's exported symbols and their addresses.\npub fn rt_symbols() -> Vec<(&'static str, *const u8)> {{\n    vec![\n{body}    ]\n}}\n"
     );
     std::fs::write(out, code).unwrap();
-}
-
-/// Compile the C runtime to bitcode with the back end's clang and link it with the Rust part's
-/// (`rust_bc`) into `OUT_DIR/auk_rt.bc`.
-fn c_bitcode(cdir: &std::path::Path, rust_bc: &std::path::Path, out: &std::path::Path, target: &str) {
-    println!("cargo:rerun-if-env-changed=LLVM_SYS_231_PREFIX");
-    let prefix = PathBuf::from(env::var("LLVM_SYS_231_PREFIX").expect("LLVM_SYS_231_PREFIX (see .cargo/config.toml)"));
-    let mut files: Vec<PathBuf> =
-        std::fs::read_dir(cdir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "c")).collect();
-    files.sort();
-    // one translation unit (and the files marked to stand alone), as runtime/build.rs compiles them
-    let mut unity = String::new();
-    let mut units = Vec::new();
-    for f in &files {
-        if std::fs::read_to_string(f).unwrap().contains("auk: own translation unit") {
-            units.push(f.clone());
-        } else {
-            unity += &format!("#include \"{}\"\n", f.display());
-        }
-    }
-    let all = out.join("c_all.c");
-    std::fs::write(&all, unity).unwrap();
-    units.push(all);
-    let mut bcs = vec![rust_bc.to_path_buf()];
-    for (i, u) in units.iter().enumerate() {
-        let o = out.join(format!("c_{i}.bc"));
-        let status = Command::new(prefix.join("bin/clang"))
-            .args(["-c", "-emit-llvm", "-O2", "-std=c11", "-fno-strict-aliasing", "-fno-stack-protector"])
-            .args(if target.contains("apple") { &["-fblocks"][..] } else { &[] })
-            .arg("-I")
-            .arg(cdir)
-            .arg(u)
-            .arg("-o")
-            .arg(&o)
-            .status()
-            .expect("could not run clang");
-        assert!(status.success(), "compiling the C runtime to bitcode failed: {}", u.display());
-        bcs.push(o);
-    }
-    let status = Command::new(prefix.join("bin/llvm-link")).args(&bcs).arg("-o").arg(out.join("auk_rt.bc")).status().expect("could not run llvm-link");
-    assert!(status.success(), "llvm-link of the runtime bitcode failed");
 }

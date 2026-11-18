@@ -27,6 +27,7 @@ mod parser;
 mod patterns;
 mod repl;
 mod resolve;
+mod rt;
 mod token;
 // Parts of the typed program are only read by tests and `auk typed`.
 #[allow(dead_code)]
@@ -97,7 +98,7 @@ fn usage() -> ! {
 fn main() {
     // started by a `gui.open` in a program run by this command, to own its windows
     if env::var_os("AUK_GUI_HOST").is_some() {
-        std::process::exit(auk_rt::gui_host::host_main());
+        std::process::exit(rt::gui_host_main());
     }
     let args: Vec<String> = env::args().skip(1).collect();
     let Some((cmd, rest)) = args.split_first() else { usage() };

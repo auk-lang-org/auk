@@ -463,10 +463,10 @@ fn watch(path: PathBuf, mut slots: HashMap<String, usize>, mut files: Files, mut
                     }
                 }
                 install(&b);
-                auk_rt::task::LIVE_RELOADS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                crate::rt::LIVE_RELOADS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if !moved.is_empty() {
                     // only tasks can hold the old shape: stop those (their supervisors restart them)
-                    let n = auk_rt::task::cancel_running(|entry, hint| seen.task_uses(entry, hint, &moved));
+                    let n = crate::rt::cancel_running(|entry, hint| seen.task_uses(entry, hint, &moved));
                     let names: Vec<String> = moved.iter().map(short).collect();
                     note(&format!("`{}` changed shape: stopped {n} task(s) that use it", names.join("`, `")));
                 }
@@ -524,7 +524,7 @@ pub fn cli(args: &[String]) -> i32 {
             std::thread::spawn(move || watch(p, slots, files, lay, seen, me));
             let code = b.jit.jit.run(&argv);
             // a normal end: its windows close now instead of waiting for the next run
-            auk_rt::gui::shutdown();
+            crate::rt::gui_shutdown();
             unsafe {
                 libc::fflush(std::ptr::null_mut());
                 libc::_exit(code);

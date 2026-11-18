@@ -2,7 +2,7 @@
 //! `run`, `build`, `ir` and `test` commands.
 //!
 //! `run` and `test` compile in memory (the JIT) and run the program in this process (tests and
-//! imprints in forked children); the runtime is the `auk_rt` library linked into the compiler.
+//! imprints in forked children); the runtime (`runtime/c`) is linked into the compiler.
 //! Debug builds (`run`, `test`, `ir`) check `ensures`; `build` is a release build (optimized, no
 //! `ensures`) that refuses a program with holes: it writes an object file and links it with the
 //! embedded runtime library (`libauk_rt.a`) using the system linker (`cc`; `AUK_LINKER`
@@ -23,15 +23,15 @@ use super::diag::Diag;
 use super::resolve::ModId;
 use super::typed::{BodyRef, ConstId, TypedProgram};
 
-/// The runtime (`runtime/`, the Rust crate `auk_rt`) as a static library, built by the cargo
-/// build script and linked into every program.
+/// The runtime (`runtime/c`) as a static library, built by the cargo build script and linked
+/// into every program.
 pub const RUNTIME_LIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libauk_rt.a"));
 
-/// Libraries the runtime needs besides libc and libm (what Rust's std links on each platform).
+/// Libraries the runtime needs besides libc and libm: the system TLS (tls.c), and dlopen.
 pub const LINK_LIBS: &[&str] = if cfg!(target_os = "macos") {
-    &["-framework", "CoreFoundation", "-framework", "Security", "-framework", "Network", "-liconv"]
+    &["-framework", "CoreFoundation", "-framework", "Security", "-framework", "Network"]
 } else {
-    &["-ldl", "-lpthread", "-lrt", "-lgcc_s"]
+    &["-ldl", "-lpthread"]
 };
 
 /// A generated program (MIR), plus the holes found in it.
@@ -152,7 +152,7 @@ fn emit(g: &mut Gen, i: usize) {
     mir::lower::emit_instance(g, i);
 }
 
-/// The debugger's tables (`--debug`): the debug info as text for `auk_dbg_init` (runtime/src/dbg.rs
+/// The debugger's tables (`--debug`): the debug info as text for `auk_dbg_init` (runtime/c/dbg.c
 /// parses it), and a constant array of show functions, one per type of a named local
 /// (`AukStr *show(void *value)`). Showing a type can instantiate more (instrumented) code, so
 /// this runs to a fixpoint.
@@ -233,7 +233,7 @@ pub(crate) fn drain(g: &mut Gen) {
 //   E0115 in the checker);
 // - the entry point writes `V<c> <value>` for each imprint: its derived (structural) `to_value`.
 // Records go to the file named by argv[1], not stdout (an imprint may `print`); the runtime
-// (runtime/src/compiler.rs) writes them. A panic (exit 101) is blamed on the innermost imprint
+// (runtime/c/compiler.c) writes them. A panic (exit 101) is blamed on the innermost imprint
 // being computed (E0420). Nothing is cached.
 
 /// Evaluate every imprint of the program at compile time: their values, by constant id.
@@ -604,7 +604,7 @@ pub struct TraceOpts {
     pub limit: Option<u64>,
     /// Trace core library functions too.
     pub core: bool,
-    /// `--debug`: instrument the program for the debugger (runtime/src/dbg.rs).
+    /// `--debug`: instrument the program for the debugger (runtime/c/dbg.c).
     pub debug: bool,
     /// `-O` (`auk run`): the full optimizer.
     pub opt: bool,

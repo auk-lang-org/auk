@@ -454,7 +454,7 @@ static Eval *evals;
 static int64_t nevals;
 static int64_t capevals;
 
-AUK_API void auk_dbg_set_eval_hook(AukDbgEvalHook h) {
+void auk_dbg_set_eval_hook(AukDbgEvalHook h) {
     eval_hook = h;
 }
 

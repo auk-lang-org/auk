@@ -45,7 +45,7 @@ pub struct Trace {
 /// generated program is exactly what it would be without it. With it, every Auk function outside
 /// core (with `core`, core's too) keeps a frame record on the thread's debugger stack (its
 /// function, current site and the address of each named local), and every statement first
-/// stores its site and calls `auk_dbg_hook` while `auk_dbg_armed` is set (runtime/src/dbg.rs).
+/// stores its site and calls `auk_dbg_hook` while `auk_dbg_armed` is set (runtime/c/dbg.c).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Debug {
     pub on: bool,
@@ -859,7 +859,7 @@ impl<'a> Gen<'a> {
         go(self, t, &mut Vec::new())
     }
 
-    // ---- deep copies (values crossing a task boundary: runtime/src/heap.rs) ----
+    // ---- deep copies (values crossing a task boundary: runtime/c/heap.c) ----
 
     /// An owned deep copy of the value `v` of type `t`, allocated in the current heap. Handles
     /// (tasks, connections, listeners, channels) are shared instead.
@@ -1265,7 +1265,7 @@ impl<'a> Gen<'a> {
     /// The debugger's children function of type `t` (type index `idx`): `void f(void *value,
     /// void *ctx)` reports each part of the value (a struct's fields, a tuple's or a variant's
     /// fields, an option's or a result's value, a list's elements, a map's entries) to the runtime
-    /// (`auk_dbg_kid`, runtime/src/dbg.rs) with its type index and address. None for a type
+    /// (`auk_dbg_kid`, runtime/c/dbg.c) with its type index and address. None for a type
     /// without parts.
     pub fn dbg_kids_fn(&mut self, t: &Ty, idx: usize) -> Option<FuncId> {
         let has_parts = match t {
