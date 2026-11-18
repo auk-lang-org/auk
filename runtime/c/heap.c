@@ -43,6 +43,9 @@ struct AukHeap {
     Link head; /* the list's sentinel */
     pthread_mutex_t handles_lock;
     Ledger handles;
+    /* being swept: freeing an object leaves its memory on the list for the sweep to free last
+     * (lock held to read or write) */
+    bool sweeping;
 };
 
 /* A reference count no release can bring to zero while a heap is swept. */
@@ -170,6 +173,11 @@ void auk__heap_free(AukHeader *h) {
     Link *l = (Link *)((uint8_t *)h - sizeof(Link));
     AukHeap *heap = l->heap;
     pthread_mutex_lock(&heap->lock);
+    if (heap->sweeping) {
+        /* the sweep frees it at the end: an object swept later may still release this one */
+        pthread_mutex_unlock(&heap->lock);
+        return;
+    }
     l->prev->next = l->next;
     l->next->prev = l->prev;
     pthread_mutex_unlock(&heap->lock);
@@ -179,7 +187,9 @@ void auk__heap_free(AukHeader *h) {
 /* Free every object still in heap, then the heap. No object outside it may point into it.
  * Each object is freed by its kind's ordinary free routine, so what it holds outside the heap
  * (handles) is released properly; objects inside the heap first get a reference count no
- * release can bring to zero, so each is freed exactly once, here. */
+ * release can bring to zero, so each is freed exactly once, here. Their memory is freed only
+ * after all of them have been: the objects are freed in list order, and freeing one releases
+ * what it holds, which may be another swept object, freed before it or not. */
 void auk__heap_sweep(AukHeap *heap) {
     if (heap == NULL) {
         return;
@@ -188,6 +198,7 @@ void auk__heap_sweep(AukHeap *heap) {
     int64_t cap = 0;
     AukHeader **objs = NULL;
     pthread_mutex_lock(&heap->lock);
+    heap->sweeping = true;
     Link *s = &heap->head;
     Link *l = s->next;
     while (l != s) {
@@ -215,6 +226,17 @@ void auk__heap_sweep(AukHeap *heap) {
         auk__free_now(objs[i]);
     }
     free(objs);
+    /* now the memory: what was swept, and anything freed while sweeping (allocated by a drop) */
+    pthread_mutex_lock(&heap->lock);
+    l = s->next;
+    while (l != s) {
+        Link *next = l->next;
+        free(l);
+        l = next;
+    }
+    s->next = s;
+    s->prev = s;
+    pthread_mutex_unlock(&heap->lock);
     auk__heap_switch(NULL);
     pthread_mutex_lock(&heap->handles_lock);
     Ledger held = heap->handles;
