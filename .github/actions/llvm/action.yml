@@ -14,6 +14,8 @@ runs:
         v="$("$cfg" --version)"
         case "$v" in 23.*) ;; *) echo "::error::Homebrew's $f is LLVM $v, not 23"; exit 1 ;; esac
         echo "LLVM_CONFIG=$cfg" >> "$GITHUB_ENV"
+        # lldb may launch and debug processes (the native debug info test runs a program in it)
+        sudo DevToolsSecurity -enable || true
     - name: Linux (apt.llvm.org)
       if: runner.os == 'Linux'
       shell: bash

@@ -788,7 +788,7 @@ fn native_line_tables() uses env, fs, ffi, time {
     "prog`prog.main at prog.auk:21:5",
     "prog`prog.fact at prog.auk:10:5",
   ] {
-    t.check(tx.contains(want), "missing {want.show()} in:\n{tx}")
+    t.check(tx.contains(want), "missing {want.show()} in:\n{tx}\nlldb's stderr:\n{o.stderr}")
   }
   // without -g: no debug info
   let o = auk_cmd().args(["build", f, "-o", paths.join(dir, "plain")]).output()
