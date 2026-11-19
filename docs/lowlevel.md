@@ -70,6 +70,12 @@ raw assert raw.size_of<Str>() == 40           // a compile-time layout check (`_
 Initializers are constant expressions. Globals are module-private unless `pub`; `export var`
 gives one a C symbol (the runtime's `extern` data in `auk_rt.h`: `auk_dbg_armed`, …).
 
+A C global defined elsewhere (libc, a framework) is `extern var`, the data counterpart of
+`extern fn`: `extern var stack_block_isa: [u8; 0] = "_NSConcreteStackBlock"` (the C name; the
+type says how it's read, `raw.addr_of(&stack_block_isa)` is its address). Needed for block
+literals (§10: `_NSConcreteStackBlock`, `_NSConcreteGlobalBlock`) and Network.framework's
+`_nw_content_context_default_stream`; reading or writing one is `uses raw`.
+
 ## 5. Exported functions
 
 ```auk
