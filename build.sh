@@ -173,7 +173,7 @@ install_rt() {
 if ! rt_auk "$SEED" "$RT"; then
   # The seed predates the dialect: stage 0 (compiler/, built by the seed) builds runtime/src.
   # It embeds the C half alone (`auk build --lib` links no runtime).
-  echo "   the seed can't build runtime/src ($(grep -m1 -o "error.*" "$RT/auk.log" | cut -c1-60)): stage 0 will"
+  echo "   the seed can't build runtime/src ($( (grep -m1 -o "error.*" "$RT/auk.log" || head -1 "$RT/auk.log") | cut -c1-60)): stage 0 will"
   c_done
   mkdir -p "$RT/c-only"
   "$LLVM_BIN/llvm-ar" crs "$RT/c-only/libauk_rt.a" "${objs[@]}"
