@@ -152,6 +152,26 @@ pub fn pat(c: var check.Checker, p: ast.Pat, ty: types.Ty, mutable: bool, seen: 
         }
         none => {}
       }
+      // the runtime's dialect: an integer `raw let` of the module is a constant pattern (C's
+      // `case V_NULL:`), compared, not bound
+      if c.prog.raw_ok(m) && c.lookup_local(n) == none {
+        match c.items[m].globals.get(n) {
+          some(g) => if c.globals[g].kind == 2 {
+            match c.globals[g].value {
+              Int(v) => {
+                let gt = c.globals[g].ty
+                if !c.unify(ty, gt) {
+                  c.err(diag.new("E0200", p.span, "`{n}` is a `{c.show(gt)}` constant, but the value matched is a `{c.show(ty)}`"))
+                }
+                c.cx.t.raw_pats[p.id] = v
+                return
+              }
+              _ => {}
+            }
+          }
+          none => {}
+        }
+      }
       if !bind {
         c.err(
           diag.new("E0263", p.span, "an `is` pattern can't bind names, but `{n}` would bind one")

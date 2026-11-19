@@ -16,6 +16,8 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("constants_of_other_modules", constants_of_other_modules),
   t.test("int_and_i64_mix", int_and_i64_mix),
   t.test("raw_type_aliases", raw_type_aliases),
+  t.test("never_void_and_parameter_addresses", never_void_and_parameter_addresses),
+  t.test("a_library_without_exports_is_empty", a_library_without_exports_is_empty),
   t.test("thread_vars_are_refused_by_the_jit", thread_vars_are_refused_by_the_jit),
   t.test("setjmp_longjmp_out_of_nested_calls", setjmp_longjmp_out_of_nested_calls),
   t.test("export_fns_by_value_and_fn_pointers", export_fns_by_value_and_fn_pointers),
@@ -135,6 +137,28 @@ fn raw_type_aliases() uses env, fs, ffi, time {
   let plain = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n"
   let gate = project_with("alias_gate", plain, "raw type N = int\nfn main() {{}}\n")
   t.eq("{codes(gate)}", "[\"E0418\"]", "")
+}
+
+/// `never` and `()` results as C's `_Noreturn` and `void`; `raw.addr_of(&param)`.
+fn never_void_and_parameter_addresses() uses env, fs, ffi, time {
+  let main = fixture("cfuncs", "cfuncs.auk")
+  let _ = passes(main)
+  let dis = llvm_dis() else return
+  let bc = paths.join(dir_of(main), "cfuncs.bc")
+  let b = auk(["build", "--lib", "--bc", main, "-o", bc])
+  t.check(b.success(), b.stderr)
+  let ll = cmd.new(dis).args([bc, "-o", "-"]).output().stdout
+  t.has(ll, "define void @bump(i64")
+  t.has(ll, "define void @stop(i32")
+}
+
+/// Plumbing can be committed before its first `export fn`: an empty library.
+fn a_library_without_exports_is_empty() uses env, fs, ffi, time {
+  let main = project("lib_empty", "raw let K: i32 = 1\nfn helper(): i32 = K\n")
+  let obj = paths.join(dir_of(main), "empty.o")
+  let b = auk(["build", "--lib", main, "-o", obj])
+  t.check(b.success(), b.stderr)
+  t.check(fs.exists(obj), "no {obj}")
 }
 
 fn thread_vars_are_refused_by_the_jit() uses env, fs, ffi, time {

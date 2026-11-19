@@ -339,7 +339,7 @@ fn exhaustive_single(cx: Cx, p: ast.Pat): bool {
 fn must_match(cx: var Cx, p: ast.Pat, what: str) {
   match p.kind {
     Wild => return
-    Bind(_) => if !cx.tables().variants.contains(p.id) { return }
+    Bind(_) => if !cx.tables().variants.contains(p.id) && !cx.tables().raw_pats.contains(p.id) { return }
     _ => {}
   }
   let ty = cx.ty_of(p.id)
@@ -601,7 +601,10 @@ fn lower_pat(cx: Cx, p: ast.Pat): P {
     Or(ps) => cx.lower_pat(ps[0])
     Bind(_) => match t.variants.get(p.id) {
       some(v) => P.C(Ctor.Idx(v.index), [])
-      none => P.Wild
+      none => match t.raw_pats.get(p.id) {
+        some(n) => P.C(Ctor.Lit(lit_key(ast.Lit.Int(n), false)), [])
+        none => P.Wild
+      }
     }
     Lit(Bool(b), _) => P.C(Ctor.Idx(if b { 1 } else { 0 }), [])
     Lit(lit, neg) => P.C(Ctor.Lit(lit_key(lit, neg)), [])

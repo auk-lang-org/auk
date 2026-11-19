@@ -79,7 +79,8 @@ pub fn ptr_field(c: var check.Checker, e: ast.Expr, t: types.Ty, name: ast.Ident
 }
 
 /// The intrinsics of core's `raw` module that need more than a generic signature.
-pub fn is_special(name: str): bool = name == "field_addr" || name == "offset_of" || name == "fn_of" || name == "cast"
+pub fn is_special(name: str): bool =
+  name == "field_addr" || name == "offset_of" || name == "fn_of" || name == "cast" || name == "addr_of"
 
 pub fn special(c: var check.Checker, e: ast.Expr, target: int, name: ast.Ident, args: [check.ArgSrc], exp: check.Exp): types.Ty {
   let m = c.cur_module()
@@ -94,6 +95,35 @@ pub fn special(c: var check.Checker, e: ast.Expr, target: int, name: ast.Ident, 
   }
   let arg = (x: ast.Expr) => typed.Arg { node: x.id, by_ref: false }
   match name.name {
+    "addr_of" => {
+      // `raw.addr_of(&x)`: a local (`let` or `var`), a parameter or a global; C takes the
+      // address of anything with storage (writing through it is the caller's business)
+      let x = xs[0]
+      let inner = match x.kind {
+        Ref(i) => i
+        _ => {
+          c.err(diag.new("E0202", x.span, "`raw.addr_of` takes `&x`: a local, a parameter or a global"))
+          c.infer_quiet(x)
+          return types.Ty.Error
+        }
+      }
+      let t = c.infer(inner, none)
+      c.record(x.id, t)
+      // a `raw let` is a value, not memory: `place` reports it when asked to change it
+      var is_let = false
+      match inner.kind {
+        Name(n) => if c.lookup_local(n) == none {
+          match c.items[c.cur_module()].globals.get(n) {
+            some(g) => is_let = c.globals[g].kind == 2
+            none => {}
+          }
+        }
+        _ => {}
+      }
+      let _ = c.place(inner, is_let, check.PlaceUse.Ref)
+      c.note_call(e.id, typed.Call { callee: typed.Callee.Fn(f, [t]), args: [typed.Arg { node: x.id, by_ref: true }] })
+      types.Ty.Ptr(t)
+    }
     "cast" => {
       // `raw.cast<U>(p)`: a `raw.Ptr<U>`, or the function pointer `U` itself when `U` is a
       // `raw.Fn` (a code pointer held as `void *`); without `<U>`, what the context expects

@@ -32,7 +32,10 @@ fn test_into(lw: var mir.lower.Lower, p: ast.Pat, v: mir.Ex, ty: types.Ty, conds
     }
     Bind(_) => match lw.t.variants.get(p.id) {
       some(vr) => conds.push(lw.g.variant_tag(ty, vr.index, v))
-      none => {}
+      none => match lw.t.raw_pats.get(p.id) {
+        some(n) => conds.push(mir.bin(mir.BOp.Eq, v, mir.int_as(n, d(ty))))
+        none => {}
+      }
     }
     Lit(lit, neg) => {
       let c = match lit {

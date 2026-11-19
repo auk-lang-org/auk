@@ -281,8 +281,10 @@ pub fn raw_node(lw: var mir.lower.Lower, e: ast.Expr, n: typed.RawNode): mir.low
         let v = lw.expr(a)
         xs.push(v.c)
       }
-      let call = mir.ex(mir.K.Call(mir.Callee.CPtr(fv.c), xs), d(ret))
-      if types.is_unit(ret) || ret == types.Ty.Never {
+      let void = types.is_unit(ret) || ret == types.Ty.Never
+      // C's `void` for `()` and `never`
+      let call = mir.ex(mir.K.Call(mir.Callee.CPtr(fv.c), xs), if void { mir.MTy.Void } else { d(ret) })
+      if void {
         lw.do_(call)
         return if ret == types.Ty.Never { mir.lower.val_never() } else { mir.lower.val_unit() }
       }

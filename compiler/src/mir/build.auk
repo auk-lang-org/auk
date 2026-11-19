@@ -167,9 +167,6 @@ pub fn generate_lib(tp: typed.TypedProgram, emb: {str: [int]}): Generated! {
       drain(&g)
     }
   }
-  if g.prog.exports.len() == 0 {
-    return fail("error: `{tp.program.mods[tp.program.root].file}` has no `export fn`: a library's interface is its exported functions\n")
-  }
   var startup: [str] = []
   for i in g.emitted.keys() {
     match tp.instances[i].body {

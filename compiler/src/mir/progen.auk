@@ -402,6 +402,8 @@ pub fn inst_fn(g: var Gen, i: int): int {
     Fn(fid) => g.tp.fns[fid].export
     _ => 0
   }
+  // a C function returning `()` or `never` returns `void`
+  if export > 0 && (types.is_unit(g.inst_ret(i)) || g.inst_ret(i) == types.Ty.Never) { ret = mir.MTy.Void }
   let f = if export > 0 {
     g.declare(g.tp.fns[match g.tp.instances[i].body {
       Fn(fid) => fid

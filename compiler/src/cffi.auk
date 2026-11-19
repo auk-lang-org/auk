@@ -575,7 +575,7 @@ pub fn conv(t: types.Ty, var_: bool, c: CTy, ret: bool, free: bool, ptr_of: (typ
       }
       Conv.List(elem, false)
     }
-    t2 when t2.is_unit() => match c {
+    t2 when t2.is_unit() || t2 == types.Ty.Never => match c {
       Void => if ret { Conv.Unit } else { fail(Bad(bad)) }
       _ => fail(Bad(bad))
     }

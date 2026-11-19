@@ -1404,7 +1404,8 @@ fn resolve_named(c: var Checker, m: int, t: ast.Type, path: [ast.Ident], args: [
         "char" => types.Ty.Char
         "str" => types.Ty.Str
         // only core can name it (`proc.exit(code): never`)
-        "never" when c.prog.is_core(m) => types.Ty.Never
+        // core (`proc.exit(code): never`) and the runtime's dialect (C's `_Noreturn`)
+        "never" when c.prog.raw_ok(m) => types.Ty.Never
         _ => none
       }
       match prim {
@@ -2533,6 +2534,7 @@ fn merge_tables(tm: var typed.Tables, t: typed.Tables) {
   for k, v in t.err_payload_pats { tm.err_payload_pats[k] = v }
   for k, v in t.units { tm.units[k] = v }
   for k, v in t.raw { tm.raw[k] = v }
+  for k, v in t.raw_pats { tm.raw_pats[k] = v }
 }
 
 /// The earliest span (in source order) among expression nodes of module `m` (searched in the

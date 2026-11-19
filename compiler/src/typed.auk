@@ -242,6 +242,9 @@ pub struct Tables {
   units: {int: str},
   /// Nodes of the runtime's dialect (conversions, ...).
   raw: {int: RawNode},
+  /// The runtime's dialect: name patterns that are an integer `raw let` (`V_NULL => ...`),
+  /// compared with its value as a literal would be.
+  raw_pats: {int: int},
 }
 
 pub fn new_tables(): Tables = Tables {
@@ -268,6 +271,7 @@ pub fn new_tables(): Tables = Tables {
   err_payload_pats: {},
   units: {},
   raw: {},
+  raw_pats: {},
 }
 
 pub enum Coercion {

@@ -179,7 +179,8 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   function whose parameters and result are numbers, `bool` and raw pointers.
 - **`auk build --lib [--bc] <file> -o <out>`** writes an object (or bitcode) at O2 with every
   function of the program, the `export fn`s and `export var`s external, no `main` and nothing
-  run at startup (a library with string literals or top-level `let`s is refused). The runtime's
+  run at startup (a library with string literals or top-level `let`s is refused). A library
+  without any `export fn` is an empty object (plumbing committed before its first export). The runtime's
   bitcode isn't linked into it. Raw globals are internal (`raw var`) or thread-local, so
   `rtlink` treats the functions that touch them exactly as it treats C statics and
   `_Thread_local`s: never copied into programs.
@@ -196,9 +197,25 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   `float`s, arrays and nested structs included) is `[n x float]` in consecutive SIMD
   registers, other aggregates up to 16 bytes `[2 x i64]` (both registers or both on the stack),
   bigger ones a pointer to a copy.
+- **C results and `never`:** an `export fn` (or a call through a `raw.Fn`) whose result is `()`
+  or `never` is C's `void`. `never` (C's `_Noreturn`) is a type in the runtime package: an
+  `extern fn auk__panic3(…): never = "void auk__panic3(…)"` or an `export fn` returning it
+  ends the path like `panic` does, so no `raw.unreachable()` follows its calls.
+- **Addresses of locals:** `raw.addr_of(&x)` takes any local (`let` or `var`), parameter (it
+  lives in the frame from then on, never read in place) or global but a `raw let` (a value) and
+  a `raw thread var` in a constant.
+- **Constant patterns:** in a `match` (or any pattern) of the runtime package, a bare name that
+  is an integer `raw let` of the module (`V_NULL => …`) compares with its value, as C's `case`
+  does, instead of binding a new name (a local of that name still binds; another module's
+  constant isn't a pattern yet: compare with `==` in a guard).
+- **`auk_retain`/`auk_release`:** generated code's calls to these runtime symbols are compiled
+  inline (`intrin.rc_update`: nothing for NULL or a negative, immortal count; the runtime for
+  handles; an atomic add/subtract, the last release calling the runtime). The ported `rc.c` must
+  keep exactly those semantics (and the symbol names), since the inline path never calls it on
+  the fast path; Auk code calling them by name gets the plain C call.
 - **Error codes:** E0418 (the gate), E0419 (a reference-counted type in `uses raw` code, an
   `export fn` or a raw struct), E0421 (not a compile-time constant, a failing `raw assert`, a
-  non-constant or invalid memory order).
+  non-constant or invalid memory order), E0422 (per-target variants that disagree).
 - **Targets (§11):** in the runtime package, `src/x.<os>-<arch>.auk`, `src/x.<os>.auk` and
   `src/x.auk` are variants of the module `x`; the loader takes the most specific one for the
   host (`<os>` is `macos`/`linux`, `<arch>` `arm64`/`x86_64` as `uname -m` normalizes), and
