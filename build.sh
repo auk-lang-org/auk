@@ -5,16 +5,28 @@
 #   ./build.sh [--check] [--test] [--install [<dir>]] [--seed <auk> | --from-seed]
 #
 # Steps:
-#   1. runtime   runtime/c → target/auk-rt/libauk_rt.a and auk_rt.bc, with the clang of the LLVM
-#                the back end links (as build.rs did): one translation unit for the files that
-#                include each other's code, the `auk: own translation unit` files alone.
+#   1. runtime   target/auk-rt/libauk_rt.a and auk_rt.bc, from two halves (Phase 7: the runtime
+#                moves from C to Auk module by module, docs/lowlevel.md):
+#                - runtime/c, with the clang of the LLVM the back end links (as build.rs did):
+#                  one translation unit for the files that include each other's code, the
+#                  `auk: own translation unit` files alone;
+#                - runtime/ (the `auk_rt` package, the modules already ported), with the seed:
+#                  `auk build --lib` (an object; `--bc`, bitcode), every `export fn` under its C
+#                  name. A seed older than the `raw` dialect can't: then the seed first builds
+#                  compiler/ as "stage 0" (target/auk-build/stage0/auk, embedding the C half
+#                  only, which `auk build --lib` doesn't use), and stage 0 builds the Auk half.
+#                The objects go into one archive, the bitcode is llvm-linked into one module.
 #   2. raft      the seed builds raft/ (no dependencies) → target/auk-build/seed-raft, which
 #                installs compiler/'s dependencies (compiler/.raft: packages/llvm).
 #   3. stage 1   the seed builds compiler/ → target/auk-build/stage1/auk. It runs on the seed's
 #                runtime but embeds the new one (step 1).
 #   4. stage 2   stage 1 builds compiler/ → target/bin/auk: the new compiler on the new runtime.
 #   5. raft      stage 2 builds raft/ → target/bin/raft.
-#   --check      also stage 3 (stage 2 builds compiler/): must be bit-identical to stage 2.
+#   --check      also stage 3 (stage 2 builds compiler/): must be bit-identical to stage 2; and
+#                stage 2 builds runtime/'s Auk half again, which must be identical to step 1's.
+#                If it isn't (the seed is an older compiler that compiles it differently), the
+#                whole build runs once more with stage 2 as the seed, so that the runtime stage
+#                2 embeds and links is the one its own source compiles.
 #   --test       then the tests: the runtime's C tests (runtime/c/test/run.sh) and the
 #                integration tests (tests/runner/, built by stage 2) against target/bin/auk and
 #                target/bin/raft.
@@ -30,15 +42,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 CHECK=0 TEST=0 INSTALL="" FROM_SEED=0 SEED="${AUK_SEED:-}"
+AGAIN=()  # the arguments of a second run (--check), without the seed's
 while [ $# -gt 0 ]; do
   case "$1" in
-    --check) CHECK=1 ;;
-    --test) TEST=1 ;;
+    --check) CHECK=1; AGAIN+=(--check) ;;
+    --test) TEST=1; AGAIN+=(--test) ;;
     --install)
-      if [ $# -gt 1 ] && [ "${2#-}" = "$2" ]; then INSTALL="$2"; shift; else INSTALL="$HOME/.auk/bin"; fi ;;
+      if [ $# -gt 1 ] && [ "${2#-}" = "$2" ]; then INSTALL="$2"; shift; else INSTALL="$HOME/.auk/bin"; fi
+      AGAIN+=(--install "$INSTALL") ;;
     --seed) SEED="$2"; shift ;;
     --from-seed) FROM_SEED=1 ;;
-    -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "build.sh: unknown argument $1" >&2; exit 2 ;;
   esac
   shift
@@ -92,9 +106,39 @@ fi
 [ -x "$SEED" ] || SEED="$(command -v "$SEED" || true)"
 [ -n "$SEED" ] && [ -x "$SEED" ] || die "the seed is not an executable"
 
+# build <by> <source> <out>: through a temporary directory, under the final file name (which
+# the macOS linker writes into the code signature)
+build() {
+  local t tmp; t=$(ms)
+  tmp="$(dirname "$3")/.tmp$$"
+  mkdir -p "$tmp"
+  "$1" build "$2" -o "$tmp/$(basename "$3")" || die "$(basename "$1") failed to build $2"
+  mv "$tmp/$(basename "$3")" "$3"
+  rmdir "$tmp"
+  echo "   ${3#"$ROOT"/} ($(wc -c < "$3" | tr -d ' ') bytes, $(secs "$t"))"
+}
+
+# rt_auk <auk> <dir>: runtime/'s Auk half (the `auk_rt` package), built by <auk> into
+# <dir>/auk_rt_auk.o and auk_rt_auk.bc; its messages in <dir>/auk.log
+rt_auk() {
+  mkdir -p "$2"
+  "$1" build --lib runtime/src/lib.auk -o "$2/auk_rt_auk.o" > "$2/auk.log" 2>&1 &&
+    "$1" build --lib --bc runtime/src/lib.auk -o "$2/auk_rt_auk.bc" >> "$2/auk.log" 2>&1
+}
+
+# raft_deps: the seed builds raft (seed-raft), which installs compiler/'s dependencies (once)
+RAFT_DONE=0
+raft_deps() {
+  [ "$RAFT_DONE" = 1 ] && return
+  say "raft (built by the seed, $SEED)"
+  build "$SEED" raft/src/main.auk "$BUILD/seed-raft"
+  (cd compiler && "$BUILD/seed-raft" install > /dev/null) || die "raft install in compiler/ failed"
+  RAFT_DONE=1
+}
+
 # ---- 1. runtime ----------------------------------------------------------------------------
 t0=$(ms)
-say "runtime (runtime/c, $CLANG)"
+say "runtime (runtime/c with $CLANG, runtime/src with the seed)"
 CDIR="$ROOT/runtime/c"
 RT="$BUILD/rt"
 rm -rf "$RT"; mkdir -p "$RT"
@@ -117,32 +161,41 @@ for i in "${!units[@]}"; do
   "$CLANG" -c -emit-llvm -O2 -std=c11 -fno-strict-aliasing -fno-stack-protector "${PLATFORM[@]}" \
     -I "$CDIR" "$u" -o "$RT/rt_$i.bc" & pids+=($!)
 done
-for p in "${pids[@]}"; do wait "$p" || die "compiling the runtime failed"; done
-rm -f "$RT/libauk_rt.a"
-"$LLVM_BIN/llvm-ar" crs "$RT/libauk_rt.a" "${objs[@]}"
-"$LLVM_BIN/llvm-link" "${bcs[@]}" -o "$RT/auk_rt.bc"
-# replaced whole (the compiler `#embed`s them from here), never seen half-written
-for f in libauk_rt.a auk_rt.bc; do
-  cp "$RT/$f" "target/auk-rt/$f.tmp$$" && mv "target/auk-rt/$f.tmp$$" "target/auk-rt/$f"
-done
-echo "   target/auk-rt/libauk_rt.a, auk_rt.bc ($(secs "$t0"))"
-
-# build <by> <source> <out>: through a temporary directory, under the final file name (which
-# the macOS linker writes into the code signature)
-build() {
-  local t tmp; t=$(ms)
-  tmp="$(dirname "$3")/.tmp$$"
-  mkdir -p "$tmp"
-  "$1" build "$2" -o "$tmp/$(basename "$3")" || die "$(basename "$1") failed to build $2"
-  mv "$tmp/$(basename "$3")" "$3"
-  rmdir "$tmp"
-  echo "   ${3#"$ROOT"/} ($(wc -c < "$3" | tr -d ' ') bytes, $(secs "$t"))"
+c_done() { for p in ${pids[@]+"${pids[@]}"}; do wait "$p" || die "compiling the runtime failed"; done; pids=(); }
+# install <dir>: <dir>'s libauk_rt.a and auk_rt.bc into target/auk-rt/, each replaced whole (the
+# compiler `#embed`s them from there), never seen half-written
+install_rt() {
+  for f in libauk_rt.a auk_rt.bc; do
+    cp "$1/$f" "target/auk-rt/$f.tmp$$" && mv "target/auk-rt/$f.tmp$$" "target/auk-rt/$f"
+  done
 }
 
+if ! rt_auk "$SEED" "$RT"; then
+  # The seed predates the dialect: stage 0 (compiler/, built by the seed) builds runtime/src.
+  # It embeds the C half alone (`auk build --lib` links no runtime).
+  echo "   the seed can't build runtime/src ($(grep -m1 -o "error.*" "$RT/auk.log" | cut -c1-60)): stage 0 will"
+  c_done
+  mkdir -p "$RT/c-only"
+  "$LLVM_BIN/llvm-ar" crs "$RT/c-only/libauk_rt.a" "${objs[@]}"
+  "$LLVM_BIN/llvm-link" "${bcs[@]}" -o "$RT/c-only/auk_rt.bc"
+  install_rt "$RT/c-only"
+  raft_deps
+  say "stage 0 (compiler/ on the C half of the runtime, built by the seed)"
+  build "$SEED" compiler/src/main.auk "$BUILD/stage0/auk"
+  rt_auk "$BUILD/stage0/auk" "$RT" || { cat "$RT/auk.log" >&2; die "building runtime/src failed"; }
+fi
+c_done
+"$LLVM_BIN/llvm-ar" crs "$RT/libauk_rt.a" "${objs[@]}" "$RT/auk_rt_auk.o"
+# auk names the target as LLVM's default triple (`arm64-apple-darwin…`), clang normalizes it
+# (`arm64-apple-macosx…`): the same target, but llvm-link warns. (rtlink sets the program's.)
+"$LLVM_BIN/llvm-link" "${bcs[@]}" "$RT/auk_rt_auk.bc" -o "$RT/auk_rt.bc" 2> "$RT/link.log" ||
+  { cat "$RT/link.log" >&2; die "linking the runtime's bitcode failed"; }
+grep -v -e "different target triples" -e '^$' "$RT/link.log" >&2 || true
+install_rt "$RT"
+echo "   target/auk-rt/libauk_rt.a, auk_rt.bc ($(secs "$t0"))"
+
 # ---- 2. raft, and compiler/'s dependencies -------------------------------------------------
-say "raft (built by the seed, $SEED)"
-build "$SEED" raft/src/main.auk "$BUILD/seed-raft"
-(cd compiler && "$BUILD/seed-raft" install > /dev/null) || die "raft install in compiler/ failed"
+raft_deps
 
 # ---- 3, 4. the compiler --------------------------------------------------------------------
 say "stage 1 (compiler/, built by the seed)"
@@ -163,6 +216,19 @@ if [ "$CHECK" = 1 ]; then
     echo "   stage 2 and stage 3 are bit-identical"
   else
     die "stage 2 and stage 3 differ: $(cmp "$BUILD/stage2/auk" "$BUILD/stage3/auk" | head -1)"
+  fi
+  say "runtime/src (built by stage 2)"
+  rt_auk target/bin/auk "$BUILD/rt-check" || { cat "$BUILD/rt-check/auk.log" >&2; die "stage 2 failed to build runtime/src"; }
+  if cmp -s "$RT/auk_rt_auk.o" "$BUILD/rt-check/auk_rt_auk.o" &&
+    cmp -s "$RT/auk_rt_auk.bc" "$BUILD/rt-check/auk_rt_auk.bc"; then
+    echo "   the same as step 1's"
+  elif [ -n "${AUK_BUILD_AGAIN:-}" ]; then
+    die "stage 2 builds runtime/src differently from step 1, even with stage 2 as the seed"
+  else
+    echo "   not the same as the seed's: building again with stage 2 as the seed"
+    mkdir -p "$BUILD/seed-again"
+    cp "$BUILD/stage2/auk" "$BUILD/seed-again/auk"
+    AUK_BUILD_AGAIN=1 exec "$0" --seed "$BUILD/seed-again/auk" ${AGAIN[@]+"${AGAIN[@]}"}
   fi
 fi
 if [ "$TEST" = 1 ]; then

@@ -1,0 +1,4 @@
+/// The runtime in Auk (docs/self-host-plan.md, Phase 7): the module root of the `auk_rt`
+/// package. build.sh compiles it with `auk build --lib` (every module of src/, the `export fn`s
+/// external under their C names) and links the object with the C modules not ported yet
+/// (runtime/c) into libauk_rt.a, the bitcode into auk_rt.bc. Ported so far: `value`.

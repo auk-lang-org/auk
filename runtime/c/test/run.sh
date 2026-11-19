@@ -4,9 +4,13 @@
 #   sh runtime/c/test/run.sh [name-filter]
 #
 # Every runtime/c/*.c file and the tests in runtime/c/test/ are compiled separately into a
-# fresh build directory (never the source tree), linked, and run. Prints one `ok <name>` /
+# fresh build directory (never the source tree), linked with the runtime's Auk half (runtime/src,
+# the modules ported from C: `auk build --lib`, an object), and run. Prints one `ok <name>` /
 # `FAIL <name>` line per test and a summary; exits non-zero if anything fails to build or
 # any test fails. The filter keeps only tests whose name contains it.
+#
+# AUK is the auk that builds the Auk half: by default the checkout's target/bin/auk (build.sh),
+# else `auk` on the PATH. The sanitizers below instrument the C half only.
 #
 # ASAN=1 builds with AddressSanitizer and UBSan. CC overrides the compiler; by default it is
 # Homebrew's clang (/opt/homebrew/opt/llvm@23/bin/clang) when present, else cc. Under ASAN=1
@@ -62,6 +66,11 @@ fi
 
 echo "building with $CC${san:+ ($san)} in $build"
 objs=""
+auk=${AUK:-$rt/../../target/bin/auk}
+[ -x "$auk" ] || auk=$(command -v auk || true)
+[ -n "$auk" ] || { echo "run.sh: no auk to build runtime/src with (run ./build.sh, or set AUK)" >&2; exit 1; }
+"$auk" build --lib "$rt/../src/lib.auk" -o "$build/rt_auk.o"
+objs="$build/rt_auk.o"
 for src in "$rt"/*.c; do
     obj="$build/rt_$(basename "$src" .c).o"
     $CC $cflags $san -c "$src" -o "$obj"

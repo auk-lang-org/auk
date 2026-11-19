@@ -483,7 +483,7 @@ void auk__handle_copy_elem(const void *src, void *dst);
 void auk__closure_copy_elem(const void *src, void *dst);
 void auk__value_copy_elem(const void *src, void *dst);
 
-/* ---- value.c ----------------------------------------------------------------------------- */
+/* ---- value: runtime/src/value.auk (auk_ops_value: value_ops.c) --------------------------- */
 
 AUK_API AukValue auk_value_null(void);
 AUK_API AukValue auk_value_bool(bool b);
