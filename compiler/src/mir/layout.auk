@@ -261,16 +261,27 @@ fn leaves(l: var Layouts, t: mir.MTy, base: int, out: var [(int, Sc)]) {
 
 // ---- the C ABI ------------------------------------------------------------------------
 
-/// How a value crosses a C call boundary.
+/// How a value crosses a C call boundary (what clang emits for the same C type).
 pub enum CPass {
   Nothing,
   /// One scalar.
   Scalar(s: Sc),
-  /// An aggregate of at most 16 bytes as register-sized words (8 bytes each; the last may be
-  /// partial), or an AArch64 floating-point aggregate as one double per member.
+  /// An aggregate of at most 16 bytes as eightbytes (word `k` at offset `8 * k`; the last may
+  /// be partial). On x86-64 an eightbyte of floats only (SysV class SSE) is `F64`, or `F32`
+  /// when it holds one `f32` and then padding: two `f32`s travel as the bits of a double,
+  /// which is the register (and stack slot) clang's `<2 x float>` uses. AArch64 passes two
+  /// words as `[2 x i64]` (one block: both in registers or both on the stack).
   Words(ws: [Sc]),
+  /// An AArch64 homogeneous floating-point aggregate: `n` (1-4) members of `s` (`F32` or
+  /// `F64`, no padding) in consecutive SIMD registers, passed as `[n x s]`, returned as a
+  /// struct of them.
+  Hfa(s: Sc, n: int),
   /// A result returned through the struct-return pointer.
   Sret,
+  /// An argument in memory: AArch64 passes a pointer to a copy (an aggregate over 16 bytes),
+  /// x86-64 a `byval` copy on the stack (over 16 bytes, or not enough registers left for all
+  /// of its eightbytes).
+  Mem,
 }
 
 pub fn c_pass(l: var Layouts, t: mir.MTy): CPass {
@@ -282,22 +293,13 @@ pub fn c_pass(l: var Layouts, t: mir.MTy): CPass {
   let x = lay(&l, t)
   var lv: [(int, Sc)] = []
   leaves(&l, t, 0, &lv)
-  // AArch64: a homogeneous floating-point aggregate (1-4 doubles, no other members) travels
-  // in float registers, one per member, whatever its size
-  if l.arch == "aarch64" &&
-    lv.len() > 0 &&
-    lv.len() <= 4 &&
-    lv.all(p => p.1 == Sc.F64) &&
-    x.size == 8 * lv.len() {
-    return CPass.Words((0..lv.len()).map(_ => Sc.F64))
-  }
-  // ... or of 1-4 floats (only raw structs have `f32` members)
-  if l.arch == "aarch64" &&
-    lv.len() > 0 &&
-    lv.len() <= 4 &&
-    lv.all(p => p.1 == Sc.F32) &&
-    x.size == 4 * lv.len() {
-    return CPass.Words((0..lv.len()).map(_ => Sc.F32))
+  // AArch64: a homogeneous floating-point aggregate (1-4 members of one float type, no
+  // other members or padding) travels in float registers, whatever its size
+  if l.arch == "aarch64" && lv.len() > 0 && lv.len() <= 4 {
+    let s = lv[0].1
+    if is_float(s) && lv.all(p => p.1 == s) && x.size == bytes(s) * lv.len() {
+      return CPass.Hfa(s, lv.len())
+    }
   }
   if x.size > 16 { return CPass.Sret }
   let n = (x.size + 7) / 8
@@ -306,16 +308,60 @@ pub fn c_pass(l: var Layouts, t: mir.MTy): CPass {
     (0..n).map(k => {
       let (lo, hi) = (k * 8, k * 8 + 8)
       let inside = lv.filter(p => p.0 < hi && p.0 + bytes(p.1) > lo)
-      if x86 && inside.len() > 0 && inside.all(p => p.1 == Sc.F64) { Sc.F64 } else { Sc.I64 }
+      if x86 && inside.len() > 0 && inside.all(p => is_float(p.1)) {
+        // SSE: `float` when only the low half holds data, else the whole eightbyte
+        if inside.all(p => p.0 + bytes(p.1) <= lo + 4) { Sc.F32 } else { Sc.F64 }
+      } else {
+        Sc.I64
+      }
     }),
   )
 }
 
-/// How each parameter and the result of a C function cross the call boundary.
+/// How each parameter and the result of a C function cross the call boundary. An aggregate
+/// parameter over 16 bytes is `Mem`; on x86-64 (SysV) so is one whose eightbytes don't all
+/// fit in the registers left (6 general, 8 SSE; the struct-return pointer takes one general
+/// register), as clang decides it.
 pub fn c_sig(l: var Layouts, params: [mir.MTy], ret: mir.MTy): ([CPass], CPass) {
+  let rp = c_pass(&l, ret)
+  let x86 = l.arch == "x86_64"
+  var gp = if rp == CPass.Sret { 5 } else { 6 }
+  var sse = 8
   var ps: [CPass] = []
-  for p in params { ps.push(c_pass(&l, p)) }
-  (ps, c_pass(&l, ret))
+  for p in params {
+    let c = c_pass(&l, p)
+    let c2 = match c {
+      Sret => CPass.Mem
+      Scalar(s) => {
+        if x86 {
+          if is_float(s) {
+            if sse > 0 { sse -= 1 }
+          } else if gp > 0 {
+            gp -= 1
+          }
+        }
+        c
+      }
+      Words(ws) => {
+        if x86 {
+          let nf = ws.filter(w => is_float(w)).len()
+          let ni = ws.len() - nf
+          if nf <= sse && ni <= gp {
+            sse -= nf
+            gp -= ni
+            c
+          } else {
+            CPass.Mem
+          }
+        } else {
+          c
+        }
+      }
+      _ => c
+    }
+    ps.push(c2)
+  }
+  (ps, rp)
 }
 
 fn rep(t: mir.MTy, n: int): [mir.MTy] = (0..n).map(_ => t)

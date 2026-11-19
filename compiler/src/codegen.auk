@@ -280,6 +280,73 @@ fn words_ty(g: Gen, ws: [mir.layout.Sc]): llvm.Type uses ffi {
   llvm.ir.struct_type_in_context(g.cx, ws.map(w => lt(g, w)), 0)
 }
 
+/// The LLVM type of a C result of type `rp` (`Words` or `Hfa`; others are void).
+fn c_ret_ty(g: Gen, rp: mir.layout.CPass): llvm.Type uses ffi = match rp {
+  Words(ws) => words_ty(g, ws)
+  Hfa(s, n) => llvm.ir.struct_type_in_context(g.cx, (0..n).map(_ => lt(g, s)), 0)
+  Scalar(s) => lt(g, s)
+  _ => g.t_void
+}
+
+/// The LLVM parameters of an aggregate argument passed as `c` (`Words` or `Hfa`): x86-64
+/// passes each word on its own, AArch64 one block (clang's `[2 x i64]`, `[n x float]`).
+fn c_arg_tys(g: Gen, c: mir.layout.CPass): [llvm.Type] uses ffi = match c {
+  Words(ws) => if g.lay.arch == "aarch64" && ws.len() > 1 {
+    [llvm.ir.array_type2(g.t_i64, ws.len())]
+  } else {
+    ws.map(w => lt(g, w))
+  }
+  Hfa(s, n) => [llvm.ir.array_type2(lt(g, s), n)]
+  _ => []
+}
+
+/// The byte offset of part `k` of a C aggregate passed as `c` (`Words` or `Hfa`).
+fn c_part_off(c: mir.layout.CPass, k: int): int = match c {
+  Hfa(s, _) => k * mir.layout.bytes(s)
+  _ => k * 8
+}
+
+/// The scalar type of part `k` of a C aggregate passed as `c` (`Words` or `Hfa`).
+fn c_part_sc(c: mir.layout.CPass, k: int): mir.layout.Sc = match c {
+  Words(ws) => ws[k]
+  Hfa(s, _) => s
+  _ => mir.bug("c_part_sc")
+}
+
+/// The number of parts of a C aggregate passed as `c` (`Words` or `Hfa`).
+fn c_parts(c: mir.layout.CPass): int = match c {
+  Words(ws) => ws.len()
+  Hfa(_, n) => n
+  _ => 0
+}
+
+/// The LLVM argument(s) of a C aggregate of type `t` at `m` passed as `c`.
+fn c_arg_vals(g: var Gen, c: mir.layout.CPass, m: llvm.Value, t: mir.MTy): [llvm.Value] uses ffi {
+  var parts: [llvm.Value] = []
+  for k in 0..c_parts(c) { parts.push(load_part(&g, m, c, k, t)) }
+  let tys = c_arg_tys(g, c)
+  if tys.len() == parts.len() { return parts }
+  var agg = llvm.values.get_undef(tys[0])
+  for k, v in parts { agg = llvm.builder.build_insert_value(g.b, agg, v, k, "") }
+  [agg]
+}
+
+/// Store the incoming LLVM argument(s) of a C aggregate passed as `c`, from parameter `k` of
+/// `fv`, at `dst`; returns the next parameter's index.
+fn c_param_store(g: Gen, c: mir.layout.CPass, fv: llvm.Value, k: int, dst: llvm.Value): int uses ffi {
+  let n = c_parts(c)
+  if c_arg_tys(g, c).len() == n {
+    for j in 0..n { store(g, llvm.values.get_param(fv, k + j), gep(g, dst, c_part_off(c, j))) }
+    return k + n
+  }
+  let agg = llvm.values.get_param(fv, k)
+  for j in 0..n {
+    let v = llvm.builder.build_extract_value(g.b, agg, j, "")
+    store(g, v, gep(g, dst, c_part_off(c, j)))
+  }
+  k + 1
+}
+
 /// A C signature: (signature, how each parameter passes, how the result returns).
 pub fn c_sig(
   g: var Gen,
@@ -298,8 +365,8 @@ pub fn c_sig(
       }
       lt(g, s)
     }
-    Words(ws) => words_ty(g, ws)
-    Sret => {
+    Words(_) | Hfa(_, _) => c_ret_ty(g, rp)
+    Sret | Mem => {
       let size = lay(&g, ret).size
       let a = llvm.ir.create_type_attribute(g.cx, attr_kind("sret"), bytes_ty(g, size))
       attrs.push((1, a))
@@ -316,8 +383,17 @@ pub fn c_sig(
         }
         ps.push(lt(g, s))
       }
-      Words(ws) => for w in ws { ps.push(lt(g, w)) }
-      Sret => ps.push(g.t_ptr)
+      Words(_) | Hfa(_, _) => for t in c_arg_tys(g, c) { ps.push(t) }
+      Sret | Mem => {
+        if g.lay.arch == "x86_64" {
+          // a copy on the stack, as clang's `byval(%struct.S) align 8`
+          let l = lay(&g, p)
+          let k = ps.len() + 1
+          attrs.push((k, llvm.ir.create_type_attribute(g.cx, attr_kind("byval"), bytes_ty(g, l.size))))
+          attrs.push((k, llvm.ir.create_enum_attribute(g.cx, attr_kind("align"), max(l.align, 8))))
+        }
+        ps.push(g.t_ptr)
+      }
       Nothing => {}
     }
   }
@@ -561,12 +637,8 @@ fn body(g: var Gen, fi: int): ()! uses ffi {
             store(g, llvm.values.get_param(fv, k), dst)
             k += 1
           }
-          Words(ws) => for j in 0..ws.len() {
-            let a = gep(g, dst, word_off(ws[j], j))
-            store(g, llvm.values.get_param(fv, k), a)
-            k += 1
-          }
-          Sret => {
+          Words(_) | Hfa(_, _) => k = c_param_store(g, pp[i], fv, k, dst)
+          Sret | Mem => {
             copy(&g, dst, llvm.values.get_param(fv, k), f.vars[v])
             k += 1
           }
@@ -601,8 +673,9 @@ fn ret_default(g: var Gen) uses ffi {
   match scalar(g, f.ret) {
     some(t) => llvm.builder.build_ret(g.b, llvm.values.const_null(t))
     none => if f.abi == mir.Abi.C && is_agg(g, f.ret) {
-      match cur_ret_sig(&g).1 {
-        Words(ws) => llvm.builder.build_ret(g.b, llvm.values.const_null(words_ty(g, ws)))
+      let rp = cur_ret_sig(&g).1
+      match rp {
+        Words(_) | Hfa(_, _) => llvm.builder.build_ret(g.b, llvm.values.const_null(c_ret_ty(g, rp)))
         _ => llvm.builder.build_ret_void(g.b)
       }
     } else {
@@ -648,19 +721,18 @@ pub fn copy(g: var Gen, dst: llvm.Value, src: llvm.Value, t: mir.MTy) uses ffi {
 
 /// The offset of word `k` of a C aggregate passed as words: 8 bytes each, except the `f32`s of an
 /// AArch64 float aggregate (only raw structs have them).
-fn word_off(w: mir.layout.Sc, k: int): int = if w == mir.layout.Sc.F32 { k * 4 } else { k * 8 }
-
-/// Word `k` of a C aggregate of type `t` at `src`: a full 8-byte load, or only the bytes the
-/// aggregate has (zero-extended) for a partial last word.
-fn load_word(
+/// Part `k` of a C aggregate of type `t` at `src` passed as `c`: a full load, or only the
+/// bytes the aggregate has (zero-extended) for a partial last integer word.
+fn load_part(
   g: var Gen,
   src: llvm.Value,
+  c: mir.layout.CPass,
   k: int,
-  w: mir.layout.Sc,
   t: mir.MTy,
 ): llvm.Value uses ffi {
   let size = lay(&g, t).size
-  let at = gep(g, src, word_off(w, k))
+  let w = c_part_sc(c, k)
+  let at = gep(g, src, c_part_off(c, k))
   let n = min(size - k * 8, 8)
   if n == 8 || mir.layout.is_float(w) { return load_ty(g, lt(g, w), at) }
   let part = llvm.builder.build_load2(g.b, llvm.ir.int_type_in_context(g.cx, n * 8), at, "")
@@ -843,22 +915,20 @@ fn ret(g: var Gen, e: mir.Ex?) uses ffi {
     M(a) => a
     _ => mir.bug("llvm: aggregate return")
   }
-  let words = if f.abi == mir.Abi.C {
-    match cur_ret_sig(&g).1 {
-      Words(ws) => some(ws)
-      _ => none
-    }
+  let parts = if f.abi == mir.Abi.C {
+    let rp = cur_ret_sig(&g).1
+    if c_parts(rp) > 0 { some(rp) } else { none }
   } else {
     none
   }
-  match words {
-    some(ws) => {
+  match parts {
+    some(rp) => {
       var vals: [llvm.Value] = []
-      for k, w in ws { vals.push(load_word(&g, src, k, w, f.ret)) }
-      if vals.len() == 1 {
+      for k in 0..c_parts(rp) { vals.push(load_part(&g, src, rp, k, f.ret)) }
+      if rp is mir.layout.CPass.Words(_) && vals.len() == 1 {
         let _ = llvm.builder.build_ret(g.b, vals[0])
       } else {
-        var agg = llvm.values.get_undef(words_ty(g, ws))
+        var agg = llvm.values.get_undef(c_ret_ty(g, rp))
         for k, v in vals { agg = llvm.builder.build_insert_value(g.b, agg, v, k, "") }
         let _ = llvm.builder.build_ret(g.b, agg)
       }
@@ -1473,12 +1543,13 @@ fn c_args(
         let v = scalar_of(&g, x, a.ty, p, lt(g, s))
         vals.push(v)
       }
-      Words(ws) => {
+      Words(_) | Hfa(_, _) => {
         let m = mem_of(&g, a)
-        for k, w in ws { vals.push(load_word(&g, m, k, w, p)) }
+        for v in c_arg_vals(&g, cp, m, p) { vals.push(v) }
       }
-      Sret => {
-        // an aggregate argument bigger than 16 bytes: a pointer to a copy (AArch64)
+      Sret | Mem => {
+        // an aggregate in memory: a pointer to a copy (AArch64; x86-64 `byval` copies it
+        // again, onto the stack)
         let m = mem_of(&g, a)
         let t = temp(&g, p)
         copy(&g, t, m, p)
@@ -1504,19 +1575,18 @@ fn c_result(
   match rp {
     Nothing => V.Nil
     Scalar(_) => V.S(c)
-    Words(ws) => {
+    Words(_) | Hfa(_, _) => {
       let a = temp(&g, ret)
-      if ws.len() == 1 {
+      if rp is mir.layout.CPass.Words(_) && c_parts(rp) == 1 {
         store(g, c, a)
       } else {
-        for k in 0..ws.len() {
+        for k in 0..c_parts(rp) {
           let v = llvm.builder.build_extract_value(g.b, c, k, "")
-          let at = gep(g, a, word_off(ws[k], k))
-          store(g, v, at)
+          store(g, v, gep(g, a, c_part_off(rp, k)))
         }
       }
       V.M(a)
     }
-    Sret => mir.bug("unreachable")
+    Sret | Mem => mir.bug("unreachable")
   }
 }

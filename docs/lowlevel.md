@@ -155,8 +155,7 @@ points; a signal handler is an `export fn` passed to `sigaction`.
 - **`extern var name: T = "symbol"`** declares C data (no initializer); reading it, writing it
   and `raw.addr_of(&name)` need `uses raw` (E0410).
 - **`export fn`:** one clause, no type parameters, raw types only (E0419); C's calling
-  convention as `mir/layout.auk` classifies it (AArch64 float aggregates of `f32` were added
-  there for raw structs); external linkage under its own name, so dead-code elimination keeps
+  convention as `mir/layout.auk` classifies it (below); external linkage under its own name, so dead-code elimination keeps
   it; `inline export fn` is the same plus `inlinehint`. `raw.fn_of(f)` takes an `export fn`, or a
   function whose parameters and result are numbers, `bool` and raw pointers.
 - **`auk build --lib [--bc] <file> -o <out>`** writes an object (or bitcode) at O2 with every
@@ -167,9 +166,17 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   `_Thread_local`s: never copied into programs.
 - **FFI:** in the runtime package a C prototype may take function pointers (`int (*f)(int)`),
   matched by `raw.Fn` (or `void *`); `raw.Ptr` is any `T *`, a fixed-width integer a C integer of
-  its width, `f32` `float`, a raw struct a C `struct` by value. On x86-64, a raw struct whose
-  eightbyte holds two `f32`s is still classified as an integer word (only AArch64 is supported
-  and tested here).
+  its width, `f32` `float`, a raw struct a C `struct` by value.
+- **The C ABI of raw structs by value** (`mir/layout.auk`, what clang emits; tested both ways
+  against `cc` by `runtime/test/raw/cabi.auk`): on x86-64 (SysV) each eightbyte of an aggregate
+  of at most 16 bytes is SSE when it holds only floats (two `f32`s travel as the bits of one
+  double, the register clang's `<2 x float>` uses; one `f32` and padding as a `float`), else
+  INTEGER (`{float, i64}` is xmm + general register); bigger aggregates are `byval` (and
+  returned through `sret`), as is one whose eightbytes don't all fit in the registers left (6
+  general, 8 SSE). On AArch64 a homogeneous floating-point aggregate (1-4 `f32`s or 1-4
+  `float`s, arrays and nested structs included) is `[n x float]` in consecutive SIMD
+  registers, other aggregates up to 16 bytes `[2 x i64]` (both registers or both on the stack),
+  bigger ones a pointer to a copy.
 - **Error codes:** E0418 (the gate), E0419 (a reference-counted type in `uses raw` code, an
   `export fn` or a raw struct), E0421 (not a compile-time constant, a failing `raw assert`, a
   non-constant or invalid memory order).

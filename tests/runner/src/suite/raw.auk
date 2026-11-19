@@ -16,6 +16,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("setjmp_longjmp_out_of_nested_calls", setjmp_longjmp_out_of_nested_calls),
   t.test("export_fns_by_value_and_fn_pointers", export_fns_by_value_and_fn_pointers),
   t.test("a_library_called_from_c", a_library_called_from_c),
+  t.test("c_abi_of_raw_structs_matches_cc", c_abi_of_raw_structs_matches_cc),
   t.test("library_bitcode_keeps_exports", library_bitcode_keeps_exports),
   t.test("extern_vars_read_c_data", extern_vars_read_c_data),
   t.test("raw_is_only_for_the_runtime_e0418", raw_is_only_for_the_runtime_e0418),
@@ -117,6 +118,23 @@ fn a_library_called_from_c() uses env, fs, ffi, time {
     t.lacks_text(syms, " T _main\n")
     t.lacks_text(syms, " T main\n")
   }
+}
+
+/// Raw structs by value across C calls both ways (cabi.auk with cabi_main.c, compiled by cc):
+/// float members (x86-64 SSE eightbytes, AArch64 HFAs), mixed eightbytes, aggregates in
+/// memory, and registers running out partway through the arguments.
+fn c_abi_of_raw_structs_matches_cc() uses env, fs, ffi, time {
+  t.skip_if_lacks("cc", "a C compiler to link the library with")
+  let main = fixture("cabi", "cabi.auk")
+  let d = dir_of(main)
+  let obj = paths.join(d, "cabi.o")
+  let b = auk(["build", "--lib", main, "-o", obj])
+  t.check(b.success(), "auk build --lib:\n{b.stderr}")
+  let exe = paths.join(d, "prog")
+  let c = cmd.new("cc").args(["runtime/test/raw/cabi_main.c", obj, "-o", exe]).output()
+  t.check(c.success(), "cc:\n{c.stderr}")
+  let r = cmd.new(exe).output()
+  t.eq(r.stdout, "ok\n", r.stderr)
 }
 
 /// `llvm-dis` next to the `clang` build.sh uses, if any.
