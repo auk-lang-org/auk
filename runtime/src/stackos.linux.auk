@@ -52,7 +52,7 @@ pub fn elf_sym_name(pc: usize, out: raw.Ptr<u8>, cap: usize): bool uses raw, ffi
   // a PIE is loaded at its program headers' address less their file offset
   let addr = if i32(eh.e_type) == cfacts.ET_DYN { pc - (usize(getauxval(u64(cfacts.AT_PHDR))) - usize(eh.e_phoff)) } else { pc }
   var sh = cfacts.Elf64Shdr {}
-  var str = cfacts.Elf64Shdr {}
+  var strtab = cfacts.Elf64Shdr {}
   var syms = Syms {}
   let sp: raw.Ptr<cfacts.Elf64Sym> = raw.cast(raw.addr_of(&syms))
   var i: u32 = 0
@@ -62,7 +62,7 @@ pub fn elf_sym_name(pc: usize, out: raw.Ptr<u8>, cap: usize): bool uses raw, ffi
     if pread(fd, raw.cast(raw.addr_of(&sh)), shsz, i64(at)) != i64(shsz) || sh.sh_type != u32(cfacts.SHT_SYMTAB) {
       continue
     }
-    if pread(fd, raw.cast(raw.addr_of(&str)), shsz, i64(eh.e_shoff + u64(sh.sh_link) * u64(shsz))) != i64(shsz) {
+    if pread(fd, raw.cast(raw.addr_of(&strtab)), shsz, i64(eh.e_shoff + u64(sh.sh_link) * u64(shsz))) != i64(shsz) {
       break
     }
     let n = usize(sh.sh_size) / symsz
@@ -76,7 +76,7 @@ pub fn elf_sym_name(pc: usize, out: raw.Ptr<u8>, cap: usize): bool uses raw, ffi
       while j < m {
         let s = sp.offset(j)
         if cfacts.elf64_st_type(s.st_info) == u8(cfacts.STT_FUNC) && u64(addr) >= s.st_value && u64(addr) < s.st_value + s.st_size {
-          let r = pread(fd, raw.cast(out), cap - 1, i64(str.sh_offset + u64(s.st_name)))
+          let r = pread(fd, raw.cast(out), cap - 1, i64(strtab.sh_offset + u64(s.st_name)))
           out.at(if r > 0 { usize(r) } else { 0 }) = 0
           found = r > 0
           break

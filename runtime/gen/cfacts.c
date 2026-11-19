@@ -337,7 +337,8 @@ int main(void) {
     I32(SA_NODEFER);
     I32(SA_SIGINFO);
     I32(SS_DISABLE);
-    I32(MINSIGSTKSZ);
+    /* no MINSIGSTKSZ: glibc 2.34+ makes it sysconf(_SC_MINSIGSTKSZ), which depends on the
+       CPU (13504 with AVX-512); the runtime's signal stack is a fixed 64 KB (stack.auk) */
     ADDR(SIG_DFL);
     ADDR(SIG_IGN);
     I32(WNOHANG);

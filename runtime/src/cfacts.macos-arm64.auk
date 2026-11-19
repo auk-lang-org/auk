@@ -92,7 +92,6 @@ pub raw let SA_RESETHAND: i32 = 4 // C: SA_RESETHAND
 pub raw let SA_NODEFER: i32 = 16 // C: SA_NODEFER
 pub raw let SA_SIGINFO: i32 = 64 // C: SA_SIGINFO
 pub raw let SS_DISABLE: i32 = 4 // C: SS_DISABLE
-pub raw let MINSIGSTKSZ: i32 = 32768 // C: MINSIGSTKSZ
 pub raw let SIG_DFL: i64 = 0 // C: SIG_DFL
 pub raw let SIG_IGN: i64 = 1 // C: SIG_IGN
 pub raw let WNOHANG: i32 = 1 // C: WNOHANG
