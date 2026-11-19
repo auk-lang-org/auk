@@ -137,8 +137,11 @@ points; a signal handler is an `export fn` passed to `sigaction`.
 - **Intrinsic signatures:** `p.at(i)`, `p.offset(i)`, `raw.from_int(n)` and the byte counts of
   `copy`/`move`/`fill`/`compare`/`alloc`/`realloc` take any integer type (`int` or fixed-width).
   `raw.cast<U>(x)` takes a `raw.Ptr`, `raw.Fn`, `ffi.Ptr` or C `extern type` and gives a
-  `raw.Ptr<U>` (a cast *to* a `raw.Fn`, as §10's `complete.invoke` needs, isn't there yet: store
-  the code pointer in a `raw.Fn` field of a raw struct instead). `is_null` works on `raw.Ptr`
+  `raw.Ptr<U>`, or, when `U` is a `raw.Fn`, that function pointer itself (§10's
+  `raw.cast<raw.Fn<(raw.Ptr<()>, bool) => ()>>(complete.invoke)(complete, ok)`); without `<U>` it
+  is what the context expects (`let f: raw.Fn<…> = raw.cast(p)`, `let q: raw.Ptr<T> =
+  raw.cast(p)`). So a pointer to function pointers is written by its type: `let slots:
+  raw.Ptr<raw.Fn<…>> = raw.cast(p)`. `is_null` works on `raw.Ptr`
   and `raw.Fn`; `raw.null()` is a `raw.Ptr`. `p.int()` is declared `fn int <T>` in the prelude
   (a space: `int<` would read as a unit of measure). A `raw.Fn` value is called like a function
   (`f(x)`); calling one stored in a struct field needs it in a local first.

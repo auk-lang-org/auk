@@ -79,14 +79,14 @@ pub fn ptr_field(c: var check.Checker, e: ast.Expr, t: types.Ty, name: ast.Ident
 }
 
 /// The intrinsics of core's `raw` module that need more than a generic signature.
-pub fn is_special(name: str): bool = name == "field_addr" || name == "offset_of" || name == "fn_of"
+pub fn is_special(name: str): bool = name == "field_addr" || name == "offset_of" || name == "fn_of" || name == "cast"
 
-pub fn special(c: var check.Checker, e: ast.Expr, target: int, name: ast.Ident, args: [check.ArgSrc]): types.Ty {
+pub fn special(c: var check.Checker, e: ast.Expr, target: int, name: ast.Ident, args: [check.ArgSrc], exp: check.Exp): types.Ty {
   let m = c.cur_module()
   let f = c.fns_in(m, target, name.name)[0]
   let xs = args.map(a => check.arg_expr(a))
   let explicit = take_explicit(&c)
-  let want = if name.name == "offset_of" { 1 } else if name.name == "fn_of" { 1 } else { 2 }
+  let want = if name.name == "field_addr" { 2 } else { 1 }
   if xs.len() != want {
     c.err(diag.new("E0300", name.span, "`raw.{name.name}` takes {want} argument(s), but {xs.len()} were given"))
     for x in xs { c.infer_quiet(x) }
@@ -94,6 +94,37 @@ pub fn special(c: var check.Checker, e: ast.Expr, target: int, name: ast.Ident, 
   }
   let arg = (x: ast.Expr) => typed.Arg { node: x.id, by_ref: false }
   match name.name {
+    "cast" => {
+      // `raw.cast<U>(p)`: a `raw.Ptr<U>`, or the function pointer `U` itself when `U` is a
+      // `raw.Fn` (a code pointer held as `void *`); without `<U>`, what the context expects
+      let from = c.infer(xs[0], none)
+      let (u, to) = match explicit {
+        some(ts) when ts.len() == 1 => match c.shallow(ts[0]) {
+          CFn(_, _) => (ts[0], ts[0])
+          _ => (ts[0], types.Ty.Ptr(ts[0]))
+        }
+        some(ts) => {
+          c.err(diag.new("E0360", name.span, "`raw.cast` takes one type argument, but {ts.len()} were given"))
+          return types.Ty.Error
+        }
+        none => {
+          let hint = match check.exp_ty(exp) {
+            some(t) => c.shallow(t)
+            none => types.Ty.Error
+          }
+          match hint {
+            CFn(_, _) => (hint, hint)
+            Ptr(x) => (x, hint)
+            _ => {
+              let v = c.fresh()
+              (v, types.Ty.Ptr(v))
+            }
+          }
+        }
+      }
+      c.note_call(e.id, typed.Call { callee: typed.Callee.Fn(f, [u, from]), args: [arg(xs[0])] })
+      to
+    }
     "field_addr" => {
       let pt = c.infer(xs[0], none)
       let sel = xs[1]

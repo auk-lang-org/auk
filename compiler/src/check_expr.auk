@@ -1296,7 +1296,7 @@ pub fn quiet_args(c: var check.Checker, args: [check.ArgSrc]): types.Ty {
 pub fn path_call(c: var check.Checker, e: ast.Expr, target: int, name: ast.Ident, args: [check.ArgSrc], exp: check.Exp, direct: bool): types.Ty {
   let m = c.cur_module()
   if some(target) == c.prog.raw_module() && check_raw.is_special(name.name) {
-    return check_raw.special(&c, e, target, name, args)
+    return check_raw.special(&c, e, target, name, args, exp)
   }
   let fs = c.fns_in(m, target, name.name)
   if fs.len() > 0 { return c.call_fns(e, name.span, name.name, fs, args, exp, direct) }
