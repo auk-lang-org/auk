@@ -161,3 +161,7 @@ how contracts, holes, tests, `peek` and `imprint` compile.
 
 [`editors/vscode/`](editors/vscode/) is a VS Code extension: syntax highlighting plus the
 language server (`auk lsp`) for diagnostics, quick fixes, hover, go to definition, formatting and the outline view.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
