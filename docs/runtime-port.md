@@ -112,25 +112,15 @@ except as listed under "Still open" below; 6 and 8 need nothing new.
    `raw assert` with `raw.offset_of`, as section 4 plans.
 8. **`_Noreturn`** (panics, `auk__catch_throw*`): a `never` result.
 
-### Still open (found writing `abi` and `cfacts`)
+### Found writing `abi` and `cfacts` (fixed since, lowlevel.md 7a)
 
-- **Another module's `raw let` isn't a constant** (E0421): `raw var lock: cfacts.PthreadMutex
-  = cfacts.PTHREAD_MUTEX_INITIALIZER` (chan.c, compiler.c, stack.c's `install_once`, every
-  static mutex) is refused, as is `raw let X = abi.K_STR + 1`. Inside functions they are
-  ordinary values. On Linux every initializer is zero (`cfacts.PthreadMutex {}` works); on
-  macOS it isn't, so until the checker follows `raw let`s across modules a static mutex needs
-  its literal copied (wrong on the other OS) or initialization at startup.
-- **No type aliases:** the 12 function-pointer typedefs are written out at every use
-  (`abi.auk`'s header lists them), and `mode_t`, `socklen_t`, `pid_t`, `off_t` can't be named:
-  write the fixed-width type `cfacts` lists for each platform (they differ: `mode_t` is `u16`
-  on macOS, `u32` on Linux; `msg_controllen` is `u32`/`u64`), and convert at the use.
-- **`raw.size_of` needs `uses raw`** in a function body although it is a constant; a
-  `raw let` of it doesn't (cfacts' `CMSG_HDR`).
-- **An out-of-range literal in a `raw let` wraps silently** (`raw let X: i32 = 2147483648`
-  is -2147483648, `raw let Y: u8 = 300` is 44) where a local `let` reports E0210; cfacts prints
-  each value as its declared type, so it doesn't hit this.
-- **`int` and `i64` are different types** to the checker (E0200 for `fn f(): int =
-  abi.SB_SMALL`), unlike lowlevel.md section 2's "`int` is `i64`": convert with `int(x)`.
+Another module's `pub raw let` is a constant (`raw var lock: cfacts.PthreadMutex =
+cfacts.PTHREAD_MUTEX_INITIALIZER`); `raw type` aliases name `mode_t` & co. per platform and the
+function-pointer typedefs; `raw.size_of`/`align_of`/`offset_of` need no `uses raw`; an
+out-of-range literal in a constant is E0210; `int` and `i64` mix. What the package uses from a
+per-target module is checked against every target's variant (E0422), so the "only on <os>"
+parts may stay.
+
 - **Not in `cfacts`** (not header facts, or not expressible): `environ` (the same symbol on
   both OSes: an `extern var` in the module that needs it); `sigemptyset`/`sigaddset` (libc
   functions on both: call them); `FD_SET` (unused); `dispatch_*`/`nw_*` enum values and block
@@ -152,23 +142,21 @@ What the dialect lacked, or does differently from C:
 
 1. **C string constants:** none, so the panic messages and tag names had no spelling. Added
    (lowlevel.md 7a): a string literal where a `raw.Ptr<u8>` is expected is a C string.
-2. **Addresses in raw initializers** (`raw.fn_of(f)` in an `export var`'s initializer): not yet,
-   so a constant table of function pointers (`auk_ops_value`, and every `AukElemOps`,
-   `auk_ops_*`, in `rc.c`, `copy.c`, …) stays C over `export fn`s. Needed before `rc.c`.
-3. **`never` is core's only:** a `_Noreturn` C function (`auk__panic3`) is declared returning
-   `()`, and its callers follow the call with `raw.unreachable()`.
-4. **`()` results are `i8`:** an `export fn` returning `()` (or a `raw.Fn<(…) => ()>`) returns
-   Auk's unit byte where C has `void`. Harmless on arm64 and x86-64 (the caller ignores the
-   register), but not C's signature; `auk_value_retain`'s IR says `i8`.
-5. **`match` can't name a `raw let`:** an arm `V_NULL => …` binds a new name (E0401 on the
-   arms after it), so C's `switch` over enum constants became `if`/`else if` chains.
-6. **Parameters have no address:** `raw.addr_of(&param)` needs a `var` copy first (C takes
-   `&val` of a parameter).
+2. **Addresses in raw initializers** (`raw.fn_of(f)` in an `export var`'s initializer): fixed
+   (lowlevel.md 7a: relocations, so `export var auk_ops_value: abi.ElemOps = abi.ElemOps {
+   retain: raw.fn_of(f), … }` is a constant table).
+3. **`never` is core's only:** fixed; `never` is a type of the runtime package (C `void`).
+4. **`()` results are `i8`:** fixed; C `void`.
+5. **`match` can't name a `raw let`:** fixed for the module's own integer `raw let`s (another
+   module's: compare in a guard).
+6. **Parameters have no address:** fixed.
 7. **Calls named `auk_retain`/`auk_release`** are compiled as the compiler's reference-counting
    fast path (inline atomics, `auk__free_last` on the last reference), not as calls: equivalent,
    but `rc.c`'s port defines those two, and must not rely on calls to them being calls.
 8. **The target triple:** auk names LLVM's default (`arm64-apple-darwin27.2.0`), clang its
-   normalized form (`arm64-apple-macosx27.2.0`); `llvm-link` warns (build.sh filters it).
+   normalized form (`arm64-apple-macosx27.2.0`); `llvm-link` warns (build.sh filters it). Left
+   as is: the `macosx` form carries a deployment version, which LLVM's code generation reads
+   (libcall availability), so switching isn't a no-op on generated code.
 
 ## Per file
 
