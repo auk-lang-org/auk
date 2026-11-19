@@ -485,6 +485,7 @@ pub fn program(g: var Gen, ex: Exports): ()! uses ffi {
     let gv = global(&g, gl)?
     g.globals.push(gv)
   }
+  rawgen.init_globals(&g)?
   for i in 0..prog.funcs.len() { body(&g, i)? }
   dwarf.finish(g.debug)
 }

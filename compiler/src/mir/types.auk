@@ -147,6 +147,8 @@ fn boxed_ty(b: bool, ft: types.Ty): mir.MTy = if b { mir.obj_ptr() } else { mir.
 
 fn d_member_ty(info: TyInfo, t: types.Ty, sel: mir.Sel): mir.MTy = match (t, sel) {
   (Tuple(ts), F(i)) => mir.MTy.D(ts[i])
+  // a fixed array of the runtime's dialect (element `i`, in a constant initializer)
+  (Array(x, _), F(_)) => mir.MTy.D(x)
   (Opt(_), F(0)) | (Res(_, _), F(0)) => mir.MTy.Bool
   (Opt(x), F(1)) | (Res(x, _), F(1)) => mir.MTy.D(x)
   (Res(_, _), F(2)) => mir.MTy.D(err_ty(info))

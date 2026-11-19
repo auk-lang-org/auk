@@ -58,6 +58,9 @@ export fn auk_calls_c(): i32 uses raw, ffi {
 raw var counter: i64 = 0
 raw thread var mine: i64 = 100
 export var auk_flag: i32 = 7
+// a table of function pointers, filled in at link time (no code runs at startup)
+raw struct Ops { twice: raw.Fn<(i32) => i32>, flag: raw.Ptr<i32> }
+export var auk_ops: Ops = Ops { twice: raw.fn_of(auk_twice), flag: raw.addr_of(&auk_flag) }
 
 export fn auk_bump(n: i64): i64 uses raw {
   var i: i64 = 0

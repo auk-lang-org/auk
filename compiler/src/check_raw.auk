@@ -428,6 +428,7 @@ fn show_cv(v: typed.ConstVal): str = match v {
   Float(x) => "{x}"
   Zero => "0"
   Agg(_) => "a struct"
+  GlobalAddr(_) | FnAddr(_) => "an address"
 }
 
 fn eval_global(c: var check.Checker, ev: var Eval, g: int) {
@@ -459,7 +460,7 @@ fn not_const(c: var check.Checker, m: int, e: ast.Expr): (typed.ConstVal, types.
   c.err_in(
     m,
     diag.new("E0421", e.span, "this isn't a compile-time constant")
-      .note("an initializer of a global and a `raw assert` use literals, `raw let`s, `raw.size_of<T>()`, `raw.align_of<T>()`, `raw.offset_of<T>(.f)`, `raw.null()`, conversions, arithmetic and raw struct literals"),
+      .note("an initializer of a global and a `raw assert` use literals, `raw let`s, `raw.size_of<T>()`, `raw.align_of<T>()`, `raw.offset_of<T>(.f)`, `raw.null()`, `raw.addr_of(&g)`, `raw.fn_of(f)`, `raw.cast`, conversions, arithmetic, and raw struct and array literals"),
   )
   none
 }
@@ -606,9 +607,9 @@ fn eval(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr, want: types.Ty?
       var g = check.gen_scope()
       var ts: [types.Ty] = []
       for t in tys { ts.push(c.resolve_type(m, t, &g)) }
-      raw_const_call(&c, m, x, ts, want)
+      raw_const_call(&c, &ev, m, x, ts, want)
     }
-    MethodCall(_, _, _) => raw_const_call(&c, m, e, [], want)
+    MethodCall(_, _, _) => raw_const_call(&c, &ev, m, e, [], want)
     Call(callee, args) => match callee.kind {
       Name(n) when args.len() == 1 => {
         let to = match types.fx_of(n) {
@@ -650,12 +651,39 @@ fn eval(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr, want: types.Ty?
       }
       some((typed.ConstVal.Agg(out), types.Ty.Named(d, [])))
     }
+    List(xs) => {
+      // a fixed array (`[T; N]`, from the type expected): elements left out are zero
+      let (et, n) = match want {
+        some(Array(et, n)) when n >= 0 => (et, n)
+        _ => return not_const(&c, m, e)
+      }
+      if xs.len() > n {
+        c.err_in(m, diag.new("E0200", e.span, "{xs.len()} elements for a `{c.defs.show(want!)}`"))
+        return none
+      }
+      var out: [(int, typed.ConstVal)] = []
+      for i, x in xs {
+        let (v, t) = eval(&c, &ev, m, x, some(et))?
+        if t != et && et != types.Ty.Error && t != types.Ty.Error {
+          c.err_in(m, diag.new("E0200", x.span, "expected `{c.defs.show(et)}`, found `{c.defs.show(t)}`"))
+        }
+        out.push((i, v))
+      }
+      some((typed.ConstVal.Agg(out), types.Ty.Array(et, n)))
+    }
     _ => not_const(&c, m, e)
   }
 }
 
-/// `raw.size_of<T>()`, `raw.align_of<T>()`, `raw.offset_of<T>(.f)`, `raw.null()` in a constant.
-fn raw_const_call(c: var check.Checker, m: int, e: ast.Expr, ts: [types.Ty], want: types.Ty?): (typed.ConstVal, types.Ty)? {
+/// Is `v` an address (or null), as `raw.cast` takes in a constant?
+fn is_addr(v: typed.ConstVal): bool = match v {
+  GlobalAddr(_) | FnAddr(_) | Zero => true
+  _ => false
+}
+
+/// `raw.size_of<T>()`, `raw.align_of<T>()`, `raw.offset_of<T>(.f)`, `raw.null()`,
+/// `raw.addr_of(&g)`, `raw.fn_of(f)`, `raw.cast(p)` in a constant.
+fn raw_const_call(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr, ts: [types.Ty], want: types.Ty?): (typed.ConstVal, types.Ty)? {
   let (recv, name, args) = match e.kind {
     MethodCall(r, n, a) => (r, n, a)
     _ => return not_const(&c, m, e)
@@ -689,6 +717,67 @@ fn raw_const_call(c: var check.Checker, m: int, e: ast.Expr, ts: [types.Ty], wan
       }
     }
     return some((typed.ConstVal.Zero, t))
+  }
+  if n == "addr_of" && args.len() == 1 {
+    let gname = match args[0].kind {
+      Ref(x) => match x.kind {
+        Name(g) => g
+        _ => return not_const(&c, m, e)
+      }
+      _ => return not_const(&c, m, e)
+    }
+    let g = c.items[m].globals.get(gname) else return not_const(&c, m, e)
+    let kind = c.globals[g].kind
+    if kind == 1 || kind == 2 {
+      let why = if kind == 1 { "each thread has its own" } else { "a `raw let` is a value, not memory" }
+      c.err_in(m, diag.new("E0421", args[0].span, "the address of `{gname}` isn't a compile-time constant: {why}"))
+      return none
+    }
+    return some((typed.ConstVal.GlobalAddr(g), types.Ty.Ptr(c.globals[g].ty)))
+  }
+  if n == "fn_of" && args.len() == 1 {
+    let fname = match args[0].kind {
+      Name(f) => f
+      _ => return not_const(&c, m, e)
+    }
+    let fs = c.fns_in(m, m, fname).filter(f => c.fns[f].kind is typed.FnKind.Auk(_, _, _))
+    if fs.len() != 1 || c.fns[fs[0]].generics.len() > 0 {
+      c.err_in(m, diag.new("E0421", args[0].span, "`raw.fn_of` in a constant takes the name of one non-generic function of this module"))
+      return none
+    }
+    let f = fs[0]
+    let info = c.fns[f]
+    let ps = info.params.map(p => p.ty)
+    let scalar = (t: types.Ty) => match t {
+      Int | Float | Bool | Char | Fixed(_) | Ptr(_) | CFn(_, _) => true
+      t => types.is_unit(t)
+    }
+    if !c.is_export(f) && !(ps.all(scalar) && scalar(info.ret)) {
+      c.err_in(
+        m,
+        diag.new("E0202", args[0].span, "`raw.fn_of({fname})`: only an `export fn`, or a function of numbers and raw pointers, has a C address")
+          .note("declare it `export fn` (C's calling convention for every type)"),
+      )
+      return none
+    }
+    return some((typed.ConstVal.FnAddr(f), types.Ty.CFn(ps, info.ret)))
+  }
+  if n == "cast" && args.len() == 1 {
+    let to = match ts.get(0) {
+      some(CFn(ps, r)) => types.Ty.CFn(ps, r)
+      some(x) => types.Ty.Ptr(x)
+      none => match want {
+        some(Ptr(x)) => types.Ty.Ptr(x)
+        some(CFn(ps, r)) => types.Ty.CFn(ps, r)
+        _ => {
+          c.err_in(m, diag.new("E0360", e.span, "`raw.cast` needs its pointer type here: `raw.cast<T>(p)`"))
+          return none
+        }
+      }
+    }
+    let (v, _) = eval(&c, &ev, m, args[0], none)?
+    if !is_addr(v) { return not_const(&c, m, args[0]) }
+    return some((v, to))
   }
   not_const(&c, m, e)
 }

@@ -306,9 +306,19 @@ pub fn raw_const(g: var Gen, v: typed.ConstVal, t: types.Ty): mir.Ex = match v {
   Int(n) => mir.int_as(n, d(t))
   Float(x) => mir.ex(mir.K.Float(x), d(types.Ty.Float)).cast(d(t))
   Zero => mir.zero(d(t))
+  GlobalAddr(id) => mir.ex(mir.K.GlobalAddr(g.raw_global(id)), d(t))
+  FnAddr(f) => {
+    let i = g.tp.instances.find_index(x => x.body == typed.BodyRef.Fn(f) && x.type_args.len() == 0) else mir.bug("raw.fn_of: no instance of {g.tp.fns[f].name}")
+    mir.fn_addr(g.inst_fn(i)).cast(d(t))
+  }
   Agg(fs) => {
     let (dd, args) = match t {
       Named(dd, args) => (dd, args)
+      Array(et, _) => {
+        var ms: [(mir.Sel, mir.Ex)] = []
+        for (i, fv) in fs { ms.push((mir.Sel.F(i), g.raw_const(fv, et))) }
+        return mir.agg(d(t), ms)
+      }
       _ => return mir.zero(d(t))
     }
     let defs = types.fields(g.tp.defs, dd)
@@ -320,17 +330,19 @@ pub fn raw_const(g: var Gen, v: typed.ConstVal, t: types.Ty): mir.Ex = match v {
 }
 
 /// The MIR global of global `id` of the runtime's dialect (`typed.GlobalInfo`), made on first
-/// use with the constant `init`.
-pub fn raw_global(g: var Gen, id: int, init: mir.Ex): int {
+/// use with its constant initializer (which may hold its own address).
+pub fn raw_global(g: var Gen, id: int): int {
   match g.raw_globals.get(id) {
     some(x) => return x
     none => {}
   }
   let gl = g.tp.globals[id]
   let name = if gl.kind == 4 { gl.c_name } else if gl.kind == 3 { gl.name } else { "dk_raw{id}_{sanitize(gl.name)}" }
-  g.prog.globals.push(mir.Global { name, ty: d(gl.ty), init: some(init), constant: false, kind: gl.kind + 1 })
+  g.prog.globals.push(mir.Global { name, ty: d(gl.ty), init: none, constant: false, kind: gl.kind + 1 })
   let x = g.prog.globals.len() - 1
   g.raw_globals[id] = x
+  let init = g.raw_const(gl.value, gl.ty)
+  g.prog.globals[x].init = some(init)
   x
 }
 

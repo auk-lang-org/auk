@@ -157,14 +157,8 @@ pub fn global(g: var codegen.Gen, gl: mir.Global): llvm.Value! uses ffi {
     llvm.values.set_linkage(gv, llvm.EXTERNAL_LINKAGE)
     return gv
   }
-  let size = max(l.size, 1)
-  var bytes = (0..size).map(_ => 0)
-  match gl.init {
-    some(e) => fill(&g, &bytes, 0, gl.ty, e)?
-    none => {}
-  }
-  let ty = llvm.ir.array_type2(g.t_i8, size)
-  let init = if bytes.all(b => b == 0) { llvm.values.const_null(ty) } else { codegen.const_bytes(g, bytes) }
+  // addresses are placeholders (null) until every global exists: `init_globals`
+  let init = image(&g, gl, false)?
   let gv = llvm.values.add_global(g.m, llvm.values.type_of(init), gl.name)
   llvm.values.set_initializer(gv, init)
   llvm.values.set_linkage(gv, if gl.kind == 4 { llvm.EXTERNAL_LINKAGE } else { llvm.INTERNAL_LINKAGE })
@@ -173,8 +167,52 @@ pub fn global(g: var codegen.Gen, gl: mir.Global): llvm.Value! uses ffi {
   gv
 }
 
-/// Write the constant `e` (of type `t`) into `bytes` at `off`.
-fn fill(g: var codegen.Gen, bytes: var [int], off: int, t: mir.MTy, e: mir.Ex): ()! uses ffi {
+/// The initializer of a raw global: its bytes, as a packed struct of byte runs and pointers
+/// when it holds addresses (null placeholders unless `real`).
+fn image(g: var codegen.Gen, gl: mir.Global, real: bool): llvm.Value! uses ffi {
+  let size = max(codegen.lay(&g, gl.ty).size, 1)
+  var bytes = (0..size).map(_ => 0)
+  var ptrs: [(int, llvm.Value)] = []
+  match gl.init {
+    some(e) => fill(&g, &bytes, &ptrs, real, 0, gl.ty, e)?
+    none => {}
+  }
+  if ptrs.len() == 0 {
+    let ty = llvm.ir.array_type2(g.t_i8, size)
+    return if bytes.all(b => b == 0) { llvm.values.const_null(ty) } else { codegen.const_bytes(g, bytes) }
+  }
+  var fields: [llvm.Value] = []
+  var at = 0
+  for (off, p) in ptrs.sort_by(p => p.0) {
+    if off > at { fields.push(codegen.const_bytes(g, bytes[at..off])) }
+    fields.push(p)
+    at = off + 8
+  }
+  if at < bytes.len() { fields.push(codegen.const_bytes(g, bytes[at..bytes.len()])) }
+  llvm.values.const_struct_in_context(g.cx, fields, 1)
+}
+
+/// The real initializers of the raw globals that hold addresses (all globals exist now).
+pub fn init_globals(g: var codegen.Gen): ()! uses ffi {
+  for i, gl in g.prog.globals {
+    if gl.kind == 0 || gl.kind == 5 || !has_addr(gl.init) { continue }
+    let init = image(&g, gl, true)?
+    llvm.values.set_initializer(g.globals[i], init)
+  }
+}
+
+fn has_addr(e: mir.Ex?): bool = match e {
+  some(x) => match x.k {
+    GlobalAddr(_) | FnAddr(_) => true
+    Cast(y) => has_addr(some(y))
+    Agg(ms) => ms.any(m => has_addr(some(m.1)))
+    _ => false
+  }
+  none => false
+}
+
+/// Write the constant `e` (of type `t`) into `bytes` at `off`; addresses go to `ptrs`.
+fn fill(g: var codegen.Gen, bytes: var [int], ptrs: var [(int, llvm.Value)], real: bool, off: int, t: mir.MTy, e: mir.Ex): ()! uses ffi {
   match e.k {
     Int(n) => {
       let sz = codegen.lay(&g, t).size
@@ -186,11 +224,13 @@ fn fill(g: var codegen.Gen, bytes: var [int], off: int, t: mir.MTy, e: mir.Ex): 
       let bits = float_bits(x, sz == 4)
       for k in 0..sz { bytes[off + k] = (bits >> (8 * k)) & 255 }
     }
-    Cast(x) => fill(&g, &bytes, off, t, x)?
+    Cast(x) => fill(&g, &bytes, &ptrs, real, off, t, x)?
+    GlobalAddr(x) => ptrs.push((off, if real { g.globals[x] } else { llvm.values.const_null(g.t_ptr) }))
+    FnAddr(Fn(f)) => ptrs.push((off, if real { g.funcs[f].0 } else { llvm.values.const_null(g.t_ptr) }))
     Agg(ms) => for (s, v) in ms {
       let at = off + codegen.offset(&g, t, s)
       let mt = mir.types.member_ty(g.lay.info, t, s, g.prog.aggs)
-      fill(&g, &bytes, at, mt, v)?
+      fill(&g, &bytes, &ptrs, real, at, mt, v)?
     }
     _ => return fail("an initializer of a raw global isn't constant")
   }

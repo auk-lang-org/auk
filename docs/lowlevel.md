@@ -150,11 +150,17 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   untouched. `.f` (a field selector) is an argument form only.
 - **Constants:** initializers of `raw var`/`raw thread var`/`export var` and `raw let`, and
   `raw assert`, are evaluated by the checker: literals, other `raw let`s of the module,
-  `raw.size_of/align_of/offset_of`, `raw.null()`, conversions, arithmetic, comparisons and raw
-  struct literals (missing fields are zero). Not yet: addresses (`raw.addr_of(&g)`,
-  `raw.fn_of(f)`) in initializers, so a global block literal (§10) is filled in at startup for
-  now. A raw struct literal anywhere may leave fields out (they are zero); a `raw union`
-  literal gives at most one field.
+  `raw.size_of/align_of/offset_of`, `raw.null()`, conversions, arithmetic, comparisons, raw
+  struct literals (missing fields are zero), fixed array literals (`[raw.fn_of(f), raw.fn_of(g)]`
+  for a `[raw.Fn<…>; 4]`: missing elements are zero), and addresses: `raw.addr_of(&g)` of a
+  `raw var`, `export var` or `extern var` of the module (any order, its own address included;
+  not a `raw thread var` or a `raw let`), `raw.fn_of(f)` of a non-generic function of the module
+  named directly (as `raw.fn_of` allows it anywhere), and `raw.cast` of either (to the type
+  argument, or the type expected). They become relocations, so a global block literal (§10) or
+  a table of function pointers costs nothing at startup (and an `auk build --lib` object
+  exports one as data). A `raw let` holding addresses is a value like any other: the
+  addresses are taken where it is used. A raw struct literal anywhere may leave fields out
+  (they are zero); a `raw union` literal gives at most one field.
 - **`extern var name: T = "symbol"`** declares C data (no initializer); reading it, writing it
   and `raw.addr_of(&name)` need `uses raw` (E0410).
 - **`export fn`:** one clause, no type parameters, raw types only (E0419); C's calling

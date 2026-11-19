@@ -12,6 +12,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("pointers_on_malloced_memory", pointers_on_malloced_memory),
   t.test("unions_and_casts_at_o2", unions_and_casts_at_o2),
   t.test("globals_constants_and_raw_assert", globals_constants_and_raw_assert),
+  t.test("addresses_in_constant_initializers", addresses_in_constant_initializers),
   t.test("thread_vars_are_refused_by_the_jit", thread_vars_are_refused_by_the_jit),
   t.test("setjmp_longjmp_out_of_nested_calls", setjmp_longjmp_out_of_nested_calls),
   t.test("export_fns_by_value_and_fn_pointers", export_fns_by_value_and_fn_pointers),
@@ -87,6 +88,8 @@ fn globals_constants_and_raw_assert() uses env, fs, ffi, time {
   built_passes(fixture("globals", "globals.auk"))
 }
 
+fn addresses_in_constant_initializers() uses env, fs, ffi, time { let _ = passes(fixture("const_addr", "const_addr.auk")) }
+
 fn thread_vars_are_refused_by_the_jit() uses env, fs, ffi, time {
   let main = fixture("tls_jit", "globals.auk")
   let o = auk(["run", main])
@@ -114,7 +117,7 @@ fn a_library_called_from_c() uses env, fs, ffi, time {
   // the symbols: the exports, by their names; no `main`
   if t.have("nm") {
     let syms = cmd.new("nm").arg(obj).output().stdout
-    for s in ["auk_bump", "auk_v2_add", "auk_mk_big", "auk_flag"] { t.has(syms, s) }
+    for s in ["auk_bump", "auk_v2_add", "auk_mk_big", "auk_flag", "auk_ops"] { t.has(syms, s) }
     t.lacks_text(syms, " T _main\n")
     t.lacks_text(syms, " T main\n")
   }
@@ -218,6 +221,10 @@ fn constants_and_raw_assert_e0421() uses env, fs, ffi, time {
     "fn g(): i64 = 1\nraw var n: i64 = g()\nfn main() {{}}\n",
     "fn f(p: raw.Ptr<i64>, o: raw.Order): i64 uses raw = raw.atomic_load(p, o)\nfn main() {{}}\n",
     "fn f(p: raw.Ptr<i64>): i64 uses raw = raw.atomic_load(p, raw.Order.Release)\nfn main() {{}}\n",
+    // addresses: not of a thread-local or a `raw let`, only of functions by name
+    "raw thread var t: i64 = 0\nraw var p: raw.Ptr<i64> = raw.addr_of(&t)\nfn main() {{}}\n",
+    "raw let K: i64 = 1\nraw var p: raw.Ptr<i64> = raw.addr_of(&K)\nfn main() {{}}\n",
+    "raw var f: raw.Fn<() => i64> = raw.fn_of(nope)\nfn main() {{}}\n",
   ]
   for i, src in srcs {
     let main = project("const{i}", src)
@@ -226,7 +233,7 @@ fn constants_and_raw_assert_e0421() uses env, fs, ffi, time {
 }
 
 fn fmt_and_check_handle_the_dialect() uses env, fs, ffi, time {
-  for f in ["lib.auk", "ptr.auk", "globals.auk", "union.auk", "sjlj.auk"] {
+  for f in ["lib.auk", "ptr.auk", "globals.auk", "union.auk", "sjlj.auk", "const_addr.auk"] {
     let src = t.read("runtime/test/raw/{f}")
     let o = t.auk().args(["fmt", "-"]).stdin(src).output()
     t.check(o.success(), "auk fmt {f}:\n{o.stderr}")

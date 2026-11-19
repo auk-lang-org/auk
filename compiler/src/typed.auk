@@ -50,8 +50,12 @@ pub enum ConstVal {
   Float(x: float),
   /// All zero bytes (`raw.null()`, a raw struct literal without fields).
   Zero,
-  /// A raw struct literal: (field index, value).
+  /// A raw struct literal: (field index, value); a fixed array literal: (element index, value).
   Agg(fields: [(int, ConstVal)]),
+  /// The address of global `g` (`raw.addr_of(&g)`: a `raw var`, `export var` or `extern var`).
+  GlobalAddr(g: int),
+  /// The C address of the (non-generic) function `f` (`raw.fn_of(f)`).
+  FnAddr(f: int),
 }
 
 /// One function: a clause group after splitting by first-parameter type.

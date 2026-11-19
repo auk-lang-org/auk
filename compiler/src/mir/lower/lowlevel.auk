@@ -12,7 +12,7 @@ pub fn const_ex(lw: var mir.lower.Lower, v: typed.ConstVal, t: types.Ty): mir.Ex
 pub fn global_ref(lw: var mir.lower.Lower, g: int): mir.lower.Val {
   let gl = lw.tp.globals[g]
   if gl.kind == 2 { return mir.lower.plain(lw.const_ex(gl.value, gl.ty), gl.ty) }
-  let ix = lw.g.raw_global(g, lw.const_ex(gl.value, gl.ty))
+  let ix = lw.g.raw_global(g)
   mir.lower.plain(lw.g.global_ex(ix), gl.ty)
 }
 

@@ -163,8 +163,8 @@ pub fn generate_lib(tp: typed.TypedProgram, emb: {str: [int]}): Generated! {
   // `export var`s are part of the interface, used or not
   for id, gl in tp.globals {
     if gl.kind == 3 {
-      let init = g.raw_const(gl.value, gl.ty)
-      let _ = g.raw_global(id, init)
+      let _ = g.raw_global(id)
+      drain(&g)
     }
   }
   if g.prog.exports.len() == 0 {

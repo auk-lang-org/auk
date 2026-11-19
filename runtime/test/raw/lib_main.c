@@ -28,6 +28,7 @@ int64_t auk_bump(int64_t);
 int64_t auk_total(void);
 int64_t auk_spawn(int64_t);
 extern int32_t auk_flag;
+extern struct { int32_t (*twice)(int32_t); int32_t *flag; } auk_ops;
 
 struct v2 c_v2_sub(struct v2 a, struct v2 b) { return (struct v2){a.x - b.x, a.y - b.y}; }
 int c_apply(int (*f)(int), int x) { return f(x); }
@@ -73,6 +74,7 @@ int main(void) {
   CHECK(auk_str_len(&str) == 3);
   CHECK(auk_calls_c() == 0);
   CHECK(auk_flag == 7);
+  CHECK(auk_ops.twice(5) == 10 && auk_ops.flag == &auk_flag);
 
   // a thread-local per thread, one atomic counter for all
   pthread_t ts[4];
