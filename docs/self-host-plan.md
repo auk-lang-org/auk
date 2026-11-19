@@ -707,7 +707,7 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       `catch` to LLVM landing pads / unwinding — decide early, it affects codegen. Done
       (2026-11-19): `runtime/src/catch.auk` on `raw.setjmp`/`raw.longjmp` (libc's
       `_setjmp`/`_longjmp`, lowlevel.md §7); codegen unchanged.
-- [ ] ObjC: call `objc_msgSend`/`sel_registerName`/`objc_getClass` via FFI to replace
+- [x] ObjC: call `objc_msgSend`/`sel_registerName`/`objc_getClass` via FFI to replace
       `gui_host.m` and `audio_out.m`; blocks (if any AppKit API needs them) via a small
       block-literal layout in Auk.
 - [x] Network.framework/OpenSSL bindings via FFI. Blocks: **proven workable without `-fblocks`**

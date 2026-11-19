@@ -524,6 +524,59 @@ same within the noise. New findings:
    (`PortBuf { b: [u8; 24] }`); a raw global `[u64; 4]` is indexed through
    `raw.cast<u64>(raw.addr_of(&g)).at(i)`.
 
+## Found by the 7c port of `audio_out`, `gui`, `gui_host` (2026-11-19)
+
+`runtime/src/audio_out.auk` (+ `audio_os.macos.auk`: AudioToolbox; `audio_os.linux.auk`:
+PulseAudio), `gui.auk` (+ `gui_os.macos.auk`/`gui_os.linux.auk`) and `gui_host.macos.auk` (+
+`gui_host.linux.auk`, which says "only on macOS" and exits 1 as the C did), line by line: same
+symbols (`auk__wire_*` stay exported: dbg.c calls `auk__wire_no_sigpipe`; `testing.auk` now
+calls `gui_host.auk__gui_host_main()` by path), messages byte for byte, the wire protocol and
+AUK_GUI_TRACE lines unchanged. Every `objc_msgSend` shape is a private wrapper casting the
+dlsym'd address to the exact `raw.Fn<(Id, Sel, …) => R>` (HRect/HPoint by value: the AArch64 HFA
+lowering); the view class's 21 methods are private functions given to `class_addMethod` as
+`raw.cast<()>(raw.fn_of(f))`; the run-loop source's `perform`, AudioQueue's callback and every
+thread start routine are `raw.fn_of`s too (no new exported symbols). The dlsym'd tables (`Sys`,
+`AqApi`, `PaApi`) are zero-initialized `raw var` structs of `raw.Fn` fields, each read into a
+local before the call. Static mutexes/conds are `cfacts.PTHREAD_*_INITIALIZER` constants.
+New findings:
+
+1. **The socket structs' field widths differ per OS and nothing names them:** `msg_controllen`
+   and `cmsg_len` are `u32` on macOS and `u64` on glibc, `msg_iovlen` `i32`/`u64`, `sun_family`
+   `u8`/`u16`. Reading is fine (`usize(m.msg_controllen)`), but a write of a computed value needs
+   the field's type, and `cfacts` has no aliases (`socklen_t` is only a comment). So the writes
+   are per-OS helpers in `gui_os.<os>.auk` (`msg_set`, `cmsg_set`, `sun_set_family`), with
+   `SUPPORTED` (C's `#if __APPLE__`), `exe_path` (`_NSGetExecutablePath`) and `inherit_std`
+   (`posix_spawn_file_actions_addinherit_np`). `cfacts` emitting `raw type SocklenT` & co. (or
+   the setters) would let core.c's port share them.
+2. **A field of a call's result can't be assigned** (E0027: `stale_at(b, i).n = 0`, where
+   `stale_at` returns a `raw.Ptr`): bind it to a local first.
+3. **`raw.cast` without a type argument can't be inferred as `raw.copy`'s argument** (E0360,
+   `raw.copy` is generic over `raw.Ptr<_>`): `raw.cast<u8>(…)`. Likewise a string literal as
+   `raw.copy`'s source is a `str`, not a C string (E0200 + E0419): only a context that says
+   `raw.Ptr<u8>` makes one, so `let pre: raw.Ptr<u8> = "AUK_GUI_OWNER="` first.
+4. **`none` is a keyword:** `let none = m_id(cls("NSNull"), "null")` parsed as a pattern for an
+   optional (E0262).
+5. **Effects through `raw.fn_of`:** taking the address of a function that `uses ffi` needs `ffi`
+   in the taker (`view_class`); calling a `raw.Fn` held in a `raw var` (or a local read from
+   one), or reading a raw global, needs no `raw` (E0411 flagged `sel`/`cls`).
+6. **More `pub`s:** `arr.auk_arr_len`, `arr.auk_arr_make_unique`, `err.auk_err_new_cstr` (called by
+   path from the new modules).
+7. Known ones again: no fixed-array locals (`char exe[4096]`, `char *argv[2]`, the event ints
+   `int64_t e[5]`, `uint8_t rgb[3]` are one-field raw structs; the `const char *keys[4]` loops
+   are unrolled), the two `cmsghdr` unions are `raw union`s with a `[u8; N]` sized for every
+   target (32 and 64 bytes), `INFINITY` is a `raw union` of its bits, `_exit` is an `extern fn
+   … : never`, `_Atomic bool host_dead` a `u8` with `raw.atomic_load/store`,
+   `atomic_compare_exchange_weak` a `raw.atomic_cas` loop, `__builtin_*_overflow`
+   `raw.add/mul_overflow`.
+8. **The byte-order `#if`** (PulseAudio's float format) is gone: every Linux target (arm64,
+   x86-64) is little-endian, so `audio_os.linux.auk` says `PA_SAMPLE_FLOAT32LE`.
+9. Unchanged from the C: on an x86-64 Mac a struct-returning `objc_msgSend` would need
+   `objc_msgSend_stret` (`m_rect`); there is no `macos-x86_64` cfacts, so only arm64 runs it.
+
+**build.sh:** `-fblocks` stays (tls.c is its one user, and Clang enables blocks on Darwin
+anyway); gui_host never linked a framework (all `dlopen`), so no link flag goes with it.
+`runtime/c/test/run.sh`'s `-framework Network/Security/CoreFoundation` are tls.c's.
+
 ## Per file
 
 Lines are of the C today. "Globals" counts file-scope variables (thread-locals and atomics
@@ -560,9 +613,9 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | `trace.c` | 668 | 20 globals (5 thread-locals), 3 function-local statics, `sigaction` + `atexit` callbacks, `open` through `cwrap.c` | its fatal-signal handler re-raises with `signal(sig, SIG_DFL)`: fine as an `export fn` |
 | ~~`stack.c`~~ | 376 | **done** (2026-11-19): `runtime/src/stack.auk`, `stackos.<os>.auk`, `cpu.auk` | the context's PC/SP through `cfacts.uc_pc`/`uc_sp`; x86-64's return-address slot is `cpu.RET_SLOT` |
 | `dbg.c` | 2141 | 50 globals (5 thread-locals, atomics), `pthread_key_create` destructor, `pthread_create`, `atexit`, `signal(SIGINT)` callbacks, Unix sockets | — (largest file; translate last among the plain ones) |
-| `audio_out.c` | 328 | 6 globals (`dlsym`'d function tables: `raw.Fn` fields), `pthread_once` | per-OS `#if` (AudioToolbox / PulseAudio) and a byte-order `#if` |
-| `gui.c` | 1301 | 26 globals, 2 `raw union`s (cmsg buffers), `CMSG_*`, `environ`, `posix_spawn` (+ the macOS `_np` call), `mmap`/`shm_open` (through `cwrap.c`), overflow builtins | 5 `#if`s (OS, `SO_NOSIGPIPE`) |
-| `gui_host.c` | 1661 | 11 globals, 22 typed `objc_msgSend` wrappers (`raw.Fn` casts, as today: no Objective-C source), CoreFoundation run-loop source callbacks, `dlopen`/`dlsym`, `mmap` | macOS only (`#if __APPLE__` around the whole host) |
+| ~~`audio_out.c`~~ | 328 | **done** (2026-11-19): `runtime/src/audio_out.auk` + `audio_os.<os>.auk` | the per-OS `#if` is `audio_os`; the byte-order `#if` is gone (all Linux targets are little-endian) |
+| ~~`gui.c`~~ | 1301 | **done** (2026-11-19): `runtime/src/gui.auk` + `gui_os.<os>.auk` | the `#if`s are `gui_os.SUPPORTED`, `cfacts.HAS_SO_NOSIGPIPE` and gui_os's setters for the per-OS field widths |
+| ~~`gui_host.c`~~ | 1661 | **done** (2026-11-19): `runtime/src/gui_host.macos.auk` (+ `gui_host.linux.auk`) | — |
 | ~~`tls.c`~~ | 916 | **done** (2026-11-19): `runtime/src/tls.auk` (shared checks and messages) + `tls_os.macos.auk` (Network.framework, hand-made blocks) / `tls_os.linux.auk` (OpenSSL through dlopen) | the 8 kinds of blocks are raw structs per lowlevel.md §10; the op refcount is the completion blocks' copy/dispose helpers; `-fblocks` gone from build.sh |
 | `cwrap.c` | 52 | nothing: it is the C half of the varargs boundary | **stays C** (or becomes varargs FFI support in the compiler; self-host-plan 7b) |
 
