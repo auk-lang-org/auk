@@ -61,7 +61,7 @@ pub fn float_cmp(a: float, b: float): i32 {
   (if a > b { 1 } else { 0 }) - (if a < b { 1 } else { 0 })
 }
 
-inline export fn auk_arr_len(a: raw.Ptr<abi.Arr>): i64 uses raw = if a.is_null() { 0 } else { a.len }
+pub inline export fn auk_arr_len(a: raw.Ptr<abi.Arr>): i64 uses raw = if a.is_null() { 0 } else { a.len }
 
 inline export fn auk_arr_data(a: raw.Ptr<abi.Arr>): raw.Ptr<()> uses raw =
   if a.is_null() { raw.null() } else { raw.cast(a.data) }
@@ -185,7 +185,7 @@ fn ensure_unique_cap(pa: raw.Ptr<raw.Ptr<abi.Arr>>, need: i64) uses raw, ffi {
   }
 }
 
-export fn auk_arr_make_unique(pa: raw.Ptr<raw.Ptr<abi.Arr>>): raw.Ptr<()> uses raw, ffi {
+pub export fn auk_arr_make_unique(pa: raw.Ptr<raw.Ptr<abi.Arr>>): raw.Ptr<()> uses raw, ffi {
   ensure_unique_cap(pa, pa.load().len)
   raw.cast(pa.load().data)
 }
