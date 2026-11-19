@@ -34,7 +34,7 @@ extern fn close(fd: i32): i32 = "int close(int)"
 
 /// Flags for send(2) on a connected socket: no SIGPIPE where the platform has MSG_NOSIGNAL (0
 /// where it hasn't); elsewhere the socket carries SO_NOSIGPIPE. C: `const int` (dbg.c reads it).
-export var auk__send_flags: i32 = cfacts.MSG_NOSIGNAL
+pub export var auk__send_flags: i32 = cfacts.MSG_NOSIGNAL
 
 fn conn_open(c: raw.Ptr<abi.Conn>): bool uses raw = !c.is_null() && (c.fd >= 0 || !c.tls.is_null())
 

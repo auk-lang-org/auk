@@ -21,8 +21,6 @@
 /// a function's entry SP (`cpu`, per CPU).
 
 // the rest of the runtime (C, for now)
-extern fn auk__dbg_thread_handoff(): i64 = "int64_t auk__dbg_thread_handoff(void)"
-extern fn auk__dbg_thread_adopt(id: i64) = "void auk__dbg_thread_adopt(int64_t)"
 // libc
 extern fn strlen(s: raw.Ptr<u8>): usize = "size_t strlen(const char *)"
 extern fn strncmp(a: raw.Ptr<u8>, b: raw.Ptr<u8>, n: usize): i32 = "int strncmp(const char *, const char *, size_t)"
@@ -276,7 +274,7 @@ raw struct BigRun {
 
 fn big_entry(p: raw.Ptr<()>): raw.Ptr<()> uses raw, ffi {
   let r: raw.Ptr<BigRun> = raw.cast(p)
-  auk__dbg_thread_adopt(r.dbg_id)
+  dbg.auk__dbg_thread_adopt(r.dbg_id)
   auk__stack_thread_begin()
   let f = r.f
   f(r.arg)
@@ -287,14 +285,14 @@ fn big_entry(p: raw.Ptr<()>): raw.Ptr<()> uses raw, ffi {
 /// Run f(arg) on a new thread with a stack of AUK_MAIN_STACK bytes and wait for it (on this
 /// thread, with overflow reporting, when no thread can be started).
 pub export fn auk__run_on_big_stack(f: raw.Fn<(raw.Ptr<()>) => ()>, arg: raw.Ptr<()>) uses raw, ffi {
-  var r = BigRun { f, arg, dbg_id: auk__dbg_thread_handoff() }
+  var r = BigRun { f, arg, dbg_id: dbg.auk__dbg_thread_handoff() }
   var attr = cfacts.PthreadAttr {}
   auk__stack_attr(raw.cast(raw.addr_of(&attr)), abi.MAIN_STACK)
   var th = cfacts.PthreadT {}
   let rc = pthread_create(raw.addr_of(&th), raw.addr_of(&attr), raw.fn_of(big_entry), raw.cast(raw.addr_of(&r)))
   pthread_attr_destroy(raw.addr_of(&attr))
   if rc != 0 {
-    auk__dbg_thread_adopt(r.dbg_id)
+    dbg.auk__dbg_thread_adopt(r.dbg_id)
     auk__stack_thread_begin()
     f(arg)
     return

@@ -11,8 +11,6 @@
 /// (a direct call: it inlines within the Auk half).
 
 // the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
-extern fn auk__dbg_on_panic(loc: raw.Ptr<u8>, msg: raw.Ptr<u8>, n: usize, caught: bool) =
-  "void auk__dbg_on_panic(const char *, const char *, size_t, bool)"
 extern fn auk__conn_free(p: raw.Ptr<()>) = "void auk__conn_free(void *)"
 extern fn auk__listener_free(p: raw.Ptr<()>) = "void auk__listener_free(void *)"
 // the C library
@@ -335,7 +333,7 @@ pub export fn auk__panic(loc: raw.Ptr<u8>, msg: raw.Ptr<u8>, n0: usize): never u
   }
   let place: raw.Ptr<u8> = if loc.is_null() { "<unknown>" } else { loc }
   let caught = recover.auk__catch_active() != 0
-  auk__dbg_on_panic(place, msg, n, caught)
+  dbg.auk__dbg_on_panic(place, msg, n, caught)
   if caught {
     trace.auk__trace_on_panic(loc, msg, n, true)
     recover.auk__catch_throw(place, msg, n)

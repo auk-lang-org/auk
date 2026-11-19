@@ -15,8 +15,6 @@
 /// `auk__catch_top_addr` and `auk__catch_throw_overflow`.
 
 // the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
-extern fn auk__dbg_save(top: raw.Ptr<raw.Ptr<()>>, depth: raw.Ptr<i64>) = "void auk__dbg_save(void **, int64_t *)"
-extern fn auk__dbg_restore(top: raw.Ptr<()>, depth: i64) = "void auk__dbg_restore(void *, int64_t)"
 extern fn auk__sb_put_cstr(b: raw.Ptr<abi.StrBuf>, s: raw.Ptr<u8>) = "void auk__sb_put_cstr(void *, const char *)"
 extern fn auk__err_sb(b: raw.Ptr<abi.StrBuf>): raw.Ptr<abi.Err> = "void *auk__err_sb(void *)"
 // libc
@@ -107,12 +105,12 @@ pub export fn auk__catch_call(f: raw.Fn<(raw.Ptr<()>, raw.Ptr<()>) => ()>, env: 
   var dtop: raw.Ptr<()> = raw.null()
   var ddepth: i64 = 0
   trace.auk__trace_save(raw.addr_of(&tdepth), raw.addr_of(&tmute))
-  auk__dbg_save(raw.addr_of(&dtop), raw.addr_of(&ddepth))
+  dbg.auk__dbg_save(raw.addr_of(&dtop), raw.addr_of(&ddepth))
   if auk__catch_run(f, env, out) == 0 {
     return raw.null()
   }
   trace.auk__trace_restore(tdepth, tmute)
-  auk__dbg_restore(dtop, ddepth)
+  dbg.auk__dbg_restore(dtop, ddepth)
   let p: raw.Ptr<abi.Panic> = raw.cast(rc.auk__xmalloc(raw.size_of<abi.Panic>()))
   auk__catch_take(raw.field_addr(p, .msg), raw.field_addr(p, .loc))
   if p.msg.is_null() {

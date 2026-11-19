@@ -43,15 +43,15 @@ pub fn strtod(s: raw.Ptr<u8>, end: raw.Ptr<raw.Ptr<u8>>): float uses ffi = c_str
 raw thread var show_left: i64 = -1
 raw thread var dbg_busy: bool = false
 
-export fn auk__dbg_busy(): bool = dbg_busy
+pub export fn auk__dbg_busy(): bool = dbg_busy
 
-export fn auk__dbg_set_busy(b: bool): bool {
+pub export fn auk__dbg_set_busy(b: bool): bool {
   let old = dbg_busy
   dbg_busy = b
   old
 }
 
-export fn auk__show_left(): i64 = show_left
+pub export fn auk__show_left(): i64 = show_left
 
 pub export fn auk__set_show_left(v: i64) {
   show_left = v

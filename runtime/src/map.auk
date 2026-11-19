@@ -369,7 +369,7 @@ export fn auk_map_remove(pm: raw.Ptr<raw.Ptr<abi.Map>>, k_in: raw.Ptr<()>, out: 
   true
 }
 
-inline export fn auk_map_next(
+pub inline export fn auk_map_next(
   m: raw.Ptr<abi.Map>,
   it: raw.Ptr<i64>,
   k: raw.Ptr<raw.Ptr<()>>,
