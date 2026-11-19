@@ -897,6 +897,7 @@ fn split_items(origin: Origin, m: ast.Module): [Def]! {
       ExternType(d) => (Key.Type(d.name.name), d.span, 1, none)
       Global(d) => (Key.Const(d.name.name), d.span, 1, none)
       RawAssert(a) => (Key.Const("raw assert {a.span.line}"), a.span, 1, none)
+      RawType(d) => (Key.Type(d.name.name), d.span, 1, none)
     }
     var start = span.line
     while start > prev_end + 1 &&

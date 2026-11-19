@@ -367,6 +367,57 @@ pub fn declare_global(c: var check.Checker, m: int, d: ast.GlobalDef) {
   c.items[m].globals[n] = id
 }
 
+/// Register a `raw type` alias (resolved on first use).
+pub fn declare_alias(c: var check.Checker, m: int, d: ast.RawTypeDef) {
+  if !c.prog.raw_ok(m) {
+    c.err_in(m, effect_check.raw_only(d.name.span, "`raw type {d.name.name}` is an alias of a raw type"))
+    return
+  }
+  let n = d.name.name
+  if c.items[m].types.contains(n) || c.items[m].aliases.contains(n) {
+    c.err_in(m, diag.new("E0107", d.name.span, "the type `{n}` is defined twice in this module"))
+    return
+  }
+  c.items[m].aliases[n] = c.aliases.len()
+  c.aliases.push(check.AliasInfo { module: m, def: d, state: 0, ty: types.Ty.Error })
+}
+
+/// The alias a type path names, seen from module `m` (`ModeT`, `cfacts.ModeT`), if any.
+pub fn alias_of(c: var check.Checker, m: int, path: [ast.Ident], g: check.GenScope): int? {
+  if path.len() == 1 {
+    if g.names.contains(path[0].name) { return none }
+    return c.items[m].aliases.get(path[0].name)
+  }
+  let target = c.module_of_path(m, path.take(path.len() - 1))?
+  let last = path[path.len() - 1]
+  let a = c.items[target].aliases.get(last.name)?
+  if target != m && !c.aliases[a].def.public {
+    c.err_in(m, diag.new("E0120", last.span, "the type `{last.name}` is private to module `{c.prog.name(target)}`").note("mark it `pub` to use it from other modules"))
+  }
+  a
+}
+
+/// The type alias `a` stands for (resolved once; a raw type).
+pub fn alias_ty(c: var check.Checker, a: int): types.Ty {
+  let info = c.aliases[a]
+  if info.state == 2 { return info.ty }
+  let d = info.def
+  let m = info.module
+  if info.state == 1 {
+    c.err_in(m, diag.new("E0107", d.name.span, "`raw type {d.name.name}` is defined in terms of itself"))
+    return types.Ty.Error
+  }
+  c.aliases[a].state = 1
+  var g = check.gen_scope()
+  let t = c.resolve_type(m, d.ty, &g)
+  if !check.raw_allowed(c.defs, t) {
+    c.err_in(m, diag.new("E0419", d.ty.span, "a `raw type` names a raw type, not `{c.defs.show(t)}`"))
+  }
+  c.aliases[a].state = 2
+  c.aliases[a].ty = t
+  t
+}
+
 /// A global used as a place (`counter += 1`, `raw.addr_of(&g)`), or none if `n` isn't one.
 pub fn global_place(c: var check.Checker, e: ast.Expr, n: str, mutate: bool): types.Ty? {
   let m = c.cur_module()

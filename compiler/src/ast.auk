@@ -20,7 +20,12 @@ pub enum Item {
   Global(d: GlobalDef),
   /// The runtime's dialect: `raw assert e`, checked at compile time.
   RawAssert(a: RawAssertDef),
+  /// The runtime's dialect: `raw type NAME = T`, a transparent alias of a raw type.
+  RawType(d: RawTypeDef),
 }
+
+/// `raw type NAME = T`: `NAME` means `T` (a raw type) wherever it is written.
+pub struct RawTypeDef { id: int, span: diag.Span, name: Ident, doc: str?, public: bool, ty: Type }
 
 /// `raw var NAME: T = e` (kind 0), `raw thread var` (1), `raw let NAME[: T] = e` (2), `export
 /// var NAME: T = e` (3), `extern var NAME: T = "c_symbol"` (4: a C global defined elsewhere;

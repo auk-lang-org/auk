@@ -15,6 +15,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("addresses_in_constant_initializers", addresses_in_constant_initializers),
   t.test("constants_of_other_modules", constants_of_other_modules),
   t.test("int_and_i64_mix", int_and_i64_mix),
+  t.test("raw_type_aliases", raw_type_aliases),
   t.test("thread_vars_are_refused_by_the_jit", thread_vars_are_refused_by_the_jit),
   t.test("setjmp_longjmp_out_of_nested_calls", setjmp_longjmp_out_of_nested_calls),
   t.test("export_fns_by_value_and_fn_pointers", export_fns_by_value_and_fn_pointers),
@@ -121,6 +122,19 @@ fn constants_of_other_modules() uses env, fs, ffi, time {
 }
 
 fn int_and_i64_mix() uses env, fs, ffi, time { let _ = passes(fixture("int_i64", "int_i64.auk")) }
+
+/// `raw type` aliases, also of another module (alias.auk, with a `facts` module).
+fn raw_type_aliases() uses env, fs, ffi, time {
+  let main = fixture("alias", "alias.auk")
+  t.write(paths.join(paths.parent(main) else ".", "facts.auk"), "pub raw type ModeT = u16\npub raw let S_IFDIR: ModeT = 0x4000\n")
+  let _ = passes(main)
+  // only raw types; not outside the runtime
+  let bad = project("alias_rc", "raw type S = str\nfn main() {{}}\n")
+  t.eq("{codes(bad)}", "[\"E0419\"]", "")
+  let plain = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n"
+  let gate = project_with("alias_gate", plain, "raw type N = int\nfn main() {{}}\n")
+  t.eq("{codes(gate)}", "[\"E0418\"]", "")
+}
 
 fn thread_vars_are_refused_by_the_jit() uses env, fs, ffi, time {
   let main = fixture("tls_jit", "globals.auk")
@@ -272,7 +286,7 @@ fn constants_and_raw_assert_e0421() uses env, fs, ffi, time {
 }
 
 fn fmt_and_check_handle_the_dialect() uses env, fs, ffi, time {
-  for f in ["lib.auk", "ptr.auk", "globals.auk", "union.auk", "sjlj.auk", "const_addr.auk"] {
+  for f in ["lib.auk", "ptr.auk", "globals.auk", "union.auk", "sjlj.auk", "const_addr.auk", "int_i64.auk"] {
     let src = t.read("runtime/test/raw/{f}")
     let o = t.auk().args(["fmt", "-"]).stdin(src).output()
     t.check(o.success(), "auk fmt {f}:\n{o.stderr}")

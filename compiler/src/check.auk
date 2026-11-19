@@ -37,9 +37,15 @@ pub struct ItemTable {
   variants: {str: [(int, int)]},
   /// The runtime's dialect: `raw var`, `raw let`, ... globals.
   globals: {str: int},
+  /// The runtime's dialect: `raw type` aliases (indexes into `Checker.aliases`).
+  aliases: {str: int},
 }
 
-fn new_items(): ItemTable = ItemTable { types: {}, fns: {}, consts: {}, variants: {}, globals: {} }
+fn new_items(): ItemTable = ItemTable { types: {}, fns: {}, consts: {}, variants: {}, globals: {}, aliases: {} }
+
+/// A `raw type` alias: where it is, and its type once resolved (`state`: 0 todo, 1 resolving,
+/// 2 done).
+pub struct AliasInfo { module: int, def: ast.RawTypeDef, state: int, ty: types.Ty }
 
 /// Well-known core definitions.
 pub struct Builtins { err: int, value: int, show: int, ord: int, eq: int, data: int }
@@ -156,6 +162,7 @@ pub struct Checker {
   main: typed.MainInfo?,
   /// The runtime's dialect: `raw var`, `raw let`, ... globals.
   globals: [typed.GlobalInfo],
+  aliases: [AliasInfo],
   instances: [typed.Instance],
   /// Rust's `BTreeSet<Ty>`: sorted by `types.cmp`; `types_used_set` for membership.
   types_used: [types.Ty],
@@ -492,6 +499,7 @@ fn new_checker(prog: resolve.Program): Checker {
     body_nodes: {},
     main: none,
     globals: [],
+    aliases: [],
     instances: [],
     types_used: [],
     types_used_set: {},
@@ -564,6 +572,15 @@ fn collect(c: var Checker) uses fs {
   for m in 0..nmods {
     for i in 0..c.prog.mods[m].ast.items.len() { c.declare_type(m, i) }
   }
+  for m in 0..nmods {
+    for it in c.prog.mods[m].ast.items {
+      match it {
+        RawType(d) => check_raw.declare_alias(&c, m, d)
+        _ => {}
+      }
+    }
+  }
+  for a in 0..c.aliases.len() { let _ = check_raw.alias_ty(&c, a) }
   c.find_builtins()
   for m in 0..nmods {
     for i in 0..c.prog.mods[m].ast.items.len() { c.define_type(m, i) }
@@ -1461,6 +1478,10 @@ fn resolve_named(c: var Checker, m: int, t: ast.Type, path: [ast.Ident], args: [
 /// The runtime's dialect (docs/lowlevel.md): the fixed-width types, `raw.Ptr<T>` and
 /// `raw.Fn<(A) => R>` (`Ptr`, `Fn` inside core's `raw` module).
 fn raw_named(c: var Checker, m: int, t: ast.Type, path: [ast.Ident], args: [ast.Type], g: var GenScope): types.Ty? {
+  match check_raw.alias_of(&c, m, path, g) {
+    some(a) => return c.no_args(m, t, args, check_raw.alias_ty(&c, a))
+    none => {}
+  }
   if path.len() == 1 && !g.names.contains(path[0].name) && !c.items[m].types.contains(path[0].name) {
     match types.fx_of(path[0].name) {
       some(k) => return c.no_args(m, t, args, types.Ty.Fixed(k))

@@ -15,7 +15,7 @@ fn narrow(x: int): i64 = x * 2
 /// No `uses raw`: only layout constants.
 fn header_size(): int = int(raw.size_of<H>()) + int(raw.align_of<H>()) + int(raw.offset_of<H>(.n))
 
-fn run(): int uses raw {
+fn run(): int {
   var bad = 0
   let a: int = 5
   let b: i64 = a
@@ -31,4 +31,4 @@ fn run(): int uses raw {
   bad
 }
 
-fn main(): int uses raw = run()
+fn main(): int = run()

@@ -183,6 +183,11 @@ fn item(out: var [str], d: int, it: ast.Item) {
       line(&out, d, "raw-assert #{a.id} {sp(a.span)}")
       expr(&out, d + 1, a.expr)
     }
+    RawType(t) => {
+      line(&out, d, "raw-type #{t.id} {sp(t.span)}{vis(t.public)} {id(t.name)}")
+      doc(&out, d + 1, t.doc)
+      ty(&out, d + 1, t.ty)
+    }
     ExternType(t) => {
       line(&out, d, "extern-type #{t.id} {sp(t.span)}{vis(t.public)} {id(t.name)} {esc(t.c_type)}")
       doc(&out, d + 1, t.doc)
@@ -748,6 +753,7 @@ fn item_line(out: var [str], m: str, it: ast.Item) {
     Imprint(c) => ("imprint", c.name.name, c.public)
     ExternType(t) => ("extern-type", t.name.name, t.public)
     Global(g) => ("global", g.name.name, g.public)
+    RawType(t) => ("raw-type", t.name.name, t.public)
     RawAssert(_) => return
   }
   line(&out, 1, "item {kind} {m}.{n}{vis(public)}")
@@ -788,6 +794,7 @@ fn item_paths(it: ast.Item, acc: var [[ast.Ident]]) {
       none => {}
     }
     Test(_) | ExternType(_) | RawAssert(_) => {}
+    RawType(t) => ty_paths(t.ty, &acc)
     Global(g) => match g.ty {
       some(t) => ty_paths(t, &acc)
       none => {}

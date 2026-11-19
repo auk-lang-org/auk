@@ -496,6 +496,14 @@ fn item(p: var Parser): Raw!diag.Fail {
       Assert => 4
       _ => -1
     }
+    if p.peek_at(1) == token.Ident("type") {
+      p.bump()
+      p.bump()
+      let name = p.ident("a name for the type")?
+      p.expect(token.Eq, "and the type it names: `raw type NAME = T`")?
+      let t = ty(&p)?
+      return RItem(ast.Item.RawType(ast.RawTypeDef { id: p.id(), span: start.to(p.prev), name, doc, public, ty: t }))
+    }
     if g == 4 {
       p.bump()
       p.bump()

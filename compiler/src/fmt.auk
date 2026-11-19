@@ -754,6 +754,7 @@ fn item(f: var Fmt, it: ast.Item): fmt.doc.Doc {
       concat([head, f.assign_rhs("=", g.value, cx_inner(), Rhs.Body)])
     }
     RawAssert(a) => concat([text("raw assert "), f.expr(a.expr, cx_inner())])
+    RawType(d) => text("{vis(d.public)}raw type {d.name.name} = {ty(d.ty)}")
     Let(c) | Imprint(c) => {
       let kw = if it is Let(_) { "let" } else { "imprint" }
       let t = match c.ty {
@@ -1800,6 +1801,7 @@ fn item_span(i: ast.Item): diag.Span = match i {
   ExternType(d) => d.span
   Global(d) => d.span
   RawAssert(a) => a.span
+  RawType(d) => d.span
 }
 
 fn vis(public: bool): str = if public { "pub " } else { "" }

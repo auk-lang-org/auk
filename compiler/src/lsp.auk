@@ -492,6 +492,7 @@ fn symbols(s: Server, params: json.Json): json.Json {
       Let(c) | Imprint(c) => out.push(sym(src, c.name.name, "", 14, c.span, c.name.span, []))
       ExternType(t) => out.push(sym(src, t.name.name, "", 23, t.span, t.name.span, []))
       Global(g) => out.push(sym(src, g.name.name, "", 13, g.span, g.name.span, []))
+      RawType(t) => out.push(sym(src, t.name.name, "", 23, t.span, t.name.span, []))
       RawAssert(_) => {}
     }
   }
@@ -666,6 +667,10 @@ fn find_item_node(f: var Finder, i: int, item: ast.Item) {
         some(t) => f.ty(t)
         none => {}
       }
+    }
+    RawType(t) => {
+      let _ = f.at(t.name.span, Hit.Decl(t.name.span))
+      f.ty(t.ty)
     }
     RawAssert(_) => {}
   }
@@ -1138,6 +1143,7 @@ fn item_in(prog: resolve.Program, m: int, name: str): diag.Span? {
       Enum(d) => if d.name.name == name { return d.name.span }
       Shape(d) => if d.name.name == name { return d.name.span }
       ExternType(d) => if d.name.name == name { return d.name.span }
+      RawType(d) => if d.name.name == name { return d.name.span }
       Let(c) | Imprint(c) => if c.name.name == name { return c.name.span }
       _ => {}
     }

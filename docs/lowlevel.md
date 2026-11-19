@@ -132,6 +132,11 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   Integer `/` and `%` by zero trap; `f32` has `%` (`frem`). A string literal (no
   interpolation) where a `raw.Ptr<u8>` is expected is a C string: a private constant,
   NUL-terminated (`auk__panic3(loc, "expected Int, got ", …)`, `fn name(): raw.Ptr<u8> = "Int"`).
+- **`raw type NAME = T`** (`pub` to export it) is a transparent alias of a raw type, C's
+  `typedef`: `raw type ModeT = u16` in one per-target file and `= u32` in another, `raw type
+  RetainFn = raw.Fn<(raw.Ptr<()>) => ()>`. It is `T` wherever it is written (`facts.ModeT`
+  from another module); no type arguments; aliases may name aliases (not themselves); only
+  raw types (E0419) and only in the runtime package (E0418).
 - **Ordinary functions of the runtime package may hold raw values** (fixed-width numbers, raw
   structs, pointers) without `uses raw`; only the intrinsics (and `extern var`s) need the
   effect, and the E0419 rule (no reference-counted type) applies to `uses raw` functions and

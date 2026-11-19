@@ -138,6 +138,7 @@ fn item_dump(it: ast.Item): str = match it {
     "({vis(g.public)}{ast.global_kw(g.kind)} {g.name.name}{t} {expr_dump(g.value)})"
   }
   RawAssert(a) => "(raw assert {expr_dump(a.expr)})"
+  RawType(d) => "({vis(d.public)}raw type {d.name.name} {ast.type_dump(d.ty)})"
 }
 
 fn const_dump(kw: str, c: ast.ConstDef): str {
