@@ -746,7 +746,9 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       `tls` (+ `tls_os.<os>`; 2026-11-19, 7b's blocks; runtime-port.md, "Found porting
       `tls.c`"). `core` (2026-11-19: fs, net, print/env/stdin, time/rand, proc as `core_*.auk`,
       per-OS `core_os.<os>.auk`; runtime-port.md, "Found by the 7c port of `core`").
-      Next: `rc`, `task`.
+      `audio_out`, `gui`, `gui_host` (2026-11-19: AppKit through typed `objc_msgSend`s,
+      AudioToolbox/PulseAudio; the real-window tests pass; runtime-port.md, "Found by the 7c
+      port of `audio_out`, `gui`, `gui_host`"). Next: `rc`, `task`.
 - [ ] `auk_rt.bc` is produced by the Auk compiler; `libauk_rt.a` via LLVM's archive writer.
 - [ ] Same C tests (called through `export fn`), then rewrite them as Auk tests. The first
       half holds for the ported modules (`run.sh` links the Auk half).
