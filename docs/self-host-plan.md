@@ -696,7 +696,10 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       runtime as `extern fn` prototypes over raw types. `auk_ops_value` (a table of function
       addresses) stays C in `value_ops.c` until raw globals can be initialized with addresses.
       C tests 72/72, the suite 373/373, stage 2 = stage 3, bench smoke, macOS and Linux;
-      `auk build` inlines the same Value functions as before (rtlink). Gaps found on the way:
+      `auk build` inlines more than before (rtlink): of a Value-heavy program's 30 `auk_value_*`
+      calls, 29 were calls with the C bitcode and 1 is with the Auk bitcode (clang's
+      `[2 x i64]` for a 16-byte struct didn't match generated code's `{ i64, i64 }`, which
+      blocked inlining; Auk's `export fn` uses the same lowering as its callers). Gaps found on the way:
       [runtime-port.md](runtime-port.md), "Found by the pilot".
 
 ### 7b. Things that were C-only
