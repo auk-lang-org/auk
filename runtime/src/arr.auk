@@ -206,19 +206,35 @@ export fn auk_arr_set(pa: raw.Ptr<raw.Ptr<abi.Arr>>, i: i64, e: raw.Ptr<()>, loc
   tmp_done(raw.addr_of(&tmp))
 }
 
+/// Scratch room for an element of up to 32 bytes: zeroing it costs two stores, where an
+/// `abi.Tmp` (no uninitialized locals in the dialect) is 256 bytes of memset on every push.
+raw struct Scratch {
+  w: [u64; 4],
+}
+
 pub export fn auk_arr_push(pa: raw.Ptr<raw.Ptr<abi.Arr>>, e: raw.Ptr<()>) uses raw, ffi {
+  let sz = pa.load().ops.size
+  if sz <= raw.size_of<Scratch>() {
+    var b = Scratch {}
+    push_via(pa, e, raw.cast(raw.addr_of(&b)))
+    return
+  }
+  var tmp = abi.Tmp {}
+  push_via(pa, e, tmp_get(raw.addr_of(&tmp), sz))
+  tmp_done(raw.addr_of(&tmp))
+}
+
+/// auk_arr_push with t: room for the element.
+fn push_via(pa: raw.Ptr<raw.Ptr<abi.Arr>>, e: raw.Ptr<()>, t: raw.Ptr<u8>) uses raw, ffi {
   let a0 = pa.load()
   let sz = a0.ops.size
   // e may point into *pa itself: copy before a possible realloc or copy-on-write
-  var tmp = abi.Tmp {}
-  let t = tmp_get(raw.addr_of(&tmp), sz)
   raw.copy(t, e, sz)
   retain_elem(a0.ops, t)
   ensure_unique_cap(pa, a0.len + 1)
   let a = pa.load()
   raw.copy(elem(a, a.len), t, sz)
   a.len += 1
-  tmp_done(raw.addr_of(&tmp))
 }
 
 export fn auk_arr_push_own(pa: raw.Ptr<raw.Ptr<abi.Arr>>, e: raw.Ptr<()>) uses raw, ffi {

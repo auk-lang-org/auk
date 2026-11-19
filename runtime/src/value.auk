@@ -9,11 +9,6 @@ extern fn auk_release(p: raw.Ptr<()>) = "void auk_release(void *)"
 extern fn auk__panic3(loc: raw.Ptr<u8>, a: raw.Ptr<u8>, b: raw.Ptr<u8>, c: raw.Ptr<u8>) =
   "void auk__panic3(const char *, const char *, const char *, const char *)"
 extern fn auk_hash_int(x: i64): u64 = "uint64_t auk_hash_int(int64_t)"
-extern fn auk_map_new(k: raw.Ptr<abi.ElemOps>, v: raw.Ptr<abi.ElemOps>): raw.Ptr<abi.Map> = "void *auk_map_new(const void *, const void *)"
-extern fn auk_map_set(pm: raw.Ptr<raw.Ptr<abi.Map>>, k: raw.Ptr<()>, v: raw.Ptr<()>) =
-  "void auk_map_set(void *, const void *, const void *)"
-extern fn auk_map_eq(a: raw.Ptr<abi.Map>, b: raw.Ptr<abi.Map>): bool = "bool auk_map_eq(const void *, const void *)"
-extern fn auk_map_show(m: raw.Ptr<abi.Map>): raw.Ptr<abi.Str> = "void *auk_map_show(const void *)"
 extern var auk_ops_float: abi.ElemOps = "auk_ops_float"
 // defined in C (runtime/c/value_ops.c) until a raw global's initializer can hold function
 // addresses: the element ops of `Value`, over the auk__value_elem_* functions below
@@ -52,12 +47,12 @@ export fn auk_value_map(m: raw.Ptr<abi.Map>): abi.Value uses raw, ffi {
 export fn auk_value_list_new(): raw.Ptr<abi.Arr> uses raw, ffi = arr.auk_arr_new(raw.addr_of(&auk_ops_value), 0)
 
 export fn auk_value_map_new(): raw.Ptr<abi.Map> uses raw, ffi =
-  auk_map_new(str.ops_str(), raw.addr_of(&auk_ops_value))
+  map.auk_map_new(str.ops_str(), raw.addr_of(&auk_ops_value))
 
 export fn auk_value_map_put(pm: raw.Ptr<raw.Ptr<abi.Map>>, key: raw.Ptr<u8>, val: abi.Value) uses raw, ffi {
   var k = str.auk_str_lit(key)
   var v = val
-  auk_map_set(pm, raw.cast(raw.addr_of(&k)), raw.cast(raw.addr_of(&v)))
+  map.auk_map_set(pm, raw.cast(raw.addr_of(&k)), raw.cast(raw.addr_of(&v)))
   auk_release(raw.cast(k))
 }
 
@@ -153,7 +148,7 @@ export fn auk_value_eq(a: abi.Value, b: abi.Value): bool uses raw, ffi {
   } else if t == abi.V_LIST {
     arr.auk_arr_eq(a.u.list, b.u.list)
   } else if t == abi.V_MAP {
-    auk_map_eq(a.u.map, b.u.map)
+    map.auk_map_eq(a.u.map, b.u.map)
   } else {
     false
   }
@@ -174,7 +169,7 @@ export fn auk_value_show(v: abi.Value): raw.Ptr<abi.Str> uses raw, ffi {
   } else if t == abi.V_LIST {
     arr.auk_arr_show(v.u.list)
   } else if t == abi.V_MAP {
-    auk_map_show(v.u.map)
+    map.auk_map_show(v.u.map)
   } else {
     str.auk_str_lit("?")
   }
