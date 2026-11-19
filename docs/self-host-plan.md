@@ -725,8 +725,8 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
 ### 7c. Port
 - [ ] Same order as Phase 1c, one module at a time, C and Auk linked together meanwhile.
       Done: `value` (the 7a pilot); `err`, `catch` (`raw.setjmp`; same frames, stack.c's
-      overflow recovery unchanged; now `recover.auk`, `catch` being a keyword), `pixels` (2026-11-19; runtime-port.md, "Found by the 7c
-      port"); `copy`, `heap` (+ `heap_os.<os>`), `chan`, `ffi` (2026-11-19: line by line, same
+      overflow recovery unchanged; now `recover.auk`, `catch` being a keyword), `pixels`
+      (2026-11-19; runtime-port.md, "Found by the 7c port"); `copy`, `heap` (+ `heap_os.<os>`), `chan`, `ffi` (2026-11-19: line by line, same
       symbols, `auk_rt.h` unchanged; stage 2 = stage 3, C tests 72/72, runner green, ASan, TSan
       `conc` clean, also with the Auk half instrumented (`SAN_AUK=1`); a spawn/await, channel and
       deep-copy microbenchmark, interleaved on a loaded machine: wall medians spawn 0.34→0.39 s

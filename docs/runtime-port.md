@@ -383,7 +383,9 @@ untouched). `value_ops.c` is gone: `auk_ops_value` is an `export var` of `value.
 private wrapper over copy.c's `auk__value_copy_elem`, since a constant's `raw.fn_of` names an
 Auk function, not an `extern fn`). New findings:
 
-1. **An `extern fn` for a symbol the package defines is renamed, not merged.** `stack.auk`
+1. **An `extern fn` for a symbol the package defines was renamed, not merged** (fixed since:
+   "codegen: a runtime symbol the package defines is called, not redeclared"; a seed older
+   than that fix still has it). `stack.auk`
    declared `extern fn auk__catch_active(): i32 = "int auk__catch_active(void)"` while
    `catch.auk` defines it as an `export fn`: in the one LLVM module of `auk build --lib` the
    declaration became `@auk__catch_active.130` (likewise `auk__catch_top_addr.145`,
@@ -391,17 +393,13 @@ Auk function, not an `extern fn`). New findings:
    `.14`): no error from `auk`, an undefined symbol at the first link (`nm` shows
    `U _auk__catch_active.130`). Fix used: call the defining module by path
    (`recover.auk__catch_active()`, `stack.auk__stack_overflow_loc()`), the `export fn` marked
-   `pub` (`pub export fn` works). **Every module that moves must do this for its callers that
-   are already Auk** (`value`, `err`, `recover`, `pixels`, `testing`, `compiler` declare
-   `auk__xmalloc`, `auk__sb_put_cstr`, `auk_str_cstr`, `auk_arr_len`, `auk_map_next`,
-   `auk_release`, …). A compiler fix (an `extern fn` whose symbol an `export fn` of the program
-   defines resolves to it, or an error when the signatures differ) would make the order of the
-   ports irrelevant. **The same for `extern var`s:** two modules declaring `extern var
+   `pub` (`pub export fn` works); still the preferred style for symbols already in Auk. **The
+   same for `extern var`s:** two modules declaring `extern var
    auk_ops_float` link to `auk_ops_float` and `auk_ops_float.1` (identical `extern fn`s in
    several modules, `strlen` & co., are merged fine). compiler.auk takes value.auk's (`pub
    extern var`) as a constant address: `raw let OPS_FLOAT: raw.Ptr<abi.ElemOps> =
    raw.addr_of(&value.auk_ops_float)` (`raw.addr_of(&m.g)` of another module's global works
-   in a constant only).
+   in a constant only); with the fix a plain `extern var` would do too.
 2. **The module `catch` can't be named:** `catch` is a keyword, so `catch.f()` is a parse error
    (E0021) and no other module could call it. `catch.auk` is now `recover.auk` (same contents
    and symbols; `auk__catch_throw_overflow` is `never` now).
