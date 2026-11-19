@@ -144,18 +144,21 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   raw.Ptr<raw.Fn<…>> = raw.cast(p)`. `is_null` works on `raw.Ptr`
   and `raw.Fn`; `raw.null()` is a `raw.Ptr`. `p.int()` is declared `fn int <T>` in the prelude
   (a space: `int<` would read as a unit of measure). A `raw.Fn` value is called like a function
-  (`f(x)`); calling one stored in a struct field needs it in a local first.
+  (`f(x)`), a global one of the module too (`raw var hook: raw.Fn<…>`, `hook(x)`); calling one
+  stored in a struct field, or another module's global, needs it in a local first.
 - **Explicit type arguments** are written only after `raw.` (`raw.size_of<T>()`): the parser
   reads `raw.name<` with no space before `<` as type arguments, so ordinary comparisons are
   untouched. `.f` (a field selector) is an argument form only.
 - **Constants:** initializers of `raw var`/`raw thread var`/`export var` and `raw let`, and
-  `raw assert`, are evaluated by the checker: literals, other `raw let`s of the module,
+  `raw assert`, are evaluated by the checker: literals (an integer literal must fit the type
+  expected, E0210 as for a local; arithmetic wraps), other `raw let`s of the module and `pub
+  raw let`s of other modules (`facts.PTHREAD_MUTEX_INITIALIZER`),
   `raw.size_of/align_of/offset_of`, `raw.null()`, conversions, arithmetic, comparisons, raw
   struct literals (missing fields are zero), fixed array literals (`[raw.fn_of(f), raw.fn_of(g)]`
   for a `[raw.Fn<…>; 4]`: missing elements are zero), and addresses: `raw.addr_of(&g)` of a
-  `raw var`, `export var` or `extern var` of the module (any order, its own address included;
-  not a `raw thread var` or a `raw let`), `raw.fn_of(f)` of a non-generic function of the module
-  named directly (as `raw.fn_of` allows it anywhere), and `raw.cast` of either (to the type
+  `raw var`, `export var` or `extern var` (any order, its own address included; another
+  module's by path if `pub`; not a `raw thread var` or a `raw let`), `raw.fn_of(f)` of a
+  non-generic function named directly or by path (as `raw.fn_of` allows it anywhere), and `raw.cast` of either (to the type
   argument, or the type expected). They become relocations, so a global block literal (§10) or
   a table of function pointers costs nothing at startup (and an `auk build --lib` object
   exports one as data). A `raw let` holding addresses is a value like any other: the

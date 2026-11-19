@@ -13,6 +13,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("unions_and_casts_at_o2", unions_and_casts_at_o2),
   t.test("globals_constants_and_raw_assert", globals_constants_and_raw_assert),
   t.test("addresses_in_constant_initializers", addresses_in_constant_initializers),
+  t.test("constants_of_other_modules", constants_of_other_modules),
   t.test("thread_vars_are_refused_by_the_jit", thread_vars_are_refused_by_the_jit),
   t.test("setjmp_longjmp_out_of_nested_calls", setjmp_longjmp_out_of_nested_calls),
   t.test("export_fns_by_value_and_fn_pointers", export_fns_by_value_and_fn_pointers),
@@ -89,6 +90,34 @@ fn globals_constants_and_raw_assert() uses env, fs, ffi, time {
 }
 
 fn addresses_in_constant_initializers() uses env, fs, ffi, time { let _ = passes(fixture("const_addr", "const_addr.auk")) }
+
+/// `pub raw let`s (and functions, globals) of another module in constant initializers.
+fn constants_of_other_modules() uses env, fs, ffi, time {
+  let main = project("xmod", r"""
+    raw var lock: facts.Mutex = facts.MUTEX_INIT
+    raw let X = facts.K_STR + 1
+    raw var tab: [u32; 2] = [facts.K_STR, X]
+    raw var f: raw.Fn<(i64) => i64> = raw.fn_of(facts.twice)
+    raw var pc: raw.Ptr<i64> = raw.addr_of(&facts.counter)
+    fn main(): int uses raw {
+      if lock.sig != 0x32AAABA7 || lock.opaque.is_null() || X != 5 || f(4) != 8 { return 1 }
+      if pc.load() != 7 { return 2 }
+      0
+    }
+    """)
+  t.write(paths.join(paths.parent(main) else ".", "facts.auk"), r"""
+    pub raw struct Mutex { sig: i64, opaque: raw.Ptr<()> }
+    pub raw let MUTEX_INIT: Mutex = Mutex { sig: 0x32AAABA7, opaque: raw.cast(raw.addr_of(&counter)) }
+    pub raw let K_STR: u32 = 4
+    raw let HIDDEN: u32 = 1
+    pub raw var counter: i64 = 7
+    pub fn twice(x: i64): i64 = x * 2
+    """)
+  let _ = passes(main)
+  // a private one is E0120
+  t.write(main, "raw let H = facts.HIDDEN\nfn main() {{}}\n")
+  t.check(codes(main).contains("E0120"), "{codes(main)}")
+}
 
 fn thread_vars_are_refused_by_the_jit() uses env, fs, ffi, time {
   let main = fixture("tls_jit", "globals.auk")
@@ -230,6 +259,13 @@ fn constants_and_raw_assert_e0421() uses env, fs, ffi, time {
     let main = project("const{i}", src)
     t.eq("{codes(main)}", "[\"E0421\"]", src)
   }
+  // a literal that doesn't fit is E0210, as for a local (arithmetic still wraps)
+  for i, src in ["raw let Y: u8 = 300\nfn main() {{}}\n", "raw var Z: u8 = -1\nfn main() {{}}\n", "raw let W: i8 = -129\nfn main() {{}}\n"] {
+    let main = project("lit{i}", src)
+    t.eq("{codes(main)}", "[\"E0210\"]", src)
+  }
+  let ok = project("lit_ok", "raw let W: i8 = -128\nraw let V: u8 = 250 + 10\nraw assert V == 4\nfn main() {{}}\n")
+  t.eq("{codes(ok)}", "[]", "")
 }
 
 fn fmt_and_check_handle_the_dialect() uses env, fs, ffi, time {

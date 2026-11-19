@@ -505,7 +505,10 @@ fn eval(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr, want: types.Ty?
   match e.kind {
     Lit(l) => match l {
       Int(n) => match fx {
-        some(k) when k != types.Fx.F32 => ci(n, types.Ty.Fixed(k))
+        some(k) when k != types.Fx.F32 => {
+          if !check_expr.lit_fits(n, k, false) { return lit_too_big(&c, m, e, n, k, false) }
+          ci(n, types.Ty.Fixed(k))
+        }
         _ => ci(n, types.Ty.Int)
       }
       Float(x) => {
@@ -517,6 +520,14 @@ fn eval(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr, want: types.Ty?
       Str(_) => not_const(&c, m, e)
     }
     Unary(op, x) => {
+      // `-1` where a `u8` is expected doesn't fit (as for a local)
+      match (op, x.kind, fx) {
+        (Neg, Lit(Int(n)), some(k)) when k != types.Fx.F32 => {
+          if !check_expr.lit_fits(n, k, true) { return lit_too_big(&c, m, x, n, k, true) }
+          return ci(0 -% n, types.Ty.Fixed(k))
+        }
+        _ => {}
+      }
       let (v, t) = eval(&c, &ev, m, x, want)?
       match v {
         Int(n) => match op {
@@ -592,16 +603,12 @@ fn eval(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr, want: types.Ty?
     }
     Name(n) => {
       let g = c.items[m].globals.get(n) else return not_const(&c, m, e)
-      if c.globals[g].kind != 2 {
-        c.err_in(m, diag.new("E0421", e.span, "`{n}` is a `{ast.global_kw(c.globals[g].kind)}`, not a constant").note("only a `raw let` is a compile-time constant"))
-        return none
-      }
-      if ev.state[g] == 1 {
-        c.err_in(m, diag.new("E0421", e.span, "`{n}` is defined in terms of itself"))
-        return none
-      }
-      eval_global(&c, &ev, g)
-      some((c.globals[g].value, c.globals[g].ty))
+      const_global(&c, &ev, m, e, g, n)
+    }
+    Field(_, _) => {
+      // `mod.NAME`: a `pub raw let` of another module
+      let (g, n) = path_global(&c, m, e) else return not_const(&c, m, e)
+      const_global(&c, &ev, m, e, g, n)
     }
     TypeArgs(x, tys) => {
       var g = check.gen_scope()
@@ -675,6 +682,41 @@ fn eval(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr, want: types.Ty?
   }
 }
 
+/// The value of global `g` (named `n`) used in a constant: a `raw let`, evaluated first.
+fn const_global(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr, g: int, n: str): (typed.ConstVal, types.Ty)? {
+  if c.globals[g].kind != 2 {
+    c.err_in(m, diag.new("E0421", e.span, "`{n}` is a `{ast.global_kw(c.globals[g].kind)}`, not a constant").note("only a `raw let` is a compile-time constant"))
+    return none
+  }
+  if ev.state[g] == 1 {
+    c.err_in(m, diag.new("E0421", e.span, "`{n}` is defined in terms of itself"))
+    return none
+  }
+  eval_global(&c, &ev, g)
+  some((c.globals[g].value, c.globals[g].ty))
+}
+
+/// The global named by the path `e` (`mod.NAME`, `a.b.NAME`) and its name: `pub` unless in
+/// module `m` itself; none when `e` isn't such a path.
+fn path_global(c: var check.Checker, m: int, e: ast.Expr): (int, str)? {
+  let path = visit.as_path(e)?
+  if path.len() < 2 { return none }
+  let target = c.module_of_path(m, path.take(path.len() - 1))?
+  let last = path[path.len() - 1]
+  let g = c.items[target].globals.get(last.name)?
+  if target != m && !c.globals[g].public {
+    c.err_in(m, diag.new("E0120", last.span, "`{last.name}` is private to module `{c.prog.name(target)}`").note("mark it `pub` to use it from other modules"))
+  }
+  (g, last.name)
+}
+
+/// E0210 for a literal that doesn't fit the fixed-width type expected.
+fn lit_too_big(c: var check.Checker, m: int, e: ast.Expr, n: int, k: types.Fx, neg: bool): (typed.ConstVal, types.Ty)? {
+  let sign = if neg { "-" } else { "" }
+  c.err_in(m, diag.new("E0210", e.span, "the integer literal {sign}{token.uint_str(n)} doesn't fit in a `{types.fx_name(k)}`"))
+  none
+}
+
 /// Is `v` an address (or null), as `raw.cast` takes in a constant?
 fn is_addr(v: typed.ConstVal): bool = match v {
   GlobalAddr(_) | FnAddr(_) | Zero => true
@@ -719,14 +761,14 @@ fn raw_const_call(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr, ts: [
     return some((typed.ConstVal.Zero, t))
   }
   if n == "addr_of" && args.len() == 1 {
-    let gname = match args[0].kind {
-      Ref(x) => match x.kind {
-        Name(g) => g
-        _ => return not_const(&c, m, e)
-      }
+    let target = match args[0].kind {
+      Ref(x) => x
       _ => return not_const(&c, m, e)
     }
-    let g = c.items[m].globals.get(gname) else return not_const(&c, m, e)
+    let (g, gname) = match target.kind {
+      Name(n) => (c.items[m].globals.get(n) else return not_const(&c, m, e), n)
+      _ => path_global(&c, m, target) else return not_const(&c, m, e)
+    }
     let kind = c.globals[g].kind
     if kind == 1 || kind == 2 {
       let why = if kind == 1 { "each thread has its own" } else { "a `raw let` is a value, not memory" }
@@ -736,13 +778,12 @@ fn raw_const_call(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr, ts: [
     return some((typed.ConstVal.GlobalAddr(g), types.Ty.Ptr(c.globals[g].ty)))
   }
   if n == "fn_of" && args.len() == 1 {
-    let fname = match args[0].kind {
-      Name(f) => f
-      _ => return not_const(&c, m, e)
-    }
-    let fs = c.fns_in(m, m, fname).filter(f => c.fns[f].kind is typed.FnKind.Auk(_, _, _))
+    let path = visit.as_path(args[0]) else return not_const(&c, m, e)
+    let fname = path[path.len() - 1].name
+    let fm = if path.len() == 1 { m } else { c.module_of_path(m, path.take(path.len() - 1)) else return not_const(&c, m, e) }
+    let fs = c.fns_in(m, fm, fname).filter(f => c.fns[f].kind is typed.FnKind.Auk(_, _, _))
     if fs.len() != 1 || c.fns[fs[0]].generics.len() > 0 {
-      c.err_in(m, diag.new("E0421", args[0].span, "`raw.fn_of` in a constant takes the name of one non-generic function of this module"))
+      c.err_in(m, diag.new("E0421", args[0].span, "`raw.fn_of` in a constant takes the name of one non-generic function"))
       return none
     }
     let f = fs[0]

@@ -651,6 +651,22 @@ pub fn lit(c: var check.Checker, e: ast.Expr, l: ast.Lit, negated: bool): types.
   Str(_) => types.Ty.Str
 }
 
+/// Does the integer literal `n` (a u64's bits; `-n` when `negated`) fit the fixed-width
+/// integer type `k`?
+pub fn lit_fits(n: int, k: types.Fx, negated: bool): bool {
+  let bits = types.fx_bits(k)
+  let min = -9223372036854775807 - 1
+  if types.fx_signed(k) {
+    if negated {
+      (n >= 0 && (bits == 64 || n <= 1 << (bits - 1))) || n == min
+    } else {
+      n >= 0 && (bits == 64 || n < 1 << (bits - 1))
+    }
+  } else {
+    (!negated || n == 0) && (bits == 64 || (n >= 0 && n < 1 << bits))
+  }
+}
+
 /// The runtime's dialect: an integer literal where a fixed-width integer is expected has that
 /// type (it must fit), a float literal where `f32` is expected is an `f32`, a string literal
 /// where a `raw.Ptr<u8>` is expected is a C string (a constant, NUL-terminated).
@@ -666,19 +682,7 @@ pub fn raw_lit(c: var check.Checker, e: ast.Expr, l: ast.Lit, negated: bool, wan
   }
   match l {
     Int(n) => if k == types.Fx.F32 { return none } else {
-      let bits = types.fx_bits(k)
-      let min = -9223372036854775807 - 1
-      // `n` holds a u64's bits
-      let fits = if types.fx_signed(k) {
-        if negated {
-          (n >= 0 && (bits == 64 || n <= 1 << (bits - 1))) || n == min
-        } else {
-          n >= 0 && (bits == 64 || n < 1 << (bits - 1))
-        }
-      } else {
-        (!negated || n == 0) && (bits == 64 || (n >= 0 && n < 1 << bits))
-      }
-      if !fits {
+      if !lit_fits(n, k, negated) {
         let sign = if negated { "-" } else { "" }
         c.err(diag.new("E0210", e.span, "the integer literal {sign}{token.uint_str(n)} doesn't fit in a `{types.fx_name(k)}`"))
       }
@@ -1246,6 +1250,16 @@ pub fn named_call(c: var check.Checker, e: ast.Expr, callee: ast.Expr, n: str, a
       c.ensure_const(k)
       let ft = c.consts[k].ty
       c.cx.t.names[callee.id] = typed.NameRef.Const(k)
+      c.record(callee.id, ft)
+      return c.closure_call(e, callee, ft, args)
+    }
+    none => {}
+  }
+  // the runtime's dialect: a global `raw.Fn` called by name
+  match c.items[m].globals.get(n) {
+    some(g) => {
+      let ft = c.globals[g].ty
+      c.cx.t.names[callee.id] = typed.NameRef.Global(g)
       c.record(callee.id, ft)
       return c.closure_call(e, callee, ft, args)
     }
