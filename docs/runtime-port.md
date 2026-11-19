@@ -220,7 +220,7 @@ The four moved the same way as the pilot (`runtime/src/copy.auk`, `heap.auk` wit
    (ffi.c's `memcpy(&v, …)` of a parameter goes through a `var` copy). The element-ops tables
    that point at copy.auk's `auk__*_copy_elem` stay C in `rc.c` (no addresses in initializers).
 
-**Sanitizers:** `ASAN=1`/`TSAN=1 sh runtime/c/test/run.sh` instrument the C half; the Auk
+**Sanitizers** (then; `runtime/test/unit/run.sh` now instruments everything): `ASAN=1`/`TSAN=1 sh runtime/c/test/run.sh` instrument the C half; the Auk
 half's own loads, stores and atomics are invisible to them (its `pthread_*`, `malloc`/`free`
 calls are still intercepted, so locks and frees made from Auk code are seen). `SAN_AUK=1` (new)
 instruments the Auk half too: `auk build --lib --bc`, every function given `sanitize_thread`
@@ -872,6 +872,82 @@ copied out under `evals_lock`. stack, recover and rc call `dbg.auk__dbg_*` by pa
    Allocation is `raw.alloc`/`raw.realloc` (C's `auk__x*`: abort on failure without the "out
    of memory" line). Messages go through `dbg_text.Text` instead of the string builder
    (`no such`, the "debugger at" line: same bytes, one `fwrite`).
+
+## Found porting the unit tests (`runtime/c/test` → `runtime/test/unit`, 2026-11-20)
+
+The 72 C tests (`test_arr/core/io/map/net/str/conc.c`, ~3.2k lines with the harness) are
+`runtime/test/unit/test_*.auk` (~4.9k lines with `rt.auk` and `ut.auk`), one Auk test per C
+test: same names, same order, same assertions and expected messages (panic texts byte for
+byte, leak reports, exit codes), the same children for panics, exits, stdin and the trace and
+debugger engines. `runtime/c/test/` is deleted (no test there tested C that is still C: the
+debugger's test, `conc_dbg_all_stop`, drives `dbg*.auk` through the same symbols).
+
+- **The tests are modules of the runtime package.** Only the package named `auk_rt` may use
+  `raw` (E0418), so `run.sh` makes a scratch package of `runtime/src/*.auk` plus
+  `runtime/test/unit/*.auk` (a name clash with a runtime module is refused) and builds one
+  `auk build --lib` object; `ut_main.auk`'s `export fn main(argc: i32, argv: …): i32` is the
+  C entry point (a `--lib` object has no `main` of its own, and nothing objected to this one).
+  `cc` links it with the platform's libraries (and any `runtime/c/*.c`, none now). The build
+  takes about a second.
+- **`rt.auk` is `auk_rt.h`:** `pub extern fn`s under the C names (generated from the header's
+  prototypes, `void *` for the runtime's pointer types), which codegen resolves to the
+  package's own definitions (ba26088), so the tests call exactly what C called, `pub` or not;
+  the element-ops tables and `auk_cancel_pending`/`auk_dbg_armed` are `extern var`s with
+  `pub raw let` addresses (`rt.OPS_STR`, `rt.CANCEL_PENDING`).
+- **The runner forks every test** (the C ran them in one process and forked only for panics):
+  the test's output is captured and printed before its `ok`/`FAIL` line (on stderr, so
+  `build.sh`'s `| tail -1` still shows only the summary), a signal is reported, a sanitizer
+  report in the output fails the test; the child checks `auk_live_objects()` (the C's leak
+  check) and, when the program has it (`dlsym` of `__lsan_do_recoverable_leak_check`), runs
+  LeakSanitizer before `_exit`, so leaks are found per test (the C runner's LSan ran once at
+  exit, and not at all on macOS, where `detect_leaks` is off by default: `run.sh` turns it on,
+  with suppressions for libSystem's fork handlers, BoringSSL and dyld thread-locals besides
+  the C runner's). `test_runner` registers tests into `auk_test_main`'s registry in a child,
+  which is why the runner isn't `auk_test_main` itself.
+- **Sanitizers:** `ASAN=1`/`TSAN=1` instrument everything Auk (the C runner's `SAN_AUK=1` path,
+  now the only one): `--lib --bc`, `sanitize_address`/`sanitize_thread` on every attribute
+  group, `opt -passes=asan` / `tsan-module,function(tsan)`, clang. Proven on macOS: with
+  `auk_chan_close`'s lock removed, `TSAN=1 run.sh conc_chan` reports the race (the test's
+  inlined close against `chan_recv`) and fails the test; with `auk__chan_free`'s
+  `raw.free(c.items)` removed, `ASAN=1 run.sh conc_` reports the 2048-byte leak (allocated in
+  `auk_chan_send`) and fails `conc_chan_many_senders_receivers`; a heap read past an 8-byte
+  `raw.alloc` in a test reports a heap-buffer-overflow. A planted bug must survive O2: an
+  out-of-bounds read at a constant index of a fresh `malloc` and a leaked block nobody reads
+  were both deleted by LLVM (the index and the pointer had to come from outside). UBSan has
+  no counterpart: its checks were clang's front end.
+
+What the dialect needed spelled differently (no compiler change made):
+
+1. **No `\x` escapes** in string literals (`\n \t \r \0 \\ \" \' \u{…}` only), so C's byte
+   strings that aren't UTF-8 (`"a\xFF" "b"`, overlong forms) are `ut.bin("a\\xFFb")` (the
+   harness decodes `\xNN`: a kept, NUL-terminated buffer and its length). Valid UTF-8 is
+   written as is (`"hé"` for `"h\xc3\xa9"`), U+FFFD as `\u{FFFD}`.
+2. **A string literal is a C string only where a `raw.Ptr<u8>` is expected**: passed to a
+   `raw.Ptr<()>` parameter (`write(fd, "\n", 1)`), to `raw.cast`, or as an `if` whose arms are
+   literals in a varargs tail (`printf("%s", if ok { "ok" } else { "FAIL" })`) it is a `str`
+   (E0202/E0040 + E0419): a typed `let` first (the `raw.copy` finding again).
+3. **`raw.fn_of` of a function returning a raw struct by value is refused** (E0202):
+   `auk_main_wrapper`'s callbacks return `AukRes_int`, so `test_core`'s are `export fn`s
+   (`ut_core_main_ok`/`_err`: two extra symbols in the test program).
+4. **`raw.cast` without a type argument isn't inferred as a generic intrinsic's argument**
+   (`raw.free(raw.cast(p))`, `raw.realloc`): `raw.cast<()>(p)`.
+5. **`raw.addr_of(&local.field)` is refused:** `raw.field_addr(raw.addr_of(&local), .f)`.
+6. **A hex literal above `i64` under a conversion** (`i64(u64(0x8000000000000000))`) is E0210:
+   the literal is typed `int` first. INT64_MIN is `i64(-9223372036854775807) - 1`; NaN, ±inf,
+   -0.0 and 5e-324 come from `auk_ffrom_bits`.
+7. **C's arrays and statics:** `var xs: [i64; N]` locals (uninitialized, so `seen[256]`-style
+   tables are `raw.fill`ed), reached through `raw.cast<T>(raw.addr_of(&xs))`; `static` tables
+   of function pointers are `raw var … = abi.ElemOps { …: raw.fn_of(f) }`; `_Atomic bool`s
+   are `u8`s with `raw.atomic_*`; `var f = abi.DbgFrame {}` (flexible member) is fine as a
+   local.
+8. **Per-OS field widths** (`sin_family`/`sun_family`: `u8` after `sin_len` on macOS, `u16` on
+   Linux) are written by width from `raw.offset_of<…>(.sin_family) == 1`, no per-OS file.
+9. Effects: the tests were written `uses raw, ffi` and trimmed with the checker's own
+   E0410/E0411 fix-its (`auk check --json`).
+
+**Checks:** `run.sh` 72/72 on macOS arm64 and in the Linux container (the C runner: the same
+72 `ok`s); `ASAN=1` 72/72 (LeakSanitizer on); `TSAN=1` 72/72, no reports;
+`./build.sh --check --test`; `scripts/check.sh`.
 
 ## Per file
 

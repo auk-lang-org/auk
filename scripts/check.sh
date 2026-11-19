@@ -2,8 +2,8 @@
 # Everything that must stay green (docs/compiler.md, Testing):
 #   1. build      ./build.sh --check: the runtime, raft, and the compiler from the seed `auk`
 #                 through stage 3, which must be bit-identical to stage 2 (the fixed point)
-#   2. runtime    runtime/c/test/run.sh: the C runtime's unit tests (AUK_NET_TESTS=1: with
-#                 real hosts)
+#   2. runtime    runtime/test/unit/run.sh: the runtime's unit tests (Auk; AUK_NET_TESTS=1:
+#                 with real hosts)
 #   3. runner     the integration tests (tests/runner/) against target/bin/auk and raft
 #   4. golden     scripts/golden.sh --compare of target/bin/auk with itself: 0 differences
 #                 (catches nondeterministic output)
@@ -22,7 +22,7 @@ STEPS="${*:-build runtime runner golden bench}"
 
 step_build() { ./build.sh --check; }
 # real-host TLS tests reach badssl.com, which times out now and then: off unless asked for
-step_runtime() { AUK_NET_TESTS="${AUK_NET_TESTS:-0}" sh runtime/c/test/run.sh; }
+step_runtime() { AUK_NET_TESTS="${AUK_NET_TESTS:-0}" sh runtime/test/unit/run.sh; }
 step_runner() { scripts/test_runner.sh --no-build; }
 step_golden() { scripts/golden.sh --no-build --compare "$AUK"; }
 step_seed() { ./build.sh --from-seed; }

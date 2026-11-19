@@ -308,7 +308,7 @@ and libdispatch take them as callbacks. A block is just a C struct with a functi
 ([Clang's Block ABI](https://clang.llvm.org/docs/Block-ABI-Apple.html)), so the dialect builds
 them by hand from `raw struct`s and `raw.Fn`s; no compiler support. **Proven** (2026-11-18) by
 `runtime/c/test/spike/blocks.c`, compiled with `-fno-blocks`, run by
-`sh runtime/c/test/spike/blocks.sh`: a real TLS connection to `openssl s_server` (refused by the
+`sh runtime/c/test/spike/blocks.sh` (commit 4e551ac; removed with runtime/c/test in 7c): a real TLS connection to `openssl s_server` (refused by the
 system trust store, then accepted by a verify block that pins the test certificate), send,
 receive, cancel, the TLS 1.2 fallback configure, and `dispatch_sync`/`dispatch_async` with each
 kind of block; clean under ASan + UBSan and `leaks --atExit` (0 leaks), and every copy the

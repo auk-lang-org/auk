@@ -3,7 +3,7 @@
 ///
 /// Network.framework, Security.framework and libdispatch take blocks as callbacks. The dialect has
 /// no `^{ … }`, so each block is a raw struct laid out per Clang's Block ABI (docs/lowlevel.md,
-/// section 10, proven by runtime/c/test/spike/blocks.c), and the SDK functions that take blocks
+/// section 10, proven by the blocks spike, commit 4e551ac), and the SDK functions that take blocks
 /// are declared here with `raw.Ptr<()>` for each (the SDK headers hide them without -fblocks).
 ///
 ///   block (tls.c)                              captures      kind here

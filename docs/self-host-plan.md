@@ -16,7 +16,7 @@ What there is to move today:
 | Part | Where | Size |
 |---|---|---|
 | Runtime | `runtime/c/*.c` + `auk_rt.h` (was `runtime/src/*.rs`) | ~14k lines C, 21 files (Phase 1 done) |
-| Runtime tests | `runtime/c/test/*.c` (was `runtime/tests/*.rs`) | ~3.2k lines C (Phase 1 done) |
+| Runtime tests | `runtime/test/unit/*.auk` (was `runtime/c/test/*.c`, before that `runtime/tests/*.rs`) | ~4.9k lines Auk (Phase 7c) |
 | Compiler | `src/` (lexer → check → MIR → LLVM); its Auk port `compiler/src/` | ~42k lines Rust; ~39k lines Auk (self-hosting since Phase 4) |
 | Tools | `fmt repl lsp dap debug mcp live hatch explain dive`, `raft` | inside the 42k |
 | Integration tests | `tests/*.rs` (24 files) + fixtures; their Auk port `tests/runner/` (360/360 tests) | drive the binaries (any `auk` via `$AUK_BIN`) |
@@ -763,12 +763,21 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       `dbg.c`"). **The runtime is Auk: no `.c` left in runtime/c** (`auk_rt.h` stays as the ABI
       contract the tests and the ABI probe compile against).
 - [ ] `auk_rt.bc` is produced by the Auk compiler; `libauk_rt.a` via LLVM's archive writer.
-- [ ] Same C tests (called through `export fn`), then rewrite them as Auk tests. The first
-      half holds for the ported modules (`run.sh` links the Auk half).
+- [x] Same C tests (called through `export fn`), then rewrite them as Auk tests (2026-11-20):
+      `runtime/test/unit/` (`sh runtime/test/unit/run.sh [filter]`), the 72 tests of
+      `runtime/c/test/*.c` one for one (same names, assertions and panic messages), modules of
+      the runtime package itself built with it into one `--lib` object whose `export fn main`
+      is the runner; every test in a forked child (live-object leak check, LeakSanitizer when
+      instrumented). `build.sh --test` and `scripts/check.sh runtime` run it; `runtime/c/test/`
+      is gone (the blocks spike with it: git history, 4e551ac). 72/72 on macOS arm64 and in
+      the Linux container, as the C runner had; runtime-port.md, "Found porting the unit tests".
 - [ ] ASan/UBSan equivalent: build the runtime with LLVM sanitizer passes from the Auk compiler.
-      A first step (2026-11-19): `SAN_AUK=1` in `runtime/c/test/run.sh` runs the Auk half's
-      bitcode through `opt`'s tsan/asan passes (the attribute added with `sed`); it catches a
-      planted race in chan.auk. Left: a compiler flag that sets the attribute, UBSan's checks.
+      Done for ASan and TSan in the unit tests (2026-11-20): `ASAN=1`/`TSAN=1
+      runtime/test/unit/run.sh` run the bitcode of the runtime and the tests through `opt`'s
+      asan/tsan passes (the attribute added with `sed`, as the C runner's `SAN_AUK=1` did);
+      shown to catch a planted race (`auk_chan_close` without its lock) and a planted leak
+      (`auk__chan_free` not freeing its buffer). Left: a compiler flag that sets the attribute,
+      UBSan's checks (no pass for Auk code; UBSan was the C front end's).
 - [ ] ±5% perf bar against Phase 1 numbers.
 
 ### 7d. Drop the C compiler from the toolchain

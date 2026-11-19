@@ -27,8 +27,8 @@
 #                If it isn't (the seed is an older compiler that compiles it differently), the
 #                whole build runs once more with stage 2 as the seed, so that the runtime stage
 #                2 embeds and links is the one its own source compiles.
-#   --test       then the tests: the runtime's C tests (runtime/c/test/run.sh) and the
-#                integration tests (tests/runner/, built by stage 2) against target/bin/auk and
+#   --test       then the tests: the runtime's unit tests (runtime/test/unit/run.sh, Auk) and
+#                the integration tests (tests/runner/, built by stage 2) against target/bin/auk and
 #                target/bin/raft.
 #   --install    then copy auk and raft to <dir> (default ~/.auk/bin; put it on your PATH).
 #
@@ -233,8 +233,8 @@ if [ "$CHECK" = 1 ]; then
   fi
 fi
 if [ "$TEST" = 1 ]; then
-  say "runtime tests (runtime/c/test)"
-  sh runtime/c/test/run.sh | tail -1
+  say "runtime tests (runtime/test/unit)"
+  sh runtime/test/unit/run.sh | tail -1
   say "integration tests (tests/runner, against target/bin/auk and target/bin/raft)"
   build target/bin/auk tests/runner/src/main.auk "$BUILD/test-runner"
   log="$BUILD/test-runner.log"
