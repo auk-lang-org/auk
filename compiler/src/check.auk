@@ -694,6 +694,16 @@ fn declare_type(c: var Checker, m: int, i: int) {
     _ => types.TypeDefKind.Enum([])
   }
   let id = c.defs.types.len()
+  match item {
+    Struct(d) when d.raw > 0 => {
+      if !c.prog.raw_ok(m) {
+        let what = if d.raw == 2 { "`raw union {name.name}`" } else { "`raw struct {name.name}`" }
+        c.err_in(m, effect_check.raw_only(name.span, "{what} is a C layout"))
+      }
+      c.defs.raw[id] = d.raw
+    }
+    _ => {}
+  }
   c.defs.types.push(types.TypeDef { name: name.name, module: m, public, doc, params, kind: tk, span, node })
   c.items[m].types[name.name] = TypeItem.Def(id)
 }
@@ -1044,6 +1054,7 @@ fn define_type(c: var Checker, m: int, i: int) {
         let ty = c.resolve_type(m, f.ty, &g)
         fields.push(types.FieldDef { name: f.name.name, ty, public: false, span: f.span })
       }
+      if sd.raw > 0 && fields.len() == sd.fields.len() { c.raw_fields(m, sd, fields) }
       c.defs.types[d].kind = types.TypeDefKind.Struct(fields)
     }
     Enum(ed) => {
@@ -1252,6 +1263,13 @@ pub fn expr_path(c: var Checker, m: int, path: [ast.Ident]): ExprPath {
 pub fn resolve_type(c: var Checker, m: int, t: ast.Type, g: var GenScope): types.Ty {
   match t.kind {
     List(x) => types.list(c.resolve_type(m, x, &g))
+    Array(x, n) => {
+      if !c.prog.raw_ok(m) {
+        c.err_in(m, effect_check.raw_only(t.span, "`{ast.type_dump(t)}` is a C array type"))
+        return types.Ty.Error
+      }
+      types.Ty.Array(c.resolve_type(m, x, &g), n)
+    }
     Map(k, v) => {
       let kt = c.resolve_type(m, k, &g)
       types.map(kt, c.resolve_type(m, v, &g))
@@ -1313,6 +1331,12 @@ pub fn resolve_type(c: var Checker, m: int, t: ast.Type, g: var GenScope): types
 
 /// The `TypeKind::Named` arm of `resolve_type`.
 fn resolve_named(c: var Checker, m: int, t: ast.Type, path: [ast.Ident], args: [ast.Type], g: var GenScope): types.Ty {
+  if c.prog.raw_ok(m) {
+    match c.raw_named(m, t, path, args, &g) {
+      some(x) => return x
+      none => {}
+    }
+  }
   if path.len() == 1 {
     let n = path[0].name
     match g.names.get(n) {
@@ -1402,6 +1426,83 @@ fn resolve_named(c: var Checker, m: int, t: ast.Type, path: [ast.Ident], args: [
           .fix(t.span, "any {name}"),
       )
       types.Ty.Error
+    }
+  }
+}
+
+/// The runtime's dialect (docs/lowlevel.md): the fixed-width types, `raw.Ptr<T>` and
+/// `raw.Fn<(A) => R>` (`Ptr`, `Fn` inside core's `raw` module).
+fn raw_named(c: var Checker, m: int, t: ast.Type, path: [ast.Ident], args: [ast.Type], g: var GenScope): types.Ty? {
+  if path.len() == 1 && !g.names.contains(path[0].name) && !c.items[m].types.contains(path[0].name) {
+    match types.fx_of(path[0].name) {
+      some(k) => return c.no_args(m, t, args, types.Ty.Fixed(k))
+      none => {}
+    }
+  }
+  let in_raw = c.prog.is_core(m) && c.prog.mods[m].path == ["core", "raw"]
+  let name = if path.len() == 1 && in_raw {
+    path[0].name
+  } else if path.len() == 2 && path[0].name == "raw" && c.prog.first_segment(m, "raw") == c.prog.raw_module() {
+    path[1].name
+  } else {
+    return none
+  }
+  let want = match name {
+    "Ptr" | "Fn" => 1
+    _ => return none
+  }
+  if args.len() != want {
+    c.err_in(m, diag.new("E0106", t.span, "`raw.{name}` takes {want} type argument(s), found {args.len()}"))
+    return types.Ty.Error
+  }
+  let a = c.resolve_type(m, args[0], &g)
+  if name == "Ptr" { return types.Ty.Ptr(a) }
+  match a {
+    Fn(ps, r) => types.Ty.CFn(ps, r)
+    Error => types.Ty.Error
+    _ => {
+      c.err_in(m, diag.new("E0106", args[0].span, "`raw.Fn` takes a function type, like `raw.Fn<(i32) => i32>`"))
+      types.Ty.Error
+    }
+  }
+}
+
+/// May a value of type `t` be in `uses raw` code or a raw struct (docs/lowlevel.md): no
+/// reference-counted type (`str`, lists, maps, closures, ordinary structs and enums, `T!`,
+/// tasks); numbers, `bool`, `char`, raw types, `T?` and tuples of those, plain enums.
+pub fn raw_allowed(defs: types.Defs, t: types.Ty): bool = match t {
+  Int | Float | Bool | Char | Never | Fixed(_) | Ptr(_) | CFn(_, _) | Param(_) | Error => true
+  Tuple(ts) => ts.all(x => raw_allowed(defs, x))
+  Opt(x) | Array(x, _) => raw_allowed(defs, x)
+  Named(d, _) => match defs.types[d].kind {
+    Struct(_) => types.is_raw_def(defs, d)
+    Enum(vs) => vs.all(v => v.fields.len() == 0)
+    Opaque(cty) => !cty.starts_with("Auk")
+  }
+  _ => false
+}
+
+/// E0419 unless every field of the raw struct `d` has a raw type; a flexible array member only
+/// last.
+fn raw_fields(c: var Checker, m: int, sd: ast.StructDef, fields: [types.FieldDef]) {
+  if sd.generics.len() > 0 {
+    c.err_in(m, diag.new("E0419", sd.generics[0].name.span, "a raw struct can't have type parameters"))
+  }
+  for i, f in fields {
+    let ast_ty = sd.fields[i].ty
+    if !raw_allowed(c.defs, f.ty) {
+      c.err_in(
+        m,
+        diag.new("E0419", ast_ty.span, "the field `{f.name}` of a raw struct can't be `{c.defs.show(f.ty)}`")
+          .note("raw structs hold C data: numbers, `bool`, raw pointers, other raw structs, `[T; N]`; an Auk object is a `raw.Ptr` to the raw struct that mirrors it"),
+      )
+    }
+    match f.ty {
+      Array(_, n) when n < 0 && i + 1 < fields.len() => c.err_in(
+        m,
+        diag.new("E0419", ast_ty.span, "a flexible array member `[T; ..]` must be the last field"),
+      )
+      _ => {}
     }
   }
 }
@@ -2282,6 +2383,7 @@ fn finish_body(c: var Checker) {
       c.tables[m].locals[l].ty = fixed
     }
   }
+  c.raw_body_types(cx)
   if unresolved.len() > 0 && c.errs.len() == 0 {
     // report at the first (in source order) expression whose type is unknown
     let span = c.first_span(m, unresolved) else diag.NONE
@@ -2292,6 +2394,61 @@ fn finish_body(c: var Checker) {
   }
   merge_tables(&c.tables[m], cx.t)
 }
+
+/// E0419: a `uses raw` function (docs/lowlevel.md) holds only types without references, so the
+/// compiler emits no reference counting there (the runtime's allocator and RC are written in it).
+fn raw_body_types(c: var Checker, cx: BodyCx) {
+  let f = match cx.body {
+    Fn(f) => f
+    _ => return
+  }
+  let info = c.fns[f]
+  if !info.effects.contains("raw") || c.prog.is_core(info.module) { return }
+  let m = cx.module
+  for p in info.params {
+    if !raw_allowed(c.defs, p.ty) {
+      c.err_in(m, raw_type_diag(c, info.span, p.ty, "a parameter"))
+      return
+    }
+  }
+  if !raw_allowed(c.defs, info.ret) {
+    c.err_in(m, raw_type_diag(c, info.span, info.ret, "the result"))
+    return
+  }
+  var bad: [int] = []
+  var bad_ty = types.Ty.Error
+  for n in cx.t.types.keys() {
+    let t = cx.t.types[n]
+    if !raw_allowed(c.defs, t) {
+      bad.push(n)
+      bad_ty = t
+    }
+  }
+  if bad.len() > 0 {
+    // the first in source order
+    let span = c.first_span(m, bad) else info.span
+    var t = bad_ty
+    for n in bad {
+      match c.first_span(m, [n]) {
+        some(s) => if s == span { t = cx.t.types[n] }
+        none => {}
+      }
+    }
+    c.err_in(m, raw_type_diag(c, span, t, "a value"))
+    return
+  }
+  for l in cx.local_start..c.tables[m].locals.len() {
+    let li = c.tables[m].locals[l]
+    if !raw_allowed(c.defs, li.ty) {
+      c.err_in(m, raw_type_diag(c, li.span, li.ty, "`{li.name}`"))
+      return
+    }
+  }
+}
+
+fn raw_type_diag(c: Checker, span: diag.Span, t: types.Ty, what: str): diag.Diag =
+  diag.new("E0419", span, "{what} of type `{c.defs.show(t)}` in `uses raw` code, which has no reference counting")
+    .note("`uses raw` code holds numbers, `bool`, `char`, raw pointers, raw structs, plain enums and `T?` of those; reach Auk objects through a `raw.Ptr` to the raw struct that mirrors them")
 
 /// `tm.x.extend(t.x)` for every side table but `locals` (Rust's tail of `finish_body`).
 fn merge_tables(tm: var typed.Tables, t: typed.Tables) {
@@ -2316,6 +2473,7 @@ fn merge_tables(tm: var typed.Tables, t: typed.Tables) {
   for k, v in t.value_map_pats { tm.value_map_pats[k] = v }
   for k, v in t.err_payload_pats { tm.err_payload_pats[k] = v }
   for k, v in t.units { tm.units[k] = v }
+  for k, v in t.raw { tm.raw[k] = v }
 }
 
 /// The earliest span (in source order) among expression nodes of module `m` (searched in the

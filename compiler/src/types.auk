@@ -49,6 +49,77 @@ pub enum Ty {
   /// The type of an expression that already produced a diagnostic; it unifies with anything so
   /// one mistake doesn't cascade.
   Error,
+  // ---- the runtime's dialect (docs/lowlevel.md), only in the runtime package ----
+  /// A fixed-width number: `i8` ... `u64`, `isize`, `usize` (wrapping arithmetic), `f32`.
+  Fixed(k: Fx),
+  /// `raw.Ptr<T>`: an address, not reference counted, may be null.
+  Ptr(t: Ty),
+  /// `raw.Fn<(A) => R>`: a C function pointer.
+  CFn(ps: [Ty], r: Ty),
+  /// `[T; N]`: a C array (`n` is -1 for a flexible array member `[T; ..]`).
+  Array(t: Ty, n: int),
+}
+
+/// The fixed-width number types of the runtime's dialect.
+pub enum Fx { I8, I16, I32, I64, U8, U16, U32, U64, Isize, Usize, F32 }
+
+/// Every fixed-width type by name.
+pub let FIXED: [(str, Fx)] = [
+  ("i8", Fx.I8),
+  ("i16", Fx.I16),
+  ("i32", Fx.I32),
+  ("i64", Fx.I64),
+  ("u8", Fx.U8),
+  ("u16", Fx.U16),
+  ("u32", Fx.U32),
+  ("u64", Fx.U64),
+  ("isize", Fx.Isize),
+  ("usize", Fx.Usize),
+  ("f32", Fx.F32),
+]
+
+pub fn fx_name(k: Fx): str = match k {
+  I8 => "i8"
+  I16 => "i16"
+  I32 => "i32"
+  I64 => "i64"
+  U8 => "u8"
+  U16 => "u16"
+  U32 => "u32"
+  U64 => "u64"
+  Isize => "isize"
+  Usize => "usize"
+  F32 => "f32"
+}
+
+pub fn fx_of(name: str): Fx? = match FIXED.find(p => p.0 == name) {
+  some(p) => some(p.1)
+  none => none
+}
+
+/// The width in bits.
+pub fn fx_bits(k: Fx): int = match k {
+  I8 | U8 => 8
+  I16 | U16 => 16
+  I32 | U32 | F32 => 32
+  _ => 64
+}
+
+pub fn fx_signed(k: Fx): bool = match k {
+  I8 | I16 | I32 | I64 | Isize => true
+  _ => false
+}
+
+/// A fixed-width integer type?
+pub fn is_fixed_int(t: Ty): bool = match t {
+  Fixed(k) => k != Fx.F32
+  _ => false
+}
+
+/// A scalar of the runtime's dialect (compared and copied as one machine value)?
+pub fn is_raw_scalar(t: Ty): bool = match t {
+  Fixed(_) | Ptr(_) | CFn(_, _) => true
+  _ => false
 }
 
 pub fn unit(): Ty = Ty.Tuple([])
@@ -109,10 +180,10 @@ pub fn any_ty(t: Ty, pred: (Ty) => bool): bool {
   if pred(t) { return true }
   // `children(t)` without building the list (the checker asks this of every type it records)
   match t {
-    List(x) | Opt(x) | Task(x) | Measured(x, _) | Mut(x) => any_ty(x, pred)
+    List(x) | Opt(x) | Task(x) | Measured(x, _) | Mut(x) | Ptr(x) | Array(x, _) => any_ty(x, pred)
     Map(a, b) | Res(a, b) => any_ty(a, pred) || any_ty(b, pred)
     Tuple(ts) | Named(_, ts) => any_all(ts, pred)
-    Fn(ps, r) => any_all(ps, pred) || any_ty(r, pred)
+    Fn(ps, r) | CFn(ps, r) => any_all(ps, pred) || any_ty(r, pred)
     _ => false
   }
 }
@@ -125,10 +196,10 @@ fn any_all(ts: [Ty], pred: (Ty) => bool): bool {
 }
 
 pub fn children(t: Ty): [Ty] = match t {
-  List(x) | Opt(x) | Task(x) | Measured(x, _) | Mut(x) => [x]
+  List(x) | Opt(x) | Task(x) | Measured(x, _) | Mut(x) | Ptr(x) | Array(x, _) => [x]
   Map(a, b) | Res(a, b) => [a, b]
   Tuple(ts) | Named(_, ts) => ts
-  Fn(ps, r) => ps + [r]
+  Fn(ps, r) | CFn(ps, r) => ps + [r]
   _ => []
 }
 
@@ -145,6 +216,9 @@ pub fn map_ty(t: Ty, f: (Ty) => Ty): Ty {
     Tuple(ts) => Ty.Tuple(ts.map(x => map_ty(x, f)))
     Named(d, ts) => Ty.Named(d, ts.map(x => map_ty(x, f)))
     Fn(ps, r) => Ty.Fn(ps.map(x => map_ty(x, f)), map_ty(r, f))
+    Ptr(x) => Ty.Ptr(map_ty(x, f))
+    Array(x, n) => Ty.Array(map_ty(x, f), n)
+    CFn(ps, r) => Ty.CFn(ps.map(x => map_ty(x, f)), map_ty(r, f))
     t => t
   }
   f(t2)
@@ -226,9 +300,20 @@ pub struct TypeParam {
 }
 
 /// Every definition, indexed by `DefId`, `ShapeId` and `ParamId`.
-pub struct Defs { types: [TypeDef], shapes: [ShapeDef], params: [TypeParam] }
+pub struct Defs {
+  types: [TypeDef],
+  shapes: [ShapeDef],
+  params: [TypeParam],
+  /// `raw struct` (1) and `raw union` (2) definitions, by id (docs/lowlevel.md).
+  raw: {int: int},
+}
 
-pub fn new_defs(): Defs = Defs { types: [], shapes: [], params: [] }
+pub fn new_defs(): Defs = Defs { types: [], shapes: [], params: [], raw: {} }
+
+/// Is `d` a `raw struct` or `raw union`?
+pub fn is_raw_def(defs: Defs, d: int): bool = defs.raw.contains(d)
+
+pub fn is_union(defs: Defs, d: int): bool = defs.raw.get(d) == some(2)
 
 pub fn fields(defs: Defs, d: int): [FieldDef] = match defs.types[d].kind {
   Struct(fields) => fields
@@ -332,6 +417,22 @@ fn fmt(defs: Defs, t: Ty, out: var [str]) {
     }
     Var(_) => out.push("_")
     Error => out.push("{{error}}")
+    Fixed(k) => out.push(fx_name(k))
+    Ptr(x) => {
+      out.push("raw.Ptr<")
+      fmt(defs, x, &out)
+      out.push(">")
+    }
+    CFn(ps, r) => {
+      out.push("raw.Fn<")
+      fmt(defs, Ty.Fn(ps, r), &out)
+      out.push(">")
+    }
+    Array(x, n) => {
+      out.push("[")
+      fmt(defs, x, &out)
+      out.push(if n < 0 { "; ..]" } else { "; {n}]" })
+    }
   }
 }
 
@@ -421,8 +522,11 @@ pub fn unify(inf: var Infer, a: Ty, b: Ty): bool {
       bind(&inf, x, t)
       true
     }
-    (List(x), List(y)) | (Opt(x), Opt(y)) | (Task(x), Task(y)) | (Mut(x), Mut(y)) =>
+    (List(x), List(y)) | (Opt(x), Opt(y)) | (Task(x), Task(y)) | (Mut(x), Mut(y)) | (Ptr(x), Ptr(y)) =>
       unify(&inf, x, y)
+    (Array(x, n), Array(y, k)) => n == k && unify(&inf, x, y)
+    (CFn(p1, r1), CFn(p2, r2)) =>
+      p1.len() == p2.len() && unify_all(&inf, p1, p2) && unify(&inf, r1, r2)
     (Measured(x, u), Measured(y, v)) => u == v && unify(&inf, x, y)
     (Map(a1, b1), Map(a2, b2)) | (Res(a1, b1), Res(a2, b2)) =>
       unify(&inf, a1, a2) && unify(&inf, b1, b2)
@@ -494,7 +598,16 @@ pub fn cmp(a: Ty, b: Ty): int {
   let rb = rank(b)
   if ra != rb { return if ra < rb { -1 } else { 1 } }
   match (a, b) {
-    (List(x), List(y)) | (Opt(x), Opt(y)) | (Task(x), Task(y)) | (Mut(x), Mut(y)) => cmp(x, y)
+    (List(x), List(y)) | (Opt(x), Opt(y)) | (Task(x), Task(y)) | (Mut(x), Mut(y)) | (Ptr(x), Ptr(y)) => cmp(x, y)
+    (Fixed(x), Fixed(y)) => cmp_int(fx_rank(x), fx_rank(y))
+    (Array(x, n), Array(y, k)) => {
+      let c = cmp(x, y)
+      if c != 0 { c } else { cmp_int(n, k) }
+    }
+    (CFn(p1, r1), CFn(p2, r2)) => {
+      let c = cmp_all(p1, p2)
+      if c != 0 { c } else { cmp(r1, r2) }
+    }
     (Map(a1, b1), Map(a2, b2)) | (Res(a1, b1), Res(a2, b2)) => {
       let c = cmp(a1, a2)
       if c != 0 { c } else { cmp(b1, b2) }
@@ -553,4 +666,10 @@ fn rank(t: Ty): int = match t {
   Mut(_) => 17
   Var(_) => 18
   Error => 19
+  Fixed(_) => 20
+  Ptr(_) => 21
+  CFn(_, _) => 22
+  Array(_, _) => 23
 }
+
+fn fx_rank(k: Fx): int = FIXED.find_index(p => p.1 == k) else 0

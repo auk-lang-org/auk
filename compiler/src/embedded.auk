@@ -15,6 +15,7 @@ extern fn prelude_str(): str = "#embed ../prelude/str.auk"
 extern fn prelude_int(): str = "#embed ../prelude/int.auk"
 extern fn prelude_float(): str = "#embed ../prelude/float.auk"
 extern fn prelude_ffi(): str = "#embed ../prelude/ffi.auk"
+extern fn prelude_raw(): str = "#embed ../prelude/raw.auk"
 
 /// The prelude texts, (module name, source), in `resolve.PRELUDE` order.
 pub fn prelude(): [(str, str)] uses ffi = [
@@ -32,6 +33,7 @@ pub fn prelude(): [(str, str)] uses ffi = [
   ("int", prelude_int()),
   ("float", prelude_float()),
   ("ffi", prelude_ffi()),
+  ("raw", prelude_raw()),
 ]
 
 test "the embedded prelude is resolve.PRELUDE" {

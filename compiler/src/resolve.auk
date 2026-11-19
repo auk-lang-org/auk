@@ -43,6 +43,7 @@ pub let PRELUDE = [
   "int",
   "float",
   "ffi",
+  "raw",
 ]
 
 /// What loading reads besides the files on disk: the prelude texts (module name, source), the
@@ -138,6 +139,9 @@ pub fn is_runtime(p: Program, m: int): bool {
 /// May module `m` use the `raw` dialect (the runtime package, or core's `raw` module)?
 pub fn raw_ok(p: Program, m: int): bool = is_runtime(p, m) || is_core(p, m)
 
+/// Core's `raw` module (compiler/prelude/raw.auk).
+pub fn raw_module(p: Program): int? = child(p, p.core_root, "raw")
+
 pub fn child(p: Program, m: int, name: str): int? = p.mods[m].children.get(name)
 
 /// What a path's first segment `name` means in module `m`, if it names a module.
@@ -153,6 +157,8 @@ pub fn first_segment(p: Program, m: int, name: str): int? {
     none => {}
   }
   if name == "core" { return p.core_root }
+  // the runtime's dialect is visible only to the runtime package
+  if name == "raw" && !raw_ok(p, m) { return none }
   child(p, p.core_root, name)
 }
 

@@ -706,7 +706,7 @@ fn ty(f: var Finder, t: ast.Type) {
       f.path(p)
       for a in args { f.ty(a) }
     }
-    List(x) | Optional(x) | Any(x) => f.ty(x)
+    List(x) | Optional(x) | Any(x) | Array(x, _) => f.ty(x)
     Measured(base, _) => f.ty(base)
     Map(k, v) => {
       f.ty(k)

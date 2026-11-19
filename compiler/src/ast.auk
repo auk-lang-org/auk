@@ -80,6 +80,8 @@ pub struct StructDef {
   public: bool,
   generics: [Generic],
   fields: [FieldDef],
+  /// The runtime's dialect (docs/lowlevel.md): 0 a plain struct, 1 `raw struct`, 2 `raw union`.
+  raw: int,
 }
 
 pub struct FieldDef { span: diag.Span, name: Ident, ty: Type, doc: str? }
@@ -139,6 +141,8 @@ pub enum TypeKind {
   Measured(base: Type, units: [(str, int)]),
   /// `var T`: a `var` parameter of a function type (only there): `(var P) => R`.
   Var(t: Type),
+  /// `[T; N]` (`n` is -1 for `[T; ..]`): a C array, in the runtime's dialect only.
+  Array(t: Type, n: int),
 }
 
 pub struct Pat { id: int, span: diag.Span, kind: PatKind }
@@ -328,4 +332,5 @@ pub fn type_dump(t: Type): str = match t.kind {
   Fn(params, ret) => "(" + params.map(type_dump).join(", ") + ") => " + type_dump(ret)
   Measured(base, us) => type_dump(base) + "<" + units.text(us) + ">"
   Var(x) => "var " + type_dump(x)
+  Array(x, n) => "[" + type_dump(x) + (if n < 0 { "; ..]" } else { "; {n}]" })
 }

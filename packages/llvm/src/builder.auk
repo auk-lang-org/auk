@@ -399,3 +399,57 @@ pub extern fn set_ordering(
   memory_access_inst: llvm.Value,
   ordering: int,
 ) = "void LLVMSetOrdering(LLVMValueRef MemoryAccessInst, int Ordering)"
+
+// ---- for the runtime's dialect (compiler: docs/lowlevel.md) ----
+
+pub extern fn build_u_div(
+  b: llvm.Builder,
+  lhs: llvm.Value,
+  rhs: llvm.Value,
+  name: str,
+): llvm.Value = "LLVMValueRef LLVMBuildUDiv(LLVMBuilderRef, LLVMValueRef LHS, LLVMValueRef RHS, const char *Name)"
+
+pub extern fn build_u_rem(
+  b: llvm.Builder,
+  lhs: llvm.Value,
+  rhs: llvm.Value,
+  name: str,
+): llvm.Value = "LLVMValueRef LLVMBuildURem(LLVMBuilderRef, LLVMValueRef LHS, LLVMValueRef RHS, const char *Name)"
+
+pub extern fn build_s_rem(
+  b: llvm.Builder,
+  lhs: llvm.Value,
+  rhs: llvm.Value,
+  name: str,
+): llvm.Value = "LLVMValueRef LLVMBuildSRem(LLVMBuilderRef, LLVMValueRef LHS, LLVMValueRef RHS, const char *Name)"
+
+pub extern fn build_f_rem(
+  b: llvm.Builder,
+  lhs: llvm.Value,
+  rhs: llvm.Value,
+  name: str,
+): llvm.Value = "LLVMValueRef LLVMBuildFRem(LLVMBuilderRef, LLVMValueRef LHS, LLVMValueRef RHS, const char *Name)"
+
+pub extern fn build_l_shr(
+  b: llvm.Builder,
+  lhs: llvm.Value,
+  rhs: llvm.Value,
+  name: str,
+): llvm.Value = "LLVMValueRef LLVMBuildLShr(LLVMBuilderRef, LLVMValueRef LHS, LLVMValueRef RHS, const char *Name)"
+
+pub extern fn build_a_shr(
+  b: llvm.Builder,
+  lhs: llvm.Value,
+  rhs: llvm.Value,
+  name: str,
+): llvm.Value = "LLVMValueRef LLVMBuildAShr(LLVMBuilderRef, LLVMValueRef LHS, LLVMValueRef RHS, const char *Name)"
+
+pub extern fn build_atomic_cmp_xchg(
+  b: llvm.Builder,
+  ptr: llvm.Value,
+  cmp: llvm.Value,
+  new: llvm.Value,
+  success: int,
+  failure: int,
+  single_thread: int,
+): llvm.Value = "LLVMValueRef LLVMBuildAtomicCmpXchg(LLVMBuilderRef, LLVMValueRef Ptr, LLVMValueRef Cmp, LLVMValueRef New, int SuccessOrdering, int FailureOrdering, int SingleThread)"

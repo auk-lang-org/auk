@@ -60,6 +60,14 @@ pub fn scalar(l: Layouts, t: mir.MTy): Sc? = match t {
     Float => Sc.F64
     Bool | Never => Sc.I8
     Char => Sc.I32
+    Fixed(k) => match k {
+      I8 | U8 => Sc.I8
+      I16 | U16 => Sc.I16
+      I32 | U32 => Sc.I32
+      F32 => Sc.F32
+      _ => Sc.I64
+    }
+    Ptr(_) | CFn(_, _) => Sc.Ptr
     d when types.is_unit(d) => Sc.I8
     d when mir.types.is_ptr(l.info, d) => Sc.Ptr
     _ => none
@@ -73,6 +81,14 @@ pub fn is_agg(l: Layouts, t: mir.MTy): bool = t != mir.MTy.Void && scalar(l, t) 
 pub fn signed(t: mir.MTy): bool = match t {
   I8 | I16 | I32 | I64 => true
   D(Int) => true
+  D(Fixed(k)) => types.fx_signed(k)
+  _ => false
+}
+
+/// An unsigned type of the runtime's dialect (fixed-width, or a raw pointer)?
+pub fn raw_unsigned(t: mir.MTy): bool = match t {
+  D(Fixed(k)) => !types.fx_signed(k) && k != types.Fx.F32
+  D(Ptr(_)) | D(CFn(_, _)) => true
   _ => false
 }
 
@@ -94,6 +110,7 @@ pub fn members(l: Layouts, t: mir.MTy): [mir.MTy] {
       Res(x, _) => [mir.MTy.Bool, mir.MTy.D(x), mir.void_ptr()]
       Fn(_, _) => [mir.MTy.Code, mir.obj_ptr()]
       Any(_) => [mir.obj_ptr(), mir.void_ptr()]
+      Array(x, n) => rep(mir.MTy.D(x), max(n, 0))
       _ when mir.types.is_struct(info, d) => {
         let n = mir.types.struct_layout(info, d).len()
         if n == 0 {
@@ -155,7 +172,28 @@ fn get(l: var Layouts, t: mir.MTy): LayInfo {
       }
     } else {
       let ms = members(l, t)
-      let (lay, offs) = struct_of(&l, ms)
+      let (lay0, offs0) = struct_of(&l, ms)
+      var lay = lay0
+      var offs = offs0
+      match t {
+        // the runtime's dialect: a C array (a flexible one has no size), a `raw union`
+        D(Array(x, n)) => {
+          let e = get(&l, mir.MTy.D(x)).lay
+          lay = Lay { size: max(n, 0) * e.size, align: e.align }
+        }
+        D(Named(d, _)) when types.is_union(l.info.defs, d) => {
+          var size = 0
+          var align = 1
+          for m in ms {
+            let x = get(&l, m).lay
+            size = max(size, x.size)
+            align = max(align, x.align)
+          }
+          lay = Lay { size: align_up(max(size, 1), align), align }
+          offs = ms.map(_ => 0)
+        }
+        _ => {}
+      }
       LayInfo { lay, offs, voffs: [] }
     }
   }
@@ -252,6 +290,14 @@ pub fn c_pass(l: var Layouts, t: mir.MTy): CPass {
     lv.all(p => p.1 == Sc.F64) &&
     x.size == 8 * lv.len() {
     return CPass.Words((0..lv.len()).map(_ => Sc.F64))
+  }
+  // ... or of 1-4 floats (only raw structs have `f32` members)
+  if l.arch == "aarch64" &&
+    lv.len() > 0 &&
+    lv.len() <= 4 &&
+    lv.all(p => p.1 == Sc.F32) &&
+    x.size == 4 * lv.len() {
+    return CPass.Words((0..lv.len()).map(_ => Sc.F32))
   }
   if x.size > 16 { return CPass.Sret }
   let n = (x.size + 7) / 8

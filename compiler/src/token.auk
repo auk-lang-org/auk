@@ -98,6 +98,8 @@ pub enum Tok {
   /// A significant line break.
   Newline,
   Eof,
+  /// `;`, only in an array type `[T; N]` (the runtime's dialect); elsewhere E0011.
+  Semi,
 }
 
 /// A piece of a string literal. `toks` ends with `Eof`; `spec` is the raw text after the
@@ -260,6 +262,7 @@ pub fn text(t: Tok): str = match t {
   PipeEq => "|="
   CaretEq => "^="
   ShlEq => "<<="
+  Semi => ";"
   Newline => "newline"
   Eof => "end of file"
   _ => ""
@@ -353,6 +356,7 @@ pub fn name(t: Tok): str = match t {
   ShlEq => "ShlEq"
   Newline => "Newline"
   Eof => "Eof"
+  Semi => "Semi"
 }
 
 /// How a token reads in "expected X, found Y" (Rust's `Display for Tok`).

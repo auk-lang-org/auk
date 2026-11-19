@@ -276,3 +276,10 @@ pub extern fn type_of(val: llvm.Value): llvm.Type = "LLVMTypeRef LLVMTypeOf(LLVM
 pub extern fn value_as_metadata(
   val: llvm.Value,
 ): llvm.Metadata = "LLVMMetadataRef LLVMValueAsMetadata(LLVMValueRef Val)"
+
+// ---- for the runtime's dialect (compiler: docs/lowlevel.md) ----
+
+pub extern fn set_thread_local(
+  global_var: llvm.Value,
+  is_thread_local: int,
+) = "void LLVMSetThreadLocal(LLVMValueRef GlobalVar, int IsThreadLocal)"

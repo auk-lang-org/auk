@@ -696,7 +696,12 @@ fn item(f: var Fmt, it: ast.Item): fmt.doc.Doc {
   match it {
     Fn(_) => nil()  // clauses are units
     Struct(d) => {
-      let head = "{vis(d.public)}struct {d.name.name}{generics(d.generics)} "
+      let kw = match d.raw {
+        1 => "raw struct"
+        2 => "raw union"
+        _ => "struct"
+      }
+      let head = "{vis(d.public)}{kw} {d.name.name}{generics(d.generics)} "
       let (elems, dangling) = f.seq(
         d.fields.len(),
         d.span.line,
@@ -845,6 +850,7 @@ fn ty(t: ast.Type): str = match t.kind {
   Fn(params, ret) => "({tys(params)}) => {ty(ret)}"
   Measured(base, u) => "{ty(base)}<{units.text(u)}>"
   Var(x) => "var {ty(x)}"
+  Array(x, n) => if n < 0 { "[{ty(x)}; ..]" } else { "[{ty(x)}; {n}]" }
 }
 
 /// A type before a `?` or `!` suffix: a function type needs parentheses.
@@ -1809,4 +1815,5 @@ fn type_dump(t: ast.Type): str = match t.kind {
   Fn(params, ret) => "({params.map(x => type_dump(x)).join(", ")}) => {type_dump(ret)}"
   Measured(base, u) => "{type_dump(base)}<{units.text(u)}>"
   Var(x) => "var {type_dump(x)}"
+  Array(x, n) => if n < 0 { "[{type_dump(x)}; ..]" } else { "[{type_dump(x)}; {n}]" }
 }

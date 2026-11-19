@@ -549,7 +549,7 @@ fn body(g: var Gen, fi: int): ()! uses ffi {
             k += 1
           }
           Words(ws) => for j in 0..ws.len() {
-            let a = gep(g, dst, j * 8)
+            let a = gep(g, dst, word_off(ws[j], j))
             store(g, llvm.values.get_param(fv, k), a)
             k += 1
           }
@@ -633,6 +633,10 @@ pub fn copy(g: var Gen, dst: llvm.Value, src: llvm.Value, t: mir.MTy) uses ffi {
   let _ = llvm.builder.build_mem_cpy(g.b, dst, a, src, a, llvm.values.const_int(g.t_i64, l.size, 0))
 }
 
+/// The offset of word `k` of a C aggregate passed as words: 8 bytes each, except the `f32`s of an
+/// AArch64 float aggregate (only raw structs have them).
+fn word_off(w: mir.layout.Sc, k: int): int = if w == mir.layout.Sc.F32 { k * 4 } else { k * 8 }
+
 /// Word `k` of a C aggregate of type `t` at `src`: a full 8-byte load, or only the bytes the
 /// aggregate has (zero-extended) for a partial last word.
 fn load_word(
@@ -643,7 +647,7 @@ fn load_word(
   t: mir.MTy,
 ): llvm.Value uses ffi {
   let size = lay(&g, t).size
-  let at = gep(g, src, k * 8)
+  let at = gep(g, src, word_off(w, k))
   let n = min(size - k * 8, 8)
   if n == 8 || mir.layout.is_float(w) { return load_ty(g, lt(g, w), at) }
   let part = llvm.builder.build_load2(g.b, llvm.ir.int_type_in_context(g.cx, n * 8), at, "")
@@ -927,6 +931,18 @@ pub fn convert(g: var Gen, v: llvm.Value, from: mir.MTy, to: mir.MTy): llvm.Valu
     llvm.builder.build_fp_ext(b, v, tt, "")
   } else if fk == dbl_k && tk == flt_k {
     llvm.builder.build_fp_trunc(b, v, tt, "")
+  } else if fk == int_k && tk == flt_k {
+    // the runtime's dialect: an integer to `f32`
+    if signed {
+      llvm.builder.build_si_to_fp(b, v, tt, "")
+    } else {
+      llvm.builder.build_ui_to_fp(b, v, tt, "")
+    }
+  } else if (fk == flt_k || fk == dbl_k) && tk == int_k && (mir.layout.raw_unsigned(to) || fk == flt_k) {
+    // the runtime's dialect: to an unsigned fixed-width integer, or from `f32` (saturating)
+    let name = if mir.layout.raw_unsigned(to) { "llvm.fptoui.sat" } else { "llvm.fptosi.sat" }
+    let (f, fty) = intrinsic(g, name, [tt, ft])
+    llvm.builder.build_call2(b, fty, f, [v], "")
   } else if fk == int_k && tk == dbl_k {
     if signed {
       llvm.builder.build_si_to_fp(b, v, tt, "")
@@ -1107,7 +1123,7 @@ pub fn ex(g: var Gen, e: mir.Ex): V uses ffi = match e.k {
           )
           bool8(g, z)
         }
-        Neg => if llvm.values.type_of(v) == g.t_f64 {
+        Neg => if llvm.values.type_of(v) == g.t_f64 || llvm.values.type_of(v) == g.t_f32 {
           llvm.builder.build_fneg(g.b, v, "")
         } else {
           llvm.builder.build_neg(g.b, v, "")
@@ -1190,13 +1206,14 @@ fn bin(g: var Gen, op: mir.BOp, a: mir.Ex, b: mir.Ex): llvm.Value uses ffi {
   let y0 = val(&g, b)
   let y = convert(&g, y0, b.ty, a.ty)
   let bld = g.b
-  if llvm.values.type_of(x) == g.t_f64 {
+  if llvm.values.type_of(x) == g.t_f64 || llvm.values.type_of(x) == g.t_f32 {
     let cmp = (p: int) => bool8(g, llvm.builder.build_fcmp(bld, p, x, y, ""))
     return match op {
       Add => llvm.builder.build_fadd(bld, x, y, "")
       Sub => llvm.builder.build_fsub(bld, x, y, "")
       Mul => llvm.builder.build_fmul(bld, x, y, "")
       Div => llvm.builder.build_fdiv(bld, x, y, "")
+      Rem => llvm.builder.build_f_rem(bld, x, y, "")
       Eq => cmp(llvm.REAL_OEQ)
       Ne => cmp(llvm.REAL_UNE)
       Lt => cmp(llvm.REAL_OLT)
@@ -1209,7 +1226,7 @@ fn bin(g: var Gen, op: mir.BOp, a: mir.Ex, b: mir.Ex): llvm.Value uses ffi {
   let unsigned = match a.ty {
     U8 | U16 | U32 | U64 | Ptr(_) | CStr | Code => true
     D(Char) => true
-    _ => false
+    t => mir.layout.raw_unsigned(t)
   }
   let cc = (s: int, u: int) => if unsigned { u } else { s }
   let cmp = (p: int) => bool8(g, llvm.builder.build_icmp(bld, p, x, y, ""))
@@ -1230,11 +1247,20 @@ fn bin(g: var Gen, op: mir.BOp, a: mir.Ex, b: mir.Ex): llvm.Value uses ffi {
       f(bld, x, y, "")
     }
   }
+  // the runtime's dialect: the shift amount modulo the width (no poison)
+  let amount = () => {
+    let w = llvm.ir.get_int_type_width(llvm.values.type_of(x))
+    llvm.builder.build_and(bld, y, llvm.values.const_int(llvm.values.type_of(x), w - 1, 0), "")
+  }
+  let raw_u = mir.layout.raw_unsigned(a.ty)
   match op {
     Add => arith(llvm.builder.build_add)
     Sub => arith(llvm.builder.build_sub)
     Mul => arith(llvm.builder.build_mul)
-    Div => arith(llvm.builder.build_sdiv)
+    Div => if raw_u { llvm.builder.build_u_div(bld, x, y, "") } else { arith(llvm.builder.build_sdiv) }
+    Rem => if raw_u { llvm.builder.build_u_rem(bld, x, y, "") } else { llvm.builder.build_s_rem(bld, x, y, "") }
+    Shl => llvm.builder.build_shl(bld, x, amount(), "")
+    Shr => if raw_u { llvm.builder.build_l_shr(bld, x, amount(), "") } else { llvm.builder.build_a_shr(bld, x, amount(), "") }
     BitAnd => arith(llvm.builder.build_and)
     BitOr => arith(llvm.builder.build_or)
     BitXor => arith(llvm.builder.build_xor)
@@ -1464,7 +1490,7 @@ fn c_result(
       } else {
         for k in 0..ws.len() {
           let v = llvm.builder.build_extract_value(g.b, c, k, "")
-          let at = gep(g, a, k * 8)
+          let at = gep(g, a, word_off(ws[k], k))
           store(g, v, at)
         }
       }

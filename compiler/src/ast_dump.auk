@@ -101,7 +101,12 @@ fn item_dump(it: ast.Item): str = match it {
   }
   Struct(d) => {
     let fields = jn(d.fields, f => "({f.name.name} {ast.type_dump(f.ty)})")
-    "({vis(d.public)}struct {d.name.name}{generics_dump(d.generics)} {fields})"
+    let kw = match d.raw {
+      1 => "raw struct"
+      2 => "raw union"
+      _ => "struct"
+    }
+    "({vis(d.public)}{kw} {d.name.name}{generics_dump(d.generics)} {fields})"
   }
   Enum(d) => {
     let vs = jn(d.variants, v => {

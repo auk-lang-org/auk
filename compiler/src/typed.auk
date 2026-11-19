@@ -72,10 +72,16 @@ pub enum FnKind {
   Intrinsic(which: Intrinsic, item: int),
 }
 
-/// Compiler intrinsics declared in the prelude with an `@` symbol.
-pub enum Intrinsic { Show, Eq, Cmp, ToValue, FromValue, Some, Fail, IntToFloat, CharToInt }
+/// Compiler intrinsics declared in the prelude with an `@` symbol. `Raw(name)`: `@raw_<name>`,
+/// the runtime's dialect (compiler/prelude/raw.auk).
+pub enum Intrinsic { Show, Eq, Cmp, ToValue, FromValue, Some, Fail, IntToFloat, CharToInt, Raw(name: str) }
 
-pub fn intrinsic_from_symbol(s: str): Intrinsic? = match s {
+pub fn intrinsic_from_symbol(s: str): Intrinsic? = match s.strip_prefix("@raw_") {
+  some(n) => Intrinsic.Raw(n)
+  none => builtin_intrinsic(s)
+}
+
+fn builtin_intrinsic(s: str): Intrinsic? = match s {
   "@show" => Intrinsic.Show
   "@eq" => Intrinsic.Eq
   "@cmp" => Intrinsic.Cmp
@@ -99,6 +105,13 @@ pub fn intrinsic_name(i: Intrinsic): str = match i {
   Fail => "Fail"
   IntToFloat => "IntToFloat"
   CharToInt => "CharToInt"
+  Raw(n) => "Raw({n})"
+}
+
+/// What a node of the runtime's dialect does (docs/lowlevel.md), beyond its call.
+pub enum RawNode {
+  /// `u8(x)`, `int(x)`, `bool(x)`, ...: a numeric conversion to `to`.
+  Conv(to: types.Ty),
 }
 
 pub struct ConstInfo {
@@ -186,6 +199,8 @@ pub struct Tables {
   err_payload_pats: {int: types.Ty},
   /// Interpolation parts whose value has a unit of measure: the unit's text.
   units: {int: str},
+  /// Nodes of the runtime's dialect (conversions, ...).
+  raw: {int: RawNode},
 }
 
 pub fn new_tables(): Tables = Tables {
@@ -211,6 +226,7 @@ pub fn new_tables(): Tables = Tables {
   value_map_pats: {},
   err_payload_pats: {},
   units: {},
+  raw: {},
 }
 
 pub enum Coercion {

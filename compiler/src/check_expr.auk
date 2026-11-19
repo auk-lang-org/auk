@@ -321,6 +321,10 @@ pub fn mismatch(c: var check.Checker, e: ast.Expr, have: types.Ty, want: types.T
 pub fn expr_inner(c: var check.Checker, e: ast.Expr, exp: check.Exp): types.Ty {
   match e.kind {
     Lit(l) => {
+      match raw_lit(&c, e, l, false, check.exp_ty(exp)) {
+        some(t) => return t
+        none => {}
+      }
       let t = c.lit(e, l, false)
       c.zero_takes_unit(e, t, check.exp_ty(exp))
     }
@@ -643,6 +647,69 @@ pub fn lit(c: var check.Checker, e: ast.Expr, l: ast.Lit, negated: bool): types.
   Bool(_) => types.Ty.Bool
   Char(_) => types.Ty.Char
   Str(_) => types.Ty.Str
+}
+
+/// The runtime's dialect: an integer literal where a fixed-width integer is expected has that
+/// type (it must fit), a float literal where `f32` is expected is an `f32`.
+pub fn raw_lit(c: var check.Checker, e: ast.Expr, l: ast.Lit, negated: bool, want: types.Ty?): types.Ty? {
+  let w = want else return none
+  let k = match c.shallow(w) {
+    Fixed(k) => k
+    _ => return none
+  }
+  match l {
+    Int(n) => if k == types.Fx.F32 { return none } else {
+      let bits = types.fx_bits(k)
+      let min = -9223372036854775807 - 1
+      // `n` holds a u64's bits
+      let fits = if types.fx_signed(k) {
+        if negated {
+          (n >= 0 && (bits == 64 || n <= 1 << (bits - 1))) || n == min
+        } else {
+          n >= 0 && (bits == 64 || n < 1 << (bits - 1))
+        }
+      } else {
+        (!negated || n == 0) && (bits == 64 || (n >= 0 && n < 1 << bits))
+      }
+      if !fits {
+        let sign = if negated { "-" } else { "" }
+        c.err(diag.new("E0210", e.span, "the integer literal {sign}{token.uint_str(n)} doesn't fit in a `{types.fx_name(k)}`"))
+      }
+      types.Ty.Fixed(k)
+    }
+    Float(_) => if k == types.Fx.F32 { types.Ty.Fixed(k) } else { none }
+    _ => none
+  }
+}
+
+/// `u8(x)`, `i64(x)`, ... and `int(x)`, `float(x)`, `bool(x)` of a fixed-width number (in the
+/// runtime package): a conversion (truncating or extending, by the source's sign). `none`
+/// when the call isn't one (then its argument has been inferred: pass it as `ArgSrc.Recv`).
+pub fn raw_conv(c: var check.Checker, e: ast.Expr, n: str, arg: ast.Expr): types.Ty? {
+  let to = match types.fx_of(n) {
+    some(k) => types.Ty.Fixed(k)
+    none => match n {
+      "int" => types.Ty.Int
+      "float" => types.Ty.Float
+      "bool" => types.Ty.Bool
+      _ => return none
+    }
+  }
+  let t = c.infer(arg, none)
+  let from = c.resolve(t)
+  if !(to is types.Ty.Fixed(_)) && !(from is types.Ty.Fixed(_)) { return none }
+  let ok = match from {
+    Int | Float | Bool | Char | Fixed(_) | Error | Never => true
+    _ => false
+  }
+  if !ok {
+    c.err(
+      diag.new("E0260", arg.span, "can't convert `{c.show(t)}` to `{c.show(to)}`")
+        .note("conversions are between numbers (`int`, `float`, the fixed-width types), `bool` and `char`"),
+    )
+  }
+  c.cx.t.raw[e.id] = typed.RawNode.Conv(to)
+  to
 }
 
 /// A literal `0` / `0.0` where a number with a unit is expected takes that unit (zero is
@@ -1096,6 +1163,16 @@ pub fn call_expr(c: var check.Checker, e: ast.Expr, callee: ast.Expr, args: [ast
         c.cx.olds.push(args[0].id)
         return t
       }
+      let m = c.cur_module()
+      if args.len() == 1 && c.prog.raw_ok(m) && c.fns_in(m, m, n).len() == 0 {
+        let is_conv = types.fx_of(n) != none || n == "int" || n == "float" || n == "bool"
+        if is_conv {
+          match raw_conv(&c, e, n, args[0]) {
+            some(t) => return t
+            none => return c.named_call(e, callee, n, [check.ArgSrc.Recv(args[0])], exp, direct)
+          }
+        }
+      }
       return c.named_call(e, callee, n, srcs, exp, direct)
     }
     Field(_, _) => match visit.as_path(callee) {
@@ -1418,6 +1495,10 @@ pub fn method_tiers(c: check.Checker, t: types.Ty): [int] {
     Named(d, _) => {
       let home = c.defs.types[d].module
       if !tiers.contains(home) { tiers.push(home) }
+    }
+    Ptr(_) | CFn(_, _) | Fixed(_) => match c.prog.raw_module() {
+      some(r) => if !tiers.contains(r) { tiers.push(r) }
+      none => {}
     }
     _ => {}
   }

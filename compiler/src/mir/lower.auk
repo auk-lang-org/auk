@@ -250,8 +250,10 @@ fn has_coercions(lw: var Lower, id: int): bool = match lw.t.coercions.get(id) {
   none => false
 }
 
-/// A cancellation point at the top of every iteration of a user loop.
+/// A cancellation point at the top of every iteration of a user loop (none in `uses raw` code:
+/// the runtime's own loops).
 fn cancel_point(lw: var Lower, span: diag.Span) {
+  if mir.lower.lowlevel.raw_fn(&lw) { return }
   let pending = mir.rt_global("auk_cancel_pending", ty_int()).deref(ty_int())
   lw.open_if(mir.bin(mir.BOp.Ne, pending, mir.int_(0)))
   let l = lw.loc(span)
@@ -1302,7 +1304,10 @@ pub fn coerce(lw: var Lower, v0: Val, cs: [typed.Coercion], node: int): Val {
 }
 
 fn expr_inner(lw: var Lower, e: ast.Expr, tail: bool): Val = match e.kind {
-  Lit(l) => lw.lit(l, false)
+  Lit(l) => match lw.ty(e.id) {
+    Fixed(k) => mir.lower.lowlevel.fixed_lit(l, false, types.Ty.Fixed(k))
+    _ => lw.lit(l, false)
+  }
   // units are erased: the literal's value
   Measured(x, _) => lw.expr_inner(x, tail)
   Interp(parts) => lw.interp(parts)
@@ -1355,18 +1360,23 @@ fn expr_inner(lw: var Lower, e: ast.Expr, tail: bool): Val = match e.kind {
     }
     BitNot => {
       let v = lw.expr(x)
+      if v.ty is types.Ty.Fixed(_) { return lw.tmp(v.ty, mir.lower.lowlevel.fixed_un(mir.UOp.BitNot, v.c, v.ty)) }
       let c = mir.ex(mir.K.Un(mir.UOp.BitNot, v.c), ty_int())
       lw.tmp(types.Ty.Int, c)
     }
     Neg => {
       match x.kind {
         Lit(l) => match l {
-          Int(_) | Float(_) => return lw.lit(l, true)
+          Int(_) | Float(_) => return match lw.ty(x.id) {
+            Fixed(k) => mir.lower.lowlevel.fixed_lit(l, true, types.Ty.Fixed(k))
+            _ => lw.lit(l, true)
+          }
           _ => {}
         }
         _ => {}
       }
       let v = lw.expr(x)
+      if v.ty is types.Ty.Fixed(_) { return lw.tmp(v.ty, mir.lower.lowlevel.fixed_un(mir.UOp.Neg, v.c, v.ty)) }
       if v.ty == types.Ty.Int {
         let lc = lw.loc(e.span)
         let c = mir.rt("auk_neg", [v.c, lc], ty_int())
@@ -1671,6 +1681,10 @@ fn name_ref(lw: var Lower, e: ast.Expr): Val {
 fn call(lw: var Lower, e: ast.Expr, first0: Val?, tail: bool): Val {
   match lw.t.fails.get(e.id) {
     some(k) => return lw.fail(e, k)
+    none => {}
+  }
+  match lw.t.raw.get(e.id) {
+    some(n) => return mir.lower.lowlevel.raw_node(&lw, e, n)
     none => {}
   }
   match e.kind {
@@ -2074,6 +2088,7 @@ fn intrinsic(lw: var Lower, which: typed.Intrinsic, ty: types.Ty, args: [ArgV], 
       lw.tmp(types.Ty.Int, c)
     }
     Fail => val_never()
+    Raw(n) => mir.bug("raw intrinsic `{n}` outside a call")
   }
 }
 
@@ -2380,6 +2395,11 @@ fn binary(lw: var Lower, e: ast.Expr, op: ast.BinOp, l: ast.Expr, r: ast.Expr): 
       let c = int_op(op, a, b, lc)
       lw.tmp(types.Ty.Int, c)
     }
+    Fixed(k) => {
+      let t = types.Ty.Fixed(k)
+      let c = mir.lower.lowlevel.fixed_bin(&lw, op, a, b, t)
+      lw.tmp(t, c)
+    }
     Float => {
       let c = match op {
         Add => mir.bin(mir.BOp.Add, a, b)
@@ -2446,7 +2466,7 @@ fn compare(lw: var Lower, e: ast.Expr, op: ast.BinOp, l: Val, r: Val): mir.Ex {
     _ => mir.BOp.Ge
   }
   match ty {
-    Int | Float | Char | Bool => mir.bin(bop, a, b)
+    Int | Float | Char | Bool | Fixed(_) | Ptr(_) | CFn(_, _) => mir.bin(bop, a, b)
     Str => match op {
       Eq => mir.rt("auk_str_eq", [a, b], ty_bool())
       Ne => mir.rt("auk_str_eq", [a, b], ty_bool()).not()
@@ -2821,6 +2841,10 @@ fn assign(lw: var Lower, e: ast.Expr, op: ast.BinOp?, target: ast.Expr, value: a
       match lty {
         Int => {
           let c = int_op(op, lv, rc, lc)
+          lw.set(lv, c)
+        }
+        Fixed(_) => {
+          let c = mir.lower.lowlevel.fixed_bin(&lw, op, lv, rc, lty)
           lw.set(lv, c)
         }
         Float => {

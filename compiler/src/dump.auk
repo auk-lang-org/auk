@@ -260,6 +260,10 @@ fn ty(out: var [str], d: int, t: ast.Type) {
       line(&out, d, "{head} list")
       ty(&out, d + 1, e)
     }
+    Array(e, n) => {
+      line(&out, d, "{head} array {n}")
+      ty(&out, d + 1, e)
+    }
     Map(k, v) => {
       line(&out, d, "{head} map")
       ty(&out, d + 1, k)
@@ -803,7 +807,7 @@ fn ty_paths(t: ast.Type, acc: var [[ast.Ident]]) {
       qualifier(path, &acc)
       for a in args { ty_paths(a, &acc) }
     }
-    List(x) | Optional(x) | Any(x) | Var(x) => ty_paths(x, &acc)
+    List(x) | Optional(x) | Any(x) | Var(x) | Array(x, _) => ty_paths(x, &acc)
     Measured(b, _) => ty_paths(b, &acc)
     Map(k, v) => {
       ty_paths(k, &acc)

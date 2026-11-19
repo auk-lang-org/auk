@@ -468,6 +468,20 @@ fn item(p: var Parser): Raw!diag.Fail {
     }
     if ok { return extern_item(&p, doc, public, start) }
   }
+  // the runtime's dialect (docs/lowlevel.md): `raw struct`, `raw union`
+  if p.peek() == token.Ident("raw") {
+    let k = match p.peek_at(1) {
+      Struct => 1
+      Ident(n) when n == "union" => 2
+      _ => 0
+    }
+    if k > 0 {
+      p.bump()
+      var d = struct_def(&p, doc, public, start)?
+      d.raw = k
+      return RItem(ast.Item.Struct(d))
+    }
+  }
   match p.peek() {
     Fn => RClause(fn_clause(&p, doc, public, start)?)
     Async => RClause(fn_clause(&p, doc, public, start)?)
@@ -705,7 +719,7 @@ fn struct_def(p: var Parser, doc: str?, public: bool, start: diag.Span): ast.Str
     fields.push(r?)
     if p.list_sep(token.RBrace, "field")? { break }
   }
-  ast.StructDef { id: p.id(), span: start.to(p.prev), name, doc, public, generics, fields }
+  ast.StructDef { id: p.id(), span: start.to(p.prev), name, doc, public, generics, fields, raw: 0 }
 }
 
 fn field_def(p: var Parser): ast.FieldDef!diag.Fail {
@@ -802,8 +816,24 @@ fn ty(p: var Parser): ast.Type!diag.Fail {
     LBracket => {
       p.bump()
       let t = nested_ty(&p)?
-      p.expect(token.RBracket, "to close the list type")?
-      ast.TypeKind.List(t)
+      if p.eat(token.Semi) {
+        // `[T; N]` / `[T; ..]`: a C array (the lexer makes `;` a token only here)
+        let n = match p.peek() {
+          Int(n) => {
+            p.bump()
+            n
+          }
+          _ => {
+            p.expect(token.DotDot, "the array length")?
+            -1
+          }
+        }
+        p.expect(token.RBracket, "to close the array type")?
+        ast.TypeKind.Array(t, n)
+      } else {
+        p.expect(token.RBracket, "to close the list type")?
+        ast.TypeKind.List(t)
+      }
     }
     LBrace => {
       p.bump()

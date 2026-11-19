@@ -184,6 +184,7 @@ pub let CODES: [(str, str)] = [
   ("E0414", "unknown effect"),
   ("E0415", "conversion to `any Shape` exceeds the shape method's effects"),
   ("E0418", "`raw` is only for the runtime"),
+  ("E0419", "a reference-counted type in `uses raw` code or a raw struct"),
   ("E0420", "imprint panicked at compile time"),
 ]
 

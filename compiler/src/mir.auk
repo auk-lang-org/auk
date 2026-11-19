@@ -85,7 +85,9 @@ pub enum RtF {
 
 pub enum UOp { Not, Neg, BitNot }
 
-pub enum BOp { Add, Sub, Mul, Div, BitAnd, BitOr, BitXor, Eq, Ne, Lt, Le, Gt, Ge }
+/// `Rem`, `Shl`, `Shr` only on the runtime dialect's fixed-width numbers (a shift amount is
+/// taken modulo the width; `Div`/`Rem`/`Shr`/comparisons are unsigned on its unsigned types).
+pub enum BOp { Add, Sub, Mul, Div, BitAnd, BitOr, BitXor, Eq, Ne, Lt, Le, Gt, Ge, Rem, Shl, Shr }
 
 /// A function reference.
 pub enum FRef {

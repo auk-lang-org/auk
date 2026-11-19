@@ -134,13 +134,24 @@ pub fn unary(c: var check.Checker, e: ast.Expr, op: ast.UnOp, x: ast.Expr, exp: 
       types.Ty.Bool
     }
     BitNot => {
-      let t = c.infer(x, types.Ty.Int)
-      if c.bit_operand(x, t, "~", true) { types.Ty.Int } else { types.Ty.Error }
+      let t = c.infer(x, raw_hint(c, exp, types.Ty.Int))
+      if c.bit_operand(x, t, "~", true) { int_or_fixed(c, t) } else { types.Ty.Error }
     }
     Neg => {
       var t = types.Ty.Error
       var done = false
-      match x.kind {
+      match check_expr.raw_lit(&c, x, match x.kind {
+        Lit(l) => l
+        _ => ast.Lit.Bool(false)
+      }, true, check.exp_ty(exp)) {
+        some(rt) => {
+          t = rt
+          c.record(x.id, t)
+          done = true
+        }
+        none => {}
+      }
+      if !done { match x.kind {
         Lit(l) => match l {
           Int(_) | Float(_) => {
             t = c.lit(x, l, true)
@@ -150,10 +161,10 @@ pub fn unary(c: var check.Checker, e: ast.Expr, op: ast.UnOp, x: ast.Expr, exp: 
           _ => {}
         }
         _ => {}
-      }
+      } }
       if !done { t = c.infer(x, check.exp_ty(exp)) }
       match c.shallow(t) {
-        Int | Float | Measured(_, _) | Error => t
+        Int | Float | Measured(_, _) | Error | Fixed(_) => t
         Var(_) => c.cant_infer(x.span, "the negated value")
         _ => {
           c.err(diag.new("E0260", e.span, "can't negate a `{c.show(t)}`").note("`-x` works on `int` and `float`"))
@@ -185,8 +196,14 @@ pub fn binary(c: var check.Checker, e: ast.Expr, op: ast.BinOp, l: ast.Expr, r: 
     }
     BitAnd | BitOr | BitXor | Shl | Shr => {
       // one error is enough: `x | true` on a bool reports the left side only
-      let lt = c.infer(l, types.Ty.Int)
+      let lt = c.infer(l, raw_hint(c, exp, types.Ty.Int))
       let ok = c.bit_operand(l, lt, op.symbol(), true)
+      if types.is_fixed_int(c.shallow(lt)) {
+        // the runtime's dialect: both sides of the same fixed-width type
+        let rt = c.infer(r, lt)
+        if ok { c.operand_with(r, lt, rt, op, l) }
+        return lt
+      }
       let rt = c.infer(r, types.Ty.Int)
       if ok && c.bit_operand(r, rt, op.symbol(), true) { types.Ty.Int } else { types.Ty.Error }
     }
@@ -196,9 +213,19 @@ pub fn binary(c: var check.Checker, e: ast.Expr, op: ast.BinOp, l: ast.Expr, r: 
 
 /// An operand of `& | ^ << >> ~` (already inferred as `t`): a plain `int`. A unit is
 /// E0293 (with an `int(x)` fix when `fix`), anything else E0260. False after an error.
+/// The expected type when it is a fixed-width number (the runtime's dialect), else `dflt`.
+fn raw_hint(c: check.Checker, exp: check.Exp, dflt: types.Ty): types.Ty = match check.exp_ty(exp) {
+  some(t) => if c.shallow(t) is types.Ty.Fixed(_) { t } else { dflt }
+  none => dflt
+}
+
+fn int_or_fixed(c: check.Checker, t: types.Ty): types.Ty =
+  if types.is_fixed_int(c.shallow(t)) { t } else { types.Ty.Int }
+
 pub fn bit_operand(c: var check.Checker, x: ast.Expr, t: types.Ty, op: str, fix: bool): bool {
   match c.shallow(t) {
     Int | Never => true
+    Fixed(k) when k != types.Fx.F32 => true
     Error => false
     Var(_) => {
       if c.unify(t, types.Ty.Int) { return true }
@@ -248,7 +275,7 @@ pub fn compare(c: var check.Checker, e: ast.Expr, op: ast.BinOp, t: types.Ty, sh
   let args = [typed.Arg { node: l.id, by_ref: false }, typed.Arg { node: r_.id, by_ref: false }]
   let r = c.resolve(t)
   let ord = shape == c.b.ord
-  if check_expr.is_prim(r) || r.has_error() || r == types.Ty.Never { return }
+  if check_expr.is_prim(r) || r.has_error() || r == types.Ty.Never || types.is_raw_scalar(r) { return }
   if r.has_vars() {
     let _ = c.cant_infer(e.span, "the operands of `{op.symbol()}`")
     return
@@ -326,6 +353,14 @@ pub fn arith(c: var check.Checker, e: ast.Expr, op: ast.BinOp, l: ast.Expr, r: a
     }
     Sub | Mul | Div | Rem | Pow => is_int_float(ls)
     AddWrap | SubWrap | MulWrap => ls == types.Ty.Int
+    _ => false
+  } || match ls {
+    // the runtime's dialect: fixed-width numbers (integers wrap)
+    Fixed(k) => match op {
+      Add | Sub | Mul | Div | Rem => true
+      AddWrap | SubWrap | MulWrap => k != types.Fx.F32
+      _ => false
+    }
     _ => false
   }
   if ok_prim {
@@ -1720,11 +1755,27 @@ pub fn assign(c: var check.Checker, e: ast.Expr, op: ast.BinOp?, target: ast.Exp
   if bits {
     let sym = "{o.symbol()}="
     let ok = c.bit_operand(target, t, sym, false)
+    if types.is_fixed_int(c.shallow(t)) {
+      let rt = c.infer(value, t)
+      if ok { c.operand_with(value, t, rt, o, target) }
+      return
+    }
     let rt = c.infer(value, types.Ty.Int)
     if ok { let _ = c.bit_operand(value, rt, sym, true) }
     return
   }
   let ts = c.shallow(t)
+  if ts is types.Ty.Fixed(_) {
+    // the runtime's dialect: `+= -= *= /= %=` on a fixed-width number
+    match o {
+      Add | Sub | Mul | Div | Rem => c.check_operand(value, t, o, target)
+      _ => {
+        c.err(diag.new("E0260", e.span, "can't apply `{o.symbol()}=` to `{c.show(t)}`"))
+        let _ = c.infer(value, none)
+      }
+    }
+    return
+  }
   let ok = match o {
     Add => match ts {
       Int | Float | Str | List(_) => true
@@ -1914,6 +1965,13 @@ pub fn struct_lit(c: var check.Checker, e: ast.Expr, path: [ast.Ident], fields: 
       var missing: [str] = []
       for i, f in defs {
         if !given[i] { missing.push(f.name) }
+      }
+      if types.is_raw_def(c.defs, d) {
+        // the runtime's dialect: the fields not given are zero (C's `{0}`); a union takes one
+        if types.is_union(c.defs, d) && defs.len() - missing.len() > 1 {
+          c.err(diag.new("E0224", e.span, "a `raw union` literal gives one field"))
+        }
+        missing = []
       }
       if missing.len() > 0 {
         let list = missing.map(x => "`{x}`").join(", ")

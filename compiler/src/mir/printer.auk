@@ -144,6 +144,18 @@ fn dt(pr: var Printer, t: types.Ty): str {
     Map(_, _) => return "AukMap *"
     Fn(_, _) => return "AukClosure"
     Task(_) => return "AukTask *"
+    Fixed(k) => return match k {
+      I8 => "int8_t"
+      I16 => "int16_t"
+      I32 => "int32_t"
+      I64 | Isize => "int64_t"
+      U8 => "uint8_t"
+      U16 => "uint16_t"
+      U32 => "uint32_t"
+      U64 | Usize => "uint64_t"
+      F32 => "float"
+    }
+    Ptr(_) | CFn(_, _) => return "void *"
     _ => {}
   }
   if mir.types.is_value(info, t) { return "AukValue" }
@@ -223,7 +235,8 @@ fn define(pr: var Printer, t: types.Ty): str {
             body.push("    {c} f{i};\n")
           }
           if body.len() == 0 { body.push("    AukUnit dummy;\n") }
-          pr.types.push("/* {show} */\ntypedef struct {name} {{\n{body.join("")}}} {name};\n")
+          let kw = if types.is_union(info.defs, d) { "union" } else { "struct" }
+          pr.types.push("/* {show} */\ntypedef {kw} {name} {{\n{body.join("")}}} {name};\n")
           name
         }
         Enum(_) => {
@@ -251,6 +264,13 @@ fn define(pr: var Printer, t: types.Ty): str {
     Any(_) => {
       let name = "DkAny{k}"
       pr.types.push("typedef struct {name} {{\n    AukObj *f0;\n    const void *f1;\n}} {name};\n")
+      name
+    }
+    Array(x, n) => {
+      let name = "DkArr{k}"
+      let c = dt(&pr, x)
+      let len = if n < 0 { "" } else { "{n}" }
+      pr.types.push("/* {show} */\ntypedef struct {name} {{\n    {c} a[{len}];\n}} {name};\n")
       name
     }
     _ => mir.bug("c: can't define {mir.types.show_ty(info, t)}")
@@ -519,6 +539,9 @@ fn ex(pr: var Printer, e: mir.Ex): str = match e.k {
       Le => "<="
       Gt => ">"
       Ge => ">="
+      Rem => "%"
+      Shl => "<<"
+      Shr => ">>"
     }
     if int && (op == mir.BOp.Add || op == mir.BOp.Sub || op == mir.BOp.Mul) {
       // wrapping integer arithmetic

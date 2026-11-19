@@ -120,6 +120,27 @@ fn is_at(lx: Lexer, n: int, c: char): bool =
 
 fn at_end(lx: Lexer): bool = lx.pos >= lx.chars.len()
 
+/// After a `;`: the rest of an array type, ` N]` or ` ..]` (docs/lowlevel.md)? Anywhere else
+/// a `;` is E0011.
+fn array_len_ahead(lx: Lexer): bool {
+  var k = 0
+  while lx.peek_at(k) == some(' ') { k += 1 }
+  if lx.is_at(k, '.') && lx.is_at(k + 1, '.') {
+    k += 2
+  } else {
+    let k0 = k
+    while k < 20 {
+      match lx.peek_at(k) {
+        some(c) when c >= '0' && c <= '9' => k += 1
+        _ => break
+      }
+    }
+    if k == k0 { return false }
+  }
+  while lx.peek_at(k) == some(' ') { k += 1 }
+  lx.is_at(k, ']')
+}
+
 fn bump(lx: var Lexer): char? {
   if lx.pos >= lx.chars.len() { return none }
   let c = lx.chars[lx.pos]
@@ -252,6 +273,7 @@ fn token(lx: var Lexer, start: diag.Span): token.Tok!diag.Fail {
     '{' => token.LBrace
     '}' => token.RBrace
     ',' => token.Comma
+    ';' when lx.array_len_ahead() => token.Semi
     ';' => {
       let span = lx.from(start)
       fail(
