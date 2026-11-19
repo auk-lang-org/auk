@@ -193,7 +193,7 @@ The four moved the same way as the pilot (`runtime/src/copy.auk`, `heap.auk` wit
    and `copy.auk` exist, a local `heap` or `copy` followed by `.` is refused in every module of
    the package. heap.c's `heap` locals are `hp`; copy.c's `copy` function-pointer locals `cp`.
    Every future module name (`str`, `map`, `arr`, `task`, …) takes the name from locals.
-2. **`if` with a literal first arm is `int`:** `let cap = if c.cap == 0 { 8 } else { c.cap * 2 }`
+2. **Fixed** (2026-11-19: the literal takes the other arm's type): **`if` with a literal first arm is `int`:** `let cap = if c.cap == 0 { 8 } else { c.cap * 2 }`
    is E0200 (`int` vs `i64`): the literal doesn't take the other arm's type. Annotate the local
    (`let cap: i64 = …`).
 3. **Fixed** (2026-11-19, lowlevel.md 7a "Uninitialized locals": `var x: T`; catch, arr, map, chan, str and str_fmt's integer paths use it): **No fixed-array locals:** `char buf[32]` (ffi.c's messages and `"0x"` buffer) is a local of

@@ -1411,11 +1411,29 @@ pub fn if_expr(c: var check.Checker, cond: ast.Expr, then: ast.Block, els: ast.E
       w
     }
     _ => {
+      // the runtime's dialect: a number literal in the first arm takes the other arm's type
+      // (`if c.n == 0 { 8 } else { c.n * 2 }` with a `u32` `c.n`), as `1 + x` does
+      if c.prog.raw_ok(c.cur_module()) && lit_arm(then) {
+        let et = c.expr(ee, exp)
+        if c.shallow(et) == types.Ty.Never { return c.block(then, exp) }
+        let _ = c.block(then, check.Exp.Check(et))
+        return et
+      }
       let tt = c.block(then, exp)
       if c.shallow(tt) == types.Ty.Never { return c.expr(ee, exp) }
       let _ = c.check(ee, tt)
       tt
     }
+  }
+}
+
+/// Is the block just an integer literal (`{ 8 }`, `{ -1 }`)?
+fn lit_arm(b: ast.Block): bool {
+  if b.stmts.len() != 1 { return false }
+  match b.stmts[0].kind {
+    Lit(Int(_)) => true
+    Unary(Neg, x) => x.kind is ast.ExprKind.Lit(ast.Lit.Int(_))
+    _ => false
   }
 }
 
