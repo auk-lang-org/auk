@@ -20,7 +20,6 @@ extern fn auk_str_byte_len(s: raw.Ptr<abi.Str>): i64 = "int64_t auk_str_byte_len
 extern fn auk__fmt_i64(out: raw.Ptr<u8>, v: i64): i32 = "int auk__fmt_i64(char *, int64_t)"
 extern fn auk_env_set_args(argc: i32, argv: raw.Ptr<raw.Ptr<u8>>) = "void auk_env_set_args(int, char **)"
 extern fn auk_env_args(): raw.Ptr<abi.Arr> = "void *auk_env_args(void)"
-extern fn auk__gui_host_main(): i32 = "int auk__gui_host_main(void)"
 extern fn auk__trace_peek(loc: raw.Ptr<u8>, src_text: raw.Ptr<u8>, shown: raw.Ptr<abi.Str>) =
   "void auk__trace_peek(const char *, const char *, const void *)"
 extern fn auk__trace_tail_mode(): bool = "bool auk__trace_tail_mode(void)"
@@ -349,7 +348,7 @@ fn run_main(p: raw.Ptr<()>) uses raw {
 export fn auk_main_wrapper(argc: i32, argv: raw.Ptr<raw.Ptr<u8>>, user_main: raw.Fn<(raw.Ptr<abi.Arr>) => abi.ResInt>): i32 uses raw, ffi {
   // started by a `gui.open` of this same program to own its windows (gui_host)
   if !getenv("AUK_GUI_HOST").is_null() {
-    return auk__gui_host_main()
+    return gui_host.auk__gui_host_main()
   }
   auk_env_set_args(argc, argv)
   // on a thread with a big stack, where an overflow is a panic
