@@ -756,7 +756,9 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       tables are `export var`s; retain/release keep the C's atomics; `s += x` now even with C
       and push 0.8x, the boundary costs gone; runtime-port.md, "Found porting `rc.c` and
       `task.c`"). `cwrap` (2026-11-19: deleted; its callers call the varargs functions
-      directly; runtime-port.md, "Found porting `cwrap.c`"). Next: `trace`, `dbg`.
+      directly; runtime-port.md, "Found porting `cwrap.c`"). `trace` (2026-11-20: the crash
+      handler stays behind the overflow handler; a traced call costs the same as in C;
+      runtime-port.md, "Found porting `trace.c`"). Next: `dbg`.
 - [ ] `auk_rt.bc` is produced by the Auk compiler; `libauk_rt.a` via LLVM's archive writer.
 - [ ] Same C tests (called through `export fn`), then rewrite them as Auk tests. The first
       half holds for the ported modules (`run.sh` links the Auk half).
