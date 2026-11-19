@@ -267,13 +267,14 @@ More of what the dialect lacks (the pilot's list above still holds; 3, 4, 5 were
    for `len_bytes`), where the struct is 8-aligned: harmless on arm64, worth fixing in codegen.
 
 **Performance** (Apple M-series, the machine shared with other builds, load 30–80: so CPU
-cycles from `/usr/bin/time -l`, A/B interleaved, ≥9 runs each; an A/A control spread ±1.5% on
-medians): bench/perf `strings` −1%, `hashmap` 0%, `sort` 0%, `trees` 0%; a micro-benchmark of
-hot string ops: `concat` +2%, `interp` −5%, `slice` +1%, `chars` +3%/0%, `split` +1%, `find`
-+1%, int to str and back 0%, float to str 0%, `upper`/`lower`/`trim` +2%/−3%, `auk check` of the
-compiler −1%. Two are slower, both at the C/Auk boundary, and both go when the C callee moves to
-Auk (one module: Auk calls Auk inline):
-- **`s += x` (`auk_str_append`) +6–13% cycles, +4% instructions:** in C's one translation unit
+cycles from `/usr/bin/time -l`, A/B interleaved, 11–15 runs each, medians; an A/A control spread
+±1.5% on medians; instructions retired where it decided): bench/perf `strings` −1%, `hashmap`
+−2%, `sort` +1%, `trees` 0%; a micro-benchmark of hot string ops: `concat` −2%, `interp` −3%,
+`slice` +2%, `chars` −2%, `split` −1%, `find` +2–3% (+1.3% instructions), int to str and back
++0–5% (+1.8% instructions: the zeroed digit buffer, 11), float to str 0%, `upper`/`lower`/`trim`
+0%, `auk check` of the compiler −1%. Slower beyond the noise, both at the C/Auk boundary, and
+both go when the C callee moves to Auk (one module: Auk calls Auk inline):
+- **`s += x` (`auk_str_append`) +9% cycles (+6–13% over the runs), +4% instructions:** in C's one translation unit
   `auk__heap_usable` (heap.c) inlined into it as a `malloc_size` call; from Auk it is a call into
   C that makes the call. Measured: with `malloc_size` called inline, +4–5%. Likewise
   `auk__alloc` (rc.c) is now one call level more in every string allocation inside the runtime.
