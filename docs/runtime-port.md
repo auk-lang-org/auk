@@ -591,6 +591,131 @@ so the playing path ran only on macOS).
 anyway); gui_host never linked a framework (all `dlopen`), so no link flag goes with it.
 `runtime/c/test/run.sh`'s `-framework Network/Security/CoreFoundation` are tls.c's.
 
+## Found porting `rc.c` and `task.c` (2026-11-19)
+
+`runtime/src/rc.auk` (reference counts, allocation, the leak checker, panics, checked
+arithmetic, hashing, the scalar element ops) and `task.auk` (tasks, spawn/await/cancel/links,
+`auk run --live`'s entry points), line by line; both C files deleted, `auk_rt.h` untouched. The
+element-ops tables C kept for lack of addresses in initializers are `export var`s of
+`raw.fn_of`s now: `auk_ops_int/float/bool/char/unit/arr/map/err/obj/task/closure` in `rc.auk`,
+`auk_ops_str` in `str.auk` (its `auk__str_elem_*` exports became private functions; `value.auk`
+already had `auk_ops_value`). task.c's struct moved into the ABI probe
+(`runtime/test/abi/probe.c`), which read it from task.c. Messages byte for byte (every panic of
+rc.c compared against the C build: overflow in `+ * - **`, division by zero, shift amounts,
+negative exponent, `int(NaN)`, `int(1e300)`, unwrapped none/error, a task's panic re-raised by
+`await`, an unawaited task's report, `catch`); golden against the C build: 0 differ in every
+mode.
+
+What it ran into:
+
+1. **No `noinline`/`cold` in the dialect, and LLVM inlines heap.auk's `auk__note_handle`** (a
+   lock and the ledger) into `auk_retain`/`auk_release`: every caller then saves registers on
+   the fast path too, which C never did (heap.c and rc.c were separate units, the call a tail
+   call). `auk__ptr_retain` went from 13 instructions to 19 on the fast path, and a `[str]`
+   copy/drop loop (`ops.retain`/`ops.release` per element) retired 10% more instructions. A
+   private `raw var` holding the function pointer is folded back into a direct call (GlobalOpt
+   sees it's never written), so the package's own modules call `rc.retain`/`rc.release`, which
+   reach the handle path through an **external** function pointer, `auk__note_handle_slow` (an
+   `export var`: mutable and visible, so never folded). A `noinline` (or `cold`) attribute on
+   `fn`s would replace it.
+2. **What rtlink offers to programs depends on what LLVM inlined inside the Auk half:** with
+   `auk__note_handle` (a thread-local) inlined, `auk_retain`/`auk_release` touch state and stay
+   out of programs, as the C ones were (C's weren't inlined into them anyway); with the
+   indirect call instead, they are offered, and inlined at each of generated code's handle
+   slow paths (the compiler's text +9%, nothing faster). So the two *exported* functions call
+   `auk__note_handle` directly (out of programs), the package's `rc.retain`/`rc.release` call
+   it through the pointer.
+3. **Auk functions keep a frame record in leaves:** codegen gives every function
+   `"frame-pointer"="all"` (clang: `non-leaf`), so `auk__ptr_retain`'s fast path still has a
+   `stp x29, x30`/`ldp` pair C's didn't (2 instructions per element retain; the `[str]` loop is
+   +6% instructions, cycles within noise). A codegen choice, left as is (backtraces).
+4. **Exported tables are mutable:** there is no `export let`, and an `export var` is an LLVM
+   global that isn't `constant`, so rtlink gives programs a declaration of `auk_ops_int` & co.,
+   where C's `const` tables were `available_externally` (LLVM could fold `auk_ops_int.cmp` into
+   a direct call after inlining a runtime function). No benchmark moved (sort, hashmap,
+   strings within noise); a constant `export` would restore it.
+5. **`catch` is a keyword** (found by the stack port too): `rc.auk` calls
+   `recover.auk__catch_active`/`auk__catch_throw` (`pub`, `auk__catch_throw` now `never`).
+   `stack.auk`'s `auk__stack_attr`/`thread_begin`/`thread_end` aren't `pub`, so `task.auk`
+   declares them `extern fn` (they resolve to the definitions).
+6. **A string literal passed to a generic intrinsic** (`raw.copy(m, "unwrapped an error: ",
+   np)`) is a `str` (E0200 + E0419): the C-string rule applies only where a `raw.Ptr<u8>` is
+   expected, so it needs a typed local first.
+7. **A null function pointer global:** `raw.null()` is a `raw.Ptr`, so `auk_set_cleanup`'s
+   `void (*)(void)` is a `raw var cleanup: raw.Ptr<()>`, cast to a `raw.Fn` where it's called.
+8. **`_Atomic bool` task fields** (`cancel`, `done`) are byte-wide atomics:
+   `raw.atomic_load(raw.cast<u8>(raw.field_addr(t, .done)), raw.Order.SeqCst)` (C's plain
+   `atomic_*` are sequentially consistent; the dialect's atomics take integers and pointers).
+9. **`pthread_t` by value** (`pthread_join`): `cfacts.PthreadT` is a one-word struct; the
+   prototype takes `uint64_t` and the call passes `t.th.w0` (a pointer on macOS, an
+   `unsigned long` on Linux: one register either way).
+10. **Every function of `task.auk` and every loop of `rc.auk` is `uses raw`**, so no cancellation
+   point lands in the runtime itself (a loop in a plain function of the package gets a call to
+   `auk_cancel_check`, which here would recurse into the task module).
+11. Fine as hoped: `never` (every panic entry point is `never`; `export fn … : never`), C's
+   `__builtin_*_overflow` as `raw.add/sub/mul_overflow`, `u64` hex literals above `i64`'s range
+   (the hash mixers), the per-thread 2048-byte panic buffer as a `raw thread var` of a one-field
+   raw struct, the static mutexes and condition variable from `cfacts.PTHREAD_*_INITIALIZER`,
+   `pthread_create`'s start routine as `raw.fn_of` of a private function. `auk_unwrap_err`
+   writes its message straight into the panic buffer (C built it in a 2048-byte local and
+   copied it: same bytes, no 2 KB memset).
+
+**Atomics, as C had them:** `auk_retain`: relaxed load (immortal check), relaxed add;
+`auk_release`: relaxed load, release subtract, acquire fence before the free; `auk__alloc`:
+relaxed store of rc 1, relaxed add to the live count; `auk__free_obj`/`auk__make_immortal`:
+relaxed subtract; `auk_live_objects`, `auk_leak_baseline`, `auk_refcount`, the immortal store,
+task flags and `auk_cancel_pending`/`auk__live_reloads`: sequentially consistent;
+`auk__live_install`: release stores. Checked in the IR (`load atomic … monotonic`, `atomicrmw sub
+… release`, `fence acquire`).
+
+**Checks:** `./build.sh --check --test` (stage 2 = stage 3; C tests 72/72; runner 382/382);
+`ASAN=1 run.sh` 72/72; `SAN_AUK=1 TSAN=1 run.sh conc` ×6 clean (the Auk half's refcount
+atomics instrumented); `TSAN=1 run.sh conc` 22 runs, one of which reported 1 failed test (8/9; its
+output wasn't kept, and the 17 runs since passed: likely a timing test under load 40–60, but not
+pinned down); `SAN_AUK=1 ASAN=1 run.sh` 72/72; `runtime/test/abi/run.sh` (670 checks, task.c's
+struct now in probe.c); `scripts/check.sh golden bench`; golden against the C build 0 differ;
+the Linux container (`--from-seed --check --test`), which also needed main's
+`stackos.linux.auk` to rename a local `str` (E0116 once a `str` module exists; macOS never
+compiles that variant).
+
+**Perf** (macOS arm64, 2026-11-19, the machine shared with other agents' builds: load average
+20–60 throughout, so spreads are wide; old is `483bd00` with rc.c/task.c, new is this port;
+interleaved A/B, 11 rounds (5 for the compiler), medians of CPU time (user + sys) and the ratio
+of the minimums; instructions retired from `/usr/bin/time -l` where they decide):
+
+| bench | C cpu median (s) | Auk cpu median (s) | median ratio | min ratio | instructions |
+|---|---:|---:|---:|---:|---:|
+| bench/perf fib 38 | 0.117 | 0.123 | 1.046 | 1.029 | — |
+| bench/perf sieve 50M | 0.503 | 0.495 | 0.983 | 0.999 | — |
+| bench/perf nbody 5M | 0.516 | 0.520 | 1.008 | 1.026 | — |
+| bench/perf hashmap 5M | 0.327 | 0.323 | 0.988 | 1.009 | — |
+| bench/perf trees 18 | 3.854 | 3.806 | 0.988 | 1.120 | — |
+| bench/perf strings 5M | 0.590 | 0.581 | 0.986 | 0.992 | — |
+| bench/perf sort 10M | 0.214 | 0.212 | 0.992 | 1.013 | — |
+| micro rcstr ([str] copy + drop, 200k × 1000) | 0.569 | 0.597 | 1.049 | 0.995 | +6.0% |
+| micro churn (`"x{i}"` + `[i, i+1]`, 10M) | 0.842 | 0.807 | 0.959 | 0.951 | −0.7% |
+| micro tasks (8 tasks: churn + copies + a channel handle copied 300k ×) | 5.286 | 5.291 | 1.001 | 0.972 | −1.1% |
+| micro append (`s += "ab"`, 20M) | 0.169 | 0.175 | 1.034 | 1.044 | −0.5% |
+| micro push (`xs.push(i)`, 20 × 3M) | 0.350 | 0.283 | 0.808 | 0.780 | +4.1% |
+| `auk build compiler/src/main.auk` | 26.38 | 24.83 | 0.941 | 1.041 | +5.9% |
+| `auk check compiler/src/main.auk` | 0.956 | 0.973 | 1.018 | 1.029 | −0.2% |
+
+Every output identical. fib/sieve/nbody don't touch rc (their ratios are the noise floor:
+±5%). In words:
+- **The two boundary cases the str and arr ports measured:** `s += x` is even in instructions
+  (−0.5%) and within noise in time (the earlier +9% came from `auk__heap_usable` across the
+  C/Auk boundary; heap and str now inline into each other, and `auk__alloc` with them). `push`
+  of ints is 0.78–0.82x in both runs (the grow path's `auk__heap_resize`/`auk__alloc` are
+  direct Auk calls now; it executes 4% more instructions but fewer cycles).
+- **rcstr** (a per-element `ops.retain`/`ops.release`) was +10% instructions before item 1's
+  fix, +6% after (item 3's frame record); time within noise.
+- **The compiler:** `auk check` (the front end, which runs on the runtime) is even in
+  instructions. `auk build` of the compiler executes 6% more instructions, because the program
+  it builds differs: the new compiler embeds the new runtime bitcode, where more runtime
+  functions are offered and inlined (the compiler's own text is 3.6% larger than with the C
+  runtime: 7,110,656 vs 6,864,896 bytes), so LLVM optimizes more code; the wall and CPU
+  medians were 0.94x (minimums 1.04x) on the loaded machine.
+
 ## Per file
 
 Lines are of the C today. "Globals" counts file-scope variables (thread-locals and atomics
@@ -601,14 +726,14 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | `auk_rt.h` | 1013 | the shared `raw struct`s (header, str, arr, map, err, obj, task, frames; flexible array members `data[]`, `slots[]`), the one union (`AukValue`), 12 function-pointer typedefs (`raw.Fn`), `_Static_assert`s → `raw assert` | stays the C contract until the C is gone (lowlevel.md, section 8) |
 | ~~`value.c`~~ | 239 | **done** (2026-11-19, the pilot): `runtime/src/value.auk`; `auk_ops_value` too (`value_ops.c` deleted) | — |
 | ~~`err.c`~~ | 125 | **done** (2026-11-19): `runtime/src/err.auk` | — |
-| ~~`copy.c`~~ | 170 | **done** (2026-11-19): `runtime/src/copy.auk` | the ops tables over its `auk__*_copy_elem` stay in `rc.c` |
+| ~~`copy.c`~~ | 170 | **done** (2026-11-19): `runtime/src/copy.auk` | — (the ops tables over its `auk__*_copy_elem` are `rc.auk`'s `export var`s now) |
 | ~~`map.c`~~ | 398 | **done** (2026-11-19): `runtime/src/map.auk` | — |
 | ~~`arr.c`~~ | 727 | **done** (2026-11-19): `runtime/src/arr.auk` | — |
 | ~~`chan.c`~~ | 168 | **done** (2026-11-19): `runtime/src/chan.auk` (`abi.Chan`; locks made with `pthread_*_init`) | — |
 | ~~`heap.c`~~ | 298 | **done** (2026-11-19): `runtime/src/heap.auk` + `heap_os.<os>.auk` | the `#ifdef` is the per-OS `heap_os` module |
 | ~~`catch.c`~~ | 142 | **done** (2026-11-19): `runtime/src/catch.auk`; `sigsetjmp(jb, 0)`/`siglongjmp` are `raw.setjmp`/`raw.longjmp` (libc `_setjmp`/`_longjmp`) | the setjmp half of `auk__catch_run` is its own `optnone` function (`run_at`), the frame in the optimized caller's memory |
 | `compiler.c` | 169 | 2 globals (the imprint file, its mutex), `FILE *` (`fputc`/`fwrite`) | — |
-| ~~`str.c`~~ | 1556 | **done** (2026-11-19): `runtime/src/str.auk`, `str_fmt.auk` (see "Found porting `str.c`") | float formatting still through `cwrap.c`'s `snprintf` and libc `strtod` (7b: "Ryu → Auk"); `auk_ops_str`'s table stays in `rc.c` |
+| ~~`str.c`~~ | 1556 | **done** (2026-11-19): `runtime/src/str.auk`, `str_fmt.auk` (see "Found porting `str.c`") | float formatting still through `cwrap.c`'s `snprintf` and libc `strtod` (7b: "Ryu → Auk"); `auk_ops_str` is an `export var` of `str.auk` (since the rc port) |
 
 | `copy.c` | 170 | atomics, callbacks (element copy ops) | — |
 | `map.c` | 398 | callbacks (hash/eq/show ops), `const` tables | — |
@@ -618,9 +743,9 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | ~~`catch.c`~~ | 142 | **done** (2026-11-19): `runtime/src/catch.auk` (now `recover.auk`: `catch` is a keyword); `sigsetjmp(jb, 0)`/`siglongjmp` are `raw.setjmp`/`raw.longjmp` (libc `_setjmp`/`_longjmp`) | the setjmp half of `auk__catch_run` is its own `optnone` function (`run_at`), the frame in the optimized caller's memory |
 | ~~`compiler.c`~~ | 169 | **done** (2026-11-19): `runtime/src/compiler.auk` | — |
 | `str.c` | 1556 | 2 thread-locals (show budget, debugger flag), atomics; `snprintf %.*e/%.*f` through `cwrap.c`; `strtod` | float formatting through libc is the 7b item "Ryu, Unicode tables → Auk" |
-| `rc.c` | 792 | 4 globals (1 thread-local, 2 atomic), 1 function-local static, overflow builtins, `atexit` callback, `%g` through `cwrap.c` | — |
+| ~~`rc.c`~~ | 792 | **done** (2026-11-19): `runtime/src/rc.auk` (see "Found porting `rc.c` and `task.c`"); the element-ops tables are `export var`s (`auk_ops_str` in `str.auk`) | the panic buffer is written in place by `auk_unwrap_err` (C built the message in a 2048-byte local first: same bytes) |
 | ~~`testing.c`~~ | 309 | **done** (2026-11-19): `runtime/src/testing.auk` | — |
-| `task.c` | 467 | 6 globals (1 thread-local), atomics, `pthread_create` callback | — |
+| ~~`task.c`~~ | 467 | **done** (2026-11-19): `runtime/src/task.auk` (`abi.Task`; the static locks from `cfacts.PTHREAD_*_INITIALIZER`) | the `_Atomic bool` fields are byte-wide atomics through `raw.cast<u8>` |
 | ~~`pixels.c`~~ | 446 | **done** (2026-11-19): `runtime/src/pixels.auk` (the statics are module `raw var`s, `raw.add/mul_overflow`) | — |
 | ~~`ffi.c`~~ | 298 | **done** (2026-11-19): `runtime/src/ffi.auk` | — |
 | ~~`core.c`~~ | 1116 | **done** (2026-11-19): `runtime/src/core_{util,fs,net,env,time,proc}.auk`, `core_os.{macos,linux}.auk`; 5 globals + 1 function-local static, `environ` (extern global), `qsort` callback, sockets/`getaddrinfo`/`posix_spawnp` structs, `S_ISDIR`, `W*` macros; `fcntl`/`ioctl`/`open` through `cwrap.c` | 5 `#if`s (OS, `SO_NOSIGPIPE`, `MSG_NOSIGNAL`, `arc4random_buf`/`getrandom`) |
