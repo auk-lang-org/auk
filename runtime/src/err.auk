@@ -36,7 +36,7 @@ export fn auk__err_bytes(msg: raw.Ptr<u8>, n: usize): raw.Ptr<abi.Err> uses raw,
 }
 
 /// A new error with a NUL-terminated message.
-export fn auk_err_new_cstr(msg: raw.Ptr<u8>): raw.Ptr<abi.Err> uses raw, ffi {
+pub export fn auk_err_new_cstr(msg: raw.Ptr<u8>): raw.Ptr<abi.Err> uses raw, ffi {
   if msg.is_null() {
     return auk__err_bytes("", 0)
   }
