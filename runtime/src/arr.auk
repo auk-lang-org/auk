@@ -827,7 +827,7 @@ export fn auk_arr_join(a: raw.Ptr<abi.Arr>, sep: raw.Ptr<abi.Str>): raw.Ptr<abi.
       auk_sb_str(pb, sep)
     }
     let ops = a.ops
-    if ops.int() == value.ops_str().int() {
+    if ops.int() == str.ops_str().int() {
       auk_sb_str(pb, raw.cast<raw.Ptr<abi.Str>>(elem(a, i)).load())
     } else if ops.int() == raw.addr_of(&auk_ops_char).int() {
       auk_sb_char(pb, raw.cast<u32>(elem(a, i)).load())

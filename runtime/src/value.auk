@@ -14,10 +14,8 @@ extern var auk_ops_float: abi.ElemOps = "auk_ops_float"
 // addresses: the element ops of `Value`, over the auk__value_elem_* functions below
 extern var auk_ops_value: abi.ElemOps = "auk_ops_value"
 
-// The addresses of the C tables declared here, for the package's other modules: a second
-// `extern var` of one symbol in another module would be renamed (TODO(dialect)), and
-// `raw.addr_of(&value.auk_ops_str)` doesn't resolve a qualified name.
-pub fn ops_str(): raw.Ptr<abi.ElemOps> uses raw = raw.addr_of(&auk_ops_str)
+// The address of the C table declared here, for the package's other modules (`str.ops_str()`
+// has `auk_ops_str`'s).
 pub fn ops_float(): raw.Ptr<abi.ElemOps> uses raw = raw.addr_of(&auk_ops_float)
 
 export fn auk_value_null(): abi.Value = abi.Value { tag: abi.V_NULL }
