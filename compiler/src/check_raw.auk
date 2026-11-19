@@ -218,6 +218,13 @@ pub fn validate(c: var check.Checker, t: typed.Tables, m: int) {
       }
     }
     let t0 = targs.get(0) else types.unit()
+    if name == "is_null" {
+      let ok = match t0 {
+        Ptr(_) | CFn(_, _) | Error => true
+        _ => false
+      }
+      if !ok { c.err_in(m, diag.new("E0202", span, "`is_null` takes a `raw.Ptr` or a `raw.Fn`, not `{c.defs.show(t0)}`")) }
+    }
     if name == "cast" {
       let from = targs.get(1) else types.unit()
       let ok = match from {
@@ -281,6 +288,18 @@ pub fn extern_vars(c: var check.Checker, t: typed.Tables, m: int, body: typed.Bo
       }
       _ => {}
     }
+  }
+}
+
+/// `export fn`: only in the runtime package, one clause, no type parameters (its types are
+/// checked by the raw rule of `uses raw` bodies, and below for every export).
+pub fn export_fn(c: var check.Checker, m: int, first: ast.FnClause, nclauses: int, generic: bool) {
+  if !c.prog.raw_ok(m) {
+    c.err_in(m, effect_check.raw_only(first.name.span, "`export fn {first.name.name}` is a C function"))
+    return
+  }
+  if generic || nclauses > 1 {
+    c.err_in(m, diag.new("E0419", first.name.span, "an `export fn` is one C function: no type parameters, one clause"))
   }
 }
 

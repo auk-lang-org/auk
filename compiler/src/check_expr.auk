@@ -2069,6 +2069,16 @@ pub fn closure_call(c: var check.Checker, e: ast.Expr, callee: ast.Expr, ft: typ
     t => t
   }
   match ft2 {
+    CFn(ps, r) => {
+      // the runtime's dialect: a call through a C function pointer
+      if ps.len() != args.len() {
+        c.err(diag.new("E0300", e.span, "this function pointer takes {ps.len()} argument(s), but {args.len()} were given"))
+        return r
+      }
+      for i, a in args { let _ = c.check(check.arg_expr(a), ps[i]) }
+      c.cx.t.raw[e.id] = typed.RawNode.CallFn
+      return r
+    }
     Fn(ps, r) => {
       if ps.len() != args.len() {
         c.err(diag.new("E0300", e.span, "this closure takes {ps.len()} argument(s), but {args.len()} were given"))

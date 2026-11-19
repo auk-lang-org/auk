@@ -1889,6 +1889,8 @@ fn declare_fn(c: var Checker, m: int, item: int, g: ast.FnGroup, clauses: [int],
     }
     none => typed.FnKind.Auk(item, clauses, header)
   }
+  let export = all.reduce(0, (a, x) => if x.export > a { x.export } else { a })
+  if export > 0 { check_raw.export_fn(&c, m, first, cls.len(), generics.len() > 0) }
   let id = c.fns.len()
   c.fns.push(typed.FnInfo {
     name: g.name,
@@ -1905,6 +1907,7 @@ fn declare_fn(c: var Checker, m: int, item: int, g: ast.FnGroup, clauses: [int],
     callees: [],
     olds: [],
     result_local: none,
+    export: export,
   })
   var ids = c.items[m].fns.get(g.name) else []
   ids.push(id)
@@ -2419,7 +2422,7 @@ fn raw_body_types(c: var Checker, cx: BodyCx) {
     _ => return
   }
   let info = c.fns[f]
-  if !info.effects.contains("raw") || c.prog.is_core(info.module) { return }
+  if !(info.effects.contains("raw") || info.export > 0) || c.prog.is_core(info.module) { return }
   let m = cx.module
   for p in info.params {
     if !raw_allowed(c.defs, p.ty) {
@@ -2463,7 +2466,7 @@ fn raw_body_types(c: var Checker, cx: BodyCx) {
 }
 
 /// Is `f` an `export fn` (C's calling convention, its name as the symbol)?
-pub fn is_export(c: Checker, f: int): bool = false
+pub fn is_export(c: Checker, f: int): bool = c.fns[f].export > 0
 
 fn raw_type_diag(c: Checker, span: diag.Span, t: types.Ty, what: str): diag.Diag =
   diag.new("E0419", span, "{what} of type `{c.defs.show(t)}` in `uses raw` code, which has no reference counting")

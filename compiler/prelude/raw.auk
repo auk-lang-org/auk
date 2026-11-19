@@ -20,7 +20,7 @@ pub extern fn offset<T, I>(p: Ptr<T>, i: I): Ptr<T> uses raw = "@raw_offset"
 /// The address as an integer (the space keeps `int<` from reading as a unit).
 pub extern fn int <T>(p: Ptr<T>): int uses raw = "@raw_ptr_int"
 /// Is it NULL?
-pub extern fn is_null<T>(p: Ptr<T>): bool uses raw = "@raw_is_null"
+pub extern fn is_null<P>(p: P): bool uses raw = "@raw_is_null"
 /// The address of a raw local or global: `raw.addr_of(&x)`.
 pub extern fn addr_of<T>(x: var T): Ptr<T> uses raw = "@raw_addr_of"
 /// The address of field `f` of the raw struct at `p`: `raw.field_addr(p, .f)`.

@@ -77,6 +77,8 @@ pub struct FnInfo {
   olds: [int],
   /// The local bound to `result` in `ensures`, if any.
   result_local: int?,
+  /// The runtime's dialect: 1 `export fn`, 2 `inline export fn`, 0 otherwise.
+  export: int,
 }
 
 pub struct ParamInfo {
@@ -143,6 +145,8 @@ pub enum RawNode {
   Field(d: int, i: int),
   /// `raw.fn_of(f)`: the C address of the function its argument names.
   FnOf,
+  /// `f(x)` with `f: raw.Fn<...>`: a call through a C function pointer.
+  CallFn,
 }
 
 pub struct ConstInfo {

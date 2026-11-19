@@ -151,6 +151,8 @@ fn const_dump(kw: str, c: ast.ConstDef): str {
 fn clause_dump(tag: str, c: ast.FnClause): str {
   var s = "({tag}"
   if c.public { s += " pub" }
+  if c.export == 1 { s += " export" }
+  if c.export == 2 { s += " inline-export" }
   if c.is_async { s += " async" }
   s += generics_dump(c.generics)
   s += if c.params.len() == 0 { " (params)" } else { " (params {jn(c.params, param_dump)})" }

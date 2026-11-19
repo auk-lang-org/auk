@@ -156,7 +156,7 @@ pub fn read(text: str): (mir.Program, mir.types.TyInfo)! {
   expect(&r, "csyms")?
   let c_syms = strings(&r)?
   if r.i != r.toks.len() { return bad(r, "the end of the dump") }
-  let prog = mir.Program { funcs, aggs, globals, entry, locs, names, links, c_syms }
+  let prog = mir.Program { funcs, aggs, globals, entry, locs, names, links, c_syms, exports: {} }
   (prog, info)
 }
 

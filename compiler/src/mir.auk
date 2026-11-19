@@ -247,6 +247,8 @@ pub struct Program {
   links: [str],
   /// The user C functions the program calls (`extern fn` with a C prototype).
   c_syms: [str],
+  /// The runtime's dialect: functions exported by name (1 `export fn`, 2 `inline export fn`).
+  exports: {int: int},
 }
 
 /// A compiler bug: print `msg` and panic (Rust's `panic!`, `unreachable!`).

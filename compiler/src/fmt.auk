@@ -783,6 +783,8 @@ fn variant_doc(v: ast.Variant): fmt.doc.Doc {
 fn clause(f: var Fmt, c: ast.FnClause, method: bool): fmt.doc.Doc {
   var head = ""
   if !method { head += vis(c.public) }
+  if c.export == 1 { head += "export " }
+  if c.export == 2 { head += "inline export " }
   if c.body is some(Extern(_)) { head += "extern " }
   if c.is_async { head += "async " }
   head += "fn {c.name.name}{generics(c.generics)}"

@@ -169,7 +169,7 @@ pub fn take(g: var Gen): Gen {
   let x = g
   g = Gen {
     rc: {},
-    prog: mir.Program { funcs: [], aggs: [], globals: [], entry: none, locs: [], names: {}, links: [], c_syms: [] },
+    prog: mir.Program { funcs: [], aggs: [], globals: [], entry: none, locs: [], names: {}, links: [], c_syms: [], exports: {} },
     live_keys: {},
     memo: {},
     memo2: {},
@@ -212,6 +212,7 @@ pub fn new(tp: typed.TypedProgram, mode: Mode): Gen {
       names: {},
       links,
       c_syms: [],
+      exports: {},
     },
     live_keys: {},
     memo: {},
@@ -366,7 +367,20 @@ pub fn inst_fn(g: var Gen, i: int): int {
       ret = d(g.inst_ret(i))
     }
   }
-  let f = g.declare("dk_f{i}_{what}", params, ret, abi)
+  // the runtime's dialect: an `export fn` is the C function of its name
+  let export = match g.tp.instances[i].body {
+    Fn(fid) => g.tp.fns[fid].export
+    _ => 0
+  }
+  let f = if export > 0 {
+    g.declare(g.tp.fns[match g.tp.instances[i].body {
+      Fn(fid) => fid
+      _ => 0
+    }].name, params, ret, mir.Abi.C)
+  } else {
+    g.declare("dk_f{i}_{what}", params, ret, abi)
+  }
+  if export > 0 { g.prog.exports[f] = export }
   g.inst_fns[i] = f
   match g.tp.instances[i].body {
     Fn(fid) => {

@@ -275,6 +275,24 @@ pub fn raw_node(lw: var mir.lower.Lower, e: ast.Expr, n: typed.RawNode): mir.low
         mir.lower.plain(mir.int_as(off, d(ret)), ret)
       }
     }
+    CallFn => {
+      let (callee, args) = match e.kind {
+        Call(f, args) => (f, args)
+        _ => return mir.lower.val_never()
+      }
+      let fv = lw.expr(callee)
+      var xs: [mir.Ex] = []
+      for a in args {
+        let v = lw.expr(a)
+        xs.push(v.c)
+      }
+      let call = mir.ex(mir.K.Call(mir.Callee.CPtr(fv.c), xs), d(ret))
+      if types.is_unit(ret) || ret == types.Ty.Never {
+        lw.do_(call)
+        return if ret == types.Ty.Never { mir.lower.val_never() } else { mir.lower.val_unit() }
+      }
+      lw.tmp(ret, call)
+    }
     FnOf => {
       let x = match e.kind {
         MethodCall(_, _, args) => args[0]

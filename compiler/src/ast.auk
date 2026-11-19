@@ -84,6 +84,9 @@ pub struct FnClause {
   guard: Expr?,
   /// `none` for a header line (or a shape method signature).
   body: FnBody?,
+  /// The runtime's dialect: 1 `export fn` (C's calling convention, its name as the symbol), 2
+  /// `inline export fn` (also `inlinehint`); 0 otherwise.
+  export: int,
 }
 
 pub enum FnBody {
