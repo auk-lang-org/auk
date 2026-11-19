@@ -463,6 +463,10 @@ fn ex(pr: var Printer, e: mir.Ex): str = match e.k {
     I64 | D(Int) => if n == -9223372036854775807 - 1 { "INT64_MIN" } else { "INT64_C({n})" }
     U64 => "UINT64_C({u64_text(n)})"
     U32 | D(Char) => "UINT32_C({n & 4294967295})"
+    D(Fixed(_)) => {
+      let c = ct(&pr, e.ty)
+      "(({c}){n})"
+    }
     t when (t is mir.MTy.D(_)) && !is_int(t) && t != mir.MTy.D(types.Ty.Float) => "0"
     t => {
       let c = ct(&pr, t)

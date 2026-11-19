@@ -171,6 +171,14 @@ points; a signal handler is an `export fn` passed to `sigaction`.
 - **Error codes:** E0418 (the gate), E0419 (a reference-counted type in `uses raw` code, an
   `export fn` or a raw struct), E0421 (not a compile-time constant, a failing `raw assert`, a
   non-constant or invalid memory order).
+- **Targets (§11):** in the runtime package, `src/x.<os>-<arch>.auk`, `src/x.<os>.auk` and
+  `src/x.auk` are variants of the module `x`; the loader takes the most specific one for the
+  host (`<os>` is `macos`/`linux`, `<arch>` `arm64`/`x86_64` as `uname -m` normalizes), and
+  ignores the others (other packages keep reading `a.b.auk` as the module `a.b`). There is no
+  cross-compilation yet, so "the target" is the machine running `auk`. The variants' public
+  items aren't compared yet. `raw.add_overflow/sub_overflow/mul_overflow(a, b): (T, bool)`
+  (`llvm.{s,u}{add,sub,mul}.with.overflow` by `T`'s signedness), `raw.ctz`/`raw.clz` (the width
+  for 0), `raw.popcount`, `raw.bswap` (16 bits and wider) take `int` or a fixed-width integer.
 - **No TBAA:** codegen attaches no alias metadata (none anywhere), so `raw.cast`
   reinterpretation and reading a union through another field are well-defined.
 

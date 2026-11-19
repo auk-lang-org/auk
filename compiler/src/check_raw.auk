@@ -238,6 +238,16 @@ pub fn validate(c: var check.Checker, t: typed.Tables, m: int) {
       }
       if !ok { c.err_in(m, diag.new("E0202", span, "`raw.cast` takes a pointer (`raw.Ptr`, `raw.Fn`, `ffi.Ptr`, an `extern type`), not `{c.defs.show(from)}`")) }
     }
+    let bits = ["add_overflow", "sub_overflow", "mul_overflow", "ctz", "clz", "popcount", "bswap"]
+    if bits.contains(name) {
+      let ok = t0 == types.Ty.Int || t0.has_error() || types.is_fixed_int(t0)
+      if !ok { c.err_in(m, diag.new("E0202", span, "`raw.{name}` works on integers, not `{c.defs.show(t0)}`")) }
+      let narrow = match t0 {
+        Fixed(k) => types.fx_bits(k) < 16
+        _ => false
+      }
+      if name == "bswap" && narrow { c.err_in(m, diag.new("E0202", span, "`raw.bswap` needs 16 bits or more, not `{c.defs.show(t0)}`")) }
+    }
     if name.starts_with("atomic_") {
       let ok = match t0 {
         Int | Bool | Ptr(_) | CFn(_, _) | Error => true

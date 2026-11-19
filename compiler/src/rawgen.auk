@@ -88,6 +88,34 @@ pub fn call(g: var codegen.Gen, sym: str, args: [mir.Ex], ret: mir.MTy): codegen
       codegen.store(g, codegen.bool8(g, okv), codegen.gep(g, a, codegen.offset(&g, ret, mir.Sel.F(1))))
       codegen.V.M(a)
     }
+    "overflow" => {
+      // `@raw.overflow.sadd`: llvm.sadd.with.overflow, its result as a `(T, bool)`
+      let a = codegen.val(&g, args[0])
+      let b2 = codegen.val(&g, args[1])
+      let ty = llvm.values.type_of(a)
+      let (f, ft) = codegen.intrinsic(g, "llvm.{parts[2]}.with.overflow", [ty])
+      let r = llvm.builder.build_call2(b, ft, f, [a, b2], "")
+      let v = llvm.builder.build_extract_value(b, r, 0, "")
+      let o = llvm.builder.build_extract_value(b, r, 1, "")
+      let out = codegen.temp(&g, ret)
+      codegen.store(g, v, codegen.gep(g, out, codegen.offset(&g, ret, mir.Sel.F(0))))
+      codegen.store(g, codegen.bool8(g, o), codegen.gep(g, out, codegen.offset(&g, ret, mir.Sel.F(1))))
+      codegen.V.M(out)
+    }
+    "bits" => {
+      let x = codegen.val(&g, args[0])
+      let ty = llvm.values.type_of(x)
+      let (iname, extra) = match parts[2] {
+        "ctz" => ("llvm.cttz", true)
+        "clz" => ("llvm.ctlz", true)
+        "popcount" => ("llvm.ctpop", false)
+        _ => ("llvm.bswap", false)
+      }
+      let (f, ft) = codegen.intrinsic(g, iname, [ty])
+      // cttz/ctlz of 0 is the width (not poison)
+      let xs = if extra { [x, llvm.values.const_int(g.t_i1, 0, 0)] } else { [x] }
+      codegen.V.S(llvm.builder.build_call2(b, ft, f, xs, ""))
+    }
     "fence" => {
       let _ = llvm.builder.build_fence(b, ord(2), 0, "")
       codegen.V.Nil

@@ -162,6 +162,47 @@ pub fn first_segment(p: Program, m: int, name: str): int? {
   child(p, p.core_root, name)
 }
 
+/// The runtime package's per-target files (docs/lowlevel.md §11): of `x.<os>-<arch>.auk`,
+/// `x.<os>.auk` and `x.auk` in one directory, only the most specific one matching the target,
+/// as the module `x`. (Only the runtime package names files this way; elsewhere `a.b.auk` is
+/// the module `a.b`, as before.)
+pub fn select_targets(files: [str], os: str, arch: str): [str] {
+  // (directory, module) -> (rank, file); rank 2 `<os>-<arch>`, 1 `<os>`, 0 plain
+  var best: {(str, str): (int, str)} = {}
+  var order: [(str, str)] = []
+  for f in files {
+    let dir = paths.parent(f) else ""
+    let file = paths.file_name(f)
+    let stem = file.strip_suffix(".auk") else file
+    let parts = stem.split(".")
+    let (base, rank) = if parts.len() == 1 {
+      (stem, 0)
+    } else {
+      let tag = parts[parts.len() - 1]
+      let base = parts.take(parts.len() - 1).join(".")
+      if tag == "{os}-{arch}" { (base, 2) } else if tag == os { (base, 1) } else { (base, -1) }
+    }
+    if rank < 0 { continue }
+    let key = (dir, base)
+    match best.get(key) {
+      some((r, _)) => if rank > r { best[key] = (rank, f) }
+      none => {
+        best[key] = (rank, f)
+        order.push(key)
+      }
+    }
+  }
+  order.map(k => best[k].1)
+}
+
+test "per-target files" {
+  let fs = ["s/os.auk", "s/os.macos.auk", "s/os.linux.auk", "s/os.linux-arm64.auk", "s/a.auk", "s/b.linux.auk"]
+  assert select_targets(fs, "macos", "arm64") == ["s/os.macos.auk", "s/a.auk"]
+  assert select_targets(fs, "linux", "arm64") == ["s/os.linux-arm64.auk", "s/a.auk", "s/b.linux.auk"]
+  assert select_targets(fs, "linux", "x86_64") == ["s/os.linux.auk", "s/a.auk", "s/b.linux.auk"]
+  assert select_targets(fs, "freebsd", "x86_64") == ["s/os.auk", "s/a.auk"]
+}
+
 /// The keys of a map in sorted order (Rust's `BTreeMap` iteration).
 pub fn sorted_keys<V>(m: {str: V}): [str] = m.keys().sort()
 
@@ -308,6 +349,7 @@ fn load_core(l: var Loader): int {
 fn add_tree(l: var Loader, pkg: int, root: int, src_dir: str, skip: str?) uses fs, ffi {
   var files: [str] = []
   collect_auk_files(src_dir, &files)
+  if l.pkgs[pkg].name == "auk_rt" { files = select_targets(files, l.cx.os, paths.arch()) }
   // `PathBuf` order: component by component
   for f in files.sort_by(f => paths.components(f)) {
     match skip {
@@ -316,7 +358,16 @@ fn add_tree(l: var Loader, pkg: int, root: int, src_dir: str, skip: str?) uses f
     }
     var segs = paths.strip_base(f, src_dir) else continue
     let last = segs.pop() else continue
-    let stem = trim_auk(last)
+    let stem0 = trim_auk(last)
+    // a per-target file of the runtime package is the module of its base name
+    let stem = if l.pkgs[pkg].name == "auk_rt" {
+      match stem0.split(".").first() {
+        some(x) => x
+        none => stem0
+      }
+    } else {
+      stem0
+    }
     if segs.len() == 0 && (stem == "lib" || stem == "main") { continue }
     segs.push(stem)
     var parent = root

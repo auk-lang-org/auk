@@ -75,6 +75,18 @@ pub extern fn atomic_add<T>(p: Ptr<T>, v: T, order: Order): T uses raw = "@raw_a
 pub extern fn atomic_sub<T>(p: Ptr<T>, v: T, order: Order): T uses raw = "@raw_atomic_sub"
 pub extern fn atomic_and<T>(p: Ptr<T>, v: T, order: Order): T uses raw = "@raw_atomic_and"
 pub extern fn atomic_or<T>(p: Ptr<T>, v: T, order: Order): T uses raw = "@raw_atomic_or"
+/// `a + b` (also `-`, `*`) and whether it overflowed `T` (signed or unsigned by `T`); the
+/// first is the wrapped result. On integers.
+pub extern fn add_overflow<T>(a: T, b: T): (T, bool) uses raw = "@raw_add_overflow"
+pub extern fn sub_overflow<T>(a: T, b: T): (T, bool) uses raw = "@raw_sub_overflow"
+pub extern fn mul_overflow<T>(a: T, b: T): (T, bool) uses raw = "@raw_mul_overflow"
+/// The trailing (`ctz`) and leading (`clz`) zero bits (the width for 0), the one bits, and the
+/// bytes reversed (`bswap`, 16 bits and wider). On integers.
+pub extern fn ctz<T>(x: T): T uses raw = "@raw_ctz"
+pub extern fn clz<T>(x: T): T uses raw = "@raw_clz"
+pub extern fn popcount<T>(x: T): T uses raw = "@raw_popcount"
+pub extern fn bswap<T>(x: T): T uses raw = "@raw_bswap"
+
 /// A memory fence.
 pub extern fn fence(order: Order) uses raw = "@raw_fence"
 

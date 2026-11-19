@@ -30,6 +30,21 @@ pub fn os(): str uses ffi {
   }
 }
 
+/// The machine (`uname -m`, normalized as the seeds name it): `"arm64"` or `"x86_64"`.
+pub fn arch(): str uses ffi {
+  let buf = ffi.alloc(4096)
+  let r = c_uname(buf)
+  // `struct utsname`: five fields of 256 bytes on macOS, 65 on Linux; the machine is the fifth
+  let field = if os() == "macos" { 256 } else { 65 }
+  let name = if r == 0 { ffi.cstr(ffi.offset(buf, 4 * field)) } else { "" }
+  ffi.free(buf)
+  match name {
+    "aarch64" | "arm64" => "arm64"
+    "amd64" | "x86_64" => "x86_64"
+    n => n
+  }
+}
+
 /// `Path::join`: `b` under `a` (`b` itself when it is absolute or `a` is empty).
 pub fn join(a: str, b: str): str {
   if a == "" || b.starts_with("/") { return b }

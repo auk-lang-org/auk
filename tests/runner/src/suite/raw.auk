@@ -22,6 +22,8 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("refcounted_types_in_raw_code_e0419", refcounted_types_in_raw_code_e0419),
   t.test("constants_and_raw_assert_e0421", constants_and_raw_assert_e0421),
   t.test("fmt_and_check_handle_the_dialect", fmt_and_check_handle_the_dialect),
+  t.test("overflow_and_bit_intrinsics", overflow_and_bit_intrinsics),
+  t.test("per_target_module_files", per_target_module_files),
 ]
 
 let TOML = "[package]\nname = \"auk_rt\"\nversion = \"0.1.0\"\neffects = [\"raw\", \"ffi\"]\n"
@@ -217,4 +219,33 @@ fn fmt_and_check_handle_the_dialect() uses env, fs, ffi, time {
     let d = auk(["dump", "ast", main])
     t.check(d.success(), "auk dump ast {f}:\n{d.stderr}")
   }
+}
+
+fn overflow_and_bit_intrinsics() uses env, fs, ffi, time { let _ = passes(fixture("bits", "bits.auk")) }
+
+/// `plat.macos.auk`, `plat.linux.auk`, `plat.<os>-<arch>.auk` and `plat.auk`: only the most
+/// specific match of this machine is the module `plat` (the runtime package only).
+fn per_target_module_files() uses env, fs, ffi, time {
+  let main = project("targets", r"""
+    fn main() { print(plat.name()) }
+    """)
+  let src = paths.parent(main) else "."
+  let os = paths.os()
+  let arch = cmd.new("uname").arg("-m").output().stdout.trim()
+  let a = if arch == "aarch64" { "arm64" } else { arch }
+  t.write(paths.join(src, "plat.auk"), "pub fn name(): str = \"plain\"\n")
+  t.write(paths.join(src, "plat.macos.auk"), "pub fn name(): str = \"macos\"\n")
+  t.write(paths.join(src, "plat.linux.auk"), "pub fn name(): str = \"linux\"\n")
+  t.write(paths.join(src, "plat.plan9.auk"), "pub fn name(): str = \"plan9\"\n")
+  let o = auk(["run", main])
+  t.eq(o.stdout, "{os}\n", o.stderr)
+  // the `<os>-<arch>` file wins over `<os>`
+  t.write(paths.join(src, "plat.{os}-{a}.auk"), "pub fn name(): str = \"{os}-{a}\"\n")
+  let o2 = auk(["run", main])
+  t.eq(o2.stdout, "{os}-{a}\n", o2.stderr)
+  // with neither, the plain file
+  t.rm_rf(paths.join(src, "plat.{os}.auk"))
+  t.rm_rf(paths.join(src, "plat.{os}-{a}.auk"))
+  let o3 = auk(["run", main])
+  t.eq(o3.stdout, "plain\n", o3.stderr)
 }

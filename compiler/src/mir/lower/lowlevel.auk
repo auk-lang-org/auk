@@ -202,6 +202,15 @@ pub fn intrinsic(lw: var mir.lower.Lower, e: ast.Expr, name: str, targs: [types.
       lw.do_(mir.rt("@raw.fence.{lw.llvm_order(order(0))}", [], mir.MTy.Void))
       unit
     }
+    "add_overflow" | "sub_overflow" | "mul_overflow" => {
+      let signed = match t0 {
+        Fixed(k) => types.fx_signed(k)
+        _ => true
+      }
+      let op = name.strip_suffix("_overflow") else name
+      lw.tmp(ret, mir.rt("@raw.overflow.{if signed { "s" } else { "u" }}{op}", [xs[0], xs[1]], rmt))
+    }
+    "ctz" | "clz" | "popcount" | "bswap" => lw.tmp(ret, mir.rt("@raw.bits.{name}", [xs[0]], rmt))
     "setjmp" => lw.tmp(ret, mir.rt("@raw.setjmp", [xs[0]], rmt))
     "longjmp" => {
       lw.do_(mir.rt("@raw.longjmp", [xs[0]], mir.MTy.Void))

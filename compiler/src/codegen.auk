@@ -1107,7 +1107,10 @@ pub fn ex(g: var Gen, e: mir.Ex): V uses ffi = match e.k {
         V.S(llvm.values.const_int_to_ptr(llvm.values.const_int(g.t_i64, n, 0), t))
       }
     } else {
-      V.S(llvm.values.const_int(t, n, 0))
+      // a negative constant narrower than 64 bits (the runtime's dialect) is sign-extended:
+      // LLVM's APInt doesn't take an out-of-range unsigned value
+      let sext = if n < 0 && (e.ty is mir.MTy.D(types.Ty.Fixed(_))) { 1 } else { 0 }
+      V.S(llvm.values.const_int(t, n, sext))
     }
     none => V.Nil
   }
