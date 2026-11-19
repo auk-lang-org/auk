@@ -250,10 +250,10 @@ fn has_coercions(lw: var Lower, id: int): bool = match lw.t.coercions.get(id) {
   none => false
 }
 
-/// A cancellation point at the top of every iteration of a user loop (none in `uses raw` code:
-/// the runtime's own loops).
+/// A cancellation point at the top of every iteration of a user loop (none in the runtime
+/// package, `uses raw` or not, nor in other `uses raw` code: the runtime's own loops).
 fn cancel_point(lw: var Lower, span: diag.Span) {
-  if mir.lower.lowlevel.raw_fn(&lw) { return }
+  if mir.lower.lowlevel.raw_fn(&lw) || lw.tp.program.is_runtime(lw.m) { return }
   let pending = mir.rt_global("auk_cancel_pending", ty_int()).deref(ty_int())
   lw.open_if(mir.bin(mir.BOp.Ne, pending, mir.int_(0)))
   let l = lw.loc(span)

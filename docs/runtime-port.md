@@ -305,7 +305,7 @@ hashing, probing and insertion order unchanged; golden and the fixed point agree
    C's `AukTmp tmp;` costs nothing; two of them made `auk_map_set` 1.4x slower. `auk_map_set` and
    `auk_arr_push` use a 32-byte scratch struct for elements up to 32 bytes (every scalar, `str`,
    `Value`) and `abi.Tmp` above that (the less hot `set`/`insert`/`remove`/`reverse` keep `Tmp`).
-4. **Cancellation points in the runtime's loops:** only `uses raw` functions are free of them,
+4. **Fixed** (2026-11-19: no function of the runtime package gets them): **Cancellation points in the runtime's loops:** only `uses raw` functions are free of them,
    so a plain helper of the runtime package with a loop (`icap_for`) loaded `auk_cancel_pending`
    and called `auk_cancel_check` per iteration; it now says `uses raw`. (Any function of the
    runtime package should be without them.)

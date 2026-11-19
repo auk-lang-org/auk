@@ -35,6 +35,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("abi_and_cfacts_match_c", abi_and_cfacts_match_c),
   t.test("uninitialized_locals", uninitialized_locals),
   t.test("noinline_export_fns", noinline_export_fns),
+  t.test("no_cancellation_points_in_the_runtime", no_cancellation_points_in_the_runtime),
 ]
 
 let TOML = "[package]\nname = \"auk_rt\"\nversion = \"0.1.0\"\neffects = [\"raw\", \"ffi\"]\n"
@@ -439,4 +440,18 @@ fn noinline_export_fns() uses env, fs, ffi, time {
   // the call stays a call at O2
   t.has(ll.split("@auk_small(")[1].split("\n}}\n")[0], "call i64 @auk_big(")
   t.has(ll, "noinline")
+}
+
+/// No cancellation points in the runtime package: neither in `uses raw` functions nor in its
+/// plain helpers (an ordinary package keeps one per loop iteration).
+fn no_cancellation_points_in_the_runtime() uses env, fs, ffi, time {
+  let src = "fn count(n: int): int {{\n  var i = 0\n  while i < n {{ i += 1 }}\n  i\n}}\n\nfn main() {{ print(count(3)) }}\n"
+  let main = project("no_cancel", src)
+  let body = (ir: str) => ir.split("_count(int64_t v0) {{")[1].split("\n}}\n")[0]
+  let o = auk(["ir", main])
+  t.check(o.success(), o.stderr)
+  t.lacks_text(body(o.stdout), "auk_cancel_check")
+  let plain = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n"
+  let app = project_with("cancel_app", plain, src)
+  t.has(body(auk(["ir", app]).stdout), "auk_cancel_check")
 }

@@ -141,6 +141,9 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   structs, pointers) without `uses raw`; only the intrinsics (and `extern var`s) need the
   effect, and the E0419 rule (no reference-counted type) applies to `uses raw` functions and
   `export fn`s.
+- **No cancellation points in the runtime:** generated code checks `auk_cancel_pending` at the
+  top of every loop iteration; no function of the runtime package does (`uses raw` or not):
+  the runtime's loops are its own business (a blocking wait polls cancellation explicitly).
 - **Intrinsic signatures:** `p.at(i)`, `p.offset(i)`, `raw.from_int(n)` and the byte counts of
   `copy`/`move`/`fill`/`compare`/`alloc`/`realloc` take any integer type (`int` or fixed-width).
   `raw.cast<U>(x)` takes a `raw.Ptr`, `raw.Fn`, `ffi.Ptr` or C `extern type` and gives a
