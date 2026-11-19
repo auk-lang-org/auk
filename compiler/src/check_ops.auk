@@ -59,7 +59,12 @@ pub fn place(c: var check.Checker, e: ast.Expr, mutate: bool, use_: check.PlaceU
       t
     }
     Field(x, name) when c.prog.raw_ok(c.cur_module()) => {
-      // the runtime's dialect: a field through a `raw.Ptr` needn't be a mutable place
+      // the runtime's dialect: another module's global by path (`facts.counter`)
+      match check_raw.module_global(&c, e, mutate) {
+        some(t) => return t
+        none => {}
+      }
+      // a field through a `raw.Ptr` needn't be a mutable place
       let bt = c.place(x, false, use_)
       if mutate && !(c.shallow(bt) is types.Ty.Ptr(_)) { let _ = c.place(x, true, use_) }
       let t = c.field_of(e, x, bt, name)

@@ -213,6 +213,9 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   or `never` is C's `void`. `never` (C's `_Noreturn`) is a type in the runtime package: an
   `extern fn auk__panic3(…): never = "void auk__panic3(…)"` or an `export fn` returning it
   ends the path like `panic` does, so no `raw.unreachable()` follows its calls.
+- **Other modules' globals by path:** `m.g` is a place for a `pub` `raw var`, `export var` or
+  `extern var` of module `m` (`raw.addr_of(&str.auk_ops_str)`, `m.g = v`, `m.g += 1`; E0120 if
+  it isn't `pub`), so one module declares a C global and the others use it through it.
 - **Addresses of locals:** `raw.addr_of(&x)` takes any local (`let` or `var`), parameter (it
   lives in the frame from then on, never read in place) or global but a `raw let` (a value) and
   a `raw thread var` in a constant.

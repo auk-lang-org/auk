@@ -2673,6 +2673,14 @@ fn place(lw: var Lower, e: ast.Expr): (mir.Ex, types.Ty) = match e.kind {
     lw.place_tmp(e)
   }
   Field(x, name) => {
+    // the runtime's dialect: another module's global by path
+    match lw.t.names.get(e.id) {
+      some(Global(g)) => if lw.tp.globals[g].kind != 2 {
+        let p = mir.lower.lowlevel.global_ref(&lw, g)
+        return (p.c, p.ty)
+      }
+      _ => {}
+    }
     let (b, bt) = lw.place(x)
     lw.place_field(e, b, bt, name.name)
   }

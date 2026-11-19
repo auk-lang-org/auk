@@ -38,6 +38,9 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("no_cancellation_points_in_the_runtime", no_cancellation_points_in_the_runtime),
   t.test("ptr_int_is_i64", ptr_int_is_i64),
   t.test("raw_field_accesses_are_aligned", raw_field_accesses_are_aligned),
+  t.test("locals_shadow_module_names", locals_shadow_module_names),
+  t.test("if_literal_arm_takes_the_other_arms_type", if_literal_arm_takes_the_other_arms_type),
+  t.test("other_modules_globals_by_path", other_modules_globals_by_path),
 ]
 
 let TOML = "[package]\nname = \"auk_rt\"\nversion = \"0.1.0\"\neffects = [\"raw\", \"ffi\"]\n"
@@ -508,4 +511,39 @@ fn raw_field_accesses_are_aligned() uses env, fs, ffi, time {
   t.has(body("auk_len"), "load i64, ptr %1, align 8")
   t.has(body("auk_set"), "store i64 %1, ptr %2, align 8")
   t.has(body("auk_c"), "load i32, ptr %1, align 4")
+}
+
+/// runtime/test/raw/names.auk with its `facts` module.
+fn names_fixture(name: str): str uses env, fs, ffi {
+  let main = fixture(name, "names.auk")
+  t.write(
+    paths.join(paths.parent(main) else ".", "facts.auk"),
+    "pub raw var counter: i64 = 7\npub export var auk_flag: i64 = 5\npub extern var environ: raw.Ptr<raw.Ptr<u8>> = \"environ\"\nraw var hidden: i64 = 1\npub fn twice(x: i64): i64 = x * 2\n",
+  )
+  main
+}
+
+/// In the runtime package a local named like a module wins while it is in scope (no E0116);
+/// elsewhere it is still E0116.
+fn locals_shadow_module_names() uses env, fs, ffi, time {
+  let _ = passes(names_fixture("names_shadow"))
+  let plain = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n"
+  let app = project_with("shadow_app", plain, "fn main() {{\n  let facts = 1\n  print(facts.abs())\n}}\n")
+  t.write(paths.join(paths.parent(app) else ".", "facts.auk"), "pub fn f(): int = 1\n")
+  t.eq("{codes(app)}", "[\"E0116\"]", "")
+}
+
+/// `if c { 8 } else { x }`: the literal takes `x`'s fixed-width type (names.auk's `grow`,
+/// `neg`, `wraps`).
+fn if_literal_arm_takes_the_other_arms_type() uses env, fs, ffi, time {
+  let _ = passes(names_fixture("names_if"))
+}
+
+/// `raw.addr_of(&m.g)` and `m.g = v` for another module's `raw var`, `export var` and `extern
+/// var`; a private one is E0120.
+fn other_modules_globals_by_path() uses env, fs, ffi, time {
+  let main = names_fixture("names_addr")
+  let _ = passes(main)
+  t.write(main, "fn main(): int uses raw = int(raw.addr_of(&facts.hidden).load())\n")
+  t.eq("{codes(main)}", "[\"E0120\"]", "")
 }

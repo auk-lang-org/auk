@@ -250,7 +250,7 @@ More of what the dialect lacks (the pilot's list above still holds; 3, 4, 5 were
    call it through its module (`str.auk_str_lit(…)`, `str_fmt.auk_str_quote(…)`); value.auk does.
    **Every module ported in parallel that declares one of str.c's functions as an `extern fn`
    must do the same** (or the compiler must resolve such an `extern fn` to the definition).
-10. **An `extern var` may be declared by one module only:** a second declaration of
+10. **Half fixed** (2026-11-19: `raw.addr_of(&other.var)` takes a `pub` global of another module by path; a second `extern var` of one symbol is still renamed): **An `extern var` may be declared by one module only:** a second declaration of
    `auk_ops_str` became `auk_ops_str.1` (undefined), and `raw.addr_of(&other.var)` can't name
    another module's `extern var` (E0102). str.auk declares `auk_ops_str`, `auk_ops_char`,
    `auk_ops_int` and offers `str.ops_str()`; value.auk uses it.
@@ -298,7 +298,7 @@ hashing, probing and insertion order unchanged; golden and the fixed point agree
    (`auk_arr_new.132`, left undefined at link time): value.auk now calls `arr.auk_arr_new`,
    `map.auk_map_set`, … by module, and those are `pub export fn`. A module that ports a function
    must replace every `extern fn` of it in the package.
-2. **Two `extern var`s of one symbol in two modules:** the second is renamed the same way
+2. **Half fixed** (as str's 10 above): **Two `extern var`s of one symbol in two modules:** the second is renamed the same way
    (`auk_ops_str.1`), and `raw.addr_of(&value.auk_ops_str)` doesn't take a qualified name: arr
    reaches `auk_ops_str`/`auk_ops_float` through `value.ops_str()`/`ops_float()`.
 3. **Fixed** (2026-11-19, lowlevel.md 7a "Uninitialized locals": `var x: T`; catch, arr, map, chan, str and str_fmt's integer paths use it): **No uninitialized locals:** `var tmp = abi.Tmp {}` is a 256-byte memset on every call, where

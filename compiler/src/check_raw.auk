@@ -107,6 +107,15 @@ pub fn special(c: var check.Checker, e: ast.Expr, target: int, name: ast.Ident, 
           return types.Ty.Error
         }
       }
+      // another module's global by path: only a place
+      match module_global(&c, inner, false) {
+        some(t) => {
+          c.record(x.id, t)
+          c.note_call(e.id, typed.Call { callee: typed.Callee.Fn(f, [t]), args: [typed.Arg { node: x.id, by_ref: true }] })
+          return types.Ty.Ptr(t)
+        }
+        none => {}
+      }
       let t = c.infer(inner, none)
       c.record(x.id, t)
       // a `raw let` is a value, not memory: `place` reports it when asked to change it
@@ -457,6 +466,32 @@ pub fn global_place(c: var check.Checker, e: ast.Expr, n: str, mutate: bool): ty
   c.record(e.id, t)
   if mutate && c.globals[g].kind == 2 {
     c.err(diag.new("E0320", e.span, "can't change `{n}`: it is a `raw let` constant").note("declare it `raw var` to change it"))
+  }
+  t
+}
+
+/// `m.g` used as a place (`raw.addr_of(&facts.counter)`, `facts.counter = 1`): a global of
+/// another module by path, or none if `e` isn't one.
+pub fn module_global(c: var check.Checker, e: ast.Expr, mutate: bool): types.Ty? {
+  let (x, name) = match e.kind {
+    Field(x, name) => (x, name)
+    _ => return none
+  }
+  let path = visit.as_path(x) else return none
+  if c.lookup_local(path[0].name) != none { return none }
+  let m = c.cur_module()
+  let tg = c.module_of_path(m, path) else return none
+  let g = c.items[tg].globals.get(name.name) else return none
+  if tg != m && !c.globals[g].public {
+    c.err(
+      diag.new("E0120", name.span, "`{name.name}` is private to module `{c.prog.name(tg)}`").note("mark it `pub` to use it from other modules"),
+    )
+  }
+  c.cx.t.names[e.id] = typed.NameRef.Global(g)
+  let t = c.globals[g].ty
+  c.record(e.id, t)
+  if mutate && c.globals[g].kind == 2 {
+    c.err(diag.new("E0320", e.span, "can't change `{name.name}`: it is a `raw let` constant").note("declare it `raw var` to change it"))
   }
   t
 }
