@@ -758,7 +758,10 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       `task.c`"). `cwrap` (2026-11-19: deleted; its callers call the varargs functions
       directly; runtime-port.md, "Found porting `cwrap.c`"). `trace` (2026-11-20: the crash
       handler stays behind the overflow handler; a traced call costs the same as in C;
-      runtime-port.md, "Found porting `trace.c`"). Next: `dbg`.
+      runtime-port.md, "Found porting `trace.c`"). `dbg` (2026-11-20: `dbg*.auk`; every
+      Phase 1 race fix kept; enter/leave faster than C; runtime-port.md, "Found porting
+      `dbg.c`"). **The runtime is Auk: no `.c` left in runtime/c** (`auk_rt.h` stays as the ABI
+      contract the tests and the ABI probe compile against).
 - [ ] `auk_rt.bc` is produced by the Auk compiler; `libauk_rt.a` via LLVM's archive writer.
 - [ ] Same C tests (called through `export fn`), then rewrite them as Auk tests. The first
       half holds for the ported modules (`run.sh` links the Auk half).
