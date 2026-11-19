@@ -183,6 +183,7 @@ pub let CODES: [(str, str)] = [
   ("E0413", "effect not allowed by the package's raft.toml"),
   ("E0414", "unknown effect"),
   ("E0415", "conversion to `any Shape` exceeds the shape method's effects"),
+  ("E0418", "`raw` is only for the runtime"),
   ("E0420", "imprint panicked at compile time"),
 ]
 

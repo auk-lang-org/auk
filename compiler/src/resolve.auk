@@ -128,6 +128,16 @@ pub fn name(p: Program, m: int): str = p.mods[m].path.join(".")
 
 pub fn is_core(p: Program, m: int): bool = p.mods[m].pkg == p.core_pkg
 
+/// Is module `m` in the runtime package (`name = "auk_rt"` in a raft.toml), the only one that
+/// may use the `raw` dialect (docs/lowlevel.md)?
+pub fn is_runtime(p: Program, m: int): bool {
+  let pkg = p.pkgs[p.mods[m].pkg]
+  !pkg.is_core && pkg.dir is some(_) && pkg.name == "auk_rt"
+}
+
+/// May module `m` use the `raw` dialect (the runtime package, or core's `raw` module)?
+pub fn raw_ok(p: Program, m: int): bool = is_runtime(p, m) || is_core(p, m)
+
 pub fn child(p: Program, m: int, name: str): int? = p.mods[m].children.get(name)
 
 /// What a path's first segment `name` means in module `m`, if it names a module.

@@ -17,6 +17,10 @@
 /// The effects a function may declare.
 pub let EFFECTS = ["fs", "net", "time", "rand", "env", "proc", "audio_out", "gui", "ffi"]
 
+/// An effect name: one of `EFFECTS`, or `raw` (docs/lowlevel.md: the runtime's dialect, which
+/// only the runtime package may use, so it isn't listed in messages).
+pub fn is_effect(n: str): bool = EFFECTS.contains(n) || n == "raw"
+
 /// One expression node of a body, in source order.
 struct Node {
   id: int,
@@ -371,9 +375,13 @@ fn names_and_ceiling(cx: var Cx) {
     let first = cx.first_clause(info) else continue
     for u in first.effects { cx.check_name(m, u) }
     let pkg = tp.program.pkgs[tp.program.mods[m].pkg]
+    let runtime = resolve.is_runtime(tp.program, m)
+    for u in first.effects {
+      if u.name == "raw" && !runtime { cx.emit(m, raw_only(u.span, "`{info.name}` uses `raw`")) }
+    }
     let dir = pkg.dir else continue
     for u in first.effects {
-      if !EFFECTS.contains(u.name) || pkg.effects.contains(u.name) { continue }
+      if !is_effect(u.name) || pkg.effects.contains(u.name) || (u.name == "raw" && !runtime) { continue }
       let allowed = if pkg.effects.len() == 0 {
         "allows no effects"
       } else {
@@ -402,8 +410,13 @@ fn names_and_ceiling(cx: var Cx) {
   }
 }
 
+/// E0418: something of the `raw` dialect outside the runtime package.
+pub fn raw_only(span: diag.Span, what: str): diag.Diag =
+  diag.new("E0418", span, "{what}, but `raw` is only for the runtime")
+    .note("the low-level dialect (docs/lowlevel.md) is only for the package `auk_rt` (runtime/raft.toml); ordinary code calls C with `extern fn` and the `ffi` effect")
+
 fn check_name(cx: var Cx, m: int, u: ast.Ident) {
-  if EFFECTS.contains(u.name) { return }
+  if is_effect(u.name) { return }
   var d = diag.new("E0414", u.span, "unknown effect `{u.name}`").note("the effects are {EFFECTS.join(", ")}")
   match check.similar(u.name, EFFECTS) {
     some(s) => d = d.fix(u.span, s)
@@ -453,7 +466,8 @@ fn check_fn(cx: var Cx, f: int) {
   match first {
     some(c) => if !(generic && insts.len() == 0) {
       for u in c.effects {
-        if EFFECTS.contains(u.name) && !used.contains(u.name) { unused.push(u) }
+        let gated = u.name == "raw" && !resolve.is_runtime(cx.tp.program, cx.tp.fns[f].module)
+        if is_effect(u.name) && !used.contains(u.name) && !gated { unused.push(u) }
       }
     }
     none => {}

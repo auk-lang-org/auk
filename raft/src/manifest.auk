@@ -99,9 +99,13 @@ pub fn parse(src: str): Manifest!res.Fail {
     some(v) =>
       toml.as_strs(v) else return bad(res.err("[package] effects must be an array of strings"))
   }
-  match effects.find(e => !EFFECTS.contains(e)) {
+  match effects.find(e => !EFFECTS.contains(e) && e != "raw") {
     some(e) => return bad(res.err("unknown effect `{e}`").help("effects are {EFFECTS.join(" ")}"))
     none => {}
+  }
+  // `raw` (docs/lowlevel.md) is only for the runtime package
+  if effects.contains("raw") && name != "auk_rt" {
+    return bad(res.err("`raw` is only for the runtime").help("only the package `auk_rt` (runtime/raft.toml) may list the `raw` effect"))
   }
   // [link] libs: C libraries for `extern fn` (the compiler loads or links them); `macos`
   // and `linux`: more, on that OS only
@@ -419,6 +423,9 @@ test "manifest validation" {
   assert bad_msg("[package]\nname = \"a\"\nversion = \"0.1\"") == "invalid version `0.1`"
   assert bad_msg("[package]\nname = \"a\"\nversion = \"0.1.0\"\neffects = [\"gpu\"]") ==
     "unknown effect `gpu`"
+  assert bad_msg("[package]\nname = \"a\"\nversion = \"0.1.0\"\neffects = [\"raw\"]") ==
+    "`raw` is only for the runtime"
+  assert parse("[package]\nname = \"auk_rt\"\nversion = \"0.1.0\"\neffects = [\"raw\"]") is ok(_)
   assert bad_msg("[package]\nname = \"a\"\nversion = \"0.1.0\"\n[deps]\nb = \">1\"") ==
     "invalid version requirement `>1` for b"
   let ffi = "[package]\nname = \"a\"\nversion = \"0.1.0\"\neffects = [\"ffi\"]\n[link]\n"

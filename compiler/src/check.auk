@@ -551,6 +551,7 @@ pub fn show(c: Checker, t: types.Ty): str {
 
 fn collect(c: var Checker) uses fs {
   let nmods = c.prog.mods.len()
+  c.raw_manifests()
   // types and shapes
   for m in 0..nmods {
     for i in 0..c.prog.mods[m].ast.items.len() { c.declare_type(m, i) }
@@ -573,6 +574,30 @@ fn collect(c: var Checker) uses fs {
       }
     }
     c.check_duplicate_fns(m)
+  }
+}
+
+/// E0418 for a package other than the runtime listing `raw` in its raft.toml's effects.
+fn raw_manifests(c: var Checker) uses fs {
+  for pkg in c.prog.pkgs {
+    if pkg.is_core || pkg.name == "auk_rt" || !pkg.effects.contains("raw") { continue }
+    let dir = pkg.dir else continue
+    let toml = paths.join(dir, "raft.toml")
+    var span = diag.Span { line: 1, col: 1, end_line: 1, end_col: 1 }
+    match fs.read(toml) {
+      ok(text) => for i, l in text.lines() {
+        match l.find("\"raw\"") {
+          some(k) => if l.trim().starts_with("effects") {
+            let col = l[0..k].chars().len() + 1
+            span = diag.Span { line: i + 1, col, end_line: i + 1, end_col: col + 5 }
+          }
+          none => {}
+        }
+      }
+      err(_) => {}
+    }
+    let d = effect_check.raw_only(span, "the package `{pkg.name}` lists the effect `raw`")
+    c.errs.push(diag.FileDiag { file: toml, diag: d })
   }
 }
 
