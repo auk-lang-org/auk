@@ -79,8 +79,8 @@ static void dt_str(DText *t, const char *s) {
 
 static void dt_int(DText *t, int64_t v) {
     char b[24];
-    snprintf(b, sizeof b, "%lld", (long long)v);
-    dt_str(t, b);
+    int n = auk__fmt_i64(b, v);
+    dt_add(t, b, (size_t)n);
 }
 
 /* A JSON string of s[0..n) (UTF-8). */
@@ -99,9 +99,10 @@ static void dt_json(DText *t, const char *s, size_t n) {
         } else if (c == '\t') {
             dt_str(t, "\\t");
         } else if (c < 0x20) {
-            char u[8];
-            snprintf(u, sizeof u, "\\u%04x", c);
-            dt_str(t, u);
+            char u[24];
+            int k = auk__fmt_hex(u, c, 4, false);
+            dt_str(t, "\\u");
+            dt_add(t, u, (size_t)k);
         } else {
             dt_add(t, (const char *)&c, 1);
         }
@@ -904,7 +905,7 @@ static char *part_name(const PartName *n) {
     }
     if (n->kind == NAME_INDEX) {
         char b[24];
-        snprintf(b, sizeof b, "%lld", (long long)n->index);
+        auk__fmt_i64(b, n->index);
         return dup_s(b);
     }
     if (n->map->kops->show == NULL) {
@@ -1117,21 +1118,26 @@ static bool thread_top(int64_t t, int64_t me, AukDbgFrame **out) {
     return found;
 }
 
+/* "<what><n>" (malloc'd): "no thread 3". */
+static char *no_such(const char *what, int64_t n) {
+    AukStrBuf m = {0};
+    auk__sb_put_cstr(&m, what);
+    auk_sb_int(&m, n);
+    return auk__sb_take_cstr(&m);
+}
+
 /* Frame n (0 = innermost) of thread t, or NULL with *err (malloc'd). */
 static AukDbgFrame *frame_at(int64_t t, int64_t n, int64_t me, char **err) {
     AukDbgFrame *f;
-    char b[64];
     if (!thread_top(t, me, &f)) {
-        snprintf(b, sizeof b, "no thread %lld", (long long)t);
-        *err = dup_s(b);
+        *err = no_such("no thread ", t);
         return NULL;
     }
     for (int64_t i = 0; i < n && f != NULL; i++) {
         f = f->parent;
     }
     if (f == NULL) {
-        snprintf(b, sizeof b, "no frame %lld", (long long)n);
-        *err = dup_s(b);
+        *err = no_such("no frame ", n);
     }
     return f;
 }
@@ -1207,9 +1213,9 @@ static bool serve(const Cmd *cmd, int64_t me, int *kind) {
             reply(cmd, "stack", r.p);
             free(r.p);
         } else {
-            char b[64];
-            snprintf(b, sizeof b, "no thread %lld", (long long)t);
-            reply_error(cmd, b);
+            char *e = no_such("no thread ", t);
+            reply_error(cmd, e);
+            free(e);
         }
     } else if (strcmp(c0, "vars") == 0 || strcmp(c0, "locals") == 0) {
         int64_t n = word_int(w, nw, 1, 0);
@@ -2061,6 +2067,17 @@ static Info *parse_info(const char *text, const AukShowFn *shows, const KidsFn *
 
 /* Start the debugger (generated main, before anything else runs): attach to the front end named
  * by AUK_DEBUG and wait for `run`. */
+/* "auk: debugger at <path>: <reason>" on stderr. */
+static void debugger_at_failed(const char *path, int e) {
+    AukStrBuf m = {0};
+    auk__sb_put_cstr(&m, "auk: debugger at ");
+    auk__sb_put_cstr(&m, path);
+    auk__sb_put_cstr(&m, ": ");
+    auk__sb_put_cstr(&m, strerror(e));
+    auk__sb_put_cstr(&m, "\n");
+    auk__sb_eprint(&m);
+}
+
 AUK_API void auk_dbg_init(const char *text, const AukShowFn *shows, const void *kids) {
     const char *path = getenv("AUK_DEBUG");
     if (path == NULL) {
@@ -2071,7 +2088,7 @@ AUK_API void auk_dbg_init(const char *text, const AukShowFn *shows, const void *
     memset(&addr, 0, sizeof addr);
     addr.sun_family = AF_UNIX;
     if (strlen(path) >= sizeof addr.sun_path) {
-        fprintf(stderr, "auk: debugger at %s: %s\n", path, strerror(ENAMETOOLONG));
+        debugger_at_failed(path, ENAMETOOLONG);
         if (fd >= 0) {
             close(fd);
         }
@@ -2080,7 +2097,7 @@ AUK_API void auk_dbg_init(const char *text, const AukShowFn *shows, const void *
     memcpy(addr.sun_path, path, strlen(path) + 1);
     if (fd < 0 || connect(fd, (struct sockaddr *)&addr, sizeof addr) != 0) {
         int e = errno;
-        fprintf(stderr, "auk: debugger at %s: %s\n", path, strerror(e));
+        debugger_at_failed(path, e);
         if (fd >= 0) {
             close(fd);
         }

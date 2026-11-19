@@ -41,6 +41,33 @@
 
 #if defined(__APPLE__)
 
+/* A malloc'd copy of the message s. */
+static char *msg_dup(const char *s) {
+    AukStrBuf m = {0};
+    auk__sb_put_cstr(&m, s);
+    return auk__sb_take_cstr(&m);
+}
+
+/* a, b and a newline on stderr, in one write. */
+static void eprint_line(const char *a, const char *b) {
+    AukStrBuf m = {0};
+    auk__sb_put_cstr(&m, a);
+    auk__sb_put_cstr(&m, b);
+    auk__sb_put_cstr(&m, "\n");
+    auk__sb_eprint(&m);
+}
+
+/* "gui.present: cannot make a <w>x<h> surface" on stderr. */
+static void no_surface(size_t w, size_t h) {
+    AukStrBuf m = {0};
+    auk__sb_put_cstr(&m, "gui.present: cannot make a ");
+    auk__sb_u64(&m, w);
+    auk__sb_put_cstr(&m, "x");
+    auk__sb_u64(&m, h);
+    auk__sb_put_cstr(&m, " surface\n");
+    auk__sb_eprint(&m);
+}
+
 typedef void *Id;
 typedef void *Sel;
 typedef void *Class;
@@ -119,9 +146,12 @@ static Sys sys;
 static void *open_lib(const char *path, char **err) {
     void *h = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
     if (h == NULL && *err == NULL) {
-        size_t n = strlen(path) + 256;
-        *err = auk__xmalloc(n);
-        snprintf(*err, n, "gui: cannot load %s: %s", path, dlerror());
+        AukStrBuf m = {0};
+        auk__sb_put_cstr(&m, "gui: cannot load ");
+        auk__sb_put_cstr(&m, path);
+        auk__sb_put_cstr(&m, ": ");
+        auk__sb_put_cstr(&m, dlerror());
+        *err = auk__sb_take_cstr(&m);
     }
     return h;
 }
@@ -129,9 +159,10 @@ static void *open_lib(const char *path, char **err) {
 static void *need(void *lib, const char *name, char **err) {
     void *p = lib == NULL ? NULL : dlsym(lib, name);
     if (p == NULL && *err == NULL) {
-        size_t n = strlen(name) + 64;
-        *err = auk__xmalloc(n);
-        snprintf(*err, n, "gui: missing system function %s", name);
+        AukStrBuf m = {0};
+        auk__sb_put_cstr(&m, "gui: missing system function ");
+        auk__sb_put_cstr(&m, name);
+        *err = auk__sb_take_cstr(&m);
     }
     return p;
 }
@@ -364,19 +395,27 @@ static void trace_add(int kind, int64_t t0) {
     int64_t now = now_us();
     if (trace_last == 0 || now - trace_last >= 500000) {
         trace_last = now;
-        char line[512];
-        int k = snprintf(line, sizeof line, "gui trace:");
+        AukStrBuf line = {0};
+        auk__sb_put_cstr(&line, "gui trace:");
         const char *names[3] = {"copy", "wait", "handle"};
         for (int i = 0; i < 3; i++) {
             uint64_t n = atomic_exchange(&trace_s[i * 3], 0);
             uint64_t tot = atomic_exchange(&trace_s[i * 3 + 1], 0);
             uint64_t max = atomic_exchange(&trace_s[i * 3 + 2], 0);
-            if (n > 0 && k < (int)sizeof line) {
-                k += snprintf(line + k, sizeof line - (size_t)k, " %s %llux avg %llu \xC2\xB5s max %llu \xC2\xB5s;", names[i],
-                              (unsigned long long)n, (unsigned long long)(tot / n), (unsigned long long)max);
+            if (n > 0) {
+                auk__sb_put_cstr(&line, " ");
+                auk__sb_put_cstr(&line, names[i]);
+                auk__sb_put_cstr(&line, " ");
+                auk__sb_u64(&line, n);
+                auk__sb_put_cstr(&line, "x avg ");
+                auk__sb_u64(&line, tot / n);
+                auk__sb_put_cstr(&line, " \xC2\xB5s max ");
+                auk__sb_u64(&line, max);
+                auk__sb_put_cstr(&line, " \xC2\xB5s;");
             }
         }
-        fprintf(stderr, "%s\n", line);
+        auk__sb_put_cstr(&line, "\n");
+        auk__sb_eprint(&line);
     }
     pthread_mutex_unlock(&trace_lock);
 }
@@ -640,12 +679,12 @@ static bool show(int64_t id) {
         HSurf a;
         HSurf b;
         if (!surf_new(fw, fh, &a)) {
-            fprintf(stderr, "gui.present: cannot make a %zux%zu surface\n", fw, fh);
+            no_surface(fw, fh);
             goto done;
         }
         if (!surf_new(fw, fh, &b)) {
             sys.cf_release(a.s);
-            fprintf(stderr, "gui.present: cannot make a %zux%zu surface\n", fw, fh);
+            no_surface(fw, fh);
             goto done;
         }
         if (win->has_surfs) {
@@ -746,9 +785,7 @@ static char *present(uint64_t client, int64_t id, int64_t fw64, int64_t fh64, in
         if (fd >= 0) {
             close(fd);
         }
-        char *e = auk__xmalloc(64);
-        snprintf(e, 64, "gui.present: bad frame");
-        return e;
+        return msg_dup("gui.present: bad frame");
     }
     int i = (int)buf;
     HWin *win = hwin(id);
@@ -756,18 +793,21 @@ static char *present(uint64_t client, int64_t id, int64_t fw64, int64_t fh64, in
         if (fd >= 0) {
             close(fd);
         }
-        char *e = auk__xmalloc(96);
-        snprintf(e, 96, "gui.present: window %lld is closed", (long long)id);
-        return e;
+        AukStrBuf m = {0};
+        auk__sb_put_cstr(&m, "gui.present: window ");
+        auk_sb_int(&m, id);
+        auk__sb_put_cstr(&m, " is closed");
+        return auk__sb_take_cstr(&m);
     }
     if (fd >= 0) {
         void *p = mmap(NULL, len, PROT_READ, MAP_SHARED, fd, 0);
         if (p == MAP_FAILED) {
             int er = errno;
             close(fd);
-            char *e = auk__xmalloc(256);
-            snprintf(e, 256, "gui.present: cannot map the frame: %s", strerror(er));
-            return e;
+            AukStrBuf m = {0};
+            auk__sb_put_cstr(&m, "gui.present: cannot map the frame: ");
+            auk__sb_put_cstr(&m, strerror(er));
+            return auk__sb_take_cstr(&m);
         }
         if (win->has_buf[i]) {
             buf_free(&win->bufs[i]);
@@ -779,9 +819,7 @@ static char *present(uint64_t client, int64_t id, int64_t fw64, int64_t fh64, in
         win->has_buf[i] = true;
     }
     if (!win->has_buf[i] || win->bufs[i].fw != fw || win->bufs[i].fh != fh) {
-        char *e = auk__xmalloc(64);
-        snprintf(e, 64, "gui.present: no frame memory of that size");
-        return e;
+        return msg_dup("gui.present: no frame memory of that size");
     }
     if (win->front >= 0 && win->has_buf[win->front] && (win->bufs[win->front].fw != fw || win->bufs[win->front].fh != fh)) {
         win->pending.n = 0; /* a new size: the new surfaces get everything anyway */
@@ -808,7 +846,7 @@ static char *present(uint64_t client, int64_t id, int64_t fw64, int64_t fh64, in
 /* Save an image of win as it is on screen to path (a binary PPM), for tests. */
 static void snapshot(Id win, const char *path) {
     if (sys.window_image == NULL) {
-        fprintf(stderr, "gui: AUK_GUI_SNAP: no CGWindowListCreateImage on this system\n");
+        fputs("gui: AUK_GUI_SNAP: no CGWindowListCreateImage on this system\n", stderr);
         return;
     }
     m_void(cls("CATransaction"), "flush");
@@ -819,7 +857,7 @@ static void snapshot(Id win, const char *path) {
     /* including only this window, its contents without the frame, at full resolution */
     void *img = sys.window_image(null_rect, 8, num, 1 | 8);
     if (img == NULL) {
-        fprintf(stderr, "gui: AUK_GUI_SNAP: could not capture the window\n");
+        fputs("gui: AUK_GUI_SNAP: could not capture the window\n", stderr);
         return;
     }
     size_t w = sys.image_width(img);
@@ -830,7 +868,14 @@ static void snapshot(Id win, const char *path) {
         const uint8_t *p = sys.data_ptr(data);
         FILE *f = fopen(path, "wb");
         if (f != NULL) {
-            fprintf(f, "P6\n%zu %zu\n255\n", w, h);
+            AukStrBuf hd = {0};
+            auk__sb_put_cstr(&hd, "P6\n");
+            auk__sb_u64(&hd, w);
+            auk__sb_put_cstr(&hd, " ");
+            auk__sb_u64(&hd, h);
+            auk__sb_put_cstr(&hd, "\n255\n");
+            fputs(auk__sb_cstr(&hd), f);
+            auk_sb_free(&hd);
             for (size_t y = 0; y < h; y++) {
                 for (size_t x = 0; x < w; x++) {
                     const uint8_t *px = p + y * rb + x * 4;
@@ -1442,7 +1487,7 @@ static void *client_reader(void *arg) {
 
 static void add_client(int fd) {
     auk__wire_no_sigpipe(fd);
-    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    auk__c_fcntl(fd, F_SETFD, FD_CLOEXEC);
     Job *j = new_job(JOB_ADD_CLIENT);
     j->client = atomic_fetch_add(&next_client, 1);
     j->fd = fd;
@@ -1498,18 +1543,23 @@ static char *listen_on(const char *path) {
     memset(&addr, 0, sizeof addr);
     size_t n = strlen(path);
     if (n >= sizeof addr.sun_path) {
-        char *e = auk__xmalloc(n + 64);
-        snprintf(e, n + 64, "gui host: socket path too long: %s", path);
-        return e;
+        AukStrBuf m = {0};
+        auk__sb_put_cstr(&m, "gui host: socket path too long: ");
+        auk__sb_put_cstr(&m, path);
+        return auk__sb_take_cstr(&m);
     }
     addr.sun_family = AF_UNIX;
     memcpy(addr.sun_path, path, n);
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     unlink(path);
     if (fd < 0 || bind(fd, (struct sockaddr *)&addr, sizeof addr) != 0 || listen(fd, 8) != 0) {
-        char *e = auk__xmalloc(n + 256);
-        snprintf(e, n + 256, "gui host: cannot listen on %s: %s", path, strerror(errno));
-        return e;
+        int er = errno;
+        AukStrBuf m = {0};
+        auk__sb_put_cstr(&m, "gui host: cannot listen on ");
+        auk__sb_put_cstr(&m, path);
+        auk__sb_put_cstr(&m, ": ");
+        auk__sb_put_cstr(&m, strerror(er));
+        return auk__sb_take_cstr(&m);
     }
     listen_fd = fd;
     listen_path = auk__xmalloc(n + 1);
@@ -1557,7 +1607,7 @@ static int host_run(const char *spec) {
     trace_on = t != NULL && strcmp(t, "1") == 0;
     char *err = load_sys();
     if (err != NULL) {
-        fprintf(stderr, "%s\n", err);
+        eprint_line(err, "");
         free(err);
         return 1;
     }
@@ -1566,7 +1616,7 @@ static int host_run(const char *spec) {
         char *end = NULL;
         long fd = strtol(spec + 3, &end, 10);
         if (end == spec + 3 || *end != 0 || fd < 0 || fd > INT32_MAX) {
-            fprintf(stderr, "gui host: bad AUK_GUI_HOST=%s\n", spec);
+            eprint_line("gui host: bad AUK_GUI_HOST=", spec);
             return 1;
         }
         single_client = true;
@@ -1574,12 +1624,12 @@ static int host_run(const char *spec) {
     } else if (strncmp(spec, "listen:", 7) == 0) {
         err = listen_on(spec + 7);
         if (err != NULL) {
-            fprintf(stderr, "%s\n", err);
+            eprint_line(err, "");
             free(err);
             return 1;
         }
     } else {
-        fprintf(stderr, "gui host: bad AUK_GUI_HOST=%s\n", spec);
+        eprint_line("gui host: bad AUK_GUI_HOST=", spec);
         return 1;
     }
     m_void(app(), "run");
@@ -1600,7 +1650,7 @@ int auk__gui_host_main(void) {
 #if defined(__APPLE__)
     int r = host_run(spec);
 #else
-    fprintf(stderr, "gui: windows are only supported on macOS so far\n");
+    fputs("gui: windows are only supported on macOS so far\n", stderr);
     int r = 1;
 #endif
     free(spec);

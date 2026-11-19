@@ -41,13 +41,28 @@ static void report_copy(int64_t w, int64_t h, const char *loc, const char *what)
     }
     uint64_t n = atomic_fetch_add(&count, 1) + 1;
     if (n <= 20) {
-        fprintf(stderr,
-                "pixels.%s%s%s: copied a shared %lldx%lld frame (%lld MB) to change it; something else still holds it "
-                "(keep one reference to a frame you draw into)\n",
-                what, loc == NULL ? "" : " at ", loc == NULL ? "" : loc, (long long)w, (long long)h,
-                (long long)(w * h * 4 / 1000000));
+        AukStrBuf m = {0};
+        auk__sb_put_cstr(&m, "pixels.");
+        auk__sb_put_cstr(&m, what);
+        if (loc != NULL) {
+            auk__sb_put_cstr(&m, " at ");
+            auk__sb_put_cstr(&m, loc);
+        }
+        auk__sb_put_cstr(&m, ": copied a shared ");
+        auk_sb_int(&m, w);
+        auk__sb_put_cstr(&m, "x");
+        auk_sb_int(&m, h);
+        auk__sb_put_cstr(&m, " frame (");
+        auk_sb_int(&m, w * h * 4 / 1000000);
+        auk__sb_put_cstr(&m, " MB) to change it; something else still holds it (keep one reference to a frame you draw "
+                             "into)\n");
+        auk__sb_eprint(&m);
     } else if (n % 100 == 0) {
-        fprintf(stderr, "pixels: %llu copies of shared frames so far\n", (unsigned long long)n);
+        AukStrBuf m = {0};
+        auk__sb_put_cstr(&m, "pixels: ");
+        auk__sb_u64(&m, n);
+        auk__sb_put_cstr(&m, " copies of shared frames so far\n");
+        auk__sb_eprint(&m);
     }
 }
 

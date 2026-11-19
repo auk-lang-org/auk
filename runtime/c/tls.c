@@ -319,9 +319,9 @@ static NwTls *nw_connect(const char *h, const char *ports, bool fallback, NwOutc
                 if (!ok) {
                     const char *r = err != NULL ? cert_reason((int)CFErrorGetCode(err)) : NULL;
                     if (r != NULL) {
-                        snprintf(t->why, sizeof t->why, "%s", r);
+                        auk__cstr_copy(t->why, sizeof t->why, r);
                     } else {
-                        snprintf(t->why, sizeof t->why, "the system trust evaluation failed");
+                        auk__cstr_copy(t->why, sizeof t->why, "the system trust evaluation failed");
                         CFStringRef d = err != NULL ? CFErrorCopyDescription(err) : NULL;
                         if (d != NULL) {
                             CFStringGetCString(d, t->why, sizeof t->why, kCFStringEncodingUTF8);
@@ -391,7 +391,7 @@ AUK_API AukRes_conn auk_net_tls(const AukStr *host, int64_t port) {
         return tls_conn_err(bad);
     }
     char ports[24];
-    snprintf(ports, sizeof ports, "%lld", (long long)port);
+    auk__fmt_i64(ports, port);
     bad = resolve_first(h, ports, port);
     if (bad != NULL) {
         return tls_conn_err(bad);
@@ -821,7 +821,7 @@ AUK_API AukRes_conn auk_net_tls(const AukStr *host, int64_t port) {
         return tls_conn_err(prefixed(&m, ": ", ssl_unavailable, 0));
     }
     char ports[24];
-    snprintf(ports, sizeof ports, "%lld", (long long)port);
+    auk__fmt_i64(ports, port);
     AukErr *err = NULL;
     bool retry = false;
     SslTls *t = ssl_open(h, ports, port, false, &err, &retry);

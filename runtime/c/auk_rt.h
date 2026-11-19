@@ -553,6 +553,16 @@ AUK_API void auk_sb_int(AukStrBuf *b, int64_t v);
 AUK_API AukStr *auk_sb_finish(AukStrBuf *b);
 AUK_API void auk_sb_free(AukStrBuf *b);
 _Noreturn void auk__panic_sb(const char *loc, AukStrBuf *b);
+int auk__fmt_i64(char *out, int64_t v);
+int auk__fmt_u64(char *out, uint64_t v);
+int auk__fmt_hex(char *out, uint64_t v, int min_digits, bool upper);
+void auk__cstr_copy(char *out, size_t cap, const char *s);
+void auk__sb_u64(AukStrBuf *b, uint64_t v);
+void auk__sb_hex(AukStrBuf *b, uint64_t v, int min_digits, bool upper);
+const char *auk__sb_cstr(AukStrBuf *b);
+void auk__sb_take_into(AukStrBuf *b, char *out, size_t cap);
+char *auk__sb_take_cstr(AukStrBuf *b);
+void auk__sb_eprint(AukStrBuf *b);
 AukErr *auk__err_sb(AukStrBuf *b);
 AukStr *auk__str_raw(const char *p, int64_t n, int64_t chars, bool ascii);
 AukStr *auk__str_new(const char *p, int64_t n);
@@ -619,6 +629,16 @@ AUK_API AukStr *auk_fmt_float(double v, const char *spec);
 AUK_API AukStr *auk_fmt_str(const AukStr *s, const char *spec);
 AUK_API AukStr *auk_fmt_char(uint32_t c, const char *spec);
 AUK_API AukStr *auk_fmt_bool(bool v, const char *spec);
+
+/* ---- cwrap.c: fixed-argument wrappers for the C library's varargs functions ------------- */
+
+int auk__c_open(const char *path, int flags, int mode);
+int auk__c_shm_open(const char *name, int flags, int mode);
+int auk__c_fcntl(int fd, int cmd, int arg);
+int auk__c_ioctl_ptr(int fd, unsigned long request, void *arg);
+int auk__c_fmt_e(char *buf, size_t cap, int prec, double v);
+int auk__c_fmt_f(char *buf, size_t cap, int prec, double v);
+int auk__c_fmt_g(char *buf, size_t cap, double v);
 
 /* ---- arr.c: arrays ------------------------------------------------------------------------ */
 

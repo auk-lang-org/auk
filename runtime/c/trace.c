@@ -409,7 +409,13 @@ static void start_stream(int fd, bool unbuffered) {
 
 static void cannot_write(const char *path) {
     int e = errno;
-    fprintf(stderr, "auk: cannot write the trace to %s: %s\n", path, strerror(e));
+    AukStrBuf m = {0};
+    auk__sb_put_cstr(&m, "auk: cannot write the trace to ");
+    auk__sb_put_cstr(&m, path);
+    auk__sb_put_cstr(&m, ": ");
+    auk__sb_put_cstr(&m, strerror(e));
+    auk__sb_put_cstr(&m, "\n");
+    auk__sb_eprint(&m);
 }
 
 AUK_API void auk_trace_init(bool tests) {
@@ -428,7 +434,7 @@ AUK_API void auk_trace_init(bool tests) {
         start_stream(2, true);
         return;
     }
-    int fd = open(trace_cfg, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    int fd = auk__c_open(trace_cfg, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0) {
         cannot_write(trace_cfg);
         return;
@@ -469,7 +475,7 @@ void auk__trace_test_begin(const char *name, const char *tail_path) {
         return;
     }
     if (tail_path != NULL) {
-        int fd = open(tail_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+        int fd = auk__c_open(tail_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
         if (fd < 0) {
             return;
         }
@@ -485,7 +491,7 @@ void auk__trace_test_begin(const char *name, const char *tail_path) {
     }
     mkdir(trace_cfg, 0755);
     char *path = test_file(trace_cfg, name);
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    int fd = auk__c_open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0) {
         cannot_write(path);
     }
@@ -499,7 +505,7 @@ void auk__trace_test_begin(const char *name, const char *tail_path) {
  * appended to the test's file; in tail mode the caller prints the file (when the test failed). */
 void auk__trace_test_end(const char *name, bool ok, const char *tail_path) {
     char *path = tail_path == NULL ? test_file(trace_cfg, name) : NULL;
-    int fd = open(path != NULL ? path : tail_path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
+    int fd = auk__c_open(path != NULL ? path : tail_path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
     free(path);
     if (fd < 0) {
         return;

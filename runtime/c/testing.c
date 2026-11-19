@@ -39,7 +39,11 @@ AUK_API _Noreturn void auk_assert_fail_cmp(const char *loc, const char *cond_tex
 AUK_API void auk_peek(const char *loc, const char *src_text, const AukStr *shown) {
     fflush(stdout);
     flockfile(stderr);
-    fprintf(stderr, "[%s] %s = ", loc, src_text);
+    fputc('[', stderr);
+    fputs(loc, stderr);
+    fputs("] ", stderr);
+    fputs(src_text, stderr);
+    fputs(" = ", stderr);
     fwrite(auk_str_cstr(shown), 1, (size_t)auk_str_byte_len(shown), stderr);
     fputc('\n', stderr);
     funlockfile(stderr);
@@ -155,7 +159,12 @@ AUK_API int auk_test_main(int argc, char **argv) {
     char tail_path[1024] = {0};
     if (tail) {
         const char *tmp = getenv("TMPDIR");
-        snprintf(tail_path, sizeof tail_path, "%s/auk-trace-%d.jsonl", tmp != NULL && tmp[0] != 0 ? tmp : "/tmp", (int)getpid());
+        AukStrBuf m = {0};
+        auk__sb_put_cstr(&m, tmp != NULL && tmp[0] != 0 ? tmp : "/tmp");
+        auk__sb_put_cstr(&m, "/auk-trace-");
+        auk_sb_int(&m, getpid());
+        auk__sb_put_cstr(&m, ".jsonl");
+        auk__sb_take_into(&m, tail_path, sizeof tail_path);
     }
     const char *tail_ptr = tail ? tail_path : NULL;
     pthread_mutex_lock(&tests_lock);
@@ -220,15 +229,23 @@ AUK_API int auk_test_main(int argc, char **argv) {
         }
         if (ok) {
             passed++;
-            printf("ok %s\n", t->name);
+            fputs("ok ", stdout);
+            fputs(t->name, stdout);
+            fputc('\n', stdout);
         } else {
             failed++;
-            printf("FAIL %s\n", t->name);
+            fputs("FAIL ", stdout);
+            fputs(t->name, stdout);
+            fputc('\n', stdout);
             if (olen != 0) {
                 print_indented(output, olen);
             }
             if (WIFSIGNALED(status)) {
-                printf("    (killed by signal %d)\n", WTERMSIG(status));
+                char sig[24];
+                auk__fmt_i64(sig, WTERMSIG(status));
+                fputs("    (killed by signal ", stdout);
+                fputs(sig, stdout);
+                fputs(")\n", stdout);
             }
             if (tail) {
                 print_trace(tail_path);
@@ -240,7 +257,13 @@ AUK_API int auk_test_main(int argc, char **argv) {
         }
     }
     free(list);
-    printf("%lld passed, %lld failed\n", (long long)passed, (long long)failed);
+    AukStrBuf m = {0};
+    auk_sb_int(&m, passed);
+    auk__sb_put_cstr(&m, " passed, ");
+    auk_sb_int(&m, failed);
+    auk__sb_put_cstr(&m, " failed\n");
+    fputs(auk__sb_cstr(&m), stdout);
+    auk_sb_free(&m);
     fflush(stdout);
     return failed != 0 ? 1 : 0;
 }

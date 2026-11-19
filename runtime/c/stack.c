@@ -91,7 +91,7 @@ static uintptr_t fault_pc(void *uc) {
  * dladdr only sees the dynamic symbol table, which doesn't have Auk's local functions. Read
  * with pread (async-signal-safe), nothing allocated. 1 when found. */
 static int elf_sym_name(uintptr_t pc, char *out, size_t cap) {
-    int fd = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
+    int fd = auk__c_open("/proc/self/exe", O_RDONLY | O_CLOEXEC, 0);
     if (fd < 0) {
         return 0;
     }

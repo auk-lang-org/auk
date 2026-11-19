@@ -68,10 +68,26 @@ AUK_API void auk__imprint_close(void) {
     pthread_mutex_unlock(&imprint_lock);
 }
 
+/* v in decimal to f. */
+static void imprint_put_int(FILE *f, int64_t v) {
+    char b[24];
+    int n = auk__fmt_i64(b, v);
+    fwrite(b, 1, (size_t)n, f);
+}
+
+/* bits as 16 lowercase hex digits to f. */
+static void imprint_put_hex16(FILE *f, int64_t bits) {
+    char b[24];
+    int n = auk__fmt_hex(b, (uint64_t)bits, 16, false);
+    fwrite(b, 1, (size_t)n, f);
+}
+
 AUK_API void auk__imprint_mark(int tag, int64_t c) {
     pthread_mutex_lock(&imprint_lock);
     if (imprint_out != NULL) {
-        fprintf(imprint_out, "%c%lld\n", (char)tag, (long long)c);
+        fputc((char)tag, imprint_out);
+        imprint_put_int(imprint_out, c);
+        fputc('\n', imprint_out);
         fflush(imprint_out);
     }
     pthread_mutex_unlock(&imprint_lock);
@@ -82,7 +98,9 @@ AUK_API void auk__imprint_mark(int tag, int64_t c) {
 
 static void dump_str(FILE *f, const AukStr *s) {
     int64_t n = auk_str_byte_len(s);
-    fprintf(f, "S%lld:", (long long)n);
+    fputc('S', f);
+    imprint_put_int(f, n);
+    fputc(':', f);
     fwrite(auk_str_cstr(s), 1, (size_t)n, f);
 }
 
@@ -95,10 +113,14 @@ static void dump(FILE *f, const AukValue *v) {
         fputc(v->u.b ? 'T' : 'F', f);
         break;
     case AUK_V_INT:
-        fprintf(f, "I%lld;", (long long)v->u.i);
+        fputc('I', f);
+        imprint_put_int(f, v->u.i);
+        fputc(';', f);
         break;
     case AUK_V_FLOAT:
-        fprintf(f, "D%016llx;", (unsigned long long)auk_fbits(v->u.f));
+        fputc('D', f);
+        imprint_put_hex16(f, auk_fbits(v->u.f));
+        fputc(';', f);
         break;
     case AUK_V_STR:
         dump_str(f, v->u.s);
@@ -106,7 +128,9 @@ static void dump(FILE *f, const AukValue *v) {
     case AUK_V_LIST: {
         const AukArr *a = v->u.list;
         int64_t n = auk_arr_len(a);
-        fprintf(f, "L%lld;", (long long)n);
+        fputc('L', f);
+        imprint_put_int(f, n);
+        fputc(';', f);
         for (int64_t i = 0; i < n; i++) {
             dump(f, &((const AukValue *)a->data)[i]);
         }
@@ -114,7 +138,9 @@ static void dump(FILE *f, const AukValue *v) {
     }
     case AUK_V_MAP: {
         const AukMap *m = v->u.map;
-        fprintf(f, "M%lld;", (long long)auk_map_len(m));
+        fputc('M', f);
+        imprint_put_int(f, auk_map_len(m));
+        fputc(';', f);
         int64_t it = 0;
         void *kp = NULL;
         void *vp = NULL;
@@ -132,7 +158,9 @@ static void dump(FILE *f, const AukValue *v) {
 AUK_API void auk__imprint_value(int64_t c, const AukValue *v) {
     pthread_mutex_lock(&imprint_lock);
     if (imprint_out != NULL) {
-        fprintf(imprint_out, "V%lld ", (long long)c);
+        fputc('V', imprint_out);
+        imprint_put_int(imprint_out, c);
+        fputc(' ', imprint_out);
         dump(imprint_out, v);
         fputc('\n', imprint_out);
         fflush(imprint_out);

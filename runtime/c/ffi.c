@@ -21,8 +21,8 @@ AUK_API int64_t auk_ffi_addr(const void *p) {
 
 /* "0x1f2e3d" (`"{p}"`); NULL is "0x0". */
 AUK_API AukStr *auk_ffi_ptr_show(const void *p) {
-    char buf[32];
-    snprintf(buf, sizeof buf, "0x%llx", (unsigned long long)(uintptr_t)p);
+    char buf[32] = "0x";
+    auk__fmt_hex(buf + 2, (uint64_t)(uintptr_t)p, 1, false);
     return auk_str_lit(buf);
 }
 
@@ -51,7 +51,11 @@ AUK_API void auk_ffi_free(void *p) {
 static void check_ptr(const void *p, const char *what, const char *loc) {
     if (p == NULL) {
         char m[96];
-        snprintf(m, sizeof m, "ffi.%s through a null pointer", what);
+        AukStrBuf b = {0};
+        auk__sb_put_cstr(&b, "ffi.");
+        auk__sb_put_cstr(&b, what);
+        auk__sb_put_cstr(&b, " through a null pointer");
+        auk__sb_take_into(&b, m, sizeof m);
         auk_panic_str(loc, m);
     }
 }
@@ -145,7 +149,10 @@ AUK_API AukArr *auk_ffi_bytes(const uint8_t *p, int64_t n, const char *loc) {
 AUK_API AukStr *auk_ffi_str(const char *p, const char *fn, const char *loc) {
     if (p == NULL) {
         char m[160];
-        snprintf(m, sizeof m, "%s returned NULL where a `str` was expected (declare the result `str?`)", fn);
+        AukStrBuf b = {0};
+        auk__sb_put_cstr(&b, fn);
+        auk__sb_put_cstr(&b, " returned NULL where a `str` was expected (declare the result `str?`)");
+        auk__sb_take_into(&b, m, sizeof m);
         auk_panic_str(loc, m);
     }
     return auk_str_lit(p);

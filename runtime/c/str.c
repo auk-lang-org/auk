@@ -1101,9 +1101,115 @@ AUK_API void auk_sb_int(AukStrBuf *b, int64_t v) {
     auk__sb_put(b, buf + at, 20 - at);
 }
 
+/* ---- text without printf ------------------------------------------------------------------
+ * The runtime calls no varargs function except through cwrap.c (docs/runtime-port.md): numbers
+ * are formatted here, messages are built with the builder (outside the show budget) and then
+ * copied, printed or duplicated. */
+
+/* v in decimal into out (at least 21 bytes), NUL-terminated: its length (`%lld`). */
+int auk__fmt_i64(char *out, int64_t v) {
+    char buf[20];
+    int at = int_digits(v, buf);
+    int n = 20 - at;
+    memcpy(out, buf + at, (size_t)n);
+    out[n] = 0;
+    return n;
+}
+
+/* v in decimal into out (at least 21 bytes), NUL-terminated: its length (`%llu`). */
+int auk__fmt_u64(char *out, uint64_t v) {
+    char buf[20];
+    int i = 20;
+    do {
+        buf[--i] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v != 0);
+    int n = 20 - i;
+    memcpy(out, buf + i, (size_t)n);
+    out[n] = 0;
+    return n;
+}
+
+/* v in hex (upper or lower case digits, at least min_digits of them: 1..16) into out (at least
+ * 17 bytes), NUL-terminated: its length (`%llx`, `%016llx`, `%X`). */
+int auk__fmt_hex(char *out, uint64_t v, int min_digits, bool upper) {
+    const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    char buf[16];
+    int i = 16;
+    do {
+        buf[--i] = digits[v & 15];
+        v >>= 4;
+    } while (v != 0);
+    while (16 - i < min_digits) {
+        buf[--i] = '0';
+    }
+    int n = 16 - i;
+    memcpy(out, buf + i, (size_t)n);
+    out[n] = 0;
+    return n;
+}
+
+/* s into out[0..cap), cut to cap - 1 bytes and NUL-terminated (`snprintf(out, cap, "%s", s)`). */
+void auk__cstr_copy(char *out, size_t cap, const char *s) {
+    if (cap == 0) {
+        return;
+    }
+    size_t n = strlen(s);
+    if (n > cap - 1) {
+        n = cap - 1;
+    }
+    memcpy(out, s, n);
+    out[n] = 0;
+}
+
+/* Append v in decimal, outside the show budget. */
+void auk__sb_u64(AukStrBuf *b, uint64_t v) {
+    char buf[24];
+    int n = auk__fmt_u64(buf, v);
+    auk__sb_put(b, buf, n);
+}
+
+/* Append v in hex (see auk__fmt_hex), outside the show budget. */
+void auk__sb_hex(AukStrBuf *b, uint64_t v, int min_digits, bool upper) {
+    char buf[24];
+    int n = auk__fmt_hex(buf, v, min_digits, upper);
+    auk__sb_put(b, buf, n);
+}
+
+/* The builder's text, NUL-terminated (valid until the builder changes). */
+const char *auk__sb_cstr(AukStrBuf *b) {
+    sb_reserve(b, 1);
+    sb_data(b)[b->len] = 0;
+    return (const char *)sb_data(b);
+}
+
+/* The builder's text into out[0..cap), cut and NUL-terminated as snprintf would; the builder
+ * is freed. */
+void auk__sb_take_into(AukStrBuf *b, char *out, size_t cap) {
+    auk__cstr_copy(out, cap, auk__sb_cstr(b));
+    auk_sb_free(b);
+}
+
+/* The builder's text as a malloc'd C string; the builder is freed. */
+char *auk__sb_take_cstr(AukStrBuf *b) {
+    size_t n = (size_t)b->len;
+    char *s = auk__xmalloc(n + 1);
+    memcpy(s, sb_data(b), n);
+    s[n] = 0;
+    auk_sb_free(b);
+    return s;
+}
+
+/* Write the builder's text to stderr in one piece (as one fprintf would); the builder is
+ * freed. */
+void auk__sb_eprint(AukStrBuf *b) {
+    fwrite(sb_data(b), 1, (size_t)b->len, stderr);
+    auk_sb_free(b);
+}
+
 /* Does `%.<prec>e` of v read back as v? Leaves the text in buf. */
 static bool round_trips(double v, int prec, char *buf, size_t n) {
-    snprintf(buf, n, "%.*e", prec, v);
+    auk__c_fmt_e(buf, n, prec, v);
     return strtod(buf, NULL) == v;
 }
 
@@ -1113,11 +1219,14 @@ void auk__fmt_float_shortest(double v, char *out, size_t outn) {
     char res[40];
     int k = 0;
     if (isnan(v)) {
-        k = snprintf(res, sizeof res, "NaN");
+        auk__cstr_copy(res, sizeof res, "NaN");
+        k = 3;
     } else if (isinf(v)) {
-        k = snprintf(res, sizeof res, "%s", v < 0 ? "-inf" : "inf");
+        auk__cstr_copy(res, sizeof res, v < 0 ? "-inf" : "inf");
+        k = (int)strlen(res);
     } else if (v == 0.0) {
-        k = snprintf(res, sizeof res, "%s", signbit(v) ? "-0.0" : "0.0");
+        auk__cstr_copy(res, sizeof res, signbit(v) ? "-0.0" : "0.0");
+        k = (int)strlen(res);
     } else {
         /* the smallest precision that round-trips (17 digits always do; a precision that
          * round-trips means every larger one does too) */
@@ -1161,7 +1270,8 @@ void auk__fmt_float_shortest(double v, char *out, size_t outn) {
                 memcpy(res + k, digits + 1, (size_t)(nd - 1));
                 k += nd - 1;
             }
-            k += snprintf(res + k, sizeof res - (size_t)k, "e%d", exp);
+            res[k++] = 'e';
+            k += auk__fmt_i64(res + k, exp);
         } else {
             int point = exp + 1; /* digits before the decimal point */
             if (point <= 0) {
@@ -1238,8 +1348,9 @@ static void quote_char(AukStrBuf *b, uint32_t c, uint8_t q) {
         auk_sb_char(b, '\\');
         auk_sb_char(b, c);
     } else if (c < 0x20 || c == 0x7F) {
-        char buf[16];
-        int n = snprintf(buf, sizeof buf, "\\u{%X}", c);
+        char buf[24] = "\\u{";
+        int n = 3 + auk__fmt_hex(buf + 3, c, 1, true);
+        buf[n++] = '}';
         auk_sb_bytes(b, buf, n);
     } else {
         auk_sb_char(b, c);
@@ -1410,9 +1521,9 @@ AUK_API AukStr *auk_fmt_float(double v, const char *spec) {
     AukStr *body;
     if (sp.prec >= 0 && isfinite(v)) {
         int prec = (int)sp.prec;
-        int n = snprintf(NULL, 0, "%.*f", prec, v);
+        int n = auk__c_fmt_f(NULL, 0, prec, v);
         char *buf = auk__xmalloc((size_t)n + 1);
-        snprintf(buf, (size_t)n + 1, "%.*f", prec, v);
+        auk__c_fmt_f(buf, (size_t)n + 1, prec, v);
         body = auk__str_raw(buf, n, n, true);
         free(buf);
     } else {

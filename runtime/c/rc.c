@@ -106,7 +106,11 @@ AUK_API int64_t auk_leak_check(void) {
     int64_t n = auk_live_objects() - atomic_load(&leak_baseline);
     if (n != 0) {
         fflush(stdout);
-        fprintf(stderr, "leak: %lld runtime object(s) still live at exit\n", (long long)n);
+        AukStrBuf m = {0};
+        auk__sb_put_cstr(&m, "leak: ");
+        auk_sb_int(&m, n);
+        auk__sb_put_cstr(&m, " runtime object(s) still live at exit\n");
+        auk__sb_eprint(&m);
         fflush(stderr);
     }
     return n;
@@ -551,7 +555,7 @@ AUK_API int64_t auk_float_to_int(double x, const char *loc) {
     }
     if (!(x >= -9223372036854775808.0 && x < 9223372036854775808.0)) {
         char g[64];
-        snprintf(g, sizeof g, "%g", x);
+        auk__c_fmt_g(g, sizeof g, x);
         auk__panic3(loc, "int(", g, ") is out of range");
     }
     return (int64_t)x;

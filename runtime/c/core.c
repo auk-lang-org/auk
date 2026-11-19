@@ -438,7 +438,7 @@ static void conn_sockopts(int fd) {
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
 #endif
-    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    auk__c_fcntl(fd, F_SETFD, FD_CLOEXEC);
 }
 
 /* Resolve host:port and connect a TCP socket (with the connected-socket options set): the fd,
@@ -515,7 +515,7 @@ AUK_API AukRes_conn auk_net_tcp(const AukStr *host, int64_t port) {
         return conn_err(auk__err_sb(&m));
     }
     char ports[24];
-    snprintf(ports, sizeof ports, "%lld", (long long)port);
+    auk__fmt_i64(ports, port);
     const char *why;
     int code;
     int fd = auk__tcp_connect(auk_str_cstr(host), ports, &why, &code);
@@ -550,7 +550,7 @@ AUK_API AukRes_listener auk_net_listen(const AukStr *host, int64_t port) {
         return listener_err(auk__err_sb(&m));
     }
     char ports[24];
-    snprintf(ports, sizeof ports, "%lld", (long long)port);
+    auk__fmt_i64(ports, port);
     struct addrinfo hints;
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
@@ -585,7 +585,7 @@ AUK_API AukRes_listener auk_net_listen(const AukStr *host, int64_t port) {
         return listener_err(err_code_sb(&m, err));
     }
     auk_sb_free(&m);
-    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    auk__c_fcntl(fd, F_SETFD, FD_CLOEXEC);
     struct sockaddr_storage ss;
     socklen_t len = sizeof ss;
     int64_t bound = port;
@@ -758,7 +758,7 @@ static bool os_random(uint8_t *buf, size_t n) {
         return true;
     }
 #endif
-    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    int fd = auk__c_open("/dev/urandom", O_RDONLY | O_CLOEXEC, 0);
     if (fd < 0) {
         return false;
     }
@@ -930,7 +930,7 @@ AUK_API AukOpt_int auk_env_columns(void) {
     int fds[3] = {1, 2, 0};
     for (int i = 0; i < 3; i++) {
         struct winsize ws;
-        if (ioctl(fds[i], TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+        if (auk__c_ioctl_ptr(fds[i], TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
             r.some = true;
             r.val = ws.ws_col;
             return r;
@@ -1030,7 +1030,7 @@ AUK_API AukRes_str auk_proc_run(const AukStr *cmd, const AukArr *args_in) {
         free(argv);
         return str_err(auk__err_errno("proc.run", cmd, errno));
     }
-    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+    auk__c_fcntl(fds[0], F_SETFD, FD_CLOEXEC);
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
     posix_spawn_file_actions_adddup2(&fa, fds[1], 1);

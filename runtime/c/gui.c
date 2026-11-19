@@ -556,7 +556,8 @@ static char *spawn_host(const char *spec, int child_fd) {
     envp[k++] = host;
     char owner[64];
     if (child_fd < 0) {
-        snprintf(owner, sizeof owner, "AUK_GUI_OWNER=%d", (int)getppid());
+        memcpy(owner, "AUK_GUI_OWNER=", 14);
+        auk__fmt_i64(owner + 14, getppid());
         envp[k++] = owner;
     }
     envp[k] = NULL;
@@ -674,7 +675,7 @@ static int gui_connect(char **err) {
         }
         fd = sv[0];
     }
-    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    auk__c_fcntl(fd, F_SETFD, FD_CLOEXEC);
     auk__wire_no_sigpipe(fd);
     pthread_t th;
     pthread_attr_t attr;
@@ -955,14 +956,19 @@ static _Atomic int64_t shm_counter;
 static bool shm_new(int64_t w, int64_t h, Shm *s, char **err) {
     size_t len = (size_t)(w * h * 4);
     char name[64];
-    snprintf(name, sizeof name, "/aukgui.%d.%lld", (int)getpid(), (long long)atomic_fetch_add(&shm_counter, 1));
-    int fd = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0600);
+    AukStrBuf nb = {0};
+    auk__sb_put_cstr(&nb, "/aukgui.");
+    auk_sb_int(&nb, getpid());
+    auk__sb_put_cstr(&nb, ".");
+    auk_sb_int(&nb, atomic_fetch_add(&shm_counter, 1));
+    auk__sb_take_into(&nb, name, sizeof name);
+    int fd = auk__c_shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0600);
     if (fd < 0) {
         *err = msg2("gui.present: shared memory: ", strerror(errno));
         return false;
     }
     shm_unlink(name);
-    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    auk__c_fcntl(fd, F_SETFD, FD_CLOEXEC);
     if (ftruncate(fd, (off_t)len) != 0) {
         int e = errno;
         close(fd);

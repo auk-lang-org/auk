@@ -110,21 +110,29 @@ static void aq_load(void) {
 
 static bool aq_fail(AudioFail *f, AqQueue q, const char *what, int32_t st) {
     aq.dispose(q, 1);
-    snprintf(f->buf, sizeof f->buf, "%s error %d", what, (int)st);
+    AukStrBuf m = {0};
+    auk__sb_put_cstr(&m, what);
+    auk__sb_put_cstr(&m, " error ");
+    auk_sb_int(&m, st);
+    auk__sb_take_into(&m, f->buf, sizeof f->buf);
     return false;
 }
 
 static bool play(const double *xs, int64_t n, int64_t nch, int64_t rate, AudioFail *f) {
     pthread_once(&aq_once, aq_load);
     if (!aq_ok) {
-        snprintf(f->buf, sizeof f->buf, "could not load AudioToolbox");
+        auk__cstr_copy(f->buf, sizeof f->buf, "could not load AudioToolbox");
         return false;
     }
     Asbd fmt = {(double)rate, LPCM, FLOAT_PACKED, (uint32_t)(4 * nch), 1, (uint32_t)(4 * nch), (uint32_t)nch, 32, 0};
     AqQueue q = NULL;
     int32_t st = aq.new_output(&fmt, aq_done, NULL, NULL, NULL, 0, &q);
     if (st != 0 || q == NULL) {
-        snprintf(f->buf, sizeof f->buf, "no output device (AudioQueueNewOutput error %d)", (int)st);
+        AukStrBuf m = {0};
+        auk__sb_put_cstr(&m, "no output device (AudioQueueNewOutput error ");
+        auk_sb_int(&m, st);
+        auk__sb_put_cstr(&m, ")");
+        auk__sb_take_into(&m, f->buf, sizeof f->buf);
         return false;
     }
     int64_t per = CHUNK * nch;
@@ -225,14 +233,18 @@ static void pa_load(void) {
 static bool play(const double *xs, int64_t n, int64_t nch, int64_t rate, AudioFail *f) {
     pthread_once(&pa_once, pa_load);
     if (!pa_ok) {
-        snprintf(f->buf, sizeof f->buf, "could not load libpulse-simple.so.0 (PulseAudio or PipeWire)");
+        auk__cstr_copy(f->buf, sizeof f->buf, "could not load libpulse-simple.so.0 (PulseAudio or PipeWire)");
         return false;
     }
     PaSpec spec = {PA_FLOAT32, (uint32_t)rate, (uint8_t)nch};
     int e = 0;
     PaSimple s = pa.new_(NULL, "auk", PA_PLAYBACK, NULL, "audio_out", &spec, NULL, NULL, &e);
     if (s == NULL) {
-        snprintf(f->buf, sizeof f->buf, "no output device (%s)", pa.strerror_(e));
+        AukStrBuf m = {0};
+        auk__sb_put_cstr(&m, "no output device (");
+        auk__sb_put_cstr(&m, pa.strerror_(e));
+        auk__sb_put_cstr(&m, ")");
+        auk__sb_take_into(&m, f->buf, sizeof f->buf);
         return false;
     }
     /* small chunks, so a cancelled task stops within a chunk */
@@ -252,7 +264,7 @@ static bool play(const double *xs, int64_t n, int64_t nch, int64_t rate, AudioFa
         if (pa.write(s, buf, (size_t)len * 4, &e) < 0) {
             pa.free_(s);
             free(buf);
-            snprintf(f->buf, sizeof f->buf, "%s", pa.strerror_(e));
+            auk__cstr_copy(f->buf, sizeof f->buf, pa.strerror_(e));
             return false;
         }
     }
@@ -260,7 +272,7 @@ static bool play(const double *xs, int64_t n, int64_t nch, int64_t rate, AudioFa
     int r = pa.drain(s, &e);
     pa.free_(s);
     if (r < 0) {
-        snprintf(f->buf, sizeof f->buf, "%s", pa.strerror_(e));
+        auk__cstr_copy(f->buf, sizeof f->buf, pa.strerror_(e));
         return false;
     }
     return true;

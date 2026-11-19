@@ -435,7 +435,13 @@ void auk__task_free(AukTask *t) {
         if (!t->observed && !atomic_load(&t->cancel)) {
             /* nobody awaited it: report it as an uncaught panic would be, and end the process */
             fflush(stdout);
-            fprintf(stderr, "panic: %s\n  at %s\n  (in a task that was never awaited)\n", p->msg, p->loc);
+            AukStrBuf m = {0};
+            auk__sb_put_cstr(&m, "panic: ");
+            auk__sb_put_cstr(&m, p->msg);
+            auk__sb_put_cstr(&m, "\n  at ");
+            auk__sb_put_cstr(&m, p->loc);
+            auk__sb_put_cstr(&m, "\n  (in a task that was never awaited)\n");
+            auk__sb_eprint(&m);
             fflush(stderr);
             _exit(101);
         }
