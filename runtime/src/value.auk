@@ -9,10 +9,6 @@ extern fn auk_release(p: raw.Ptr<()>) = "void auk_release(void *)"
 extern fn auk__panic3(loc: raw.Ptr<u8>, a: raw.Ptr<u8>, b: raw.Ptr<u8>, c: raw.Ptr<u8>) =
   "void auk__panic3(const char *, const char *, const char *, const char *)"
 extern fn auk_hash_int(x: i64): u64 = "uint64_t auk_hash_int(int64_t)"
-extern fn auk_arr_new(ops: raw.Ptr<abi.ElemOps>, cap: i64): raw.Ptr<abi.Arr> = "void *auk_arr_new(const void *, int64_t)"
-extern fn auk_arr_eq(a: raw.Ptr<abi.Arr>, b: raw.Ptr<abi.Arr>): bool = "bool auk_arr_eq(const void *, const void *)"
-extern fn auk_arr_hash(a: raw.Ptr<abi.Arr>): u64 = "uint64_t auk_arr_hash(const void *)"
-extern fn auk_arr_show(a: raw.Ptr<abi.Arr>): raw.Ptr<abi.Str> = "void *auk_arr_show(const void *)"
 extern fn auk_map_new(k: raw.Ptr<abi.ElemOps>, v: raw.Ptr<abi.ElemOps>): raw.Ptr<abi.Map> = "void *auk_map_new(const void *, const void *)"
 extern fn auk_map_set(pm: raw.Ptr<raw.Ptr<abi.Map>>, k: raw.Ptr<()>, v: raw.Ptr<()>) =
   "void auk_map_set(void *, const void *, const void *)"
@@ -22,6 +18,12 @@ extern var auk_ops_float: abi.ElemOps = "auk_ops_float"
 // defined in C (runtime/c/value_ops.c) until a raw global's initializer can hold function
 // addresses: the element ops of `Value`, over the auk__value_elem_* functions below
 extern var auk_ops_value: abi.ElemOps = "auk_ops_value"
+
+// The addresses of the C tables declared here, for the package's other modules: a second
+// `extern var` of one symbol in another module would be renamed (TODO(dialect)), and
+// `raw.addr_of(&value.auk_ops_str)` doesn't resolve a qualified name.
+pub fn ops_str(): raw.Ptr<abi.ElemOps> uses raw = raw.addr_of(&auk_ops_str)
+pub fn ops_float(): raw.Ptr<abi.ElemOps> uses raw = raw.addr_of(&auk_ops_float)
 
 export fn auk_value_null(): abi.Value = abi.Value { tag: abi.V_NULL }
 
@@ -47,7 +49,7 @@ export fn auk_value_map(m: raw.Ptr<abi.Map>): abi.Value uses raw, ffi {
   abi.Value { tag: abi.V_MAP, u: abi.ValueU { map: m2 } }
 }
 
-export fn auk_value_list_new(): raw.Ptr<abi.Arr> uses raw, ffi = auk_arr_new(raw.addr_of(&auk_ops_value), 0)
+export fn auk_value_list_new(): raw.Ptr<abi.Arr> uses raw, ffi = arr.auk_arr_new(raw.addr_of(&auk_ops_value), 0)
 
 export fn auk_value_map_new(): raw.Ptr<abi.Map> uses raw, ffi =
   auk_map_new(str.ops_str(), raw.addr_of(&auk_ops_value))
@@ -149,7 +151,7 @@ export fn auk_value_eq(a: abi.Value, b: abi.Value): bool uses raw, ffi {
   } else if t == abi.V_STR {
     str.auk_str_eq(a.u.s, b.u.s)
   } else if t == abi.V_LIST {
-    auk_arr_eq(a.u.list, b.u.list)
+    arr.auk_arr_eq(a.u.list, b.u.list)
   } else if t == abi.V_MAP {
     auk_map_eq(a.u.map, b.u.map)
   } else {
@@ -170,7 +172,7 @@ export fn auk_value_show(v: abi.Value): raw.Ptr<abi.Str> uses raw, ffi {
   } else if t == abi.V_STR {
     str_fmt.auk_str_quote(v.u.s)
   } else if t == abi.V_LIST {
-    auk_arr_show(v.u.list)
+    arr.auk_arr_show(v.u.list)
   } else if t == abi.V_MAP {
     auk_map_show(v.u.map)
   } else {
@@ -193,7 +195,7 @@ export fn auk__value_elem_hash(p: raw.Ptr<()>): u64 uses raw, ffi {
   if t == abi.V_STR {
     str.auk_str_hash(v.u.s)
   } else if t == abi.V_LIST {
-    auk_arr_hash(v.u.list)
+    arr.auk_arr_hash(v.u.list)
   } else if t == abi.V_FLOAT {
     let hash = raw.addr_of(&auk_ops_float).hash
     hash(raw.cast(raw.field_addr(v, .u)))
