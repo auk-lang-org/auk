@@ -55,8 +55,8 @@ pub noinline export fn auk_arr_new(ops: raw.Ptr<abi.ElemOps>, cap: i64): raw.Ptr
   }
   let a: raw.Ptr<abi.Arr> = raw.cast(rc.auk__alloc(raw.size_of<abi.Arr>(), abi.K_ARR))
   a.ops = ops
-  a.cap = if cap > 0 { cap } else { 0 }
-  a.data = if a.cap != 0 { auk__xmalloc(usize(a.cap) * ops.size) } else { raw.null() }
+  a.cap = heap.buf_fit(if cap > 0 { cap } else { 0 }, ops.size)
+  a.data = if a.cap != 0 { heap.auk__buf_alloc(usize(a.cap) * ops.size) } else { raw.null() }
   a
 }
 
@@ -89,7 +89,7 @@ pub export fn auk__arr_free(a: raw.Ptr<abi.Arr>) uses raw, ffi {
         i += 1
       }
     }
-    raw.free(a.data)
+    heap.auk__buf_free(a.data, usize(a.cap) * a.ops.size)
   }
   rc.auk__free_obj(raw.cast(a))
 }
@@ -160,7 +160,8 @@ fn ensure_unique_cap(pa: raw.Ptr<raw.Ptr<abi.Arr>>, need: i64) uses raw, ffi {
     while cap < need {
       cap *= 2
     }
-    a.data = auk__xrealloc(a.data, usize(cap) * a.ops.size)
+    cap = heap.buf_fit(cap, a.ops.size)
+    a.data = heap.auk__buf_resize(a.data, usize(a.cap) * a.ops.size, usize(cap) * a.ops.size)
     a.cap = cap
   }
 }

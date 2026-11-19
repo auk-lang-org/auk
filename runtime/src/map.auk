@@ -73,17 +73,18 @@ pub export fn auk__map_free(m: raw.Ptr<abi.Map>) uses raw, ffi {
     }
     i += 1
   }
-  raw.free(m.entries)
-  raw.free(m.hashes)
-  raw.free(m.dead)
-  raw.free(m.index)
+  let cap = usize(m.cap)
+  heap.auk__buf_free(m.entries, cap * usize(m.stride))
+  heap.auk__buf_free(raw.cast(m.hashes), cap * 8)
+  heap.auk__buf_free(raw.cast(m.dead), cap)
+  heap.auk__buf_free(raw.cast(m.index), usize(m.icap) * 8)
   rc.auk__free_obj(raw.cast(m))
 }
 
 fn rebuild_index(m: raw.Ptr<abi.Map>, icap: i64) uses raw, ffi {
-  raw.free(m.index)
+  heap.auk__buf_free(raw.cast(m.index), usize(m.icap) * 8)
   m.icap = icap
-  m.index = raw.cast(auk__xcalloc(usize(icap), 8))
+  m.index = raw.cast(heap.auk__buf_zalloc(usize(icap) * 8))
   let mask = u64(icap) - 1
   var e: i64 = 0
   while e < m.n {
@@ -123,9 +124,11 @@ fn set_cap(m: raw.Ptr<abi.Map>, cap: i64) uses raw, ffi {
     rc.auk__panic_rt("a map can't hold more than 4294967293 entries")
     raw.unreachable()
   }
-  m.entries = auk__xrealloc(m.entries, usize(cap) * usize(m.stride))
-  m.hashes = raw.cast(auk__xrealloc(raw.cast(m.hashes), usize(cap) * 8))
-  m.dead = raw.cast(auk__xrealloc(raw.cast(m.dead), usize(cap)))
+  let old = usize(m.cap)
+  let n = usize(cap)
+  m.entries = heap.auk__buf_resize(m.entries, old * usize(m.stride), n * usize(m.stride))
+  m.hashes = raw.cast(heap.auk__buf_resize(raw.cast(m.hashes), old * 8, n * 8))
+  m.dead = raw.cast(heap.auk__buf_resize(raw.cast(m.dead), old, n))
   m.cap = cap
 }
 

@@ -106,17 +106,21 @@ fn class_of(h: raw.Ptr<abi.Header>): i64 uses raw = i64((h.flags >> CLASS_SHIFT)
 
 /// A zeroed block of class c.
 fn pool_alloc(c: i64): raw.Ptr<u8> uses raw, ffi {
+  let q = pool_take(c)
+  raw.fill(q, 0, usize(c) * 16)
+  q
+}
+
+/// A block of class c (its bytes as they are).
+fn pool_take(c: i64): raw.Ptr<u8> uses raw, ffi {
   let p = raw.addr_of(&pool)
   let lists: raw.Ptr<raw.Ptr<FreeBlock>> = raw.cast(raw.field_addr(p, .free))
-  let n = usize(c) * 16
   let b = lists.at(c)
   if raw.likely(!b.is_null()) {
     lists.at(c) = b.next
-    let q: raw.Ptr<u8> = raw.cast(b)
-    raw.fill(q, 0, n)
-    return q
+    return raw.cast(b)
   }
-  pool_refill(p, c, n)
+  pool_refill(p, c, usize(c) * 16)
 }
 
 /// pool_alloc's slow path: the spill's blocks of class c, else a block carved from the chunk.
@@ -133,9 +137,7 @@ fn pool_refill(p: raw.Ptr<Pool>, c: i64, n: usize): raw.Ptr<u8> uses raw, ffi {
     let _ = pthread_mutex_unlock(raw.addr_of(&spill_lock))
     if !b.is_null() {
       lists.at(c) = b.next
-      let q: raw.Ptr<u8> = raw.cast(b)
-      raw.fill(q, 0, n)
-      return q
+      return raw.cast(b)
     }
   }
   if p.bump.is_null() || p.end.int() - p.bump.int() < i64(n) {
@@ -145,7 +147,6 @@ fn pool_refill(p: raw.Ptr<Pool>, c: i64, n: usize): raw.Ptr<u8> uses raw, ffi {
   }
   let q = p.bump
   p.bump = q.offset(i64(n))
-  raw.fill(q, 0, n)
   q
 }
 
@@ -174,6 +175,74 @@ fn block_alloc(total: usize, class: raw.Ptr<i64>): raw.Ptr<()> uses raw, ffi {
     return rc.auk__xcalloc(1, total)
   }
   raw.cast(pool_alloc(c))
+}
+
+// ---- buffers: memory whose size its owner keeps (a list's elements, a map's tables) ----------
+//
+// A buffer of n bytes comes from the pool when n <= POOL_MAX, else from malloc; the owner
+// passes the same n back to resize or free it (class_for(n) says which). The bytes of a new
+// buffer are unspecified unless zeroed.
+
+/// A buffer of n bytes.
+pub export fn auk__buf_alloc(n: usize): raw.Ptr<u8> uses raw, ffi {
+  let c = class_for(n)
+  if c == 0 {
+    return raw.cast(rc.auk__xmalloc(n))
+  }
+  pool_take(c)
+}
+
+/// A zeroed buffer of n bytes.
+pub export fn auk__buf_zalloc(n: usize): raw.Ptr<u8> uses raw, ffi {
+  let c = class_for(n)
+  if c == 0 {
+    return raw.cast(rc.auk__xcalloc(1, n))
+  }
+  let q = pool_take(c)
+  raw.fill(q, 0, n)
+  q
+}
+
+/// Free the buffer p of n bytes (null is nothing).
+pub export fn auk__buf_free(p: raw.Ptr<u8>, n: usize) uses raw {
+  if p.is_null() {
+    return
+  }
+  block_free(raw.cast(p), class_for(n))
+}
+
+/// The buffer p of old bytes (null when old is 0), now n bytes: the first min(old, n) kept.
+pub export fn auk__buf_resize(p: raw.Ptr<u8>, old: usize, n: usize): raw.Ptr<u8> uses raw, ffi {
+  let oc = if p.is_null() { i64(0) } else { class_for(old) }
+  let nc = class_for(n)
+  if oc == nc && !p.is_null() {
+    if oc != 0 {
+      return p
+    }
+    return raw.cast(rc.auk__xrealloc(raw.cast(p), n))
+  }
+  if oc == 0 && nc == 0 {
+    return raw.cast(rc.auk__xrealloc(raw.cast(p), n))
+  }
+  let q = auk__buf_alloc(n)
+  if !p.is_null() {
+    raw.copy(q, p, if old < n { old } else { n })
+    auk__buf_free(p, old)
+  }
+  q
+}
+
+/// The capacity, at least cap, of a buffer of elements of size bytes that fills its pool
+/// block (cap itself when it isn't pooled), so `cap * size` stays in the same class.
+pub fn buf_fit(cap: i64, size: usize): i64 {
+  if size == 0 || cap <= 0 {
+    return cap
+  }
+  let c = class_for(usize(cap) * size)
+  if c == 0 {
+    return cap
+  }
+  i64(usize(c) * 16 / size)
 }
 
 /// A thread that allocated or freed objects is ending: its free blocks go to the spill, for
@@ -375,8 +444,8 @@ pub export fn auk__heap_resize(h: raw.Ptr<abi.Header>, size: usize): raw.Ptr<abi
   header_of(n)
 }
 
-/// auk__heap_resize of a pooled object: moved to a malloc'd block of exactly size bytes (and
-/// its Link), unless its block already holds them.
+/// auk__heap_resize of a pooled object: moved to a block of a bigger class (or a malloc'd one
+/// past POOL_MAX), unless its block already holds size bytes (and its Link).
 fn pool_resize(h: raw.Ptr<abi.Header>, size: usize, c: i64): raw.Ptr<abi.Header> uses raw, ffi {
   let tracked = (h.flags & abi.TRACKED) != 0
   let extra = if tracked { raw.size_of<Link>() } else { usize(0) }
@@ -384,9 +453,11 @@ fn pool_resize(h: raw.Ptr<abi.Header>, size: usize, c: i64): raw.Ptr<abi.Header>
   if extra + size <= have {
     return h
   }
-  let flags = h.flags & ~(u32(255) << CLASS_SHIFT)
+  let nc = class_for(extra + size)
+  let mem: raw.Ptr<u8> = if nc == 0 { raw.cast(rc.auk__xmalloc(extra + size)) } else { pool_take(nc) }
+  let flags = (h.flags & ~(u32(255) << CLASS_SHIFT)) | (u32(nc) << CLASS_SHIFT)
   if !tracked {
-    let n: raw.Ptr<abi.Header> = raw.cast(rc.auk__xmalloc(size))
+    let n: raw.Ptr<abi.Header> = raw.cast(mem)
     raw.copy(n, h, have)
     n.flags = flags
     pool_free(raw.cast(h), c)
@@ -395,7 +466,7 @@ fn pool_resize(h: raw.Ptr<abi.Header>, size: usize, c: i64): raw.Ptr<abi.Header>
   let l = link_of(h)
   let hp = l.heap
   let _ = pthread_mutex_lock(raw.field_addr(hp, .lock))
-  let n: raw.Ptr<Link> = raw.cast(rc.auk__xmalloc(extra + size))
+  let n: raw.Ptr<Link> = raw.cast(mem)
   raw.copy(n, l, have)
   let nh = header_of(n)
   nh.flags = flags
@@ -405,7 +476,7 @@ fn pool_resize(h: raw.Ptr<abi.Header>, size: usize, c: i64): raw.Ptr<abi.Header>
   next.prev = n
   let _ = pthread_mutex_unlock(raw.field_addr(hp, .lock))
   pool_free(raw.cast(l), c)
-  header_of(n)
+  nh
 }
 
 /// Free every object still in heap, then the heap. No object outside it may point into it.
