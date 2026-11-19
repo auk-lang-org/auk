@@ -38,7 +38,7 @@ programs live in [`examples/`](examples/): start with `hello.auk`, `fib.auk` and
 Install the latest release (macOS arm64, Linux arm64 and x86-64) into `~/.auk/bin`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/auk-lang-org/auk/main/install.sh | sh
+curl -fsSL https://auk-lang.org/install.sh | sh
 ```
 
 (`AUK_VERSION=1.0.0` picks a release, `AUK_INSTALL=<dir>` the place.) Or build from source.

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs the latest Auk release (auk and raft) for this machine from GitHub:
 #
-#   curl -fsSL https://raw.githubusercontent.com/auk-lang-org/auk/main/install.sh | sh
+#   curl -fsSL https://auk-lang.org/install.sh | sh
 #
 # macOS arm64, Linux arm64 and Linux x86-64. The binaries need LLVM 23 (its shared library):
 # `brew install llvm@23` on macOS; on Debian/Ubuntu `libllvm23` (apt.llvm.org), and a system

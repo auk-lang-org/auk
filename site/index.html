@@ -171,7 +171,7 @@ footer a:not(.brand):hover { color: var(--accent-text); }
     </nav>
     <div class="hero">
       <div>
-        <p class="eyebrow" style="color:#6fbbe2">Auk 1.0 is out</p>
+        <p class="eyebrow" style="color:#6fbbe2"><a href="https://github.com/auk-lang-org/auk/releases/latest" style="color:inherit;text-decoration:none">Auk <span data-auk-version>1.0.0</span> is out</a></p>
         <h1>Short to write. <em>Hard to get wrong.</em></h1>
         <p class="lede">Auk is a statically typed language that compiles to native code with LLVM. It is built so that code, <b>especially code an AI model writes</b>, takes few tokens and gets checked hard before it runs.</p>
         <div class="cta">
@@ -428,13 +428,13 @@ weather 0.1.0   uses net
       <div class="text">
         <p class="eyebrow">Get started</p>
         <h2>Build from source</h2>
-        <p>Auk is at version 1.0. Download <code>auk</code> and <code>raft</code> for macOS (arm64) or Linux (arm64, x86-64) from the <a href="https://github.com/auk-lang-org/auk/releases/latest">latest release</a>, or build them from source: you need LLVM 23 and a system linker, no C compiler. <code>auk run</code> and <code>auk test</code> compile in memory, so they start right away.</p>
+        <p>The current version is <b><span data-auk-version>1.0.0</span></b>. Download <code>auk</code> and <code>raft</code> for macOS (arm64) or Linux (arm64, x86-64) from the <a href="https://github.com/auk-lang-org/auk/releases/latest">latest release</a>, or build them from source: you need LLVM 23 and a system linker, no C compiler. <code>auk run</code> and <code>auk test</code> compile in memory, so they start right away.</p>
         <p>Then read the language reference with <code>auk spec</code> and try the programs in <code>examples/</code>: start with <code>hello.auk</code>, <code>fib.auk</code> and <code>tour.auk</code>.</p>
       </div>
       <div class="steps">
         <div class="step"><div><p>Install LLVM 23, then <code>auk</code> and <code>raft</code> into <code>~/.auk/bin</code> (or build them: <code>./build.sh --install</code>).</p>
           <div class="win"><pre class="out"><span class="pr">$ </span>brew install llvm@23
-<span class="pr">$ </span>curl -fsSL https://raw.githubusercontent.com/auk-lang-org/auk/main/install.sh | sh</pre></div></div></div>
+<span class="pr">$ </span>curl -fsSL https://auk-lang.org/install.sh | sh</pre></div></div></div>
         <div class="step"><div><p>Write a program.</p>
           <div class="win"><div class="win-bar"><span>hello.auk</span></div><pre data-auk>fn main() {
   print("Hello from Auk!")
@@ -457,6 +457,19 @@ Hello from Auk!</pre></div></div></div>
   </footer>
 </div>
 
+<script>
+// The current version: the latest GitHub release (the page says the one it was published with).
+(function () {
+  fetch('https://api.github.com/repos/auk-lang-org/auk/releases/latest', { headers: { Accept: 'application/vnd.github+json' } })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) {
+      var v = j && typeof j.tag_name === 'string' ? j.tag_name.replace(/^v/, '') : '';
+      if (!/^\d+\.\d+\.\d+$/.test(v)) return;
+      document.querySelectorAll('[data-auk-version]').forEach(function (el) { el.textContent = v; });
+    })
+    .catch(function () {});
+})();
+</script>
 <script>
 // Highlight Auk code blocks: comments, strings (with {interpolation}), keywords, types, numbers.
 (function () {
