@@ -469,6 +469,10 @@ Gaps hit:
 2. **`{` in a string literal is interpolation**: block signatures (`^{nw_error=}`) need `{{`/`}}`
    wherever they're spelled as strings.
 3. **`when` is a keyword** (a parameter of `dispatch_time`).
+   A string literal passed to a generic intrinsic (`raw.copy(b, "protocol error", 15)`, whose
+   source is `raw.Ptr<_>`) stays a `str` (E0200/E0419): the C-string rule needs a concrete
+   `raw.Ptr<u8>` expected, so it goes through a typed local. Found only by the Linux build
+   (the other target's file is parsed on every host, but only type-checked on its own).
 4. Known ones met again: no fixed-array locals (`char ports[24]`, OpenSSL's `char buf[256]`,
    inet_pton's `addr[16]`: one-field raw structs), a local can't share a module's name (C's
    `err`, `tls`, `str` locals renamed), a function pointer stored in a global struct's field is
