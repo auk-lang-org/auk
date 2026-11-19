@@ -514,7 +514,7 @@ pub export fn auk_str_append(ps: raw.Ptr<raw.Ptr<abi.Str>>, b0: raw.Ptr<abi.Str>
     a = raw.cast(auk__heap_resize(raw.field_addr(a, .h), want))
     if self { b = a }
   }
-  raw.move(a.data.offset(na), sdata(b), nb)
+  raw.move(a.data.offset(na), b.data, nb)  // b isn't null: nb > 0
   a.data.at(na + nb) = 0
   a.len_bytes = na + nb
   a.len_chars += chars
@@ -560,6 +560,20 @@ pub inline export fn auk_str_cmp(a: raw.Ptr<abi.Str>, b: raw.Ptr<abi.Str>): i32 
 pub inline export fn auk_str_hash(s: raw.Ptr<abi.Str>): u64 uses raw, ffi = auk_hash_bytes(sdata(s), usize(slen(s)))
 
 export fn auk__str_free(s: raw.Ptr<abi.Str>) uses raw, ffi = auk__free_obj(raw.cast(s))
+
+// the element functions of `str` (auk_ops_str, rc.c: a table of function addresses stays C until
+// a raw initializer can hold them): here, so that the string functions inline into them
+
+export fn auk__str_elem_eq(a: raw.Ptr<()>, b: raw.Ptr<()>): bool uses raw =
+  auk_str_eq(raw.cast<raw.Ptr<abi.Str>>(a).load(), raw.cast<raw.Ptr<abi.Str>>(b).load())
+
+export fn auk__str_elem_cmp(a: raw.Ptr<()>, b: raw.Ptr<()>): i32 uses raw =
+  auk_str_cmp(raw.cast<raw.Ptr<abi.Str>>(a).load(), raw.cast<raw.Ptr<abi.Str>>(b).load())
+
+export fn auk__str_elem_hash(a: raw.Ptr<()>): u64 uses raw, ffi = auk_str_hash(raw.cast<raw.Ptr<abi.Str>>(a).load())
+
+export fn auk__str_elem_show(a: raw.Ptr<()>): raw.Ptr<abi.Str> uses raw, ffi =
+  str_fmt.auk_str_quote(raw.cast<raw.Ptr<abi.Str>>(a).load())
 
 // ---- searching ------------------------------------------------------------------------------
 

@@ -703,24 +703,16 @@ void auk__ptr_release(void *p) {
     auk_release(*(void **)p);
 }
 
-static bool str_eq(const void *a, const void *b) {
-    return auk_str_eq(*(AukStr *const *)a, *(AukStr *const *)b);
-}
-
-static int str_cmp(const void *a, const void *b) {
-    return auk_str_cmp(*(AukStr *const *)a, *(AukStr *const *)b);
-}
-
-static uint64_t str_hash(const void *a) {
-    return auk_str_hash(*(AukStr *const *)a);
-}
-
-static AukStr *str_show(const void *a) {
-    return auk_str_quote(*(AukStr *const *)a);
-}
+/* the element functions of `str`: runtime/src/str.auk (the wrappers inline the string
+ * functions there; from C they couldn't, across the C/Auk boundary) */
+bool auk__str_elem_eq(const void *a, const void *b);
+int auk__str_elem_cmp(const void *a, const void *b);
+uint64_t auk__str_elem_hash(const void *a);
+AukStr *auk__str_elem_show(const void *a);
 
 AUK_API const AukElemOps auk_ops_str = {
-    8, auk__ptr_retain, auk__ptr_release, str_eq, str_cmp, str_hash, str_show, auk__str_copy_elem,
+    8, auk__ptr_retain, auk__ptr_release, auk__str_elem_eq, auk__str_elem_cmp, auk__str_elem_hash,
+    auk__str_elem_show, auk__str_copy_elem,
 };
 
 static bool arr_eq(const void *a, const void *b) {
