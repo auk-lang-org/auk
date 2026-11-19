@@ -75,7 +75,7 @@ pub fn run(cx: resolve.Sources, args: [str]): int uses fs, env, proc, ffi {
       return 1
     }
   }
-  if !quiet { say("Auk {lsp.VERSION} dive: :help for commands\n") }
+  if !quiet { say("Auk {version.text()} dive: :help for commands\n") }
   var buf = ""
   // The rendered E0400 errors of a clause group waiting for more clauses.
   var pending: str? = none

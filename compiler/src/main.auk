@@ -57,6 +57,7 @@ commands:
   mcp                      run the MCP server for AI agents (tools over stdio)
   ir [--llvm] <file>       print the program's MIR (--llvm: its LLVM IR)
   spec                     print the compact language reference
+  -v, --version            print the version
 
 packages are managed by `raft` (see docs/raft.md).
 
@@ -134,6 +135,10 @@ fn main(args: [str]): int! uses fs, env, time, ffi, proc {
     "mir" | "llvm" | "build-mir" | "run-mir" => return driver.main(args)
     "help" | "-h" | "--help" => {
       print(usage())
+      return 0
+    }
+    "-v" | "--version" => {
+      print("auk {version.text()}")
       return 0
     }
     _ => {}

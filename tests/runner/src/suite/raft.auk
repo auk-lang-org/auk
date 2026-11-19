@@ -1,6 +1,7 @@
 /// tests/raft.rs: the package manager end to end against the fixture registry
-/// (tests/fixtures/registry): `new`, `add` (transitive, path dependencies), `remove`,
-/// `install`, `list`, the lock file, effects, checksums and errors. The raft under test is
+/// (tests/fixtures/registry): `new`, `add` (transitive, path and URL dependencies), `remove`,
+/// `install`, `list`, `pack`, the lock file, effects, checksums and errors. Fetching over HTTP
+/// uses a local `python3 -m http.server` (skipped without python3). The raft under test is
 /// `$RAFT_BIN`, else target/bin/raft.
 
 pub fn tests(): [t.Test] uses env, fs, ffi, time = [
@@ -14,6 +15,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("unknown_package", unknown_package),
   t.test("version_mismatch", version_mismatch),
   t.test("outside_a_project", outside_a_project),
+  t.test("url_registry_and_url_dep", url_registry_and_url_dep),
 ]
 
 /// A fresh scratch directory (Rust's `Tmp`; removed at the end of the test).
@@ -255,5 +257,66 @@ fn outside_a_project() uses env, fs, ffi, time {
   let err = fails(d, ["install"])
   assert err ==
     "error: no raft.toml in this directory or any parent\n  help: create a project with `raft new <name>`\n"
+  t.rm_rf(d)
+}
+
+/// `raft pack` bundles served over HTTP: `RAFT_REGISTRY=<url>`, `{ url = ... }` deps, lock
+/// checksums equal to the bundle's sha256, a changed remote bundle refused, and an offline
+/// reinstall from `.raft/`.
+fn url_registry_and_url_dep() uses env, fs, ffi, time {
+  if !t.have("python3") { t.skip("needs python3 for a local HTTP server") }
+  let d = tmp("url_registry_and_url_dep")
+  let srv = paths.join(d, "srv")
+  let packed = ok(paths.join(registry(), "b"), ["pack", srv])
+  let b_sum = packed.split("\n")[1].trim()
+  t.check(b_sum.starts_with("sha256:"), packed)
+  for p in ["a", "c"] { let _ = ok(paths.join(registry(), p), ["pack", srv]) }
+
+  var server = cmd.new("python3").args(["-u", "-m", "http.server", "0", "--bind", "127.0.0.1"]).cwd(srv).start()
+  let line = sys.read_line(&server, 20000) else ""
+  let port = match line.split(" port ") {
+    [_, rest] => rest.split(" ")[0]
+    _ => {
+      sys.kill(&server)
+      t.bail("no port from python3 http.server: `{line}`")
+    }
+  }
+  let url = "http://127.0.0.1:{port}"
+  let net = (dir: str, args: [str]) => t.raft().args(args).cwd(dir).setenv("RAFT_REGISTRY", url).output()
+
+  let _ = ok(d, ["new", "app"])
+  let dir = paths.join(d, "app")
+  let o = net(dir, ["add", "a"])
+  t.check(o.success(), o.stderr)
+  assert o.stdout == "  + a 1.2.0\n  + b 1.0.3   (via a)\n"
+  t.has(
+    read(paths.join(dir, "raft.lock")),
+    "name = \"b\"\nversion = \"1.0.3\"\nsource = \"registry\"\neffects = []\nchecksum = \"{b_sum}\"",
+  )
+  let o = net(dir, ["add", "c", "--url", "{url}/c.raft"])
+  t.check(o.success(), o.stderr)
+  t.has(read(paths.join(dir, "raft.toml")), "c = {{ url = \"{url}/c.raft\" }}")
+  t.has(read(paths.join(dir, "raft.lock")), "source = \"url:{url}/c.raft\"")
+
+  t.has(net(dir, ["add", "zz", "--url", "{url}/zz.raft"]).stderr, "error: cannot fetch {url}/zz.raft: HTTP 404")
+  t.has(net(dir, ["add", "d", "--url", "{url}/c.raft"]).stderr, "error: {url}/c.raft is package `c`, not `d`")
+
+  // A changed bundle at the locked URL is refused once it has to be fetched.
+  let c2 = paths.join(d, "c2")
+  t.copy_dir(paths.join(registry(), "c"), c2)
+  t.write(paths.join(c2, "src/lib.auk"), "pub fn evil() {{}}\n")
+  let _ = ok(c2, ["pack", srv])
+  t.check(net(dir, ["install"]).success(), "the installed c matches the lock: nothing to fetch")
+  t.rm_rf(paths.join(dir, ".raft/c"))
+  t.has(net(dir, ["install"]).stderr, "error: checksum mismatch for c 2.0.0 at {url}/c.raft")
+  assert !fs.exists(paths.join(dir, ".raft/c"))
+
+  // Put c back and reinstall; then, with the server gone, the locked project still installs.
+  let _ = ok(paths.join(registry(), "c"), ["pack", srv])
+  t.check(net(dir, ["install"]).success(), "reinstall")
+  sys.kill(&server)
+  let _ = cmd.wait(&server, 5000)
+  let o = net(dir, ["install"])
+  t.check(o.success() && o.stdout == "", o.stderr)
   t.rm_rf(d)
 }

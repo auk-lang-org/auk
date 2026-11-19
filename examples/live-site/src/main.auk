@@ -133,7 +133,7 @@ fn view(path: str, s: Shown, mine: str): str = """
   <p>Auk of the day:
     <select splash-change="auk">{AUKS.map(d => option(d, s.auk)).join("")}</select>
   </p>
-  <p><a href="/">home</a> · <a href="/pond">pond</a> · <a href="/boom">boom</a></p>
+  <nav splash-nav><a href="/">home</a> · <a href="/pond">pond</a> · <a href="/boom" splash-nav="off">boom</a></nav>
   """
 
 fn option(d: str, chosen: str): str {
@@ -172,7 +172,12 @@ fn handle(req: http.server.Req, site: Site): http.server.Reply uses fs {
   site.hits.send(Hit { path: req.path, act: act(req), reply })
   let shown = reply.recv() else Shown { visits: 0, likes: 0, names: [], note: "", auk: "" }
   let page = view(req.path, shown, splash.ask(site.mine, req))
-  http.server.Whole(splash.answer(req, look(site.hub, site.log), page))
+  let resp = splash.answer(req, look(site.hub, site.log), page)
+  match splash.event(req) {
+    some(splash.Submit("sign", fields)) when (fields.get("name") else "").trim() != "" =>
+      http.server.Whole(splash.flash(resp, "Thanks for signing!"))
+    _ => http.server.Whole(resp)
+  }
 }
 
 fn web(site: Site, port: int): ()! uses net, fs {

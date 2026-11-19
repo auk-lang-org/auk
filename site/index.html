@@ -148,6 +148,8 @@ section.s { padding-block: 88px; border-bottom: 1px solid var(--line); }
 footer { padding-block: 48px 64px; display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap; color: var(--muted); font-size: 0.9rem; }
 footer .brand span { font-size: 1.25rem; color: var(--fg); }
 footer .brand svg { width: 26px; height: 24px; color: var(--fg); }
+footer a:not(.brand) { color: var(--fg); text-decoration: underline; text-underline-offset: 3px; }
+footer a:not(.brand):hover { color: var(--accent-text); }
 </style>
 </head>
 <body>
@@ -164,7 +166,7 @@ footer .brand svg { width: 26px; height: 24px; color: var(--fg); }
     <nav>
       <a class="brand" href="#" aria-label="Auk home"><svg aria-hidden="true"><use href="#mark"/></svg><span>auk</span></a>
       <div class="links">
-        <a href="#checks">Checks</a><a href="#holes">Holes</a><a href="#agents">Agents</a><a href="#packages">Packages</a><a href="#performance">Performance</a><a href="#start">Get started</a>
+        <a href="#checks">Checks</a><a href="#holes">Holes</a><a href="#agents">Agents</a><a href="#packages">Packages</a><a href="#performance">Performance</a><a href="#start">Get started</a><a href="https://github.com/auk-lang-org/auk">GitHub</a>
       </div>
     </nav>
     <div class="hero">
@@ -450,6 +452,7 @@ Hello from Auk!</pre></div></div></div>
   <footer>
     <a class="brand" href="#"><svg aria-hidden="true"><use href="#mark"/></svg><span>auk</span></a>
     <span>Named for the great auk and its living cousin, the razorbill.</span>
+    <span class="by">Made by Nathan Spackman · <a href="https://github.com/thenatespack">GitHub</a> · <a href="https://www.linkedin.com/in/nathan-spackman-2613591b6/">LinkedIn</a> · <a href="https://github.com/auk-lang-org/auk">Source</a></span>
   </footer>
 </div>
 

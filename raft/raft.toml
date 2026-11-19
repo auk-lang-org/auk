@@ -1,4 +1,4 @@
 [package]
 name = "raft"
-version = "0.1.0"
-effects = ["fs", "env", "ffi"]
+version = "1.0.0"
+effects = ["fs", "net", "env", "ffi"]

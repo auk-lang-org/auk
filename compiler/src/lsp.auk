@@ -23,9 +23,6 @@
 /// spliced as chars, the same text); `uri_to_path` keeps invalid UTF-8 percent-escapes
 /// undecoded instead of writing U+FFFD.
 
-/// The version the server reports (Cargo.toml's).
-pub let VERSION = "0.1.0"
-
 /// Serve on stdin/stdout until `exit`. Returns the process exit code.
 pub fn run(cx: resolve.Sources): int uses fs, env, ffi {
   var server = Server { cx, docs: {}, others: {}, diags: {}, shutdown: false, exit: false }
@@ -523,7 +520,7 @@ fn code_actions(s: Server, params: json.Json): json.Json uses fs {
   json.Json.Arr(out)
 }
 
-fn initialize_result(): json.Json =
+fn initialize_result(): json.Json uses ffi =
   json.obj([
     ("capabilities", json.obj([
       ("textDocumentSync", json.obj([("openClose", json.of(true)), ("change", json.of(1)), ("save", json.obj([("includeText", json.of(true))]))])),
@@ -533,7 +530,7 @@ fn initialize_result(): json.Json =
       ("documentSymbolProvider", json.of(true)),
       ("codeActionProvider", json.obj([("codeActionKinds", json.Json.Arr([json.of("quickfix")]))])),
     ])),
-    ("serverInfo", json.obj([("name", json.of("auk")), ("version", json.of(VERSION))])),
+    ("serverInfo", json.obj([("name", json.of("auk")), ("version", json.of(version.text()))])),
   ])
 
 /// The char offset of an LSP position in `text` (clamped to the text): Rust's `byte_offset`,

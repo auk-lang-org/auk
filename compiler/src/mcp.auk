@@ -116,13 +116,13 @@ pub fn handle(msg: json.Json, exe: str): json.Json? uses fs, time, ffi {
   }
 }
 
-fn initialize(params: json.Json): json.Json {
+fn initialize(params: json.Json): json.Json uses ffi {
   let requested = params.get("protocolVersion").as_str() else ""
-  let version = PROTOCOL_VERSIONS.find(v => v == requested) else PROTOCOL_VERSIONS[0]
+  let protocol = PROTOCOL_VERSIONS.find(v => v == requested) else PROTOCOL_VERSIONS[0]
   json.obj([
-    ("protocolVersion", json.of(version)),
+    ("protocolVersion", json.of(protocol)),
     ("capabilities", json.obj([("tools", json.obj([]))])),
-    ("serverInfo", json.obj([("name", json.of("auk")), ("version", json.of(lsp.VERSION))])),
+    ("serverInfo", json.obj([("name", json.of("auk")), ("version", json.of(version.text()))])),
     ("instructions", json.of(INSTRUCTIONS)),
   ])
 }

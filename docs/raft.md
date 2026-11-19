@@ -54,6 +54,7 @@ effects = ["net", "fs"]        # the most this package (and its deps) may use
 http = "^0.1"                  # from the registry
 json = "^0.1"
 geo  = { path = "../geo" }     # a local package
+maps = { url = "https://example.com/pkgs/maps.raft" }   # a `raft pack` bundle at a URL
 
 [link]
 libs = ["sqlite3"]             # C libraries for `extern fn` (needs the ffi effect)
@@ -76,19 +77,24 @@ source = "registry"
 effects = ["net"]
 checksum = "sha256:9f2c…"
 ```
-The checksum is SHA-256 over the installed files (`raft.toml`, `README.md` if present, `src/**`), in sorted relative-path order using `/` separators. Each file contributes its path, a NUL byte, its length as 8 big-endian bytes, then its contents. `raft install` verifies both the registry copy and `.raft/<name>/` against the lock and fails loudly on a mismatch. Path dependencies are recorded as `source = "path:../geo"` (relative to the project) and aren't verified, since they're edited freely.
+The checksum is SHA-256 over the installed files (`raft.toml`, `README.md` if present, `src/**`), in sorted relative-path order using `/` separators. Each file contributes its path, a NUL byte, its length as 8 big-endian bytes, then its contents. `raft install` verifies both the registry copy and `.raft/<name>/` against the lock and fails loudly on a mismatch. URL dependencies are recorded as `source = "url:<url>"` and verified like registry ones. Path dependencies are recorded as `source = "path:../geo"` (relative to the project) and aren't verified, since they're edited freely. A registry or URL package is taken from `.raft/<name>/` without downloading when the lock pins it (same name and source) and the installed copy has the locked checksum, so a locked, installed project installs offline.
 
 ## Registry
-v1's registry is a directory of packages, each one `<registry>/<name>/` with a `raft.toml`. It defaults to the `packages/` folder of the Auk installation; override it with `RAFT_REGISTRY=/path`. Each name has one published version in v1. (A hosted index with many versions per package comes later; the manifest and lock formats don't change.)
+v1's registry is a directory of packages, each one `<registry>/<name>/` with a `raft.toml`, or an `http://`/`https://` URL serving one bundle per package at `<registry>/<name>.raft`. It defaults to the `packages/` folder of the Auk installation; override it with `RAFT_REGISTRY=/path` or `RAFT_REGISTRY=https://…`.
+
+### Bundles
+`raft pack [<dir>]` writes the project as `<dir>/<name>.raft` (default: the project directory). A bundle is exactly the checksum input above (each file's path, NUL, 8-byte big-endian length, contents, in sorted path order), so its SHA-256 is the lock checksum, which `pack` prints. raft unpacks only `raft.toml`, `README.md` and `src/**` (strictly sorted, no empty, `.` or `..` components), so a bundle can't write outside `.raft/<name>/`. Downloads use core `net` (raft has no dependencies, so `raft/src/fetch.auk` is a small GET-only HTTP/1.1 client: chunked/`Content-Length`/close framing, up to 5 redirects, TLS always verified). Each name has one published version in v1. (A hosted index with many versions per package comes later; the manifest and lock formats don't change.)
 
 ## Commands
 | command | does |
 |---|---|
 | `raft new <name> [--lib]` | create `<name>/` with `raft.toml` and `src/main.auk` (or `src/lib.auk`) |
 | `raft add <pkg> [--path <dir>]` | add a dependency (latest version, as `^MAJOR.MINOR`), then install |
+| `raft add <pkg> --url <url>` | add a dependency on a `raft pack` bundle at an http(s) URL, then install |
 | `raft remove <pkg>` | drop a dependency, then re-install |
 | `raft install` | resolve, check effects, copy into `.raft/<name>/`, write `raft.lock` |
 | `raft list` | show the dependency tree with versions and effects |
+| `raft pack [<dir>]` | write the package as `<dir>/<name>.raft` for serving from a URL |
 
 Behavior:
 - Every command finds the project by searching upward from the current directory.

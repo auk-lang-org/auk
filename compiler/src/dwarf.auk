@@ -12,9 +12,6 @@
 ///
 /// Rust's `Option<Debug>` is a `Debug` with `on` (handles are `?`s when it is off).
 
-/// The version the producer string names (the Rust compiler's Cargo.toml `version`, kept).
-let VERSION = "0.1.0"
-
 pub struct Debug {
   on: bool,
   cx: llvm.Context,
@@ -74,7 +71,7 @@ pub fn new(cx: llvm.Context, m: llvm.Module, prog: mir.Program): Debug uses fs, 
   }
   let file = file_of(&d, main)
   d.main = file
-  let producer = "auk {VERSION}"
+  let producer = "auk {version.text()}"
   llvm.debug.di_builder_create_compile_unit(
     dib,
     llvm.DWARF_SOURCE_LANGUAGE_C99,

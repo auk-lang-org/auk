@@ -3,5 +3,5 @@
 # auk_rt.bc. No dependencies.
 [package]
 name = "auk_rt"
-version = "0.1.0"
+version = "1.0.0"
 effects = ["raw", "ffi"]

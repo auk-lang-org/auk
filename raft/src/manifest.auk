@@ -46,6 +46,8 @@ pub enum DepSrc {
   Registry(req: semver.Req),
   /// A local package directory, relative to the manifest that names it.
   Path(p: str),
+  /// A package bundle (`raft pack`) at an http(s) URL.
+  Url(u: str),
 }
 
 /// Why `name` is not a valid package name, if it isn't.
@@ -166,12 +168,20 @@ pub fn parse(src: str): Manifest!res.Fail {
       }
       Table(es) => match es {
         [toml.Entry { key: "path", value: Str(p) }] => Path(p)
+        [toml.Entry { key: "url", value: Str(u) }] => {
+          if !fetch.is_url(u) {
+            return bad(
+              res.err("invalid url `{u}` for {dep}").help("use an http:// or https:// URL of a `raft pack` bundle"),
+            )
+          }
+          Url(u)
+        }
         _ => return bad(
-          res.err("invalid dependency {dep}").help("write {dep} = {{ path = \"../{dep}\" }}"),
+          res.err("invalid dependency {dep}").help("write {dep} = {{ path = \"../{dep}\" }} or {dep} = {{ url = \"https://...\" }}"),
         )
       }
       List(_) => return bad(
-        res.err("invalid dependency {dep}").help("use a version requirement string or {{ path = \"...\" }}"),
+        res.err("invalid dependency {dep}").help("use a version requirement string, {{ path = \"...\" }} or {{ url = \"...\" }}"),
       )
     }
     deps.push(Dep { name: dep, src })
@@ -183,7 +193,7 @@ pub fn parse(src: str): Manifest!res.Fail {
 pub struct Locked {
   name: str,
   version: str,
-  /// `registry` or `path:<dir>`.
+  /// `registry`, `path:<dir>` or `url:<url>`.
   source: str,
   effects: [str],
   checksum: str,
@@ -428,6 +438,10 @@ test "manifest validation" {
   assert parse("[package]\nname = \"auk_rt\"\nversion = \"0.1.0\"\neffects = [\"raw\"]") is ok(_)
   assert bad_msg("[package]\nname = \"a\"\nversion = \"0.1.0\"\n[deps]\nb = \">1\"") ==
     "invalid version requirement `>1` for b"
+  let url = parse("[package]\nname = \"a\"\nversion = \"0.1.0\"\n[deps]\nb = {{ url = \"https://x.io/b.raft\" }}")?
+  assert url.deps[0].src == Url("https://x.io/b.raft")
+  assert bad_msg("[package]\nname = \"a\"\nversion = \"0.1.0\"\n[deps]\nb = {{ url = \"x.io/b\" }}") ==
+    "invalid url `x.io/b` for b"
   let ffi = "[package]\nname = \"a\"\nversion = \"0.1.0\"\neffects = [\"ffi\"]\n[link]\n"
   assert parse("{ffi}libs = [\"sqlite3\", \"/opt/x/libz.dylib\"]") is ok(_)
   assert bad_msg("{ffi}libs = \"z\"") == "[link] libs must be an array of strings"

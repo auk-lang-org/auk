@@ -6,4 +6,4 @@ effects = ["net", "time", "env", "fs"]
 [deps]
 http = "^0.1"
 sup = "^0.1"
-splash = "^0.6"
+splash = "^0.7"

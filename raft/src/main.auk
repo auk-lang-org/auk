@@ -12,20 +12,24 @@ let USAGE = """
   commands:
     new <name> [--lib]          create <name>/ with raft.toml and src/main.auk (or src/lib.auk)
     add <pkg> [--path <dir>]    add a dependency (latest version, as ^MAJOR.MINOR), then install
+    add <pkg> --url <url>       add a dependency on a package bundle at an http(s) URL
     remove <pkg>                drop a dependency, then re-install
     install                     resolve, check effects, copy into .raft/, write raft.lock
     list                        show the dependency tree with versions and effects
+    pack [<dir>]                write the package as <dir>/<name>.raft (default: the project)
 
   environment:
-    RAFT_REGISTRY              package registry directory (default: Auk's packages/)
+    RAFT_REGISTRY              package registry: a directory, or an http(s) URL serving
+                               <name>.raft bundles (default: Auk's packages/)
   """
 
-fn main(args: [str]): int uses fs, env, ffi {
+fn main(args: [str]): int uses fs, net, env, ffi {
   let result: ()!res.Fail = match args.skip(1) {
     ["new", name] => new(name, false)
     ["new", name, "--lib"] | ["new", "--lib", name] => new(name, true)
     ["add", pkg] => add(pkg, none)
-    ["add", pkg, "--path", dir] | ["add", "--path", dir, pkg] => add(pkg, some(dir))
+    ["add", pkg, "--path", dir] | ["add", "--path", dir, pkg] => add(pkg, some(Path(dir)))
+    ["add", pkg, "--url", u] | ["add", "--url", u, pkg] => add(pkg, some(Url(u)))
     ["remove", pkg] => remove(pkg)
     ["install"] => match project() {
       ok(dir) => install(dir)
@@ -33,6 +37,14 @@ fn main(args: [str]): int uses fs, env, ffi {
     }
     ["list"] => match project() {
       ok(dir) => list(dir)
+      err(Bad(e)) => bad(e)
+    }
+    ["pack"] => match project() {
+      ok(dir) => pack(dir, dir)
+      err(Bad(e)) => bad(e)
+    }
+    ["pack", out] => match project() {
+      ok(dir) => pack(dir, out)
       err(Bad(e)) => bad(e)
     }
     ["help"] | ["--help"] | ["-h"] => {
@@ -58,6 +70,15 @@ fn main(args: [str]): int uses fs, env, ffi {
 }
 
 fn bad<T>(e: res.Error): T!res.Fail = fail(res.Bad(e))
+
+/// Run `f` with a new private scratch directory (where fetched packages are unpacked), removing
+/// it afterwards whatever the result.
+fn with_work<T>(f: (str) => T!res.Fail): T!res.Fail uses fs, ffi {
+  let work = fs.temp_dir() else e => return bad(res.err("cannot make a temporary directory: {paths.io_error(e.show())}"))
+  let r = f(work)
+  let _ = paths.remove_all(work)
+  r
+}
 
 /// The registry directory: `$RAFT_REGISTRY`, else the `packages/` folder of the checkout the
 /// binary is in, else the directory named in `raft.registry` next to the binary (written by
@@ -135,7 +156,7 @@ fn new(name: str, lib: bool): ()!res.Fail uses fs {
   if lib {
     write_new(dir, "src/lib.auk", "pub fn hello(): str {{\n    \"hello from {name}\"\n}}\n")?
   } else {
-    write_new(dir, "src/main.auk", "fn main() {{\n    print(\"Hello from {name}!\");\n}}\n")?
+    write_new(dir, "src/main.auk", "fn main() {{\n    print(\"Hello from {name}!\")\n}}\n")?
   }
   print("created {name}/ ({if lib { "library" } else { "app" }})")
 }
@@ -148,8 +169,14 @@ fn write_new(dir: str, rel: str, text: str): ()!res.Fail uses fs {
   fs.write(path, text) else e => return bad(io(e))
 }
 
+/// Where `raft add` takes a package from, when not the registry.
+enum From {
+  Path(dir: str),
+  Url(u: str),
+}
+
 /// `raft add`: write the requirement into `[deps]`, then install (restoring raft.toml on failure).
-fn add(pkg: str, path: str?): ()!res.Fail uses fs, env, ffi {
+fn add(pkg: str, from: From?): ()!res.Fail uses fs, net, env, ffi {
   let dir = project()?
   let root = manifest.load(dir)?
   if pkg == root.name {
@@ -159,13 +186,21 @@ fn add(pkg: str, path: str?): ()!res.Fail uses fs, env, ffi {
     some(msg) => return bad(res.err(msg))
     none => {}
   }
-  let value = match path {
-    some(p) => {
+  let value = match from {
+    some(Path(p)) => {
       let _ = load_dep(paths.join(dir, p), pkg, [root.name, pkg], "no raft.toml in {p}")?
       toml.value_str(toml.Table([toml.Entry { key: "path", value: toml.Str(p) }]))
     }
+    some(Url(u)) => {
+      if !fetch.is_url(u) {
+        return bad(res.err("`{u}` is not an http:// or https:// URL"))
+      }
+      // Fetched again by install; checking first gives a clean error before raft.toml changes.
+      let _ = with_work(work => fetch_pkg(u, pkg, [root.name, pkg], work))?
+      toml.value_str(toml.Table([toml.Entry { key: "url", value: toml.Str(u) }]))
+    }
     none => {
-      let m = load_registry(pkg, [root.name, pkg])?
+      let (m, _) = with_work(work => load_registry(pkg, [root.name, pkg], work))?
       toml.value_str(toml.Str("^{m.version.major}.{m.version.minor}"))
     }
   }
@@ -173,7 +208,7 @@ fn add(pkg: str, path: str?): ()!res.Fail uses fs, env, ffi {
 }
 
 /// `raft remove`: drop a dependency from `[deps]`, then re-install.
-fn remove(pkg: str): ()!res.Fail uses fs, env, ffi {
+fn remove(pkg: str): ()!res.Fail uses fs, net, env, ffi {
   let dir = project()?
   let root = manifest.load(dir)?
   if !root.deps.any(d => d.name == pkg) {
@@ -185,7 +220,7 @@ fn remove(pkg: str): ()!res.Fail uses fs, env, ffi {
 }
 
 /// Rewrite one `[deps]` line of raft.toml and install; put the old text back if anything fails.
-fn edit_and_install(dir: str, pkg: str, value: str?): ()!res.Fail uses fs, env, ffi {
+fn edit_and_install(dir: str, pkg: str, value: str?): ()!res.Fail uses fs, net, env, ffi {
   let path = paths.join(dir, "raft.toml")
   let old = fs.read(
     path,
@@ -211,7 +246,7 @@ struct Pkg {
   m: manifest.Manifest,
   /// Where its files are read from.
   dir: str,
-  /// `registry` or `path:<dir>` (path relative to the project when possible).
+  /// `registry`, `path:<dir>` (path relative to the project when possible) or `url:<url>`.
   source: str,
   /// Names from the root down to this package, as first reached.
   chain: [str],
@@ -231,11 +266,44 @@ fn load_dep(dir: str, name: str, chain: [str], missing: str): manifest.Manifest!
   m
 }
 
-/// Load registry package `name`.
-fn load_registry(name: str, chain: [str]): manifest.Manifest!res.Fail uses fs, env, ffi {
+/// Download the bundle at `url`, unpack it into `<work>/<name>`, and load it as dependency
+/// `name`: (manifest, directory).
+fn fetch_pkg(url: str, name: str, chain: [str], work: str): (manifest.Manifest, str)!res.Fail uses fs, net {
+  let chain_s = chain_str(chain)
+  let data = fetch.get(url) else e => return bad(res.err("cannot fetch {url}: {e} ({chain_s})"))
+  let files = bundle.decode(data) else e => return bad(
+    res.err("{url} is not a raft package bundle: {e} ({chain_s})").help("make one with `raft pack`"),
+  )
+  let dir = paths.join(work, name)
+  for (rel, bytes) in files {
+    let to = paths.join(dir, rel)
+    let io = (e: Err) => res.err("cannot write {to}: {paths.io_error(e.show())}")
+    fs.mkdir(paths.parent(to) else "") else e => return bad(io(e))
+    fs.write_bytes(to, bytes) else e => return bad(io(e))
+  }
+  let m = manifest.load(dir)?
+  if m.name != name {
+    return bad(res.err("{url} is package `{m.name}`, not `{name}` ({chain_s})"))
+  }
+  (m, dir)
+}
+
+/// `load_dep`, with the directory: (manifest, `dir`).
+fn local_dep(dir: str, name: str, chain: [str], missing: str): (manifest.Manifest, str)!res.Fail uses fs {
+  (load_dep(dir, name, chain, missing)?, dir)
+}
+
+/// Load registry package `name` (fetching `<registry>/<name>.raft` into `work` when the
+/// registry is a URL): (manifest, directory).
+fn load_registry(name: str, chain: [str], work: str): (manifest.Manifest, str)!res.Fail uses fs, net, env, ffi {
   let reg = registry()
-  match load_dep(paths.join(reg, name), name, chain, "package `{name}` not found in the registry") {
-    ok(m) => m
+  let found = if fetch.is_url(reg) {
+    fetch_pkg(fetch.join(reg, "{name}.raft"), name, chain, work)
+  } else {
+    local_dep(paths.join(reg, name), name, chain, "package `{name}` not found in the registry")
+  }
+  match found {
+    ok(x) => x
     err(Bad(e)) => {
       if e.help == none {
         bad(e.help("the registry is {reg}; set RAFT_REGISTRY to use another"))
@@ -248,7 +316,11 @@ fn load_registry(name: str, chain: [str]): manifest.Manifest!res.Fail uses fs, e
 
 /// Resolve the root's dependencies breadth-first, one version per name, checking requirements and
 /// that every package's effects fit within those of the package depending on it.
-fn resolve(root: manifest.Manifest, root_dir: str): [Pkg]!res.Fail uses fs, env, ffi {
+///
+/// A package that would be downloaded is taken from `.raft/` instead when raft.lock pins it (same
+/// name and source) and the installed copy still has the locked checksum, so a locked project
+/// installs offline. Downloads go under `work`.
+fn resolve(root: manifest.Manifest, root_dir: str, lock: [manifest.Locked], work: str): [Pkg]!res.Fail uses fs, net, env, ffi {
   var pkgs: [Pkg] = []
   // (dependency, index of the package declaring it; none = root)
   var queue: [(manifest.Dep, int?)] = root.deps.map(d => (d, none))
@@ -268,6 +340,7 @@ fn resolve(root: manifest.Manifest, root_dir: str): [Pkg]!res.Fail uses fs, env,
     }
     let source = match dep.src {
       Registry(_) => "registry"
+      Url(u) => "url:{u}"
       Path(p) => {
         let full = paths.join(pdir, p)
         let shown = match paths.strip_base(full, root_dir) {
@@ -293,8 +366,16 @@ fn resolve(root: manifest.Manifest, root_dir: str): [Pkg]!res.Fail uses fs, env,
         effects = p.m.effects
       }
       none => {
+        let installed = paths.join(root_dir, ".raft/{dep.name}")
+        let remote = dep.src is Url(_) || (dep.src is Registry(_) && fetch.is_url(registry()))
+        let cached = remote && match lock.find(l => l.name == dep.name && l.source == source) {
+          some(l) => ok_sum(installed) == some(l.checksum)
+          none => false
+        }
         let (m, dir) = match dep.src {
-          Registry(_) => (load_registry(dep.name, chain)?, paths.join(registry(), dep.name))
+          _ when cached => (load_dep(installed, dep.name, chain, "no raft.toml in {installed}")?, installed)
+          Registry(_) => load_registry(dep.name, chain, work)?
+          Url(u) => fetch_pkg(u, dep.name, chain, work)?
           Path(p) => {
             let dir = paths.join(pdir, p)
             (load_dep(dir, dep.name, chain, "no raft.toml in {p}")?, dir)
@@ -376,20 +457,32 @@ fn walk(dir: str, rel: str, out: var [(str, str)]): ()! uses fs {
   }
 }
 
-/// `sha256:<hex>` over each file's relative path, a NUL, its length (8 bytes big-endian) and its contents.
-fn checksum(dir: str): str!res.Fail uses fs {
-  var data: [int] = []
+/// The package in `dir` as a bundle (bundle.auk): each file's relative path, a NUL, its length
+/// (8 bytes big-endian) and its contents.
+fn bundle_of(dir: str): [int]!res.Fail uses fs {
+  var files: [(str, [int])] = []
   for (rel, path) in package_files(dir)? {
     let bytes = fs.read_bytes(
       path,
     ) else e => return bad(res.err("cannot read {path}: {paths.io_error(e.show())}"))
-    data += rel.bytes()
-    data.push(0)
-    let n = bytes.len()
-    for i in 0..8 { data.push((n >> (56 - 8 * i)) & 0xff) }
-    data += bytes
+    files.push((rel, bytes))
   }
-  "sha256:{sha256.hex(data)}"
+  bundle.encode(files)
+}
+
+/// `sha256:<hex>` of the package's bundle.
+fn checksum(dir: str): str!res.Fail uses fs = "sha256:{sha256.hex(bundle_of(dir)?)}"
+
+/// `raft pack`: write the project as a bundle, `<out>/<name>.raft`, for serving from a URL.
+fn pack(dir: str, out: str): ()!res.Fail uses fs {
+  let m = manifest.load(dir)?
+  let data = bundle_of(dir)?
+  let path = paths.join(out, "{m.name}.raft")
+  let io = (e: Err) => res.err("cannot write {path}: {paths.io_error(e.show())}")
+  fs.mkdir(out) else e => return bad(io(e))
+  fs.write_bytes(path, data) else e => return bad(io(e))
+  print("packed {m.name} {semver.show(m.version)} -> {path}")
+  print("  sha256:{sha256.hex(data)}")
 }
 
 /// `checksum(dir).ok()` (`checksum(dir) else none` is typed `str` in a comparison).
@@ -402,24 +495,32 @@ fn ok_sum(dir: str): str? uses fs {
 
 /// `raft install`: resolve, verify against raft.lock, copy into `.raft/`, rewrite raft.lock,
 /// and print what was added or removed. Nothing is written unless every check passes.
-fn install(dir: str): ()!res.Fail uses fs, env, ffi {
+fn install(dir: str): ()!res.Fail uses fs, net, env, ffi = with_work(work => install_in(dir, work))
+
+/// `install`, downloading under `work`.
+fn install_in(dir: str, work: str): ()!res.Fail uses fs, net, env, ffi {
   let root = manifest.load(dir)?
-  let pkgs = resolve(root, dir)?  // breadth-first: direct dependencies print first
   let lock_path = paths.join(dir, "raft.lock")
   let old = manifest.read_lock(lock_path)?
+  let pkgs = resolve(root, dir, old, work)?  // breadth-first: direct dependencies print first
   let store = paths.join(dir, ".raft")
   var locked: [manifest.Locked] = []
   for p in pkgs {
     let (name, version) = (p.m.name, semver.show(p.m.version))
     let sum = checksum(p.dir)?
     let prev = old.find(l => l.name == name && l.version == version && l.source == p.source)
-    // Registry packages are pinned by raft.lock; path packages are local and may change freely.
+    // Registry and URL packages are pinned by raft.lock; path packages are local and may change
+    // freely.
     match prev {
-      some(prev) when p.source == "registry" => {
+      some(prev) when !p.source.starts_with("path:") => {
         if sum != prev.checksum {
+          let place = match p.source.strip_prefix("url:") {
+            some(u) => "at {u}"
+            none => "in the registry ({if fetch.is_url(registry()) { registry() } else { p.dir }})"
+          }
           return bad(
             res
-              .err("checksum mismatch for {name} {version} in the registry ({p.dir})")
+              .err("checksum mismatch for {name} {version} {place}")
               .help("raft.lock expects {prev.checksum}; if the change is intended, delete {name}'s entry from raft.lock and run `raft install`"),
           )
         }

@@ -38,8 +38,10 @@ the same URL every 500 ms and patches the live part (`view`) in place when it ch
 flash; focus, half-typed input and the scroll position all stay. The ❤ button
 (`splash-click="like"`), the guestbook form (`splash-submit="sign"`), the note
 (`splash-input="note"`) and the auk picker (`splash-change="auk"`) send events that `act` turns
-into an `Act`, and the answer updates the page at once. A refresh is a `Look`, so it doesn't
-count as a visit. That one loop shows both kinds of change:
+into an `Act`, and the answer updates the page at once; signing also gets a thank-you
+(`splash.flash`). The home and pond links are in a `<nav splash-nav>`, so they move between pages
+without a reload (boom's link is a plain one, `splash-nav="off"`). A refresh is a `Look`, so it
+doesn't count as a visit. That one loop shows both kinds of change:
 
 - **Code changes:** you save, `auk run --live` swaps in the new code, the hub notices the reload,
   and every open tab fetches at once. The page changes about 0.3 s after the reload finishes.
