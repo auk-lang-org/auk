@@ -208,7 +208,7 @@ The four moved the same way as the pilot (`runtime/src/copy.auk`, `heap.auk` wit
 6. **Per-OS calls in a small module:** `malloc_size` (macOS) / `malloc_usable_size` (glibc) are
    `heap_os.macos.auk` / `heap_os.linux.auk` (one `pub fn usable_size`), the loader's per-target
    files, instead of two copies of heap.auk.
-7. **Reading a `raw thread var` needs no effect** (E0411 "declares `raw` but doesn't use it" on
+7. **Fixed** (2026-11-19: no global of the dialect needs the effect, and declaring it for one isn't E0411): **Reading a `raw thread var` needs no effect** (E0411 "declares `raw` but doesn't use it" on
    `auk__heap_current`); `raw.atomic_*`, `raw.field_addr`, `raw.cast` do.
 8. **`time_t`/`suseconds_t` widths differ** (cfacts' `Timeval.tv_usec` is `i32` on macOS, `i64` on
    Linux): `i64(now.tv_usec)` reads it on both.
@@ -260,7 +260,7 @@ More of what the dialect lacks (the pilot's list above still holds; 3, 4, 5 were
    paths, 2048 in `auk__panic_sb`).
 12. **Fixed** (2026-11-19: `p.int()` is an `i64`): **`p.int()` is `int`, whose arithmetic is checked:** `at.int() - hay.int()` compiled to a call
    to `auk_sub` (overflow panic) in raw code. Convert first: `i64(at.int()) - i64(hay.int())`.
-13. **Thread vars need no `uses raw`** (an `extern var` does): the four show-budget accessors
+13. **Fixed** (as 7 above): **Thread vars need no `uses raw`** (an `extern var` does): the four show-budget accessors
    were flagged E0411 for declaring it.
 14. **Fixed** (2026-11-19, lowlevel.md 7a "Alignment"): **Field loads through `raw.Ptr<abi.Str>` are `align 4`** in the IR (`load i64, … align 4`
    for `len_bytes`), where the struct is 8-aligned: harmless on arm64, worth fixing in codegen.

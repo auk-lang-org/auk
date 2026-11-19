@@ -248,13 +248,25 @@ fn library_bitcode_keeps_exports() uses env, fs, ffi, time {
 fn extern_vars_read_c_data() uses env, fs, ffi, time {
   let _ = passes(fixture("extern_var", "extern_var.auk"))
   if t.macos() { let _ = passes(fixture("extern_var_macos", "extern_var_macos.auk")) }
-  // reading C data needs `uses raw`
+  // reading C data needs no `uses raw`, as a `raw var` or `raw thread var` doesn't; declaring it
+  // for them isn't E0411 either
   let main = project("extern_var_effect", r"""
     extern var environ: raw.Ptr<raw.Ptr<u8>> = "environ"
-    fn f(): bool = environ.is_null()
+    raw var count: i64 = 0
+    fn f(): raw.Ptr<raw.Ptr<u8>> = environ
+    fn g(): raw.Ptr<raw.Ptr<u8>> uses raw = environ
+    fn h(): i64 uses raw = count
+    fn k(): i64 = count
     fn main() {}
     """)
-  t.check(codes(main).contains("E0410"), "{codes(main)}")
+  t.eq("{codes(main)}", "[]", "")
+  // `raw.addr_of(&x)` and memory through a pointer still do
+  let addr = project("extern_var_addr", r"""
+    extern var environ: raw.Ptr<raw.Ptr<u8>> = "environ"
+    fn f(): bool = raw.addr_of(&environ).is_null()
+    fn main() {}
+    """)
+  t.check(codes(addr).contains("E0410"), "{codes(addr)}")
 }
 
 fn raw_is_only_for_the_runtime_e0418() uses env, fs, ffi, time {

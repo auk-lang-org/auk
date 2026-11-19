@@ -242,9 +242,8 @@ fn direct(cx: Cx, m: int, n: int): ([str], Via)? {
   }
   match t.names.get(n) {
     some(Fn(func, _)) => return (cx.fn_uses(func), Via { callee: cx.fn_name(func, m), next: none, declared: true })
-    // the runtime's dialect: C data
-    some(Global(g)) when cx.tp.globals[g].kind == 4 =>
-      return (["raw"], Via { callee: "the `extern var` {cx.tp.globals[g].name}", next: none, declared: true })
+    // the runtime's dialect: reading or writing a global, an `extern var` (C data) as a `raw
+    // var` or `raw thread var`, needs no effect (only the runtime package has them)
     _ => {}
   }
   // the runtime's dialect: memory through a pointer
@@ -453,7 +452,13 @@ fn check_fn(cx: var Cx, f: int) {
   let nodes = cx.body_nodes(b)
   var used: [str] = []
   var missing: [Missing] = []
+  // a global of the dialect touched: `raw` may be declared for it, not required
+  var raw_global = false
   for nd in nodes {
+    match cx.tp.tables[m].names.get(nd.id) {
+      some(Global(g)) => if cx.tp.globals[g].kind != 2 { raw_global = true }
+      _ => {}
+    }
     for (s, via) in cx.needs(b, inst, nd.id) {
       for e in s {
         if !declared.contains(e) && !missing.any(x => x.eff == e) {
@@ -473,7 +478,7 @@ fn check_fn(cx: var Cx, f: int) {
   match first {
     some(c) => if !(generic && insts.len() == 0) {
       for u in c.effects {
-        let gated = u.name == "raw" && !resolve.is_runtime(cx.tp.program, cx.tp.fns[f].module)
+        let gated = u.name == "raw" && (!resolve.is_runtime(cx.tp.program, cx.tp.fns[f].module) || raw_global)
         if is_effect(u.name) && !used.contains(u.name) && !gated { unused.push(u) }
       }
     }

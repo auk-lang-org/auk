@@ -74,7 +74,8 @@ A C global defined elsewhere (libc, a framework) is `extern var`, the data count
 `extern fn`: `extern var stack_block_isa: [u8; 0] = "_NSConcreteStackBlock"` (the C name; the
 type says how it's read, `raw.addr_of(&stack_block_isa)` is its address). Needed for block
 literals (§10: `_NSConcreteStackBlock`, `_NSConcreteGlobalBlock`) and Network.framework's
-`_nw_content_context_default_stream`; reading or writing one is `uses raw`.
+`_nw_content_context_default_stream`; reading or writing one is `uses raw` (as implemented,
+not: see 7a).
 
 ## 5. Exported functions
 
@@ -138,8 +139,8 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   from another module); no type arguments; aliases may name aliases (not themselves); only
   raw types (E0419) and only in the runtime package (E0418).
 - **Ordinary functions of the runtime package may hold raw values** (fixed-width numbers, raw
-  structs, pointers) without `uses raw`; only the intrinsics (and `extern var`s) need the
-  effect, and the E0419 rule (no reference-counted type) applies to `uses raw` functions and
+  structs, pointers) without `uses raw`; only the intrinsics need the effect (globals of any
+  kind don't, below), and the E0419 rule (no reference-counted type) applies to `uses raw` functions and
   `export fn`s.
 - **No cancellation points in the runtime:** generated code checks `auk_cancel_pending` at the
   top of every loop iteration; no function of the runtime package does (`uses raw` or not):
@@ -175,8 +176,11 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   exports one as data). A `raw let` holding addresses is a value like any other: the
   addresses are taken where it is used. A raw struct literal anywhere may leave fields out
   (they are zero); a `raw union` literal gives at most one field.
-- **`extern var name: T = "symbol"`** declares C data (no initializer); reading it, writing it
-  and `raw.addr_of(&name)` need `uses raw` (E0410).
+- **`extern var name: T = "symbol"`** declares C data (no initializer). **Differs from §4:**
+  reading or writing a global of the dialect, an `extern var` as a `raw var`, `raw thread var`
+  or `export var`, needs no `uses raw` (all of them exist only in the runtime package, so the
+  effect would gate nothing); a function may still declare `raw` for them (no E0411).
+  `raw.addr_of(&name)` is an intrinsic and needs it (E0410).
 - **`export fn`:** one clause, no type parameters, raw types only (E0419); C's calling
   convention as `mir/layout.auk` classifies it (below); external linkage under its own name, so dead-code elimination keeps
   it; `inline export fn` is the same plus `inlinehint`; `noinline export fn` plus `noinline`:
