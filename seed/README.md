@@ -16,7 +16,7 @@ last Rust compiler, which can rebuild a seed from scratch.
 the seed, before stage 1. A seed cut before the dialect (and the C-string literals it needs,
 2026-11-19) can't, so build.sh first builds `compiler/` with it as "stage 0" and lets stage 0
 build the runtime: such seeds keep working, one compiler build (~20 s) slower. Re-cut each
-platform's seed to drop that step: `scripts/cut_seed.sh` on macOS arm64; Linux arm64 by
+platform's seed to drop that step: `scripts/cut_seed.sh` on macOS arm64 (done, 9b2c2ed); Linux arm64 by
 running it in the `ci/linux` image on a writable clone (`docker run --rm -v "$PWD:/src"
 auk-linux bash -c 'git -c safe.directory="*" clone -q /src /work && cd /work && scripts/cut_seed.sh && cp seed/linux-*
 /src/seed/'`); Linux x86-64 by the GitHub workflow `auk`, job
