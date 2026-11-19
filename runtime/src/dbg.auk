@@ -311,20 +311,44 @@ fn register_as(id: i64) uses raw, ffi {
 // Not covered: the site and locals a thread returning from a blocking call writes before its
 // next statement parks it. The site is one aligned 8-byte store, read relaxed (frame_site); a
 // local shown at that moment may be half-updated.
+//
+// The entry points split it by hand so the fast path (registered, nobody stopped) is two
+// straight-line blocks: each block that touches `cur` looks the thread-local up again (a call
+// on macOS), and a check of the busy flag (str.auk's thread-local) before the halt test would
+// be one more lookup on every call.
 fn frame_op_begin(t: raw.Ptr<PerThread>) uses raw, ffi {
-  if t.tid == 0 {
-    return
+  if t.tid != 0 {
+    frame_op_raise(t)
   }
+}
+
+/// frame_op_begin for a registered thread (t.tid != 0).
+fn frame_op_raise(t: raw.Ptr<PerThread>) uses raw, ffi {
+  raw.atomic_store(raw.field_addr(t, .in_op), 1, raw.Order.SeqCst)
+  if raw.atomic_load(raw.addr_of(&st_halt), raw.Order.SeqCst) != 0 {
+    frame_op_park(t)
+  }
+}
+
+/// The flag is up and st_halt was seen set: unless this is the busy thread, lower the flag,
+/// park until no thread is stopped, and raise it again (C's frame_op_begin loop). The busy
+/// check comes after lowering the flag (the busy thread puts it back up and goes on: nobody
+/// settles on it but itself), so LLVM doesn't hoist its thread-local onto the fast path.
+fn frame_op_park(t: raw.Ptr<PerThread>) uses raw, ffi {
   let flag = raw.field_addr(t, .in_op)
   loop {
-    raw.atomic_store(flag, 1, raw.Order.SeqCst)
-    if raw.atomic_load(raw.addr_of(&st_halt), raw.Order.SeqCst) == 0 || str.auk__dbg_busy() {
+    raw.atomic_store(flag, 0, raw.Order.SeqCst)
+    if str.auk__dbg_busy() {
+      raw.atomic_store(flag, 1, raw.Order.SeqCst)
       return
     }
-    raw.atomic_store(flag, 0, raw.Order.SeqCst)
     lock_st()
     wait_not_stopped()
     unlock_st()
+    raw.atomic_store(flag, 1, raw.Order.SeqCst)
+    if raw.atomic_load(raw.addr_of(&st_halt), raw.Order.SeqCst) == 0 {
+      return
+    }
   }
 }
 
@@ -830,21 +854,36 @@ fn stop(me: i64, reason: raw.Ptr<u8>, extra: raw.Ptr<u8>) uses raw, ffi {
 
 export fn auk_dbg_enter(f: raw.Ptr<abi.DbgFrame>) uses raw, ffi {
   let t = raw.addr_of(&cur)
-  if t.tid == 0 && is_attached() {
-    let _ = tid()
+  if t.tid == 0 {
+    if is_attached() {
+      let _ = tid()
+    }
+    if t.tid == 0 {
+      // never read by the debugger: no flag (depth first: a tail unlike the other path's,
+      // which LLVM would otherwise merge into one more block, one more thread-local lookup)
+      t.depth += 1
+      f.parent = t.top
+      t.top = f
+      return
+    }
   }
-  frame_op_begin(t)
+  frame_op_raise(t)
   f.parent = t.top
   t.top = f
-  frame_op_end(t)
+  raw.atomic_store(raw.field_addr(t, .in_op), 0, raw.Order.Release)
   t.depth += 1
 }
 
 export fn auk_dbg_leave(f: raw.Ptr<abi.DbgFrame>) uses raw, ffi {
   let t = raw.addr_of(&cur)
-  frame_op_begin(t)
+  if t.tid == 0 {
+    t.depth -= 1
+    t.top = f.parent
+    return
+  }
+  frame_op_raise(t)
   t.top = f.parent
-  frame_op_end(t)
+  raw.atomic_store(raw.field_addr(t, .in_op), 0, raw.Order.Release)
   t.depth -= 1
 }
 
