@@ -8,10 +8,7 @@
 /// a write while shared, so it behaves like any Auk value. Rectangles are clipped to the frame,
 /// so drawing partly (or wholly) outside it is fine.
 
-// the rest of the runtime (C, for now)
-extern fn auk__alloc(size: usize, kind: u32): raw.Ptr<()> = "void *auk__alloc(size_t, uint32_t)"
-extern fn auk__xmalloc(n: usize): raw.Ptr<()> = "void *auk__xmalloc(size_t)"
-extern fn auk_release(p: raw.Ptr<()>) = "void auk_release(void *)"
+// the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
 extern fn auk__sb_put_cstr(b: raw.Ptr<abi.StrBuf>, s: raw.Ptr<u8>) = "void auk__sb_put_cstr(void *, const char *)"
 extern fn auk_sb_int(b: raw.Ptr<abi.StrBuf>, v: i64) = "void auk_sb_int(void *, int64_t)"
 extern fn auk__sb_u64(b: raw.Ptr<abi.StrBuf>, v: u64) = "void auk__sb_u64(void *, uint64_t)"
@@ -21,7 +18,6 @@ extern fn auk__panic_sb(loc: raw.Ptr<u8>, b: raw.Ptr<abi.StrBuf>) = "void auk__p
 extern fn auk_arr_len(a: raw.Ptr<abi.Arr>): i64 = "int64_t auk_arr_len(const void *)"
 extern fn auk_arr_new(ops: raw.Ptr<abi.ElemOps>, cap: i64): raw.Ptr<abi.Arr> = "void *auk_arr_new(const void *, int64_t)"
 extern fn auk_arr_make_unique(pa: raw.Ptr<raw.Ptr<abi.Arr>>): raw.Ptr<()> = "void *auk_arr_make_unique(void *)"
-extern var auk_ops_int: abi.ElemOps = "auk_ops_int"
 // libc
 extern fn getenv(name: raw.Ptr<u8>): raw.Ptr<u8> = "char *getenv(const char *)"
 extern fn strcmp(a: raw.Ptr<u8>, b: raw.Ptr<u8>): i32 = "int strcmp(const char *, const char *)"
@@ -34,7 +30,7 @@ raw let INT64_MAX: i64 = 9223372036854775807
 raw let INT64_MIN: i64 = -9223372036854775807 - 1
 
 fn frame_alloc(w: i64, h: i64): raw.Ptr<abi.Frame> uses raw, ffi {
-  let f: raw.Ptr<abi.Frame> = raw.cast(auk__alloc(raw.size_of<abi.Frame>() + usize(w * h) * 4, abi.K_FRAME))
+  let f: raw.Ptr<abi.Frame> = raw.cast(rc.auk__alloc(raw.size_of<abi.Frame>() + usize(w * h) * 4, abi.K_FRAME))
   f.w = w
   f.hgt = h
   f
@@ -96,7 +92,7 @@ fn unique(pf: raw.Ptr<raw.Ptr<abi.Frame>>, loc: raw.Ptr<u8>, what: raw.Ptr<u8>):
     report_copy(w, h, loc, what)
     let g = frame_alloc(w, h)
     raw.copy(g.data, f.data, usize(w * h) * 4)
-    auk_release(raw.cast(f))
+    rc.auk_release(raw.cast(f))
     pf.store(g)
   }
   pf.load().data
@@ -241,7 +237,7 @@ export fn auk_frame_from_list(w: i64, h: i64, px: raw.Ptr<abi.Arr>, loc: raw.Ptr
 /// The frame's colors as a list, rows top to bottom.
 export fn auk_frame_to_list(f: raw.Ptr<abi.Frame>): raw.Ptr<abi.Arr> uses raw, ffi {
   let n = f.w * f.hgt
-  var out = auk_arr_new(raw.addr_of(&auk_ops_int), n)
+  var out = auk_arr_new(rc.ops_int(), n)
   let d: raw.Ptr<i64> = raw.cast(auk_arr_make_unique(raw.addr_of(&out)))
   let s = f.data
   var i: i64 = 0
@@ -398,7 +394,7 @@ fn copy_rect(pf: raw.Ptr<raw.Ptr<abi.Frame>>, x: i64, y: i64, src: raw.Ptr<abi.F
   let same = src == pf.load()
   var tmp: raw.Ptr<u32> = raw.null()
   if same {
-    tmp = raw.cast(auk__xmalloc(usize(len * rows) * 4 + 4))
+    tmp = raw.cast(rc.auk__xmalloc(usize(len * rows) * 4 + 4))
     var r: i64 = 0
     while r < rows {
       raw.copy(tmp.offset(r * len), src.data.offset((oy + r) * sw + ox), usize(len) * 4)

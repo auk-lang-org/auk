@@ -6,16 +6,7 @@
 /// as the C did.)
 
 // the rest of the runtime
-extern fn auk__alloc(size: usize, kind: u32): raw.Ptr<()> = "void *auk__alloc(size_t, uint32_t)"
-extern fn auk__free_obj(p: raw.Ptr<()>) = "void auk__free_obj(void *)"
-extern fn auk__xmalloc(n: usize): raw.Ptr<()> = "void *auk__xmalloc(size_t)"
-extern fn auk__tmp_get(t: raw.Ptr<abi.Tmp>, size: usize): raw.Ptr<u8> = "uint8_t *auk__tmp_get(void *, size_t)"
-extern fn auk__tmp_done(t: raw.Ptr<abi.Tmp>) = "void auk__tmp_done(void *)"
-extern fn auk__on_task(): bool = "bool auk__on_task(void)"
-extern fn auk__check_cancel(loc: raw.Ptr<u8>) = "void auk__check_cancel(const char *)"
 // _Noreturn: its callers say `raw.unreachable()` (no `never` here, TODO(dialect))
-extern fn auk__panic3(loc: raw.Ptr<u8>, a: raw.Ptr<u8>, b: raw.Ptr<u8>, c: raw.Ptr<u8>) =
-  "void auk__panic3(const char *, const char *, const char *, const char *)"
 // pthreads and clocks
 extern fn pthread_mutex_init(m: raw.Ptr<cfacts.PthreadMutex>, attr: raw.Ptr<()>): i32 =
   "int pthread_mutex_init(void *, const void *)"
@@ -36,7 +27,7 @@ extern fn gettimeofday(tv: raw.Ptr<cfacts.Timeval>, tz: raw.Ptr<()>): i32 = "int
 
 /// A new channel for elements described by proto's element ops (proto is an empty [T]).
 export fn auk_chan_new(proto: raw.Ptr<abi.Arr>): raw.Ptr<abi.Chan> uses raw, ffi {
-  let c: raw.Ptr<abi.Chan> = raw.cast(auk__alloc(raw.size_of<abi.Chan>(), abi.K_CHAN))
+  let c: raw.Ptr<abi.Chan> = raw.cast(rc.auk__alloc(raw.size_of<abi.Chan>(), abi.K_CHAN))
   let _ = pthread_mutex_init(raw.field_addr(c, .lock), raw.null())
   let _ = pthread_cond_init(raw.field_addr(c, .cv), raw.null())
   c.ops = proto.ops
@@ -50,7 +41,7 @@ fn slot(c: raw.Ptr<abi.Chan>, i: i64): raw.Ptr<u8> uses raw =
 /// `c.send(x)`: queue a copy of *x. Panics on a closed channel.
 export fn auk_chan_send(c: raw.Ptr<abi.Chan>, x: raw.Ptr<()>, loc: raw.Ptr<u8>) uses raw, ffi {
   var tmp: abi.Tmp
-  let buf = auk__tmp_get(raw.addr_of(&tmp), c.size)
+  let buf = rc.auk__tmp_get(raw.addr_of(&tmp), c.size)
   let old = heap.auk__heap_switch(raw.null())
   copy.auk__copy_elem(c.ops, x, raw.cast(buf))
   let _ = heap.auk__heap_switch(old)
@@ -61,13 +52,13 @@ export fn auk_chan_send(c: raw.Ptr<abi.Chan>, x: raw.Ptr<()>, loc: raw.Ptr<u8>) 
     if !release.is_null() {
       release(raw.cast(buf))
     }
-    auk__tmp_done(raw.addr_of(&tmp))
-    auk__panic3(loc, "send on a closed channel", raw.null(), raw.null())
+    rc.auk__tmp_done(raw.addr_of(&tmp))
+    rc.auk__panic3(loc, "send on a closed channel", raw.null(), raw.null())
     raw.unreachable()
   }
   if c.count == c.cap {
     let cap: i64 = if c.cap == 0 { 8 } else { c.cap * 2 }
-    let items: raw.Ptr<u8> = raw.cast(auk__xmalloc(usize(cap) * c.size))
+    let items: raw.Ptr<u8> = raw.cast(rc.auk__xmalloc(usize(cap) * c.size))
     var i: i64 = 0
     while i < c.count {
       raw.copy(items.offset(usize(i) * c.size), slot(c, i), c.size)
@@ -82,7 +73,7 @@ export fn auk_chan_send(c: raw.Ptr<abi.Chan>, x: raw.Ptr<()>, loc: raw.Ptr<u8>) 
   c.count += 1
   let _ = pthread_mutex_unlock(raw.field_addr(c, .lock))
   let _ = pthread_cond_signal(raw.field_addr(c, .cv))
-  auk__tmp_done(raw.addr_of(&tmp))
+  rc.auk__tmp_done(raw.addr_of(&tmp))
 }
 
 /// Take the oldest message (lock held, count > 0) into buf.
@@ -124,25 +115,25 @@ fn wait_ms(c: raw.Ptr<abi.Chan>, ms: i64) uses raw, ffi {
 fn chan_recv(c: raw.Ptr<abi.Chan>, ms: i64, out: raw.Ptr<()>): bool uses raw, ffi {
   let end: i64 = if ms < 0 { 0 } else { now_ms() + ms }
   var tmp: abi.Tmp
-  let buf = auk__tmp_get(raw.addr_of(&tmp), c.size)
+  let buf = rc.auk__tmp_get(raw.addr_of(&tmp), c.size)
   let _ = pthread_mutex_lock(raw.field_addr(c, .lock))
   while true {
     if c.count > 0 {
       pop(c, buf)
       let _ = pthread_mutex_unlock(raw.field_addr(c, .lock))
       deliver(c, buf, out)
-      auk__tmp_done(raw.addr_of(&tmp))
+      rc.auk__tmp_done(raw.addr_of(&tmp))
       return true
     }
     let left: i64 = if ms < 0 { 50 } else { end - now_ms() }
     if c.closed || (ms >= 0 && left <= 0) {
       let _ = pthread_mutex_unlock(raw.field_addr(c, .lock))
-      auk__tmp_done(raw.addr_of(&tmp))
+      rc.auk__tmp_done(raw.addr_of(&tmp))
       return false
     }
-    if auk__on_task() {
+    if task.auk__on_task() {
       let _ = pthread_mutex_unlock(raw.field_addr(c, .lock))
-      auk__check_cancel("a channel receive")
+      task.auk__check_cancel("a channel receive")
       let _ = pthread_mutex_lock(raw.field_addr(c, .lock))
       wait_ms(c, if left < 50 { left } else { 50 })
     } else if ms < 0 {
@@ -168,7 +159,7 @@ export fn auk_chan_close(c: raw.Ptr<abi.Chan>) uses raw, ffi {
   let _ = pthread_cond_broadcast(raw.field_addr(c, .cv))
 }
 
-export fn auk__chan_free(c: raw.Ptr<abi.Chan>) uses raw, ffi {
+pub export fn auk__chan_free(c: raw.Ptr<abi.Chan>) uses raw, ffi {
   var i: i64 = 0
   while i < c.count {
     let release = c.ops.release
@@ -180,5 +171,5 @@ export fn auk__chan_free(c: raw.Ptr<abi.Chan>) uses raw, ffi {
   raw.free(c.items)
   let _ = pthread_mutex_destroy(raw.field_addr(c, .lock))
   let _ = pthread_cond_destroy(raw.field_addr(c, .cv))
-  auk__free_obj(raw.cast(c))
+  rc.auk__free_obj(raw.cast(c))
 }

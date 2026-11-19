@@ -3,7 +3,7 @@
 /// (compile-time evaluation of `imprint` constants) (was runtime/c/compiler.c, ported line by
 /// line).
 
-// the rest of the runtime (C, for now)
+// the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
 extern fn auk__sb_put_cstr(b: raw.Ptr<abi.StrBuf>, s: raw.Ptr<u8>) = "void auk__sb_put_cstr(void *, const char *)"
 extern fn auk__err_sb(b: raw.Ptr<abi.StrBuf>): raw.Ptr<abi.Err> = "void *auk__err_sb(void *)"
 extern fn auk_str_cstr(s: raw.Ptr<abi.Str>): raw.Ptr<u8> = "const char *auk_str_cstr(const void *)"
@@ -14,8 +14,8 @@ extern fn auk_arr_len(a: raw.Ptr<abi.Arr>): i64 = "int64_t auk_arr_len(const voi
 extern fn auk_map_len(m: raw.Ptr<abi.Map>): i64 = "int64_t auk_map_len(const void *)"
 extern fn auk_map_next(m: raw.Ptr<abi.Map>, it: raw.Ptr<i64>, k: raw.Ptr<raw.Ptr<()>>, v: raw.Ptr<raw.Ptr<()>>): bool =
   "bool auk_map_next(const void *, int64_t *, void **, void **)"
-// rc.c's, declared by value.auk (a second `extern var` of one symbol would link to `auk_ops_float.1`)
-raw let OPS_FLOAT: raw.Ptr<abi.ElemOps> = raw.addr_of(&value.auk_ops_float)
+// rc.auk's
+raw let OPS_FLOAT: raw.Ptr<abi.ElemOps> = raw.addr_of(&rc.auk_ops_float)
 // libc
 extern fn fopen(path: raw.Ptr<u8>, mode: raw.Ptr<u8>): raw.Ptr<()> = "FILE *fopen(const char *, const char *)"
 extern fn fclose(f: raw.Ptr<()>): i32 = "int fclose(FILE *)"

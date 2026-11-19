@@ -2,14 +2,8 @@
 /// auk_rt.h's: `AukValue` (`abi.Value`) by value, every `auk_value_*` entry point under its C
 /// name.
 
-// the rest of the runtime (C, for now); strings are str.auk and str_fmt.auk
-extern fn auk_retain(p: raw.Ptr<()>): raw.Ptr<()> = "void *auk_retain(void *)"
-extern fn auk_release(p: raw.Ptr<()>) = "void auk_release(void *)"
-// _Noreturn: `never` is core's only (TODO(dialect)), so its callers say `raw.unreachable()`
-extern fn auk__panic3(loc: raw.Ptr<u8>, a: raw.Ptr<u8>, b: raw.Ptr<u8>, c: raw.Ptr<u8>) =
-  "void auk__panic3(const char *, const char *, const char *, const char *)"
-extern fn auk_hash_int(x: i64): u64 = "uint64_t auk_hash_int(int64_t)"
-pub extern var auk_ops_float: abi.ElemOps = "auk_ops_float"
+// the rest of the runtime: strings are str.auk and str_fmt.auk, reference counts and the scalar
+// element ops rc.auk
 extern fn auk__value_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) = "void auk__value_copy_elem(const void *, void *)"
 
 /// The element ops of `Value` (C: `const AukElemOps auk_ops_value`), over the elem_* functions
@@ -24,9 +18,8 @@ export var auk_ops_value: abi.ElemOps = abi.ElemOps {
   copy: raw.fn_of(elem_copy),
 }
 
-// The address of the C table declared here, for the package's other modules (`str.ops_str()`
-// has `auk_ops_str`'s).
-pub fn ops_float(): raw.Ptr<abi.ElemOps> uses raw = raw.addr_of(&auk_ops_float)
+// &auk_ops_float (rc.auk's), for the package's other modules
+pub fn ops_float(): raw.Ptr<abi.ElemOps> uses raw = rc.ops_float()
 
 export fn auk_value_null(): abi.Value = abi.Value { tag: abi.V_NULL }
 
@@ -38,17 +31,17 @@ export fn auk_value_int(i: i64): abi.Value = abi.Value { tag: abi.V_INT, u: abi.
 export fn auk_value_float(f: float): abi.Value = abi.Value { tag: abi.V_FLOAT, u: abi.ValueU { f } }
 
 export fn auk_value_str(s: raw.Ptr<abi.Str>): abi.Value uses raw, ffi {
-  let s2: raw.Ptr<abi.Str> = if s.is_null() { str.auk_str_lit("") } else { raw.cast(auk_retain(raw.cast(s))) }
+  let s2: raw.Ptr<abi.Str> = if s.is_null() { str.auk_str_lit("") } else { raw.cast(rc.auk_retain(raw.cast(s))) }
   abi.Value { tag: abi.V_STR, u: abi.ValueU { s: s2 } }
 }
 
 export fn auk_value_list(xs: raw.Ptr<abi.Arr>): abi.Value uses raw, ffi {
-  let l: raw.Ptr<abi.Arr> = if xs.is_null() { auk_value_list_new() } else { raw.cast(auk_retain(raw.cast(xs))) }
+  let l: raw.Ptr<abi.Arr> = if xs.is_null() { auk_value_list_new() } else { raw.cast(rc.auk_retain(raw.cast(xs))) }
   abi.Value { tag: abi.V_LIST, u: abi.ValueU { list: l } }
 }
 
 export fn auk_value_map(m: raw.Ptr<abi.Map>): abi.Value uses raw, ffi {
-  let m2: raw.Ptr<abi.Map> = if m.is_null() { auk_value_map_new() } else { raw.cast(auk_retain(raw.cast(m))) }
+  let m2: raw.Ptr<abi.Map> = if m.is_null() { auk_value_map_new() } else { raw.cast(rc.auk_retain(raw.cast(m))) }
   abi.Value { tag: abi.V_MAP, u: abi.ValueU { map: m2 } }
 }
 
@@ -61,7 +54,7 @@ export fn auk_value_map_put(pm: raw.Ptr<raw.Ptr<abi.Map>>, key: raw.Ptr<u8>, val
   var k = str.auk_str_lit(key)
   var v = val
   map.auk_map_set(pm, raw.cast(raw.addr_of(&k)), raw.cast(raw.addr_of(&v)))
-  auk_release(raw.cast(k))
+  rc.auk_release(raw.cast(k))
 }
 
 fn value_ptr(v: abi.Value): raw.Ptr<()> uses raw {
@@ -78,10 +71,10 @@ fn value_ptr(v: abi.Value): raw.Ptr<()> uses raw {
 }
 
 export fn auk_value_retain(v: abi.Value) uses raw, ffi {
-  let _ = auk_retain(value_ptr(v))
+  let _ = rc.auk_retain(value_ptr(v))
 }
 
-export fn auk_value_release(v: abi.Value) uses raw, ffi = auk_release(value_ptr(v))
+export fn auk_value_release(v: abi.Value) uses raw, ffi = rc.auk_release(value_ptr(v))
 
 pub export fn auk_value_tag_name(t: u32): raw.Ptr<u8> {
   if t == abi.V_NULL {
@@ -105,7 +98,7 @@ pub export fn auk_value_tag_name(t: u32): raw.Ptr<u8> {
 
 /// `want` is "expected <Tag>, got ".
 fn mismatch(loc: raw.Ptr<u8>, want: raw.Ptr<u8>, v: abi.Value) uses raw, ffi {
-  auk__panic3(loc, want, auk_value_tag_name(v.tag), raw.null())
+  rc.auk__panic3(loc, want, auk_value_tag_name(v.tag), raw.null())
   raw.unreachable()
 }
 
@@ -200,12 +193,12 @@ pub fn elem_hash(p: raw.Ptr<()>): u64 uses raw, ffi {
   } else if t == abi.V_LIST {
     arr.auk_arr_hash(v.u.list)
   } else if t == abi.V_FLOAT {
-    let hash = raw.addr_of(&auk_ops_float).hash
+    let hash = rc.ops_float().hash
     hash(raw.cast(raw.field_addr(v, .u)))
   } else if t == abi.V_INT {
-    auk_hash_int(v.u.i)
+    rc.auk_hash_int(v.u.i)
   } else if t == abi.V_BOOL {
-    auk_hash_int((if v.u.b { 1 } else { 0 }) + 2)
+    rc.auk_hash_int((if v.u.b { 1 } else { 0 }) + 2)
   } else {
     u64(t) * 7919
   }

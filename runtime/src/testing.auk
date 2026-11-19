@@ -1,12 +1,7 @@
 /// Contracts, holes, assert, peek, the test registry and runner, and the program entry (was
 /// runtime/c/testing.c, ported line by line).
 
-// the rest of the runtime (C, for now)
-extern fn auk__xmalloc(n: usize): raw.Ptr<()> = "void *auk__xmalloc(size_t)"
-extern fn auk__xrealloc(p: raw.Ptr<()>, n: usize): raw.Ptr<()> = "void *auk__xrealloc(void *, size_t)"
-extern fn auk_release(p: raw.Ptr<()>) = "void auk_release(void *)"
-extern fn auk__panic3(loc: raw.Ptr<u8>, a: raw.Ptr<u8>, b: raw.Ptr<u8>, c: raw.Ptr<u8>): never =
-  "void auk__panic3(const char *, const char *, const char *, const char *)"
+// the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
 extern fn auk__panic_sb(loc: raw.Ptr<u8>, b: raw.Ptr<abi.StrBuf>): never = "void auk__panic_sb(const char *, void *)"
 extern fn auk_leak_check(): i64 = "int64_t auk_leak_check(void)"
 extern fn auk__sb_put_cstr(b: raw.Ptr<abi.StrBuf>, s: raw.Ptr<u8>) = "void auk__sb_put_cstr(void *, const char *)"
@@ -58,16 +53,16 @@ extern fn pthread_mutex_lock(m: raw.Ptr<cfacts.PthreadMutex>): i32 = "int pthrea
 extern fn pthread_mutex_unlock(m: raw.Ptr<cfacts.PthreadMutex>): i32 = "int pthread_mutex_unlock(pthread_mutex_t *)"
 
 export fn auk_requires_fail(loc: raw.Ptr<u8>, cond_text: raw.Ptr<u8>): never uses raw, ffi =
-  auk__panic3(loc, "requires failed: ", cond_text, raw.null())
+  rc.auk__panic3(loc, "requires failed: ", cond_text, raw.null())
 
 export fn auk_ensures_fail(loc: raw.Ptr<u8>, cond_text: raw.Ptr<u8>): never uses raw, ffi =
-  auk__panic3(loc, "ensures failed: ", cond_text, raw.null())
+  rc.auk__panic3(loc, "ensures failed: ", cond_text, raw.null())
 
 export fn auk_hole(loc: raw.Ptr<u8>, expected: raw.Ptr<u8>): never uses raw, ffi =
-  auk__panic3(loc, "unfilled hole (expected ", expected, ")")
+  rc.auk__panic3(loc, "unfilled hole (expected ", expected, ")")
 
 export fn auk_assert_fail(loc: raw.Ptr<u8>, cond_text: raw.Ptr<u8>): never uses raw, ffi =
-  auk__panic3(loc, "assertion failed: ", cond_text, raw.null())
+  rc.auk__panic3(loc, "assertion failed: ", cond_text, raw.null())
 
 export fn auk_assert_fail_cmp(loc: raw.Ptr<u8>, cond_text: raw.Ptr<u8>, left: raw.Ptr<abi.Str>, right: raw.Ptr<abi.Str>): never uses raw, ffi {
   var m = abi.StrBuf {}
@@ -116,7 +111,7 @@ export fn auk_test_register(name: raw.Ptr<u8>, func: raw.Fn<() => raw.Ptr<abi.Er
   pthread_mutex_lock(raw.addr_of(&tests_lock))
   if ntests == captests {
     captests = if captests == 0 { 16 } else { captests * 2 }
-    tests = raw.cast(auk__xrealloc(raw.cast(tests), usize(captests) * raw.size_of<TestEntry>()))
+    tests = raw.cast(rc.auk__xrealloc(raw.cast(tests), usize(captests) * raw.size_of<TestEntry>()))
   }
   let t = tests.offset(ntests)
   t.name = name
@@ -150,11 +145,11 @@ fn print_indented(p: raw.Ptr<u8>, n: usize) uses raw, ffi {
 fn read_fd(fd: i32, n: raw.Ptr<usize>): raw.Ptr<u8> uses raw, ffi {
   var cap: usize = 4096
   var len: usize = 0
-  var b: raw.Ptr<u8> = raw.cast(auk__xmalloc(cap))
+  var b: raw.Ptr<u8> = raw.cast(rc.auk__xmalloc(cap))
   while true {
     if len == cap {
       cap *= 2
-      b = raw.cast(auk__xrealloc(raw.cast(b), cap))
+      b = raw.cast(rc.auk__xrealloc(raw.cast(b), cap))
     }
     let r = c_read(fd, raw.cast(b.offset(len)), cap - len)
     if r < 0 && cfacts.errno() == cfacts.EINTR {
@@ -186,7 +181,7 @@ fn print_trace(path: raw.Ptr<u8>) uses raw, ffi {
 }
 
 fn sys_fail(what: raw.Ptr<u8>): never uses raw, ffi =
-  auk__panic3("auk test", what, ": ", strerror(cfacts.errno()))
+  rc.auk__panic3("auk test", what, ": ", strerror(cfacts.errno()))
 
 raw struct TestRun {
   func: raw.Fn<() => raw.Ptr<abi.Err>>,
@@ -227,7 +222,7 @@ export fn auk_test_main(argc: i32, argv: raw.Ptr<raw.Ptr<u8>>): i32 uses raw, ff
   let tail_ptr: raw.Ptr<u8> = if tail { tail_path } else { raw.null() }
   pthread_mutex_lock(raw.addr_of(&tests_lock))
   let n = ntests
-  let list: raw.Ptr<TestEntry> = raw.cast(auk__xmalloc(usize(n + 1) * raw.size_of<TestEntry>()))
+  let list: raw.Ptr<TestEntry> = raw.cast(rc.auk__xmalloc(usize(n + 1) * raw.size_of<TestEntry>()))
   raw.copy(list, tests, usize(n) * raw.size_of<TestEntry>())
   pthread_mutex_unlock(raw.addr_of(&tests_lock))
   var k: i64 = 0
@@ -363,8 +358,8 @@ export fn auk_main_wrapper(argc: i32, argv: raw.Ptr<raw.Ptr<u8>>, user_main: raw
     fputs("error: ", errf)
     fwrite(raw.cast(auk_str_cstr(s)), 1, usize(auk_str_byte_len(s)), errf)
     fputc(10, errf)
-    auk_release(raw.cast(s))
-    auk_release(raw.cast(r.err))
+    rc.auk_release(raw.cast(s))
+    rc.auk_release(raw.cast(r.err))
     fflush(errf)
     return if auk_leak_check() != 0 { 102 } else { 1 }
   }

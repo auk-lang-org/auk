@@ -4,12 +4,7 @@
 /// connections, listeners, channels: shared by reference count, never tracked). (Was
 /// runtime/c/copy.c, ported line by line.)
 
-// the rest of the runtime (C, for now)
-extern fn auk_retain(p: raw.Ptr<()>): raw.Ptr<()> = "void *auk_retain(void *)"
-extern fn auk_release(p: raw.Ptr<()>) = "void auk_release(void *)"
-extern fn auk__alloc(size: usize, kind: u32): raw.Ptr<()> = "void *auk__alloc(size_t, uint32_t)"
-extern fn auk__xmalloc(n: usize): raw.Ptr<()> = "void *auk__xmalloc(size_t)"
-extern fn auk__xcalloc(n: usize, size: usize): raw.Ptr<()> = "void *auk__xcalloc(size_t, size_t)"
+// the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
 extern fn auk_str_from_bytes(p: raw.Ptr<u8>, n: i64): raw.Ptr<abi.Str> = "void *auk_str_from_bytes(const char *, int64_t)"
 extern fn auk_arr_new(ops: raw.Ptr<abi.ElemOps>, cap: i64): raw.Ptr<abi.Arr> = "void *auk_arr_new(const void *, int64_t)"
 extern fn auk_arr_at(a: raw.Ptr<abi.Arr>, i: i64, loc: raw.Ptr<u8>): raw.Ptr<()> = "void *auk_arr_at(const void *, int64_t, const char *)"
@@ -27,7 +22,7 @@ export fn auk_obj_alloc(size: usize, drop: raw.Fn<(raw.Ptr<abi.Obj>) => ()>, cop
   if n < raw.size_of<abi.Obj>() {
     n = raw.size_of<abi.Obj>()
   }
-  let o: raw.Ptr<abi.Obj> = raw.cast(auk__alloc(n, abi.K_OBJ))
+  let o: raw.Ptr<abi.Obj> = raw.cast(rc.auk__alloc(n, abi.K_OBJ))
   o.drop = drop
   o.copy = copy
   raw.cast(o)
@@ -41,7 +36,7 @@ export fn auk_obj_copy(o: raw.Ptr<abi.Obj>): raw.Ptr<abi.Obj> uses raw, ffi {
   if !cp.is_null() {
     return cp(o)
   }
-  raw.cast(auk_retain(raw.cast(o)))
+  raw.cast(rc.auk_retain(raw.cast(o)))
 }
 
 export fn auk_str_copy(s: raw.Ptr<abi.Str>): raw.Ptr<abi.Str> uses raw, ffi {
@@ -88,8 +83,8 @@ export fn auk_map_copy_deep(m: raw.Ptr<abi.Map>): raw.Ptr<abi.Map> uses raw, ffi
   let kops = m.kops
   let vops = m.vops
   var out = auk_map_new(kops, vops)
-  let kb = auk__xcalloc(1, kops.size)
-  let vb = auk__xcalloc(1, vops.size)
+  let kb = rc.auk__xcalloc(1, kops.size)
+  let vb = rc.auk__xcalloc(1, vops.size)
   var i: i64 = 0
   while i < m.n {
     if !m.dead.at(i) {
@@ -119,13 +114,13 @@ export fn auk_err_copy_deep(e: raw.Ptr<abi.Err>): raw.Ptr<abi.Err> uses raw, ffi
   }
   let msg = auk_str_copy(e.msg)
   let c = auk_err_new(msg)
-  auk_release(raw.cast(msg))
+  rc.auk_release(raw.cast(msg))
   c.code = e.code
   c.cause = auk_err_copy_deep(e.cause)
   if !e.payload.data.is_null() {
     c.payload.type_id = e.payload.type_id
     c.payload.ops = e.payload.ops
-    c.payload.data = auk__xmalloc(e.payload.ops.size)
+    c.payload.data = rc.auk__xmalloc(e.payload.ops.size)
     auk__copy_elem(e.payload.ops, e.payload.data, c.payload.data)
   }
   c
@@ -146,39 +141,39 @@ export fn auk_value_copy(v: abi.Value): abi.Value uses raw, ffi {
 
 // ---- `copy` entries of the built-in element ops ----
 
-export fn auk__str_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
+pub export fn auk__str_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
   raw.cast<raw.Ptr<abi.Str>>(dst).store(auk_str_copy(raw.cast<raw.Ptr<abi.Str>>(src).load()))
 }
 
-export fn auk__arr_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
+pub export fn auk__arr_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
   raw.cast<raw.Ptr<abi.Arr>>(dst).store(auk_arr_copy_deep(raw.cast<raw.Ptr<abi.Arr>>(src).load()))
 }
 
-export fn auk__map_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
+pub export fn auk__map_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
   raw.cast<raw.Ptr<abi.Map>>(dst).store(auk_map_copy_deep(raw.cast<raw.Ptr<abi.Map>>(src).load()))
 }
 
-export fn auk__err_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
+pub export fn auk__err_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
   raw.cast<raw.Ptr<abi.Err>>(dst).store(auk_err_copy_deep(raw.cast<raw.Ptr<abi.Err>>(src).load()))
 }
 
-export fn auk__obj_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
+pub export fn auk__obj_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
   raw.cast<raw.Ptr<abi.Obj>>(dst).store(auk_obj_copy(raw.cast<raw.Ptr<abi.Obj>>(src).load()))
 }
 
 /// A handle (a task): shared, not copied.
-export fn auk__handle_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
-  raw.cast<raw.Ptr<()>>(dst).store(auk_retain(raw.cast<raw.Ptr<()>>(src).load()))
+pub export fn auk__handle_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
+  raw.cast<raw.Ptr<()>>(dst).store(rc.auk_retain(raw.cast<raw.Ptr<()>>(src).load()))
 }
 
 /// A closure {code, env}: the same code with a copy of the env.
-export fn auk__closure_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
+pub export fn auk__closure_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
   let s: raw.Ptr<abi.Closure> = raw.cast(src)
   let d: raw.Ptr<abi.Closure> = raw.cast(dst)
   d.func = s.func
   d.env = if s.env.is_null() { raw.null() } else { auk_obj_copy(s.env) }
 }
 
-export fn auk__value_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
+pub export fn auk__value_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
   raw.cast<abi.Value>(dst).store(auk_value_copy(raw.cast<abi.Value>(src).load()))
 }

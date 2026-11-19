@@ -8,17 +8,11 @@
 /// TOMB a removed entry, anything else the hash's upper 32 bits over (entry + 1), so a probe
 /// rejects most other keys without touching their entries.
 
-// the rest of the runtime (C, for now)
-extern fn auk_release(p: raw.Ptr<()>) = "void auk_release(void *)"
-extern fn auk__alloc(size: usize, kind: u32): raw.Ptr<()> = "void *auk__alloc(size_t, uint32_t)"
-extern fn auk__free_obj(p: raw.Ptr<()>) = "void auk__free_obj(void *)"
+// the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
 extern fn auk__xcalloc(n: usize, size: usize): raw.Ptr<u8> = "void *auk__xcalloc(size_t, size_t)"
 extern fn auk__xmalloc(n: usize): raw.Ptr<u8> = "void *auk__xmalloc(size_t)"
 extern fn auk__xrealloc(p: raw.Ptr<u8>, n: usize): raw.Ptr<u8> = "void *auk__xrealloc(void *, size_t)"
 // _Noreturn: `never` is core's only (TODO(dialect)), so their callers say `raw.unreachable()`
-extern fn auk__panic_rt(msg: raw.Ptr<u8>) = "void auk__panic_rt(const char *)"
-extern fn auk__panic3(loc: raw.Ptr<u8>, a: raw.Ptr<u8>, b: raw.Ptr<u8>, c: raw.Ptr<u8>) =
-  "void auk__panic3(const char *, const char *, const char *, const char *)"
 extern fn auk_str_lit(s: raw.Ptr<u8>): raw.Ptr<abi.Str> = "void *auk_str_lit(const char *)"
 extern fn auk_str_cstr(s: raw.Ptr<abi.Str>): raw.Ptr<u8> = "const char *auk_str_cstr(const void *)"
 extern fn auk__show_exhausted(): bool = "bool auk__show_exhausted(void)"
@@ -45,14 +39,14 @@ fn round8(n: usize): i64 = i64((n + 7) / 8 * 8)
 
 pub export fn auk_map_new(kops: raw.Ptr<abi.ElemOps>, vops: raw.Ptr<abi.ElemOps>): raw.Ptr<abi.Map> uses raw, ffi {
   if kops.is_null() || vops.is_null() {
-    auk__panic_rt("auk_map_new: missing ops")
+    rc.auk__panic_rt("auk_map_new: missing ops")
     raw.unreachable()
   }
   if kops.hash.is_null() || kops.eq.is_null() {
-    auk__panic_rt("auk_map_new: key type needs hash and eq")
+    rc.auk__panic_rt("auk_map_new: key type needs hash and eq")
     raw.unreachable()
   }
-  let m: raw.Ptr<abi.Map> = raw.cast(auk__alloc(raw.size_of<abi.Map>(), abi.K_MAP))
+  let m: raw.Ptr<abi.Map> = raw.cast(rc.auk__alloc(raw.size_of<abi.Map>(), abi.K_MAP))
   m.kops = kops
   m.vops = vops
   // every Auk value's alignment is at most 8: the value starts at the key's size rounded up
@@ -64,7 +58,7 @@ pub export fn auk_map_new(kops: raw.Ptr<abi.ElemOps>, vops: raw.Ptr<abi.ElemOps>
   m
 }
 
-export fn auk__map_free(m: raw.Ptr<abi.Map>) uses raw, ffi {
+pub export fn auk__map_free(m: raw.Ptr<abi.Map>) uses raw, ffi {
   let krelease = m.kops.release
   let vrelease = m.vops.release
   var i: i64 = 0
@@ -83,7 +77,7 @@ export fn auk__map_free(m: raw.Ptr<abi.Map>) uses raw, ffi {
   raw.free(m.hashes)
   raw.free(m.dead)
   raw.free(m.index)
-  auk__free_obj(raw.cast(m))
+  rc.auk__free_obj(raw.cast(m))
 }
 
 fn rebuild_index(m: raw.Ptr<abi.Map>, icap: i64) uses raw, ffi {
@@ -126,7 +120,7 @@ fn compact(m: raw.Ptr<abi.Map>) uses raw {
 
 fn set_cap(m: raw.Ptr<abi.Map>, cap: i64) uses raw, ffi {
   if cap > MAX_ENTRIES {
-    auk__panic_rt("a map can't hold more than 4294967293 entries")
+    rc.auk__panic_rt("a map can't hold more than 4294967293 entries")
     raw.unreachable()
   }
   m.entries = auk__xrealloc(m.entries, usize(cap) * usize(m.stride))
@@ -185,7 +179,7 @@ export fn auk_map_at(m: raw.Ptr<abi.Map>, k: raw.Ptr<()>, loc: raw.Ptr<u8>): raw
       auk_str_lit("?")
     }
     // the key's text up to its first NUL byte
-    auk__panic3(loc, "key not found: ", auk_str_cstr(ks), raw.null())
+    rc.auk__panic3(loc, "key not found: ", auk_str_cstr(ks), raw.null())
     raw.unreachable()
   }
   v
@@ -236,26 +230,20 @@ export fn auk_map_copy(m: raw.Ptr<abi.Map>): raw.Ptr<abi.Map> uses raw, ffi {
   c
 }
 
-// rc.c's auk_refcount, auk__tmp_get/auk__tmp_done, which map.c's translation unit inlined:
-// here, so that they still are (a call into the C half can't be)
+// rc.auk's auk_refcount, auk__tmp_get/auk__tmp_done, under the names this file
+// uses (direct calls: they inline, as in C's one translation unit)
 
-fn refcount(p: raw.Ptr<abi.Map>): i64 uses raw =
-  if p.is_null() { 0 } else { raw.atomic_load(raw.field_addr(raw.field_addr(p, .h), .rc), raw.Order.SeqCst) }
+fn refcount(p: raw.Ptr<abi.Map>): i64 uses raw = rc.auk_refcount(raw.cast(p))
 
-fn tmp_get(t: raw.Ptr<abi.Tmp>, size: usize): raw.Ptr<u8> uses raw, ffi {
-  t.heap = if size <= raw.size_of<abi.Tmp>() - 8 { raw.null() } else { auk__xmalloc(size) }
-  if t.heap.is_null() { t.stack } else { t.heap }
-}
+fn tmp_get(t: raw.Ptr<abi.Tmp>, size: usize): raw.Ptr<u8> uses raw, ffi = rc.auk__tmp_get(t, size)
 
-fn tmp_done(t: raw.Ptr<abi.Tmp>) uses raw {
-  if !t.heap.is_null() { raw.free(t.heap) }
-}
+fn tmp_done(t: raw.Ptr<abi.Tmp>) uses raw = rc.auk__tmp_done(t)
 
 export fn auk_map_make_unique(pm: raw.Ptr<raw.Ptr<abi.Map>>): raw.Ptr<()> uses raw, ffi {
   let m = pm.load()
   if refcount(m) != 1 {
     pm.store(auk_map_copy(m))
-    auk_release(raw.cast(m))
+    rc.auk_release(raw.cast(m))
   }
   raw.cast(pm.load())
 }
@@ -466,7 +454,7 @@ pub export fn auk_map_show(m: raw.Ptr<abi.Map>): raw.Ptr<abi.Str> uses raw, ffi 
     let kshow = m.kops.show
     let vshow = m.vops.show
     if kshow.is_null() || vshow.is_null() {
-      auk__panic_rt("show: key or value type has no show")
+      rc.auk__panic_rt("show: key or value type has no show")
       raw.unreachable()
     }
     auk_sb_str_own(pb, kshow(k))

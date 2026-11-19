@@ -2,12 +2,7 @@
 /// line by line). The ABI is auk_rt.h's: `AukErr` (`abi.Err`), every `auk_err_*` / `auk__err_*`
 /// entry point under its C name.
 
-// the rest of the runtime (C, for now)
-extern fn auk__alloc(size: usize, kind: u32): raw.Ptr<()> = "void *auk__alloc(size_t, uint32_t)"
-extern fn auk__free_obj(p: raw.Ptr<()>) = "void auk__free_obj(void *)"
-extern fn auk__xmalloc(n: usize): raw.Ptr<()> = "void *auk__xmalloc(size_t)"
-extern fn auk_retain(p: raw.Ptr<()>): raw.Ptr<()> = "void *auk_retain(void *)"
-extern fn auk_release(p: raw.Ptr<()>) = "void auk_release(void *)"
+// the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
 extern fn auk_str_lit(s: raw.Ptr<u8>): raw.Ptr<abi.Str> = "void *auk_str_lit(const char *)"
 extern fn auk_str_cstr(s: raw.Ptr<abi.Str>): raw.Ptr<u8> = "const char *auk_str_cstr(const void *)"
 extern fn auk_sb_bytes(b: raw.Ptr<abi.StrBuf>, p: raw.Ptr<u8>, n: i64) = "void auk_sb_bytes(void *, const char *, int64_t)"
@@ -19,8 +14,8 @@ extern fn strerror(err: i32): raw.Ptr<u8> = "char *strerror(int)"
 
 /// New error; msg is borrowed.
 export fn auk_err_new(msg: raw.Ptr<abi.Str>): raw.Ptr<abi.Err> uses raw, ffi {
-  let e: raw.Ptr<abi.Err> = raw.cast(auk__alloc(raw.size_of<abi.Err>(), abi.K_ERR))
-  e.msg = if msg.is_null() { auk_str_lit("") } else { raw.cast(auk_retain(raw.cast(msg))) }
+  let e: raw.Ptr<abi.Err> = raw.cast(rc.auk__alloc(raw.size_of<abi.Err>(), abi.K_ERR))
+  e.msg = if msg.is_null() { auk_str_lit("") } else { raw.cast(rc.auk_retain(raw.cast(msg))) }
   e
 }
 
@@ -31,7 +26,7 @@ export fn auk__err_bytes(msg: raw.Ptr<u8>, n: usize): raw.Ptr<abi.Err> uses raw,
   auk_sb_bytes(raw.addr_of(&b), msg, i64(n))
   let s = auk_sb_finish(raw.addr_of(&b))
   let e = auk_err_new(s)
-  auk_release(raw.cast(s))
+  rc.auk_release(raw.cast(s))
   e
 }
 
@@ -45,25 +40,25 @@ pub export fn auk_err_new_cstr(msg: raw.Ptr<u8>): raw.Ptr<abi.Err> uses raw, ffi
 
 export fn auk_err_wrap(msg: raw.Ptr<abi.Str>, cause: raw.Ptr<abi.Err>): raw.Ptr<abi.Err> uses raw, ffi {
   let e = auk_err_new(msg)
-  e.cause = raw.cast(auk_retain(raw.cast(cause)))
+  e.cause = raw.cast(rc.auk_retain(raw.cast(cause)))
   e
 }
 
 export fn auk_err_typed(type_id: u32, value: raw.Ptr<()>, ops: raw.Ptr<abi.ElemOps>, msg: raw.Ptr<abi.Str>): raw.Ptr<abi.Err> uses raw, ffi {
   let show = ops.show
   let m: raw.Ptr<abi.Str> = if !msg.is_null() {
-    raw.cast(auk_retain(raw.cast(msg)))
+    raw.cast(rc.auk_retain(raw.cast(msg)))
   } else if !show.is_null() {
     show(value)
   } else {
     auk_str_lit("error")
   }
   let e = auk_err_new(m)
-  auk_release(raw.cast(m))
+  rc.auk_release(raw.cast(m))
   let pl = raw.field_addr(e, .payload)
   pl.type_id = type_id
   pl.ops = ops
-  let data = auk__xmalloc(ops.size)
+  let data = rc.auk__xmalloc(ops.size)
   pl.data = data
   raw.copy(data, value, ops.size)
   let retain = ops.retain
@@ -94,11 +89,11 @@ pub export fn auk_err_show(e: raw.Ptr<abi.Err>): raw.Ptr<abi.Str> uses raw, ffi 
 }
 
 /// Iterative over the cause chain, so a long chain can't overflow the stack.
-export fn auk__err_free(e0: raw.Ptr<abi.Err>) uses raw, ffi {
+pub export fn auk__err_free(e0: raw.Ptr<abi.Err>) uses raw, ffi {
   var e = e0
   while !e.is_null() {
     let next = e.cause
-    auk_release(raw.cast(e.msg))
+    rc.auk_release(raw.cast(e.msg))
     let data = e.payload.data
     if !data.is_null() {
       let release = e.payload.ops.release
@@ -107,7 +102,7 @@ export fn auk__err_free(e0: raw.Ptr<abi.Err>) uses raw, ffi {
       }
       raw.free(data)
     }
-    auk__free_obj(raw.cast(e))
+    rc.auk__free_obj(raw.cast(e))
     if next.is_null() {
       break
     }
@@ -126,7 +121,7 @@ pub export fn auk__err_errno(what: raw.Ptr<u8>, subject: raw.Ptr<abi.Str>, err: 
   let nw: usize = if what.is_null() { 0 } else { strlen(what) }
   let ns: usize = if subj.is_null() { 0 } else { strlen(subj) + 1 }
   let ne = strlen(se)
-  let m: raw.Ptr<u8> = raw.cast(auk__xmalloc(nw + ns + 2 + ne))
+  let m: raw.Ptr<u8> = raw.cast(rc.auk__xmalloc(nw + ns + 2 + ne))
   var k: usize = 0
   raw.copy(m, what, nw)
   k += nw

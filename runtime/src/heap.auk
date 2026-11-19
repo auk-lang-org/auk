@@ -18,12 +18,7 @@
 /// the frames of a crashed task are on the ledger and nowhere else: the sweep gives them back,
 /// closing the connections the task still had open.
 
-// the rest of the runtime (C, for now)
-extern fn auk_release(p: raw.Ptr<()>) = "void auk_release(void *)"
-extern fn auk__xcalloc(n: usize, size: usize): raw.Ptr<()> = "void *auk__xcalloc(size_t, size_t)"
-extern fn auk__xrealloc(p: raw.Ptr<()>, n: usize): raw.Ptr<()> = "void *auk__xrealloc(void *, size_t)"
-extern fn auk__free_now(p: raw.Ptr<()>) = "void auk__free_now(void *)"
-extern fn auk_hash_int(x: i64): u64 = "uint64_t auk_hash_int(int64_t)"
+// the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
 // pthreads
 extern fn pthread_mutex_init(m: raw.Ptr<cfacts.PthreadMutex>, attr: raw.Ptr<()>): i32 =
   "int pthread_mutex_init(void *, const void *)"
@@ -73,15 +68,15 @@ fn header_of(l: raw.Ptr<Link>): raw.Ptr<abi.Header> uses raw = raw.cast(raw.cast
 /// The Link of the tracked object h.
 fn link_of(h: raw.Ptr<abi.Header>): raw.Ptr<Link> uses raw = raw.cast(raw.cast<u8>(h).offset(-i64(raw.size_of<Link>())))
 
-fn ledger_slot(key: usize, cap: i64): u64 uses ffi = auk_hash_int(i64(key)) & u64(cap - 1)
+fn ledger_slot(key: usize, cap: i64): u64 uses ffi = rc.auk_hash_int(i64(key)) & u64(cap - 1)
 
 fn ledger_grow(l: raw.Ptr<Ledger>) uses raw, ffi {
   let keys = l.keys
   let counts = l.counts
   let cap = l.cap
   l.cap = if cap == 0 { 16 } else { cap * 2 }
-  l.keys = raw.cast(auk__xcalloc(usize(l.cap), raw.size_of<usize>()))
-  l.counts = raw.cast(auk__xcalloc(usize(l.cap), raw.size_of<i64>()))
+  l.keys = raw.cast(rc.auk__xcalloc(usize(l.cap), raw.size_of<usize>()))
+  l.counts = raw.cast(rc.auk__xcalloc(usize(l.cap), raw.size_of<i64>()))
   l.used = 0
   var i: i64 = 0
   while i < cap {
@@ -113,7 +108,7 @@ fn ledger_entry(l: raw.Ptr<Ledger>, key: usize): raw.Ptr<i64> uses raw, ffi {
   l.counts.offset(i)
 }
 
-export fn auk__note_handle(p: raw.Ptr<()>, delta: i64) uses raw, ffi {
+pub export fn auk__note_handle(p: raw.Ptr<()>, delta: i64) uses raw, ffi {
   let h = cur_heap
   if h.is_null() {
     return
@@ -125,7 +120,7 @@ export fn auk__note_handle(p: raw.Ptr<()>, delta: i64) uses raw, ffi {
 }
 
 export fn auk__heap_new(): raw.Ptr<Heap> uses raw, ffi {
-  let h: raw.Ptr<Heap> = raw.cast(auk__xcalloc(1, raw.size_of<Heap>()))
+  let h: raw.Ptr<Heap> = raw.cast(rc.auk__xcalloc(1, raw.size_of<Heap>()))
   let _ = pthread_mutex_init(raw.field_addr(h, .lock), raw.null())
   let _ = pthread_mutex_init(raw.field_addr(h, .handles_lock), raw.null())
   let s = raw.field_addr(h, .head)
@@ -151,18 +146,18 @@ export fn auk_heap_new(): raw.Ptr<()> uses raw, ffi = raw.cast(auk__heap_new())
 
 /// Allocate size zeroed bytes for an object of kind in the current heap (untracked when there
 /// is none, or for a handle kind). Returns the header's address.
-export fn auk__heap_alloc(size: usize, kind: u32): raw.Ptr<abi.Header> uses raw, ffi {
+pub export fn auk__heap_alloc(size: usize, kind: u32): raw.Ptr<abi.Header> uses raw, ffi {
   let handle = abi.is_handle(kind)
   let hp: raw.Ptr<Heap> = if handle { raw.null() } else { cur_heap }
   if hp.is_null() {
-    let h: raw.Ptr<abi.Header> = raw.cast(auk__xcalloc(1, size))
+    let h: raw.Ptr<abi.Header> = raw.cast(rc.auk__xcalloc(1, size))
     h.kind = kind
     if handle {
       auk__note_handle(raw.cast(h), 1)
     }
     return h
   }
-  let l: raw.Ptr<Link> = raw.cast(auk__xcalloc(1, raw.size_of<Link>() + size))
+  let l: raw.Ptr<Link> = raw.cast(rc.auk__xcalloc(1, raw.size_of<Link>() + size))
   let h = header_of(l)
   h.kind = kind
   h.flags = abi.TRACKED
@@ -179,7 +174,7 @@ export fn auk__heap_alloc(size: usize, kind: u32): raw.Ptr<abi.Header> uses raw,
 }
 
 /// Free an object's memory (taking it off its heap's list).
-export fn auk__heap_free(h: raw.Ptr<abi.Header>) uses raw, ffi {
+pub export fn auk__heap_free(h: raw.Ptr<abi.Header>) uses raw, ffi {
   if (h.flags & abi.TRACKED) == 0 {
     raw.free(h)
     return
@@ -202,7 +197,7 @@ export fn auk__heap_free(h: raw.Ptr<abi.Header>) uses raw, ffi {
 
 /// The bytes usable from h (the header included) in its allocation, which may be more than
 /// were asked for.
-export fn auk__heap_usable(h: raw.Ptr<abi.Header>): usize uses raw, ffi {
+pub export fn auk__heap_usable(h: raw.Ptr<abi.Header>): usize uses raw, ffi {
   let tracked = (h.flags & abi.TRACKED) != 0
   let base: raw.Ptr<()> = if tracked { raw.cast(link_of(h)) } else { raw.cast(h) }
   let n = heap_os.usable_size(base)
@@ -212,7 +207,7 @@ export fn auk__heap_usable(h: raw.Ptr<abi.Header>): usize uses raw, ffi {
 /// Grow (or shrink) h's allocation to size bytes from the header on; returns its new address.
 /// The object must be unique: nothing else may hold the old address. Bytes past the old size
 /// are not zeroed.
-export fn auk__heap_resize(h: raw.Ptr<abi.Header>, size: usize): raw.Ptr<abi.Header> uses raw, ffi {
+pub export fn auk__heap_resize(h: raw.Ptr<abi.Header>, size: usize): raw.Ptr<abi.Header> uses raw, ffi {
   if (h.flags & abi.TRACKED) == 0 {
     // raw.realloc aborts on failure, as the C did
     return raw.cast(raw.realloc(h, size))
@@ -235,7 +230,7 @@ export fn auk__heap_resize(h: raw.Ptr<abi.Header>, size: usize): raw.Ptr<abi.Hea
 /// release can bring to zero, so each is freed exactly once, here. Their memory is freed only
 /// after all of them have been: the objects are freed in list order, and freeing one releases
 /// what it holds, which may be another swept object, freed before it or not.
-export fn auk__heap_sweep(hp: raw.Ptr<Heap>) uses raw, ffi {
+pub export fn auk__heap_sweep(hp: raw.Ptr<Heap>) uses raw, ffi {
   if hp.is_null() {
     return
   }
@@ -259,7 +254,7 @@ export fn auk__heap_sweep(hp: raw.Ptr<Heap>) uses raw, ffi {
       raw.atomic_store(raw.field_addr(h, .rc), DYING, raw.Order.SeqCst)
       if n == cap {
         cap = if cap == 0 { 64 } else { cap * 2 }
-        objs = raw.cast(auk__xrealloc(raw.cast(objs), usize(cap) * raw.size_of<raw.Ptr<abi.Header>>()))
+        objs = raw.cast(rc.auk__xrealloc(raw.cast(objs), usize(cap) * raw.size_of<raw.Ptr<abi.Header>>()))
       }
       objs.at(n) = h
       n += 1
@@ -271,7 +266,7 @@ export fn auk__heap_sweep(hp: raw.Ptr<Heap>) uses raw, ffi {
   let old = auk__heap_switch(hp)
   var i: i64 = 0
   while i < n {
-    auk__free_now(raw.cast(objs.at(i)))
+    rc.auk__free_now(raw.cast(objs.at(i)))
     i += 1
   }
   raw.free(objs)
@@ -295,7 +290,7 @@ export fn auk__heap_sweep(hp: raw.Ptr<Heap>) uses raw, ffi {
   while i < held.cap {
     var k: i64 = 0
     while k < held.counts.at(i) {
-      auk_release(raw.from_int(int(held.keys.at(i))))
+      rc.auk_release(raw.from_int(int(held.keys.at(i))))
       k += 1
     }
     i += 1

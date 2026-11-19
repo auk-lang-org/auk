@@ -6,7 +6,7 @@
 # 2. tables.awk turns every struct, field, constant and initializer they declare into a probe:
 #    an Auk library (`auk build --lib`) returning raw.size_of/align_of/offset_of and the values,
 #    and C code comparing them with sizeof/_Alignof/offsetof and the macros, compiled with the
-#    real runtime/c/auk_rt.h (and task.c's private struct, and chan.c's as it was: probe.c) and the system headers
+#    real runtime/c/auk_rt.h (and task.c's and chan.c's structs as they were: probe.c) and the system headers
 #    with the runtime's feature macros; probe.c adds the functions (W*, S_IS*, CMSG_*, the
 #    ucontext slots, errno, stdout, the abi helpers, structs by value both ways);
 # 3. every checked-in cfacts file declares the same public items above its "only on <os>" part.
@@ -51,7 +51,6 @@ cat "$HERE/probe.auk" "$T/tables.auk" > "$T/src/main.auk"
     printf '#include <elf.h>\n#include <link.h>\n#include <sys/auxv.h>\n#include <ucontext.h>\n'
   fi
   echo '#include "auk_rt.h"'
-  sed -n '/^struct AukTask {/,/^};/p' "$ROOT/runtime/c/task.c"
   cat "$HERE/probe.c"
 } > "$T/probe_all.c"
 # shellcheck disable=SC2086

@@ -1,7 +1,7 @@
 /// Recovery points for `catch` and task threads (was runtime/c/catch.c, ported line by line;
 /// the module isn't `catch`, a keyword, so that stack.auk can call it by path).
 ///
-/// A thread keeps a stack of recovery points (setjmp buffers); a panic (rc.c auk__panic) on a
+/// A thread keeps a stack of recovery points (setjmp buffers); a panic (rc.auk auk__panic) on a
 /// thread with one records its message here and jumps back to the innermost one instead of
 /// ending the process. Nothing between the jump and the recovery point is cleaned up: Auk
 /// objects the aborted code owned leak (bounded per panic), and `var` state it was changing
@@ -14,13 +14,11 @@
 /// stack.auk's stack-overflow handler reaches the same frames through `auk__catch_active`,
 /// `auk__catch_top_addr` and `auk__catch_throw_overflow`.
 
-// the rest of the runtime (C, for now)
-extern fn auk__xmalloc(n: usize): raw.Ptr<()> = "void *auk__xmalloc(size_t)"
+// the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
 extern fn auk__trace_save(depth: raw.Ptr<i64>, mute: raw.Ptr<i32>) = "void auk__trace_save(int64_t *, int *)"
 extern fn auk__trace_restore(depth: i64, mute: i32) = "void auk__trace_restore(int64_t, int)"
 extern fn auk__dbg_save(top: raw.Ptr<raw.Ptr<()>>, depth: raw.Ptr<i64>) = "void auk__dbg_save(void **, int64_t *)"
 extern fn auk__dbg_restore(top: raw.Ptr<()>, depth: i64) = "void auk__dbg_restore(void *, int64_t)"
-extern fn auk__task_cancelled(): bool = "bool auk__task_cancelled(void)"
 extern fn auk__sb_put_cstr(b: raw.Ptr<abi.StrBuf>, s: raw.Ptr<u8>) = "void auk__sb_put_cstr(void *, const char *)"
 extern fn auk__err_sb(b: raw.Ptr<abi.StrBuf>): raw.Ptr<abi.Err> = "void *auk__err_sb(void *)"
 // libc
@@ -67,14 +65,14 @@ pub export fn auk__catch_active(): i32 uses raw = if top.is_null() { 0 } else { 
 pub export fn auk__catch_top_addr(): usize uses raw = usize(top.int())
 
 fn copy_bytes(p: raw.Ptr<u8>, n: usize): raw.Ptr<u8> uses raw, ffi {
-  let s: raw.Ptr<u8> = raw.cast(auk__xmalloc(n + 1))
+  let s: raw.Ptr<u8> = raw.cast(rc.auk__xmalloc(n + 1))
   raw.copy(s, p, n)
   s.at(n) = 0
   s
 }
 
-/// _Noreturn (`never` is core's only: a `()` that never returns).
-export fn auk__catch_throw(loc: raw.Ptr<u8>, msg: raw.Ptr<u8>, n: usize) uses raw, ffi {
+/// Jump to the innermost recovery point with this panic.
+pub export fn auk__catch_throw(loc: raw.Ptr<u8>, msg: raw.Ptr<u8>, n: usize): never uses raw, ffi {
   raw.free(caught_msg)
   raw.free(caught_loc)
   caught_msg = copy_bytes(msg, n)
@@ -105,7 +103,7 @@ export fn auk__catch_take(msg: raw.Ptr<raw.Ptr<u8>>, loc: raw.Ptr<raw.Ptr<u8>>) 
 /// Run f(env, out) under a recovery point: NULL if it finished, the panic (malloc'd; free it
 /// with auk__panic_free) if one jumped back. The tracer's and the debugger's per-thread state
 /// is put back as it was here.
-export fn auk__catch_call(f: raw.Fn<(raw.Ptr<()>, raw.Ptr<()>) => ()>, env: raw.Ptr<()>, out: raw.Ptr<()>): raw.Ptr<abi.Panic> uses raw, ffi {
+pub export fn auk__catch_call(f: raw.Fn<(raw.Ptr<()>, raw.Ptr<()>) => ()>, env: raw.Ptr<()>, out: raw.Ptr<()>): raw.Ptr<abi.Panic> uses raw, ffi {
   var tdepth: i64 = 0
   var tmute: i32 = 0
   var dtop: raw.Ptr<()> = raw.null()
@@ -117,7 +115,7 @@ export fn auk__catch_call(f: raw.Fn<(raw.Ptr<()>, raw.Ptr<()>) => ()>, env: raw.
   }
   auk__trace_restore(tdepth, tmute)
   auk__dbg_restore(dtop, ddepth)
-  let p: raw.Ptr<abi.Panic> = raw.cast(auk__xmalloc(raw.size_of<abi.Panic>()))
+  let p: raw.Ptr<abi.Panic> = raw.cast(rc.auk__xmalloc(raw.size_of<abi.Panic>()))
   auk__catch_take(raw.field_addr(p, .msg), raw.field_addr(p, .loc))
   if p.msg.is_null() {
     p.msg = copy_bytes("panic", 5)
@@ -126,14 +124,14 @@ export fn auk__catch_call(f: raw.Fn<(raw.Ptr<()>, raw.Ptr<()>) => ()>, env: raw.
   p
 }
 
-export fn auk__panic_free(p: raw.Ptr<abi.Panic>) uses raw {
+pub export fn auk__panic_free(p: raw.Ptr<abi.Panic>) uses raw {
   raw.free(p.msg)
   raw.free(p.loc)
   raw.free(p)
 }
 
 /// The Err a recovered panic becomes: "panic: <msg> at <loc>".
-export fn auk__panic_err(p: raw.Ptr<abi.Panic>): raw.Ptr<abi.Err> uses raw, ffi {
+pub export fn auk__panic_err(p: raw.Ptr<abi.Panic>): raw.Ptr<abi.Err> uses raw, ffi {
   var b = abi.StrBuf {}
   let bp = raw.addr_of(&b)
   auk__sb_put_cstr(bp, "panic: ")
@@ -150,7 +148,7 @@ export fn auk_catch(f: raw.Fn<(raw.Ptr<()>, raw.Ptr<()>) => ()>, env: raw.Ptr<()
   if p.is_null() {
     return raw.null()
   }
-  if auk__task_cancelled() {
+  if task.auk__task_cancelled() {
     // a cancelled task must end: pass the panic on to the next recovery point out (the task's
     // own, at the latest)
     auk__catch_throw(p.loc, p.msg, strlen(p.msg))

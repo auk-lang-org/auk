@@ -1,7 +1,7 @@
 /* The C side of the layout probe (run.sh): compares runtime/src/abi.auk and the platform's
  * runtime/src/cfacts.<os>-<arch>.auk, compiled by `auk build --lib`, with the C compiler's view
  * of runtime/c/auk_rt.h and the system headers. run.sh puts the generated tables
- * (tables.awk) and task.c's private struct in front of this file. Prints "ok <n> checks" or
+ * (tables.awk) in front of this file. Prints "ok <n> checks" or
  * what differs. */
 #include <stdio.h>
 #include <string.h>
@@ -22,6 +22,28 @@ struct AukChan {
     bool closed;
 };
 
+/* task.c's task, as the C defined it before the port (runtime/src/task.auk uses abi.Task). */
+struct AukTask {
+    AukHeader h;
+    pthread_t th;
+    pthread_mutex_t mu;
+    AukThunk fn;
+    void *args;
+    void *result;
+    size_t result_size;
+    const AukElemOps *ops;
+    bool joined;
+    AukPanic *panic;
+    bool observed;
+    _Atomic bool cancel;
+    _Atomic bool done;
+    AukTask **kids;
+    int64_t nkids;
+    int64_t capkids;
+    AukHeap *heap;
+    void (*args_drop)(void *args);
+    uintptr_t hint;
+};
 
 static int bad = 0;
 static int nchecked = 0;

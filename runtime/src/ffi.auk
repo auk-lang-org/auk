@@ -3,20 +3,17 @@
 /// elements. An `ffi.Ptr` (and every `extern type` of user code) is a plain machine address: not
 /// reference counted, never freed automatically. (Was runtime/c/ffi.c, ported line by line.)
 
-// the rest of the runtime (C, for now)
+// the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
 extern fn auk__fmt_hex(out: raw.Ptr<u8>, v: u64, min_digits: i32, upper: bool): i32 =
   "int auk__fmt_hex(char *, uint64_t, int, bool)"
-extern fn auk__xmalloc(n: usize): raw.Ptr<()> = "void *auk__xmalloc(size_t)"
 extern fn auk_str_lit(s: raw.Ptr<u8>): raw.Ptr<abi.Str> = "void *auk_str_lit(const char *)"
 extern fn auk_str_cstr(s: raw.Ptr<abi.Str>): raw.Ptr<u8> = "const char *auk_str_cstr(const void *)"
 extern fn auk__sb_put_cstr(b: raw.Ptr<abi.StrBuf>, s: raw.Ptr<u8>) = "void auk__sb_put_cstr(void *, const char *)"
 extern fn auk__sb_take_into(b: raw.Ptr<abi.StrBuf>, out: raw.Ptr<u8>, cap: usize) =
   "void auk__sb_take_into(void *, char *, size_t)"
 // _Noreturn: its callers say `raw.unreachable()` (no `never` here, TODO(dialect))
-extern fn auk_panic_str(loc: raw.Ptr<u8>, msg: raw.Ptr<u8>) = "void auk_panic_str(const char *, const char *)"
 extern fn auk_arr_new(ops: raw.Ptr<abi.ElemOps>, cap: i64): raw.Ptr<abi.Arr> = "void *auk_arr_new(const void *, int64_t)"
 extern fn auk_arr_make_unique(pa: raw.Ptr<raw.Ptr<abi.Arr>>): raw.Ptr<()> = "void *auk_arr_make_unique(void *)"
-extern var auk_ops_int: abi.ElemOps = "auk_ops_int"
 // libc
 extern fn calloc(n: usize, size: usize): raw.Ptr<()> = "void *calloc(size_t, size_t)"
 extern fn dlsym(handle: raw.Ptr<()>, name: raw.Ptr<u8>): raw.Ptr<()> = "void *dlsym(void *, const char *)"
@@ -52,12 +49,12 @@ export fn auk_ffi_ptr_show(p: raw.Ptr<()>): raw.Ptr<abi.Str> uses raw, ffi {
 
 export fn auk_ffi_alloc(n: i64, loc: raw.Ptr<u8>): raw.Ptr<()> uses raw, ffi {
   if n < 0 {
-    auk_panic_str(loc, "ffi.alloc: negative size")
+    rc.auk_panic_str(loc, "ffi.alloc: negative size")
     raw.unreachable()
   }
   let p = calloc(1, if n == 0 { 1 } else { usize(n) })
   if p.is_null() {
-    auk_panic_str(loc, "ffi.alloc: out of memory")
+    rc.auk_panic_str(loc, "ffi.alloc: out of memory")
     raw.unreachable()
   }
   p
@@ -79,7 +76,7 @@ fn check_ptr(p: raw.Ptr<u8>, what: raw.Ptr<u8>, loc: raw.Ptr<u8>) uses raw, ffi 
     auk__sb_put_cstr(raw.addr_of(&b), what)
     auk__sb_put_cstr(raw.addr_of(&b), " through a null pointer")
     auk__sb_take_into(raw.addr_of(&b), raw.cast(raw.addr_of(&m)), raw.size_of<Buf96>())
-    auk_panic_str(loc, raw.cast(raw.addr_of(&m)))
+    rc.auk_panic_str(loc, raw.cast(raw.addr_of(&m)))
     raw.unreachable()
   }
 }
@@ -155,10 +152,10 @@ export fn auk_ffi_cstr(p: raw.Ptr<u8>, loc: raw.Ptr<u8>): raw.Ptr<abi.Str> uses 
 /// ffi.bytes: n bytes at p as a list of ints 0..255.
 export fn auk_ffi_bytes(p: raw.Ptr<u8>, n: i64, loc: raw.Ptr<u8>): raw.Ptr<abi.Arr> uses raw, ffi {
   if n < 0 {
-    auk_panic_str(loc, "ffi.bytes: negative length")
+    rc.auk_panic_str(loc, "ffi.bytes: negative length")
     raw.unreachable()
   }
-  var out = auk_arr_new(raw.addr_of(&auk_ops_int), n)
+  var out = auk_arr_new(rc.ops_int(), n)
   if n == 0 {
     return out
   }
@@ -183,7 +180,7 @@ export fn auk_ffi_str(p: raw.Ptr<u8>, func: raw.Ptr<u8>, loc: raw.Ptr<u8>): raw.
     auk__sb_put_cstr(raw.addr_of(&b), func)
     auk__sb_put_cstr(raw.addr_of(&b), " returned NULL where a `str` was expected (declare the result `str?`)")
     auk__sb_take_into(raw.addr_of(&b), raw.cast(raw.addr_of(&m)), raw.size_of<Buf160>())
-    auk_panic_str(loc, raw.cast(raw.addr_of(&m)))
+    rc.auk_panic_str(loc, raw.cast(raw.addr_of(&m)))
     raw.unreachable()
   }
   auk_str_lit(p)
@@ -213,7 +210,7 @@ export fn auk_ffi_arr_in(a: raw.Ptr<abi.Arr>, kind: i32): raw.Ptr<()> uses raw, 
   let n: i64 = if a.is_null() { 0 } else { a.len }
   let rawsz: usize = if a.is_null() { 8 } else { a.ops.size }
   let sz = elem_size(kind, rawsz)
-  let buf: raw.Ptr<u8> = raw.cast(auk__xmalloc(if n == 0 { 1 } else { usize(n) * sz }))
+  let buf: raw.Ptr<u8> = raw.cast(rc.auk__xmalloc(if n == 0 { 1 } else { usize(n) * sz }))
   if n == 0 {
     return raw.cast(buf)
   }

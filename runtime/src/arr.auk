@@ -2,19 +2,12 @@
 /// ported line by line). The ABI is auk_rt.h's: `AukArr` (`abi.Arr`) by pointer, every
 /// `auk_arr_*` entry point under its C name.
 
-// the rest of the runtime (C, for now)
-extern fn auk_retain(p: raw.Ptr<()>): raw.Ptr<()> = "void *auk_retain(void *)"
-extern fn auk_release(p: raw.Ptr<()>) = "void auk_release(void *)"
-extern fn auk__alloc(size: usize, kind: u32): raw.Ptr<()> = "void *auk__alloc(size_t, uint32_t)"
-extern fn auk__free_obj(p: raw.Ptr<()>) = "void auk__free_obj(void *)"
+// the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
 extern fn auk__xmalloc(n: usize): raw.Ptr<u8> = "void *auk__xmalloc(size_t)"
 extern fn auk__xcalloc(n: usize, size: usize): raw.Ptr<u8> = "void *auk__xcalloc(size_t, size_t)"
 extern fn auk__xrealloc(p: raw.Ptr<u8>, n: usize): raw.Ptr<u8> = "void *auk__xrealloc(void *, size_t)"
 // _Noreturn: `never` is core's only (TODO(dialect)), so their callers say `raw.unreachable()`
-extern fn auk__panic_rt(msg: raw.Ptr<u8>) = "void auk__panic_rt(const char *)"
 extern fn auk__panic_sb(loc: raw.Ptr<u8>, b: raw.Ptr<abi.StrBuf>) = "void auk__panic_sb(const char *, void *)"
-extern fn auk_panic_overflow(loc: raw.Ptr<u8>, op: raw.Ptr<u8>) = "void auk_panic_overflow(const char *, const char *)"
-extern fn auk_hash_combine(h: u64, x: u64): u64 = "uint64_t auk_hash_combine(uint64_t, uint64_t)"
 extern fn auk__show_exhausted(): bool = "bool auk__show_exhausted(void)"
 extern fn auk__sb_put_cstr(b: raw.Ptr<abi.StrBuf>, s: raw.Ptr<u8>) = "void auk__sb_put_cstr(void *, const char *)"
 extern fn auk_sb_int(b: raw.Ptr<abi.StrBuf>, v: i64) = "void auk_sb_int(void *, int64_t)"
@@ -23,8 +16,6 @@ extern fn auk_sb_lit(b: raw.Ptr<abi.StrBuf>, s: raw.Ptr<u8>) = "void auk_sb_lit(
 extern fn auk_sb_str(b: raw.Ptr<abi.StrBuf>, s: raw.Ptr<abi.Str>) = "void auk_sb_str(void *, const void *)"
 extern fn auk_sb_str_own(b: raw.Ptr<abi.StrBuf>, s: raw.Ptr<abi.Str>) = "void auk_sb_str_own(void *, void *)"
 extern fn auk_sb_finish(b: raw.Ptr<abi.StrBuf>): raw.Ptr<abi.Str> = "void *auk_sb_finish(void *)"
-extern var auk_ops_int: abi.ElemOps = "auk_ops_int"
-extern var auk_ops_char: abi.ElemOps = "auk_ops_char"
 
 /// Address of element i.
 fn elem(a: raw.Ptr<abi.Arr>, i: i64): raw.Ptr<u8> uses raw = a.data.offset(i * i64(a.ops.size))
@@ -39,27 +30,16 @@ fn release_elem(ops: raw.Ptr<abi.ElemOps>, e: raw.Ptr<u8>) uses raw {
   if !f.is_null() { f(raw.cast(e)) }
 }
 
-// rc.c's auk_refcount, auk__tmp_get/auk__tmp_done and auk_float_cmp, which arr.c's translation
-// unit inlined: here, so that they still are (a call into the C half can't be)
+// rc.auk's auk_refcount, auk__tmp_get/auk__tmp_done and auk_float_cmp, under the names this file
+// uses (direct calls: they inline, as in C's one translation unit)
 
-fn refcount(p: raw.Ptr<abi.Arr>): i64 uses raw =
-  if p.is_null() { 0 } else { raw.atomic_load(raw.field_addr(raw.field_addr(p, .h), .rc), raw.Order.SeqCst) }
+fn refcount(p: raw.Ptr<abi.Arr>): i64 uses raw = rc.auk_refcount(raw.cast(p))
 
-fn tmp_get(t: raw.Ptr<abi.Tmp>, size: usize): raw.Ptr<u8> uses raw, ffi {
-  t.heap = if size <= raw.size_of<abi.Tmp>() - 8 { raw.null() } else { auk__xmalloc(size) }
-  if t.heap.is_null() { t.stack } else { t.heap }
-}
+fn tmp_get(t: raw.Ptr<abi.Tmp>, size: usize): raw.Ptr<u8> uses raw, ffi = rc.auk__tmp_get(t, size)
 
-fn tmp_done(t: raw.Ptr<abi.Tmp>) uses raw {
-  if !t.heap.is_null() { raw.free(t.heap) }
-}
+fn tmp_done(t: raw.Ptr<abi.Tmp>) uses raw = rc.auk__tmp_done(t)
 
-pub fn float_cmp(a: float, b: float): i32 {
-  if a != a || b != b {
-    return (if a != a { 1 } else { 0 }) - (if b != b { 1 } else { 0 })
-  }
-  (if a > b { 1 } else { 0 }) - (if a < b { 1 } else { 0 })
-}
+pub fn float_cmp(a: float, b: float): i32 = rc.auk_float_cmp(a, b)
 
 pub inline export fn auk_arr_len(a: raw.Ptr<abi.Arr>): i64 uses raw = if a.is_null() { 0 } else { a.len }
 
@@ -70,10 +50,10 @@ inline export fn auk_arr_data(a: raw.Ptr<abi.Arr>): raw.Ptr<()> uses raw =
 /// (docs/runtime-port.md, arr and map).
 pub noinline export fn auk_arr_new(ops: raw.Ptr<abi.ElemOps>, cap: i64): raw.Ptr<abi.Arr> uses raw, ffi {
   if ops.is_null() {
-    auk__panic_rt("auk_arr_new: missing element ops")
+    rc.auk__panic_rt("auk_arr_new: missing element ops")
     raw.unreachable()
   }
-  let a: raw.Ptr<abi.Arr> = raw.cast(auk__alloc(raw.size_of<abi.Arr>(), abi.K_ARR))
+  let a: raw.Ptr<abi.Arr> = raw.cast(rc.auk__alloc(raw.size_of<abi.Arr>(), abi.K_ARR))
   a.ops = ops
   a.cap = if cap > 0 { cap } else { 0 }
   a.data = if a.cap != 0 { auk__xmalloc(usize(a.cap) * ops.size) } else { raw.null() }
@@ -97,9 +77,9 @@ export fn auk_arr_from(ops: raw.Ptr<abi.ElemOps>, elems: raw.Ptr<()>, n: i64): r
   a
 }
 
-export fn auk__arr_free(a: raw.Ptr<abi.Arr>) uses raw, ffi {
+pub export fn auk__arr_free(a: raw.Ptr<abi.Arr>) uses raw, ffi {
   if !a.base.is_null() {
-    auk_release(raw.cast(a.base))
+    rc.auk_release(raw.cast(a.base))
   } else {
     let release = a.ops.release
     if !release.is_null() {
@@ -111,7 +91,7 @@ export fn auk__arr_free(a: raw.Ptr<abi.Arr>) uses raw, ffi {
     }
     raw.free(a.data)
   }
-  auk__free_obj(raw.cast(a))
+  rc.auk__free_obj(raw.cast(a))
 }
 
 fn oob(loc: raw.Ptr<u8>, i: i64, len: i64) uses raw, ffi {
@@ -166,12 +146,12 @@ fn is_unique(a: raw.Ptr<abi.Arr>): bool uses raw = a.base.is_null() && refcount(
 fn ensure_unique_cap(pa: raw.Ptr<raw.Ptr<abi.Arr>>, need: i64) uses raw, ffi {
   let a = pa.load()
   if a.is_null() {
-    auk__panic_rt("mutating a NULL array")
+    rc.auk__panic_rt("mutating a NULL array")
     raw.unreachable()
   }
   if !is_unique(a) {
     let c = copy_with_cap(a, if need > a.len { need } else { a.len })
-    auk_release(raw.cast(a))
+    rc.auk_release(raw.cast(a))
     pa.store(c)
     return
   }
@@ -301,7 +281,7 @@ export fn auk_arr_clear(pa: raw.Ptr<raw.Ptr<abi.Arr>>) uses raw, ffi {
   let a = pa.load()
   if !is_unique(a) {
     pa.store(auk_arr_new(a.ops, 0))
-    auk_release(raw.cast(a))
+    rc.auk_release(raw.cast(a))
     return
   }
   let release = a.ops.release
@@ -330,12 +310,12 @@ export fn auk_arr_slice(a: raw.Ptr<abi.Arr>, lo: i64, hi: i64, loc: raw.Ptr<u8>)
     raw.unreachable()
   }
   if lo == 0 && hi == n {
-    return raw.cast(auk_retain(raw.cast(a)))
+    return raw.cast(rc.auk_retain(raw.cast(a)))
   }
   let root = if !a.base.is_null() { a.base } else { a }
-  let v: raw.Ptr<abi.Arr> = raw.cast(auk__alloc(raw.size_of<abi.Arr>(), abi.K_ARR))
+  let v: raw.Ptr<abi.Arr> = raw.cast(rc.auk__alloc(raw.size_of<abi.Arr>(), abi.K_ARR))
   v.ops = a.ops
-  v.base = raw.cast(auk_retain(raw.cast(root)))
+  v.base = raw.cast(rc.auk_retain(raw.cast(root)))
   v.data = elem(a, lo)
   v.len = hi - lo
   v.cap = v.len
@@ -367,7 +347,7 @@ export fn auk_arr_extend(pa: raw.Ptr<raw.Ptr<abi.Arr>>, b: raw.Ptr<abi.Arr>) use
   if bn == 0 {
     return
   }
-  let keep = auk_retain(raw.cast(b)) // b may be *pa
+  let keep = rc.auk_retain(raw.cast(b)) // b may be *pa
   ensure_unique_cap(pa, pa.load().len + bn)
   let a = pa.load()
   raw.copy(elem(a, a.len), b.data, usize(bn) * a.ops.size)
@@ -380,7 +360,7 @@ export fn auk_arr_extend(pa: raw.Ptr<raw.Ptr<abi.Arr>>, b: raw.Ptr<abi.Arr>) use
     }
   }
   a.len += bn
-  auk_release(keep)
+  rc.auk_release(keep)
 }
 
 fn reverse_in_place(a: raw.Ptr<abi.Arr>) uses raw, ffi {
@@ -676,7 +656,7 @@ export fn auk_arr_sort(pa: raw.Ptr<raw.Ptr<abi.Arr>>) uses raw, ffi {
   let ops = pa.load().ops
   let cmp = ops.cmp
   if cmp.is_null() {
-    auk__panic_rt("sort: element type has no cmp")
+    rc.auk__panic_rt("sort: element type has no cmp")
     raw.unreachable()
   }
   let _ = auk_arr_make_unique(pa)
@@ -685,7 +665,7 @@ export fn auk_arr_sort(pa: raw.Ptr<raw.Ptr<abi.Arr>>) uses raw, ffi {
   if n < 2 {
     return
   }
-  if ops.int() == raw.addr_of(&auk_ops_int).int() {
+  if ops.int() == rc.ops_int().int() {
     sort_ints(raw.cast(a.data), n)
     return
   }
@@ -729,7 +709,7 @@ export fn auk_arr_index_of(a: raw.Ptr<abi.Arr>, e: raw.Ptr<()>): abi.OptInt uses
   while i < auk_arr_len(a) {
     let eq = a.ops.eq
     if eq.is_null() {
-      auk__panic_rt("contains: element type has no eq")
+      rc.auk__panic_rt("contains: element type has no eq")
       raw.unreachable()
     }
     if eq(raw.cast(elem(a, i)), e) {
@@ -754,7 +734,7 @@ pub export fn auk_arr_eq(a: raw.Ptr<abi.Arr>, b: raw.Ptr<abi.Arr>): bool uses ra
   while i < n {
     let eq = a.ops.eq
     if eq.is_null() {
-      auk__panic_rt("element type has no eq")
+      rc.auk__panic_rt("element type has no eq")
       raw.unreachable()
     }
     if !eq(raw.cast(elem(a, i)), raw.cast(elem(b, i))) {
@@ -765,14 +745,14 @@ pub export fn auk_arr_eq(a: raw.Ptr<abi.Arr>, b: raw.Ptr<abi.Arr>): bool uses ra
   true
 }
 
-export fn auk_arr_cmp(a: raw.Ptr<abi.Arr>, b: raw.Ptr<abi.Arr>): i32 uses raw, ffi {
+pub export fn auk_arr_cmp(a: raw.Ptr<abi.Arr>, b: raw.Ptr<abi.Arr>): i32 uses raw, ffi {
   let na = auk_arr_len(a)
   let nb = auk_arr_len(b)
   var i: i64 = 0
   while i < na && i < nb {
     let cmp = a.ops.cmp
     if cmp.is_null() {
-      auk__panic_rt("element type has no cmp")
+      rc.auk__panic_rt("element type has no cmp")
       raw.unreachable()
     }
     let c = cmp(raw.cast(elem(a, i)), raw.cast(elem(b, i)))
@@ -790,10 +770,10 @@ pub export fn auk_arr_hash(a: raw.Ptr<abi.Arr>): u64 uses raw, ffi {
   while i < auk_arr_len(a) {
     let hash = a.ops.hash
     if hash.is_null() {
-      auk__panic_rt("element type has no hash")
+      rc.auk__panic_rt("element type has no hash")
       raw.unreachable()
     }
-    h = auk_hash_combine(h, hash(raw.cast(elem(a, i))))
+    h = rc.auk_hash_combine(h, hash(raw.cast(elem(a, i))))
     i += 1
   }
   h
@@ -810,7 +790,7 @@ pub export fn auk_arr_show(a: raw.Ptr<abi.Arr>): raw.Ptr<abi.Str> uses raw, ffi 
     }
     let show = a.ops.show
     if show.is_null() {
-      auk__panic_rt("show: element type has no show")
+      rc.auk__panic_rt("show: element type has no show")
       raw.unreachable()
     }
     auk_sb_str_own(pb, show(raw.cast(elem(a, i))))
@@ -831,12 +811,12 @@ export fn auk_arr_join(a: raw.Ptr<abi.Arr>, sep: raw.Ptr<abi.Str>): raw.Ptr<abi.
     let ops = a.ops
     if ops.int() == str.ops_str().int() {
       auk_sb_str(pb, raw.cast<raw.Ptr<abi.Str>>(elem(a, i)).load())
-    } else if ops.int() == raw.addr_of(&auk_ops_char).int() {
+    } else if ops.int() == rc.ops_char().int() {
       auk_sb_char(pb, raw.cast<u32>(elem(a, i)).load())
     } else {
       let show = ops.show
       if show.is_null() {
-        auk__panic_rt("element type has no show")
+        rc.auk__panic_rt("element type has no show")
         raw.unreachable()
       }
       auk_sb_str_own(pb, show(raw.cast(elem(a, i))))
@@ -854,7 +834,7 @@ export fn auk_arr_sum_int(a: raw.Ptr<abi.Arr>, loc: raw.Ptr<u8>): i64 uses raw, 
     // auk_add
     let (r, o) = raw.add_overflow(s, d.at(i))
     if o {
-      auk_panic_overflow(loc, "+")
+      rc.auk_panic_overflow(loc, "+")
       raw.unreachable()
     }
     s = r

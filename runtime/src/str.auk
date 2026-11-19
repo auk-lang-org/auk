@@ -7,17 +7,10 @@
 /// through an `extern fn` of the same symbol (which the compiler would rename: see
 /// docs/runtime-port.md, "Found porting str.c").
 
-// the rest of the runtime (C, for now)
-extern fn auk_retain(p: raw.Ptr<()>): raw.Ptr<()> = "void *auk_retain(void *)"
-extern fn auk_release(p: raw.Ptr<()>) = "void auk_release(void *)"
+// the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
 extern fn auk__xmalloc(n: usize): raw.Ptr<u8> = "void *auk__xmalloc(size_t)"
 extern fn auk__xrealloc(p: raw.Ptr<u8>, n: usize): raw.Ptr<u8> = "void *auk__xrealloc(void *, size_t)"
-extern fn auk__alloc(size: usize, kind: u32): raw.Ptr<()> = "void *auk__alloc(size_t, uint32_t)"
-extern fn auk__free_obj(p: raw.Ptr<()>) = "void auk__free_obj(void *)"
 // _Noreturn: its callers say `raw.unreachable()` (no `never` outside core, TODO(dialect))
-extern fn auk__panic_bytes(loc: raw.Ptr<u8>, p: raw.Ptr<u8>, n: usize) =
-  "void auk__panic_bytes(const char *, const char *, size_t)"
-extern fn auk_panic_overflow(loc: raw.Ptr<u8>, op: raw.Ptr<u8>) = "void auk_panic_overflow(const char *, const char *)"
 extern fn auk__err_bytes(p: raw.Ptr<u8>, n: usize): raw.Ptr<abi.Err> = "void *auk__err_bytes(const char *, size_t)"
 extern fn auk__heap_usable(h: raw.Ptr<abi.Header>): usize = "size_t auk__heap_usable(void *)"
 extern fn auk__heap_resize(h: raw.Ptr<abi.Header>, size: usize): raw.Ptr<abi.Header> =
@@ -28,12 +21,6 @@ extern fn auk_arr_make_unique(pa: raw.Ptr<raw.Ptr<abi.Arr>>): raw.Ptr<()> = "voi
 extern fn auk_arr_push(pa: raw.Ptr<raw.Ptr<abi.Arr>>, e: raw.Ptr<()>) = "void auk_arr_push(void *, const void *)"
 extern fn auk_arr_slice(a: raw.Ptr<abi.Arr>, lo: i64, hi: i64, loc: raw.Ptr<u8>): raw.Ptr<abi.Arr> =
   "void *auk_arr_slice(void *, int64_t, int64_t, const char *)"
-// The element ops (rc.c). One module may declare an `extern var` of a symbol (a second
-// declaration elsewhere becomes `<name>.1`, undefined): value.auk reaches these through
-// `ops_str()`.
-extern var auk_ops_str: abi.ElemOps = "auk_ops_str"
-extern var auk_ops_char: abi.ElemOps = "auk_ops_char"
-extern var auk_ops_int: abi.ElemOps = "auk_ops_int"
 // trace.c's flag: the tracer is showing values
 extern var auk_trace_live: bool = "auk_trace_live"
 
@@ -42,7 +29,7 @@ extern fn c_strlen(s: raw.Ptr<u8>): usize = "size_t strlen(const char *)"
 extern fn c_memchr(p: raw.Ptr<u8>, c: i32, n: usize): raw.Ptr<u8> = "void *memchr(const void *, int, size_t)"
 extern fn c_strtod(s: raw.Ptr<u8>, end: raw.Ptr<raw.Ptr<u8>>): float = "double strtod(const char *, char **)"
 
-/// &auk_ops_str (for the other modules: see the `extern var`s above).
+/// &auk_ops_str (below), for the other modules.
 pub fn ops_str(): raw.Ptr<abi.ElemOps> uses raw = raw.addr_of(&auk_ops_str)
 
 /// strlen.
@@ -275,7 +262,7 @@ pub inline export fn auk_sb_str(b: raw.Ptr<abi.StrBuf>, s: raw.Ptr<abi.Str>) use
 
 pub inline export fn auk_sb_str_own(b: raw.Ptr<abi.StrBuf>, s: raw.Ptr<abi.Str>) uses raw, ffi {
   auk_sb_str(b, s)
-  auk_release(raw.cast(s))
+  rc.auk_release(raw.cast(s))
 }
 
 pub export fn auk_sb_char(b: raw.Ptr<abi.StrBuf>, c: u32) uses raw, ffi {
@@ -310,7 +297,7 @@ pub export fn auk__panic_sb(loc: raw.Ptr<u8>, b: raw.Ptr<abi.StrBuf>) uses raw, 
   let n: i64 = if b.len < 2048 { b.len } else { 2048 }
   raw.copy(raw.addr_of(&m), sb_data(b), n)
   auk_sb_free(b)
-  auk__panic_bytes(loc, raw.cast(raw.addr_of(&m)), usize(n))
+  rc.auk__panic_bytes(loc, raw.cast(raw.addr_of(&m)), usize(n))
   raw.unreachable()
 }
 
@@ -325,7 +312,7 @@ pub export fn auk__err_sb(b: raw.Ptr<abi.StrBuf>): raw.Ptr<abi.Err> uses raw, ff
 
 /// A string from n bytes at p whose metadata is already known.
 pub inline export fn auk__str_raw(p: raw.Ptr<u8>, n: i64, chars: i64, ascii: bool): raw.Ptr<abi.Str> uses raw, ffi {
-  let s: raw.Ptr<abi.Str> = raw.cast(auk__alloc(raw.size_of<abi.Str>() + usize(n) + 1, abi.K_STR))
+  let s: raw.Ptr<abi.Str> = raw.cast(rc.auk__alloc(raw.size_of<abi.Str>() + usize(n) + 1, abi.K_STR))
   if n > 0 { raw.copy(s.data, p, n) }
   s.data.at(n) = 0
   s.len_bytes = n
@@ -474,7 +461,7 @@ pub export fn auk_str_slice(s: raw.Ptr<abi.Str>, a: i64, b: i64, loc: raw.Ptr<u8
     auk__panic_sb(loc, mp)
     raw.unreachable()
   }
-  if a == 0 && b == n && !s.is_null() { return raw.cast(auk_retain(raw.cast(s))) }
+  if a == 0 && b == n && !s.is_null() { return raw.cast(rc.auk_retain(raw.cast(s))) }
   let ba = auk__str_byte_offset(s, a)
   let bb = auk__str_byte_offset(s, b)
   auk__str_raw(sdata(s).offset(ba), bb - ba, b - a, is_ascii(s))
@@ -483,7 +470,7 @@ pub export fn auk_str_slice(s: raw.Ptr<abi.Str>, a: i64, b: i64, loc: raw.Ptr<u8
 pub inline export fn auk_str_concat(a: raw.Ptr<abi.Str>, b: raw.Ptr<abi.Str>): raw.Ptr<abi.Str> uses raw, ffi {
   let na = slen(a)
   let nb = slen(b)
-  let s: raw.Ptr<abi.Str> = raw.cast(auk__alloc(raw.size_of<abi.Str>() + usize(na + nb) + 1, abi.K_STR))
+  let s: raw.Ptr<abi.Str> = raw.cast(rc.auk__alloc(raw.size_of<abi.Str>() + usize(na + nb) + 1, abi.K_STR))
   raw.copy(s.data, sdata(a), na)
   raw.copy(s.data.offset(na), sdata(b), nb)
   s.data.at(na + nb) = 0
@@ -500,7 +487,7 @@ pub export fn auk_str_append(ps: raw.Ptr<raw.Ptr<abi.Str>>, b0: raw.Ptr<abi.Str>
   if nb == 0 { return }
   if a.is_null() || raw.atomic_load(raw.field_addr(raw.field_addr(a, .h), .rc), raw.Order.Acquire) != 1 {
     ps.store(auk_str_concat(a, b))
-    auk_release(raw.cast(a))
+    rc.auk_release(raw.cast(a))
     return
   }
   // unique: nobody else can see a change; grow in place
@@ -559,21 +546,31 @@ pub inline export fn auk_str_cmp(a: raw.Ptr<abi.Str>, b: raw.Ptr<abi.Str>): i32 
 
 pub inline export fn auk_str_hash(s: raw.Ptr<abi.Str>): u64 uses raw, ffi = auk_hash_bytes(sdata(s), usize(slen(s)))
 
-export fn auk__str_free(s: raw.Ptr<abi.Str>) uses raw, ffi = auk__free_obj(raw.cast(s))
+pub export fn auk__str_free(s: raw.Ptr<abi.Str>) uses raw, ffi = rc.auk__free_obj(raw.cast(s))
 
-// the element functions of `str` (auk_ops_str, rc.c: a table of function addresses stays C until
-// a raw initializer can hold them): here, so that the string functions inline into them
+// the element ops of `str`: here, so that the string functions inline into them
 
-export fn auk__str_elem_eq(a: raw.Ptr<()>, b: raw.Ptr<()>): bool uses raw =
+fn elem_eq(a: raw.Ptr<()>, b: raw.Ptr<()>): bool uses raw =
   auk_str_eq(raw.cast<raw.Ptr<abi.Str>>(a).load(), raw.cast<raw.Ptr<abi.Str>>(b).load())
 
-export fn auk__str_elem_cmp(a: raw.Ptr<()>, b: raw.Ptr<()>): i32 uses raw =
+fn elem_cmp(a: raw.Ptr<()>, b: raw.Ptr<()>): i32 uses raw =
   auk_str_cmp(raw.cast<raw.Ptr<abi.Str>>(a).load(), raw.cast<raw.Ptr<abi.Str>>(b).load())
 
-export fn auk__str_elem_hash(a: raw.Ptr<()>): u64 uses raw, ffi = auk_str_hash(raw.cast<raw.Ptr<abi.Str>>(a).load())
+fn elem_hash(a: raw.Ptr<()>): u64 uses raw, ffi = auk_str_hash(raw.cast<raw.Ptr<abi.Str>>(a).load())
 
-export fn auk__str_elem_show(a: raw.Ptr<()>): raw.Ptr<abi.Str> uses raw, ffi =
+fn elem_show(a: raw.Ptr<()>): raw.Ptr<abi.Str> uses raw, ffi =
   str_fmt.auk_str_quote(raw.cast<raw.Ptr<abi.Str>>(a).load())
+
+export var auk_ops_str: abi.ElemOps = abi.ElemOps {
+  size: 8,
+  retain: raw.fn_of(rc.auk__ptr_retain),
+  release: raw.fn_of(rc.auk__ptr_release),
+  eq: raw.fn_of(elem_eq),
+  cmp: raw.fn_of(elem_cmp),
+  hash: raw.fn_of(elem_hash),
+  show: raw.fn_of(elem_show),
+  copy: raw.fn_of(copy.auk__str_copy_elem),
+}
 
 // ---- searching ------------------------------------------------------------------------------
 
@@ -603,7 +600,7 @@ fn chars_in(p: raw.Ptr<u8>, n: i64): i64 uses raw {
 
 /// Sub-string by byte range [a, b) of s (valid UTF-8, a and b on boundaries).
 fn sub_bytes(s: raw.Ptr<abi.Str>, a: i64, b: i64): raw.Ptr<abi.Str> uses raw, ffi {
-  if !s.is_null() && a == 0 && b == s.len_bytes { return raw.cast(auk_retain(raw.cast(s))) }
+  if !s.is_null() && a == 0 && b == s.len_bytes { return raw.cast(rc.auk_retain(raw.cast(s))) }
   let p = sdata(s).offset(a)
   let ascii = is_ascii(s)
   auk__str_raw(p, b - a, if ascii { b - a } else { chars_in(p, b - a) }, ascii)
@@ -612,7 +609,7 @@ fn sub_bytes(s: raw.Ptr<abi.Str>, a: i64, b: i64): raw.Ptr<abi.Str> uses raw, ff
 fn push_own(a: raw.Ptr<raw.Ptr<abi.Arr>>, s: raw.Ptr<abi.Str>) uses raw, ffi {
   var e = s
   auk_arr_push(a, raw.cast(raw.addr_of(&e)))
-  auk_release(raw.cast(s))
+  rc.auk_release(raw.cast(s))
 }
 
 /// ' ', '\t', '\n', '\r', '\v', '\f'
@@ -726,7 +723,7 @@ pub export fn auk_str_replace(s: raw.Ptr<abi.Str>, from: raw.Ptr<abi.Str>, to: r
   let fn_ = slen(from)
   let p = sdata(s)
   let n = slen(s)
-  if fn_ == 0 { return if s.is_null() { auk_str_lit("") } else { raw.cast(auk_retain(raw.cast(s))) } }
+  if fn_ == 0 { return if s.is_null() { auk_str_lit("") } else { raw.cast(rc.auk_retain(raw.cast(s))) } }
   var b = abi.StrBuf {}
   let bp = raw.addr_of(&b)
   var st: i64 = 0
@@ -772,10 +769,10 @@ pub export fn auk_str_repeat(s: raw.Ptr<abi.Str>, n: i64, loc: raw.Ptr<u8>): raw
   let bl = slen(s)
   let (total, overflow) = raw.mul_overflow(bl, n)
   if overflow {
-    auk_panic_overflow(loc, "repeat")
+    rc.auk_panic_overflow(loc, "repeat")
     raw.unreachable()
   }
-  let r: raw.Ptr<abi.Str> = raw.cast(auk__alloc(raw.size_of<abi.Str>() + usize(total) + 1, abi.K_STR))
+  let r: raw.Ptr<abi.Str> = raw.cast(rc.auk__alloc(raw.size_of<abi.Str>() + usize(total) + 1, abi.K_STR))
   if bl > 0 {
     let src = sdata(s)
     var i: i64 = 0
@@ -793,7 +790,7 @@ pub export fn auk_str_repeat(s: raw.Ptr<abi.Str>, n: i64, loc: raw.Ptr<u8>): raw
 
 pub export fn auk_str_chars(s: raw.Ptr<abi.Str>): raw.Ptr<abi.Arr> uses raw, ffi {
   let n = auk_str_len(s)
-  var out = auk_arr_new(raw.addr_of(&auk_ops_char), n)
+  var out = auk_arr_new(rc.ops_char(), n)
   let d: raw.Ptr<u32> = raw.cast(auk_arr_make_unique(raw.addr_of(&out)))
   let p = sdata(s)
   let bn = slen(s)
@@ -821,7 +818,7 @@ pub export fn auk_str_chars(s: raw.Ptr<abi.Str>): raw.Ptr<abi.Arr> uses raw, ffi
 pub export fn auk_str_bytes(s: raw.Ptr<abi.Str>): raw.Ptr<abi.Arr> uses raw, ffi {
   let p = sdata(s)
   let n = slen(s)
-  var out = auk_arr_new(raw.addr_of(&auk_ops_int), n)
+  var out = auk_arr_new(rc.ops_int(), n)
   let d: raw.Ptr<i64> = raw.cast(auk_arr_make_unique(raw.addr_of(&out)))
   var i: i64 = 0
   while i < n {
@@ -859,7 +856,7 @@ fn str_of_chars(cs: raw.Ptr<u32>, n: i64): raw.Ptr<abi.Str> uses raw, ffi {
       i += 1
     }
   }
-  let s: raw.Ptr<abi.Str> = raw.cast(auk__alloc(raw.size_of<abi.Str>() + usize(bytes) + 1, abi.K_STR))
+  let s: raw.Ptr<abi.Str> = raw.cast(rc.auk__alloc(raw.size_of<abi.Str>() + usize(bytes) + 1, abi.K_STR))
   var d = s.data
   if ascii {
     i = 0
