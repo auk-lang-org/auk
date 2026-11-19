@@ -680,8 +680,13 @@ sjlj intrinsics; the port goes module by module.
 - [ ] ObjC: call `objc_msgSend`/`sel_registerName`/`objc_getClass` via FFI to replace
       `gui_host.m` and `audio_out.m`; blocks (if any AppKit API needs them) via a small
       block-literal layout in Auk.
-- [ ] Network.framework/OpenSSL bindings via FFI (Network.framework uses blocks — check;
-      fall back to Security.framework `SecureTransport` alternatives or OpenSSL on macOS too).
+- [ ] Network.framework/OpenSSL bindings via FFI. Blocks: **proven workable without `-fblocks`**
+      (2026-11-18): hand-made block literals (raw structs per Clang's Block ABI: global, stack,
+      stack + copy/dispose) drive every Network.framework / Security / dispatch API tls.c uses,
+      incl. the verify block and a real TLS round trip; ASan/UBSan clean, 0 leaks
+      (`runtime/c/test/spike/blocks.c`, recipe in [lowlevel.md](lowlevel.md) §10). Needs
+      `extern var` (C data symbols: `_NSConcreteStackBlock`, …) in the dialect. No OpenSSL
+      fallback needed on macOS.
 - [ ] Ryu, Unicode tables, `buf_printf` → Auk.
 - [ ] Varargs: none in our API by then (Phase 1 rule); calling libc varargs (`printf`, `open`
       with mode) via fixed-arg wrappers or varargs FFI support.

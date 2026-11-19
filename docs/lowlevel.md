@@ -116,5 +116,102 @@ points; a signal handler is an `export fn` passed to `sigaction`.
 No pointer arithmetic operators (`p + 1`: use `p.offset(1)`), no implicit integer conversions,
 no varargs (call fixed-argument C wrappers), no `goto` (labeled `break`/`continue`), no macros
 (constants and `inline` functions), no bit-fields (masks), no Objective-C (`objc_msgSend` through
-typed `raw.Fn`s, as `gui_host.c` does today), no blocks until Network.framework needs them
-(Phase 7b: `tls.c` is the one user of `-fblocks`).
+typed `raw.Fn`s, as `gui_host.c` does today), no blocks syntax (`^{ … }`: Network.framework's
+blocks are hand-made raw structs, §10).
+
+## 10. Blocks without -fblocks (Network.framework)
+
+`tls.c` (macOS) is the runtime's one user of Clang blocks: Network.framework, Security.framework
+and libdispatch take them as callbacks. A block is just a C struct with a function pointer in it
+([Clang's Block ABI](https://clang.llvm.org/docs/Block-ABI-Apple.html)), so the dialect builds
+them by hand from `raw struct`s and `raw.Fn`s; no compiler support. **Proven** (2026-11-18) by
+`runtime/c/test/spike/blocks.c`, compiled with `-fno-blocks`, run by
+`sh runtime/c/test/spike/blocks.sh`: a real TLS connection to `openssl s_server` (refused by the
+system trust store, then accepted by a verify block that pins the test certificate), send,
+receive, cancel, the TLS 1.2 fallback configure, and `dispatch_sync`/`dispatch_async` with each
+kind of block; clean under ASan + UBSan and `leaks --atExit` (0 leaks), and every copy the
+frameworks make is released (copy/dispose counts balance).
+
+**Layout** (64-bit; what Clang emits today, checked with `-emit-llvm`):
+```auk
+raw struct BlockHdr {                // every block starts with this
+    isa: raw.Ptr<()>,                // &_NSConcreteStackBlock or &_NSConcreteGlobalBlock
+    flags: i32, reserved: i32,
+    invoke: raw.Ptr<()>,             // raw.fn_of(f): f(block: raw.Ptr<B>, args…) -> R
+    descriptor: raw.Ptr<()>,
+}
+raw struct BlockDesc { reserved: usize, size: usize, signature: raw.Ptr<u8>, layout: raw.Ptr<u8> }
+raw struct BlockDescCD {             // when flags has BLOCK_HAS_COPY_DISPOSE
+    reserved: usize, size: usize,
+    copy: raw.Fn<(raw.Ptr<()>, raw.Ptr<()>) => ()>,   // (dst heap copy, src) after the memmove
+    dispose: raw.Fn<(raw.Ptr<()>) => ()>,             // before the heap copy is freed
+    signature: raw.Ptr<u8>, layout: raw.Ptr<u8>,
+}
+raw struct RecvBlock { h: BlockHdr, op: raw.Ptr<NwOp> }   // captures follow the header
+```
+- `size` is `raw.size_of` the whole literal (header + captures): `_Block_copy` memmoves that
+  many bytes. `layout` is null; `reserved` fields are 0.
+- **Flags:** `BLOCK_HAS_SIGNATURE = 1 << 30`, `BLOCK_HAS_COPY_DISPOSE = 1 << 25`,
+  `BLOCK_IS_GLOBAL = 1 << 28`. A stack literal is `HAS_SIGNATURE` (`| HAS_COPY_DISPOSE`), a
+  global one `IS_GLOBAL | HAS_SIGNATURE`. The low 16 bits (refcount, deallocating) and
+  `BLOCK_NEEDS_FREE` (1 << 24) belong to the runtime: always 0 in a literal.
+- **Signature:** nothing tls.c calls reads it (the spike also passes with no signature flag),
+  but it costs one string; use Clang's C encodings: `v16@?0^{nw_protocol_options=}8` (configure),
+  `v32@?0^{sec_protocol_metadata=}8^{sec_trust=}16@?<v@?B>24` (verify),
+  `v20@?0i8^{nw_error=}12` (state), `v36@?0^{dispatch_data_s=}8^{nw_content_context=}16B24^{nw_error=}28`
+  (receive), `v16@?0^{nw_error=}8` (send), `B40@?0^{dispatch_data_s=}8Q16r^v24Q32` (data
+  applier), `v8@?0` (`dispatch_block_t`).
+- `invoke`'s first parameter is the block itself (the address of whichever copy is running, not
+  the literal): captures are read through it. Arguments follow with their C types (`bool` is C's
+  `_Bool`).
+
+**The three kinds**, all of which the spike uses:
+1. **Global** (no captures: tls.c's TCP configure block): a `raw let` literal with
+   `isa = &_NSConcreteGlobalBlock`. `_Block_copy` returns it unchanged, `_Block_release` ignores
+   it; it lives forever.
+2. **Stack** (plain captures: pointers, `bool`s): a local (or any scratch memory) with
+   `isa = &_NSConcreteStackBlock`. A framework that keeps a block calls `_Block_copy`, which
+   mallocs `size` bytes, memmoves the literal and refcounts the copy; the literal may die as soon
+   as the call returns (the spike scribbles over and frees it right away). Without helpers the
+   captures are copied as bits and own nothing: their lifetime is the caller's, as in tls.c.
+3. **Stack + copy/dispose** (captures that own a reference): `copy` retains the captured object
+   on the new heap copy, `dispose` releases it. The literal itself holds no reference; each copy
+   holds one, so the captured object lives exactly as long as the framework keeps the callback,
+   including one it drops without calling (a cancelled connection). This replaces tls.c's
+   hand-counted `NwOp.refs = 2`.
+
+**Per API** (what tls.c passes, what the framework does with it):
+
+| API | block | captures | copied? |
+|---|---|---|---|
+| `nw_parameters_create_secure_tcp` (TLS configure) | `(nw_protocol_options_t)` | `t`, `fallback` | yes |
+| ″ (TCP configure) | `(nw_protocol_options_t)` | none: global | — |
+| `sec_protocol_options_set_verify_block` | `(metadata, sec_trust_t, complete)` | `t` | yes (runs later on `t.q`) |
+| `nw_connection_set_state_changed_handler` | `(nw_connection_state_t, nw_error_t)` | `t` | yes; released after cancel |
+| `nw_connection_receive` | `(dispatch_data_t, nw_content_context_t, bool, nw_error_t)` | `op` | yes; released after the call |
+| `nw_connection_send` | `(nw_error_t)` | `op` | yes |
+| `dispatch_data_apply` | `bool (region, offset, bytes, len)` | `op` | no (noescape) |
+| `dispatch_sync` / `dispatch_async` | `()` | `t`, `out` | sync: no; async: yes |
+
+The verify block's third argument, `complete`, is a block the framework made: call it as
+`raw.cast<raw.Fn<(raw.Ptr<()>, bool) => ()>>(complete.invoke)(complete, ok)`.
+
+**Pitfalls**
+- **Clang enables blocks by default on Darwin**: a C file that must not use them needs
+  `-fno-blocks` (`-fblocks` in `build.sh` is redundant there).
+- **Without `__BLOCKS__` the SDK headers hide every block-taking declaration**, not only the
+  callback setters: `dispatch_data_create` (its destructor is a block; pass null for
+  `DISPATCH_DATA_DESTRUCTOR_DEFAULT`) and `NW_CONNECTION_DEFAULT_STREAM_CONTEXT` (the data symbol
+  `_nw_content_context_default_stream`) too. Declare them yourself with `raw.Ptr<()>` for each
+  block: the `extern fn`s the Auk port writes anyway.
+- **The dialect needs C data symbols:** `_NSConcreteStackBlock`, `_NSConcreteGlobalBlock` (whose
+  *addresses* are the `isa`s) and `_nw_content_context_default_stream` (whose *value* is the
+  context). An `extern var name: T` declaration (address and load) covers them.
+- A copy/dispose helper runs on whatever thread the framework releases on, possibly after the
+  callback (or instead of it): helpers must be thread-safe (atomic refcounts) and must not touch
+  the caller's stack.
+- Never set the refcount bits or `BLOCK_NEEDS_FREE` yourself, and never `free` a block the
+  framework gave you; `_Block_copy`/`_Block_release` (libSystem) if one must outlive the call.
+- `dispatch_sync` and `dispatch_data_apply` don't copy, so a stack literal there needs no
+  helpers even when its captures own something.
+
