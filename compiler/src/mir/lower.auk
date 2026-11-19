@@ -1306,6 +1306,11 @@ pub fn coerce(lw: var Lower, v0: Val, cs: [typed.Coercion], node: int): Val {
 fn expr_inner(lw: var Lower, e: ast.Expr, tail: bool): Val = match e.kind {
   Lit(l) => match lw.ty(e.id) {
     Fixed(k) => mir.lower.lowlevel.fixed_lit(l, false, types.Ty.Fixed(k))
+    // the runtime's dialect: a C string constant
+    Ptr(p) => match l {
+      Str(s) => plain(mir.cstr(s).cast(d(types.Ty.Ptr(p))), types.Ty.Ptr(p))
+      _ => lw.lit(l, false)
+    }
     _ => lw.lit(l, false)
   }
   // units are erased: the literal's value

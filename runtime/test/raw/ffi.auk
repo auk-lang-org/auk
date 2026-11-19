@@ -30,6 +30,10 @@ fn run(): int uses raw, ffi {
   s.at(1) = 105
   s.at(2) = 0
   if c_strlen(s) != 2 { return 3 }
+  // a string literal where a `raw.Ptr<u8>` is expected is a C string constant
+  if c_strlen("hello, C") != 8 { return 4 }
+  let msg: raw.Ptr<u8> = "\u{e9}t\u{e9}\n"
+  if c_strlen(msg) != 6 || msg.at(5) != 10 || msg.at(6) != 0 { return 5 }
   raw.free(xs)
   0
 }

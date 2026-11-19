@@ -127,7 +127,9 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   (64-bit). An integer literal takes the fixed-width type its context expects (`x + 1`,
   `let b: u8 = 250`; it must fit); a literal on the left of an operator whose right side is
   fixed-width does not (write `x + 1`, not `1 + x`). Shift amounts are taken modulo the width.
-  Integer `/` and `%` by zero trap; `f32` has `%` (`frem`).
+  Integer `/` and `%` by zero trap; `f32` has `%` (`frem`). A string literal (no
+  interpolation) where a `raw.Ptr<u8>` is expected is a C string: a private constant,
+  NUL-terminated (`auk__panic3(loc, "expected Int, got ", …)`, `fn name(): raw.Ptr<u8> = "Int"`).
 - **Ordinary functions of the runtime package may hold raw values** (fixed-width numbers, raw
   structs, pointers) without `uses raw`; only the intrinsics (and `extern var`s) need the
   effect, and the E0419 rule (no reference-counted type) applies to `uses raw` functions and

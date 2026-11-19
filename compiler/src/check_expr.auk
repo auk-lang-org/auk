@@ -652,11 +652,16 @@ pub fn lit(c: var check.Checker, e: ast.Expr, l: ast.Lit, negated: bool): types.
 }
 
 /// The runtime's dialect: an integer literal where a fixed-width integer is expected has that
-/// type (it must fit), a float literal where `f32` is expected is an `f32`.
+/// type (it must fit), a float literal where `f32` is expected is an `f32`, a string literal
+/// where a `raw.Ptr<u8>` is expected is a C string (a constant, NUL-terminated).
 pub fn raw_lit(c: var check.Checker, e: ast.Expr, l: ast.Lit, negated: bool, want: types.Ty?): types.Ty? {
   let w = want else return none
   let k = match c.shallow(w) {
     Fixed(k) => k
+    Ptr(p) => return match l {
+      Str(_) => if c.shallow(p) == types.Ty.Fixed(types.Fx.U8) { some(c.shallow(w)) } else { none }
+      _ => none
+    }
     _ => return none
   }
   match l {
