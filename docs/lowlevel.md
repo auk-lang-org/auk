@@ -263,7 +263,11 @@ them by hand from `raw struct`s and `raw.Fn`s; no compiler support. **Proven** (
 system trust store, then accepted by a verify block that pins the test certificate), send,
 receive, cancel, the TLS 1.2 fallback configure, and `dispatch_sync`/`dispatch_async` with each
 kind of block; clean under ASan + UBSan and `leaks --atExit` (0 leaks), and every copy the
-frameworks make is released (copy/dispose counts balance).
+frameworks make is released (copy/dispose counts balance). **In the runtime** (2026-11-19):
+`runtime/src/tls_os.macos.auk` (tls.c's port) builds every block this way. One difference from
+the recipe below: the literals carry no signature (no `BLOCK_HAS_SIGNATURE`, a null
+`signature`), since a C string literal isn't a compile-time constant in a global's initializer
+yet (E0421); nothing these blocks are given to reads it.
 
 **Layout** (64-bit; what Clang emits today, checked with `-emit-llvm`):
 ```auk

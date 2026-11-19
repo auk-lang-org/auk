@@ -216,7 +216,8 @@ fn ssl_err(prefix: raw.Ptr<abi.StrBuf>, s: raw.Ptr<()>, ret: i32, saved_errno: i
   let code = get_error()
   var buf = Buf256 {}
   let b: raw.Ptr<u8> = raw.cast(raw.addr_of(&buf))
-  raw.copy(b, "protocol error", 15)
+  let protocol_error: raw.Ptr<u8> = "protocol error"
+  raw.copy(b, protocol_error, 15)
   if code != 0 {
     let error_string = ssl.err_error_string_n
     error_string(code, b, raw.size_of<Buf256>())
