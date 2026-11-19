@@ -230,6 +230,65 @@ between `auk_chan_close` and `chan_recv` (Auk frames by name); the real modules 
 `SAN_AUK=1 TSAN=1` (conc) and `SAN_AUK=1 ASAN=1` (all 72). A compiler flag that sets the
 attribute itself would replace the `sed` (self-host-plan 7c, "ASan/UBSan equivalent").
 
+## Found porting `str.c` (2026-11-19)
+
+`str.c` (1556 lines) is `runtime/src/str.auk` (strings, UTF-8, the builder, the show budget,
+searching, parsing) and `runtime/src/str_fmt.auk` (numbers to text, the shortest float, quoting,
+format specs), line by line: every function under its C name, the same algorithms, output
+byte-identical (golden against the C build: 0 differ in every mode). Its two thread-locals are
+`raw thread var`s; `auk_trace_live` is an `extern var` read with `raw.atomic_load`. Small safe
+functions are `inline export fn` (`auk_str_len`, `auk_str_eq`, `auk_str_concat`, `auk__str_raw`,
+`auk__sb_put`, `auk_sb_str`, `auk_sb_int`, `auk_sb_finish`, `auk_str_from_int`, the `auk_char_*`,
+…). `auk_ops_str`'s element functions moved from `rc.c` to `str.auk` (`auk__str_elem_eq/cmp/
+hash/show`; the table stays in `rc.c`, as `auk_ops_value` in `value_ops.c`).
+
+More of what the dialect lacks (the pilot's list above still holds; 3, 4, 5 were hit again:
+`auk__panic_sb`'s callers say `raw.unreachable()`, `quote_char`'s `switch` is an `if` chain):
+
+9. **An `extern fn` of a symbol another module of the package exports is renamed:** value.auk's
+   `extern fn auk_str_lit(…) = "…"`, once str.auk defines `export fn auk_str_lit`, became a call
+   to an undefined `auk_str_lit.75`. So every `export fn` here is also `pub`, and other modules
+   call it through its module (`str.auk_str_lit(…)`, `str_fmt.auk_str_quote(…)`); value.auk does.
+   **Every module ported in parallel that declares one of str.c's functions as an `extern fn`
+   must do the same** (or the compiler must resolve such an `extern fn` to the definition).
+10. **An `extern var` may be declared by one module only:** a second declaration of
+   `auk_ops_str` became `auk_ops_str.1` (undefined), and `raw.addr_of(&other.var)` can't name
+   another module's `extern var` (E0102). str.auk declares `auk_ops_str`, `auk_ops_char`,
+   `auk_ops_int` and offers `str.ops_str()`; value.auk uses it.
+11. **No uninitialized locals, no array literals:** `var buf: [u8; 24]` needs a value and
+   `[0; 24]` doesn't parse, so C's `char buf[24]` is a raw struct `Bytes24 { b: [u8; 24] }`,
+   `var buf = Bytes24 {}` (zeroed: an extra `memset` C doesn't do; 24 bytes on the integer
+   paths, 2048 in `auk__panic_sb`).
+12. **`p.int()` is `int`, whose arithmetic is checked:** `at.int() - hay.int()` compiled to a call
+   to `auk_sub` (overflow panic) in raw code. Convert first: `i64(at.int()) - i64(hay.int())`.
+13. **Thread vars need no `uses raw`** (an `extern var` does): the four show-budget accessors
+   were flagged E0411 for declaring it.
+14. **Field loads through `raw.Ptr<abi.Str>` are `align 4`** in the IR (`load i64, … align 4`
+   for `len_bytes`), where the struct is 8-aligned: harmless on arm64, worth fixing in codegen.
+
+**Performance** (Apple M-series, the machine shared with other builds, load 30–80: so CPU
+cycles from `/usr/bin/time -l`, A/B interleaved, ≥9 runs each; an A/A control spread ±1.5% on
+medians): bench/perf `strings` −1%, `hashmap` 0%, `sort` 0%, `trees` 0%; a micro-benchmark of
+hot string ops: `concat` +2%, `interp` −5%, `slice` +1%, `chars` +3%/0%, `split` +1%, `find`
++1%, int to str and back 0%, float to str 0%, `upper`/`lower`/`trim` +2%/−3%, `auk check` of the
+compiler −1%. Two are slower, both at the C/Auk boundary, and both go when the C callee moves to
+Auk (one module: Auk calls Auk inline):
+- **`s += x` (`auk_str_append`) +6–13% cycles, +4% instructions:** in C's one translation unit
+  `auk__heap_usable` (heap.c) inlined into it as a `malloc_size` call; from Auk it is a call into
+  C that makes the call. Measured: with `malloc_size` called inline, +4–5%. Likewise
+  `auk__alloc` (rc.c) is now one call level more in every string allocation inside the runtime.
+- **A `str`-keyed map lookup** was +4–5% cycles while rc.c's `str_eq`/`str_hash` wrappers called
+  `auk_str_eq`/`auk_str_hash` across the boundary; with the wrappers in str.auk it is −4%
+  instructions, cycles within noise (minimums equal, medians +0–5% with the load).
+  `arr.c`'s string-sort fast path (`ops == &auk_ops_str`) still calls `auk_str_cmp` across it.
+
+`auk build` inlines more string functions than before (with the C bitcode `auk_str_len`,
+`auk_str_byte_len`, `auk_str_cstr` were folded aliases or not inlined; `auk_sb_str`,
+`auk_sb_finish`, `auk_str_eq` mostly calls): in the compiler, calls to `auk_sb_str` fell from
+2066 to 300, `auk_sb_finish` 1808 to 219, `auk_str_eq` 898 to 155, and its text grew from 4.20 to
+4.86 MB, with `auk check` 1% faster. Every program also links ~16 KB more: the Auk half is one
+object, so a program that uses any of it gets all of it.
+
 ## Per file
 
 Lines are of the C today. "Globals" counts file-scope variables (thread-locals and atomics
@@ -247,7 +306,7 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | ~~`heap.c`~~ | 298 | **done** (2026-11-19): `runtime/src/heap.auk` + `heap_os.<os>.auk` | the `#ifdef` is the per-OS `heap_os` module |
 | ~~`catch.c`~~ | 142 | **done** (2026-11-19): `runtime/src/catch.auk`; `sigsetjmp(jb, 0)`/`siglongjmp` are `raw.setjmp`/`raw.longjmp` (libc `_setjmp`/`_longjmp`) | the setjmp half of `auk__catch_run` is its own `optnone` function (`run_at`), the frame in the optimized caller's memory |
 | `compiler.c` | 169 | 2 globals (the imprint file, its mutex), `FILE *` (`fputc`/`fwrite`) | — |
-| `str.c` | 1556 | 2 thread-locals (show budget, debugger flag), atomics; `snprintf %.*e/%.*f` through `cwrap.c`; `strtod` | float formatting through libc is the 7b item "Ryu, Unicode tables → Auk" |
+| ~~`str.c`~~ | 1556 | **done** (2026-11-19): `runtime/src/str.auk`, `str_fmt.auk` (see "Found porting `str.c`") | float formatting still through `cwrap.c`'s `snprintf` and libc `strtod` (7b: "Ryu → Auk"); `auk_ops_str`'s table stays in `rc.c` |
 | `rc.c` | 792 | 4 globals (1 thread-local, 2 atomic), 1 function-local static, overflow builtins, `atexit` callback, `%g` through `cwrap.c` | — |
 | `testing.c` | 309 | 4 globals, `fork`/`waitpid` and the `W*` status macros, `flockfile`, `stdout`/`stderr` | — |
 | `task.c` | 467 | 6 globals (1 thread-local), atomics, `pthread_create` callback | — |
