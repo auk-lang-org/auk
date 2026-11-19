@@ -15,6 +15,8 @@ pub enum CTy {
   Ptr(to: CTy, konst: bool),
   /// A type name the FFI doesn't know (a typedef, or `struct X`).
   Named(name: str),
+  /// The runtime's dialect: a function pointer parameter `R (*)(P...)` (a `raw.Fn`).
+  FnPtr(ret: CTy, params: [CTy]),
 }
 
 /// A parsed C prototype.
@@ -50,6 +52,9 @@ pub enum Conv {
   Unit,
   List(elem: Elem, back: bool),
   Out(c: Conv),
+  /// The runtime's dialect: the value as it is (`raw.Ptr`, a fixed-width number, a raw struct
+  /// by value, a `raw.Fn`), in C's calling convention.
+  Raw(t: types.Ty),
 }
 
 /// Why a prototype, C type or Auk type doesn't work (Rust's `Err(String)`; `T!E` needs an
@@ -103,6 +108,7 @@ pub fn show(c: CTy): str = match c {
     if inner.ends_with("*") { "{k}{inner}*" } else { "{k}{inner} *" }
   }
   Named(n) => n
+  FnPtr(r, ps) => "{show(r)} (*)({ps.map(show).join(", ")})"
 }
 
 // ---- parsing ----
@@ -193,7 +199,8 @@ fn int_typedef(w: str): (int, bool)? = match w {
 /// (macOS, Linux x86_64).
 fn char_signed(): bool = true
 
-struct P { toks: [Tok], pos: int }
+/// `fnptr`: function-pointer parameters are allowed (the runtime's dialect).
+struct P { toks: [Tok], pos: int, fnptr: bool }
 
 fn peek(p: P): Tok? = p.toks.get(p.pos)
 
@@ -273,7 +280,38 @@ fn decl(p: var P, what: str, top: bool): (CTy, str?)!CErr {
     none => {}
   }
   if !top && p.peek() == some(Tok.LParen) {
-    return fail(Bad("function pointers (callbacks from C into Auk) aren't supported"))
+    if !p.fnptr { return fail(Bad("function pointers (callbacks from C into Auk) aren't supported")) }
+    // `R (*name)(P, ...)`: a C function pointer
+    p.pos += 1
+    if p.peek() != some(Tok.Star) { return fail(Bad("expected `(*` of a function pointer in {what}")) }
+    p.pos += 1
+    match p.word() {
+      some(w) => {
+        name = w
+        p.pos += 1
+      }
+      none => {}
+    }
+    if p.peek() != some(Tok.RParen) || p.toks.get(p.pos + 1) != some(Tok.LParen) {
+      return fail(Bad("expected `(*)(...)` of a function pointer in {what}"))
+    }
+    p.pos += 2
+    var ps: [CTy] = []
+    if p.peek() == some(Tok.RParen) || (p.word() == some("void") && p.toks.get(p.pos + 1) == some(Tok.RParen)) {
+      if p.peek() != some(Tok.RParen) { p.pos += 1 }
+    } else {
+      loop {
+        let (t, _) = decl(&p, what, false)?
+        ps.push(t)
+        match p.peek() {
+          some(Comma) => p.pos += 1
+          some(RParen) => break
+          _ => return fail(Bad("expected `,` or `)` in a function pointer in {what}"))
+        }
+      }
+    }
+    p.pos += 1
+    return (CTy.FnPtr(ty, ps), name)
   }
   while p.peek() == some(Tok.LBrack) {
     p.pos += 1
@@ -314,7 +352,7 @@ fn base_type(words: [str]): CTy? {
 /// Parse an `extern type`'s C spelling: a pointer type (`sqlite3 *`) or a typedef name for one
 /// (`LLVMModuleRef`).
 pub fn parse_type(s: str): CTy!CErr {
-  var p = P { toks: lex(s)?, pos: 0 }
+  var p = P { toks: lex(s)?, pos: 0, fnptr: false }
   let (t, name) = decl(&p, "the C type", false)?
   if name != none || p.pos < p.toks.len() { return fail(Bad("`{s}` is not a single C type")) }
   t
@@ -328,7 +366,10 @@ fn is_ident(f: str): bool {
 }
 
 /// Parse `"<C prototype>"`, with an optional ` +free(fn)` suffix.
-pub fn parse_proto(src: str): CSig!CErr {
+pub fn parse_proto(src: str): CSig!CErr = parse_proto_in(src, false)
+
+/// `parse_proto`, with function-pointer parameters when `fnptr` (the runtime's dialect).
+pub fn parse_proto_in(src: str, fnptr: bool): CSig!CErr {
   match src.trim().strip_prefix("#embed") {
     some(rest) => {
       let path = trim_quotes(rest.trim())
@@ -365,7 +406,7 @@ pub fn parse_proto(src: str): CSig!CErr {
   // `(T)`: a cast between opaque pointer types
   if toks.len() > 2 && toks[0] == Tok.LParen && toks[toks.len() - 1] == Tok.RParen {
     if free is some(_) { return fail(Bad("a cast `(T)` frees nothing: drop `+free`")) }
-    var cp = P { toks: toks[1..toks.len() - 1], pos: 0 }
+    var cp = P { toks: toks[1..toks.len() - 1], pos: 0, fnptr: false }
     let (cret, cname) = decl(&cp, "the cast", false)?
     if cname is some(_) || cp.pos < cp.toks.len() {
       return fail(Bad("a cast is a single C pointer type in parentheses, e.g. \"(LLVMValueRef)\" or \"(void *)\""))
@@ -376,7 +417,7 @@ pub fn parse_proto(src: str): CSig!CErr {
     }
     return CSig { name: "(cast)", ret: cret, params: [CTy.Ptr(CTy.Void, false)], free: none, indirect: false, cast: true, embed: none }
   }
-  var p = P { toks, pos: 0 }
+  var p = P { toks, pos: 0, fnptr }
   let (ret, name0) = decl(&p, "the result type", true)?
   // `T (*)(params)`: a call through the function pointer passed first
   let indirect = name0 == none && p.pos + 3 <= p.toks.len() && p.toks[p.pos] == Tok.LParen &&
@@ -431,6 +472,7 @@ fn ptr_fits(p: PtrKind, c: CTy): bool = match p {
 
 /// The help for a C type that no Auk type fits.
 fn hint(c: CTy): str = match c {
+  FnPtr(_, _) => "a C function pointer is a `raw.Fn` (the runtime's dialect only)"
   Named(n) => {
     var base = n
     while base.ends_with("Ref") { base = base[0..base.len() - 3] }
@@ -549,6 +591,33 @@ pub fn conv(t: types.Ty, var_: bool, c: CTy, ret: bool, free: bool, ptr_of: (typ
         NotPtr => fail(Bad("only `int`, `float`, `bool`, `str`, `str?`, lists of these, `ffi.Ptr`, `extern type`s, their optionals and `()` cross to C"))
       }
     }
+  }
+}
+
+/// The runtime's dialect (docs/lowlevel.md): a raw type `t` against C type `c`: a `raw.Ptr` is
+/// any `T *`, a fixed-width integer a C integer of its width, `f32` `float`, a `raw.Fn` a
+/// function pointer (or `void *`), a raw struct a C struct by value. `none` when `t` isn't a
+/// raw type (the ordinary rules apply).
+pub fn is_raw(t: types.Ty, raw_struct: bool): bool = match t {
+  Ptr(_) | Fixed(_) | CFn(_, _) => true
+  Named(_, _) => raw_struct
+  _ => false
+}
+
+pub fn raw_conv(t: types.Ty, raw_struct: bool, c: CTy): Conv!CErr {
+  let fits = match t {
+    Ptr(_) => is_ptr(c)
+    Fixed(k) => match c {
+      Int(bytes, _, _) => k != types.Fx.F32 && bytes * 8 == types.fx_bits(k)
+      F32 => k == types.Fx.F32
+      _ => false
+    }
+    CFn(_, _) => (c is CTy.FnPtr(_, _)) || is_ptr(c)
+    Named(_, _) => raw_struct && c is CTy.Named(_)
+    _ => false
+  }
+  if fits { Conv.Raw(t) } else {
+    fail(Bad("in the runtime's dialect `raw.Ptr` is any `T *`, a fixed-width integer a C integer of its width, `f32` `float`, `raw.Fn` a function pointer, a raw struct a `struct` by value"))
   }
 }
 

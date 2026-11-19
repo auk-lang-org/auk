@@ -734,6 +734,12 @@ fn ffi_allowed(c: var Checker, m: int, at: diag.Span): bool {
   false
 }
 
+/// Is `t` a raw struct (passed to C by value)?
+fn raw_struct(defs: types.Defs, t: types.Ty): bool = match t {
+  Named(d, _) => types.is_raw_def(defs, d)
+  _ => false
+}
+
 /// The span of the string literal that ends an item spanning `end` (its C prototype or C type).
 fn ffi_str_span(c: Checker, m: int, end: diag.Span): diag.Span {
   let ls = c.src_lines[m]
@@ -923,7 +929,7 @@ fn ffi_fn(c: var Checker, m: int, cl: ast.FnClause, proto: str, params: [typed.P
     )
     return none
   }
-  let sig = match cffi.parse_proto(proto) {
+  let sig = match cffi.parse_proto_in(proto, c.prog.raw_ok(m)) {
     ok(s) => s
     err(Bad(e)) => {
       c.err_in(
@@ -960,7 +966,13 @@ fn ffi_fn(c: var Checker, m: int, cl: ast.FnClause, proto: str, params: [typed.P
   for k, p in params {
     let ct = sig.params[k]
     if p.ty.has_error() { return none }
-    let cv = if sig.cast { cast_conv(defs, prog, p) } else { cffi.conv(p.ty, p.var_, ct, false, free, t => ptr_kind(defs, prog, t)) }
+    let cv = if cffi.is_raw(p.ty, raw_struct(defs, p.ty)) && !p.var_ && !sig.cast {
+      cffi.raw_conv(p.ty, raw_struct(defs, p.ty), ct)
+    } else if sig.cast {
+      cast_conv(defs, prog, p)
+    } else {
+      cffi.conv(p.ty, p.var_, ct, false, free, t => ptr_kind(defs, prog, t))
+    }
     match cv {
       ok(cv) => convs.push(cv)
       err(Bad(why)) => {
@@ -980,7 +992,12 @@ fn ffi_fn(c: var Checker, m: int, cl: ast.FnClause, proto: str, params: [typed.P
     }
   }
   if ret.has_error() { return none }
-  match cffi.conv(ret, false, sig.ret, true, free, t => ptr_kind(defs, prog, t)) {
+  let rconv = if cffi.is_raw(ret, raw_struct(defs, ret)) {
+    cffi.raw_conv(ret, raw_struct(defs, ret), sig.ret)
+  } else {
+    cffi.conv(ret, false, sig.ret, true, free, t => ptr_kind(defs, prog, t))
+  }
+  match rconv {
     ok(cv) => convs.push(cv)
     err(Bad(why)) => {
       let span = match cl.ret {

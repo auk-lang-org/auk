@@ -46,6 +46,7 @@ fn c_mty(c: cffi.Conv): mir.MTy = match c {
   Str(_) | OptStr(_) => mir.MTy.CStr
   Unit => mir.MTy.Void
   Ptr | OptPtr | List(_, _) | Out(_) => mir.void_ptr()
+  Raw(t) => d(t)
 }
 
 /// Call the user C function `f`.
@@ -185,6 +186,7 @@ fn ffi_in(lw: var mir.lower.Lower, v: mir.lower.Val, conv: cffi.Conv): mir.Ex {
       mir.cond(lw.fld(o, mir.Sel.F(0)), s, mir.zero(mir.MTy.CStr))
     }
     Ptr => x.cast(mir.void_ptr())
+    Raw(_) => x
     OptPtr => {
       let o = lw.lvalue(v, ty)
       mir.cond(lw.fld(o, mir.Sel.F(0)), lw.fld(o, mir.Sel.F(1)).cast(mir.void_ptr()), mir.zero(mir.void_ptr()))
@@ -206,6 +208,7 @@ fn nonnull(r: mir.Ex): mir.Ex = mir.bin(mir.BOp.Ne, r.cast(mir.void_ptr()), mir.
 fn ffi_out_ex(lw: var mir.lower.Lower, r: mir.Ex, conv: cffi.Conv, ty: types.Ty, name: str, free: str?, lc: mir.Ex): mir.Ex {
   let e = match conv {
     Int(_, _) | Bool | Float(_) | Ptr => return r.cast(d(ty))
+    Raw(_) => return r
     OptPtr => {
       let inner = match ty {
         Opt(i) => i

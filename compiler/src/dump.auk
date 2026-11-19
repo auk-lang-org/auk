@@ -1126,6 +1126,7 @@ fn conv_text(cv: cffi.Conv): str = match cv {
   Unit => "unit"
   List(elem, back) => "list {elem_name(elem)}" + flag(back, " back")
   Out(x) => "out(" + conv_text(x) + ")"
+  Raw(_) => "raw"
 }
 
 fn elem_name(e: cffi.Elem): str = match e {
