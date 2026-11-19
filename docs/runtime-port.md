@@ -262,7 +262,7 @@ More of what the dialect lacks (the pilot's list above still holds; 3, 4, 5 were
    to `auk_sub` (overflow panic) in raw code. Convert first: `i64(at.int()) - i64(hay.int())`.
 13. **Thread vars need no `uses raw`** (an `extern var` does): the four show-budget accessors
    were flagged E0411 for declaring it.
-14. **Field loads through `raw.Ptr<abi.Str>` are `align 4`** in the IR (`load i64, … align 4`
+14. **Fixed** (2026-11-19, lowlevel.md 7a "Alignment"): **Field loads through `raw.Ptr<abi.Str>` are `align 4`** in the IR (`load i64, … align 4`
    for `len_bytes`), where the struct is 8-aligned: harmless on arm64, worth fixing in codegen.
 
 **Performance** (Apple M-series, the machine shared with other builds, load 30–80: so CPU

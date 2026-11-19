@@ -709,6 +709,44 @@ pub fn load_ty(g: Gen, t: llvm.Type, at: llvm.Value): llvm.Value uses ffi =
 
 pub fn temp(g: var Gen, t: mir.MTy): llvm.Value uses ffi = alloca(&g, t)
 
+/// The alignment of a scalar place reached through a pointer to a raw type (the runtime's
+/// dialect: `p.f`, `p.load()`, `p.at(i)`): the field's natural alignment within its struct's,
+/// as C's. The module has no data layout while it is built, so a load or store left alone gets
+/// LLVM's default (4 for an `i64`). Other places keep the default.
+fn raw_align(g: var Gen, e: mir.Ex): int? {
+  if scalar(g, e.ty) == none { return none }
+  let (base, off) = raw_base(&g, e)?
+  // the largest power of two dividing the offset, within the base's alignment
+  var a = base
+  while a > 1 && off % a != 0 { a = a / 2 }
+  min(a, lay(&g, e.ty).align)
+}
+
+/// The alignment of the raw object a place starts in, and the place's offset in it.
+fn raw_base(g: var Gen, e: mir.Ex): (int, int)? = match e.k {
+  Deref(_) => if is_raw_mty(g, e.ty) { (lay(&g, e.ty).align, 0) } else { none }
+  Field(b, s) => {
+    let (al, off) = raw_base(&g, b)?
+    (al, off + offset(&g, b.ty, s))
+  }
+  _ => none
+}
+
+fn is_raw_mty(g: Gen, t: mir.MTy): bool = match t {
+  D(Named(d, _)) => types.is_raw_def(g.lay.info.defs, d)
+  D(Fixed(_)) | D(Ptr(_)) | D(CFn(_, _)) => true
+  _ => false
+}
+
+/// A value loaded from place `e`, its load given `raw_align`.
+fn aligned(g: var Gen, v: V, e: mir.Ex): V uses ffi {
+  match (v, raw_align(&g, e)) {
+    (S(l), some(al)) => llvm.values.set_alignment(l, al)
+    _ => {}
+  }
+  v
+}
+
 /// The aggregate `e` (an `Agg` or a `Zero`) built at `a`: zeroed, then the members given.
 fn agg_into(g: var Gen, a: llvm.Value, e: mir.Ex) uses ffi {
   zero_mem(&g, a, e.ty)
@@ -860,7 +898,14 @@ fn stmt(g: var Gen, s: mir.Stmt): ()! uses ffi {
     Set(p, e) => {
       let x = ex(&g, e)
       let a = place(&g, p)
-      store_at(&g, a, p.ty, x, e.ty)
+      match (scalar(g, p.ty), raw_align(&g, p)) {
+        (some(s), some(al)) => {
+          let v = scalar_of(&g, x, e.ty, p.ty, s)
+          let st = llvm.builder.build_store(g.b, v, a)
+          llvm.values.set_alignment(st, al)
+        }
+        _ => store_at(&g, a, p.ty, x, e.ty)
+      }
     }
     Do(e) => {
       let _ = ex(&g, e)
@@ -1197,13 +1242,17 @@ fn cstr_addr(g: var Gen, s: [int]): llvm.Value uses ffi {
 
 pub fn ex(g: var Gen, e: mir.Ex): V uses ffi = match e.k {
   Var(v) => load(g, g.vars[v], e.ty)
-  Global(_) | Deref(_) | Elem(_, _) | RtField(_, _) => {
+  Global(_) | Elem(_, _) | RtField(_, _) => {
     let a = place(&g, e)
     load(g, a, e.ty)
   }
+  Deref(_) => {
+    let a = place(&g, e)
+    aligned(&g, load(g, a, e.ty), e)
+  }
   Field(b, s) => if mir.is_place(e) {
     let a = place(&g, e)
-    load(g, a, e.ty)
+    aligned(&g, load(g, a, e.ty), e)
   } else {
     // a member of an aggregate value
     let base = mem_of(&g, b)

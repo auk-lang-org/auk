@@ -248,6 +248,10 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   local named like the module would be taken for it. `raw.add_overflow/sub_overflow/mul_overflow(a, b): (T, bool)`
   (`llvm.{s,u}{add,sub,mul}.with.overflow` by `T`'s signedness), `raw.ctz`/`raw.clz` (the width
   for 0), `raw.popcount`, `raw.bswap` (16 bits and wider) take `int` or a fixed-width integer.
+- **Alignment:** a load or store through a `raw.Ptr` to a raw type (`p.f`, `p.f.g`,
+  `p.load()`, `p.at(i)`) carries the field's natural alignment within its struct's alignment
+  (the pointer is taken to be aligned for its type, as C does): `load i64 … align 8` for
+  `s.len_bytes`. Other loads keep LLVM's default.
 - **No TBAA:** codegen attaches no alias metadata (none anywhere), so `raw.cast`
   reinterpretation and reading a union through another field are well-defined.
 

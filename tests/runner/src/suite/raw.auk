@@ -37,6 +37,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("noinline_export_fns", noinline_export_fns),
   t.test("no_cancellation_points_in_the_runtime", no_cancellation_points_in_the_runtime),
   t.test("ptr_int_is_i64", ptr_int_is_i64),
+  t.test("raw_field_accesses_are_aligned", raw_field_accesses_are_aligned),
 ]
 
 let TOML = "[package]\nname = \"auk_rt\"\nversion = \"0.1.0\"\neffects = [\"raw\", \"ffi\"]\n"
@@ -471,4 +472,28 @@ fn ptr_int_is_i64() uses env, fs, ffi, time {
     }
     """)
   let _ = passes(main)
+}
+
+/// Loads and stores through a `raw.Ptr` to a raw struct have the field's natural alignment
+/// within the struct's (not LLVM's default 4 for an `i64`).
+fn raw_field_accesses_are_aligned() uses env, fs, ffi, time {
+  let dis = llvm_dis() else return t.skip("llvm-dis not found")
+  let main = project("align", r"""
+    raw struct Header { rc: i64, kind: u32, flags: u32 }
+    raw struct Str { h: Header, len_bytes: i64, len_chars: i64, is_ascii: bool, data: [u8; ..] }
+    raw struct Packed4 { a: u32, b: u32, c: u32 }
+    export fn auk_len(s: raw.Ptr<Str>): i64 uses raw = s.len_bytes
+    export fn auk_set(s: raw.Ptr<Str>, n: i64) uses raw {
+      s.len_chars = n
+    }
+    export fn auk_c(p: raw.Ptr<Packed4>): u32 uses raw = p.c
+    """)
+  let bc = paths.join(dir_of(main), "a.bc")
+  let b = auk(["build", "--lib", "--bc", main, "-o", bc])
+  t.check(b.success(), b.stderr)
+  let ll = cmd.new(dis).args([bc, "-o", "-"]).output().stdout
+  let body = (name: str) => ll.split("@{name}(")[1].split("\n}}\n")[0]
+  t.has(body("auk_len"), "load i64, ptr %1, align 8")
+  t.has(body("auk_set"), "store i64 %1, ptr %2, align 8")
+  t.has(body("auk_c"), "load i32, ptr %1, align 4")
 }
