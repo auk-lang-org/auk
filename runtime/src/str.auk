@@ -310,7 +310,7 @@ pub export fn auk__err_sb(b: raw.Ptr<abi.StrBuf>): raw.Ptr<abi.Err> uses raw, ff
 
 /// A string from n bytes at p whose metadata is already known.
 pub inline export fn auk__str_raw(p: raw.Ptr<u8>, n: i64, chars: i64, ascii: bool): raw.Ptr<abi.Str> uses raw, ffi {
-  let s: raw.Ptr<abi.Str> = raw.cast(rc.auk__alloc(raw.size_of<abi.Str>() + usize(n) + 1, abi.K_STR))
+  let s: raw.Ptr<abi.Str> = raw.cast(rc.auk__alloc_nz(raw.size_of<abi.Str>() + usize(n) + 1, abi.K_STR))
   if n > 0 { raw.copy(s.data, p, n) }
   s.data.at(n) = 0
   s.len_bytes = n
@@ -407,23 +407,77 @@ export fn auk_str_from_utf8(bytes: raw.Ptr<abi.Arr>): abi.ResStr uses raw, ffi {
 
 // ---- indexing -------------------------------------------------------------------------------
 
+// Where the last char index looked up in a non-ASCII string was: indexing such a string has
+// to count chars, and a loop `s[i]`, `s[i..j]` over one resumes from here instead of from the
+// start (linear, not quadratic). Per thread: nothing crosses a task by reference (heap.auk),
+// and the string can't change under it: strings are immutable but for auk_str_append on a
+// unique one, which only adds to the end and forgets the cursor when it moves the string;
+// auk__str_free and the heap sweep forget it too, so a new string at the same address can't
+// match it.
+raw struct Cursor {
+  s: raw.Ptr<abi.Str>,
+  c: i64,
+  b: i64,
+}
+
+raw thread var cursor: Cursor = Cursor {}
+
+/// Forget the cursor if it is in s (s is going away or moving).
+pub fn forget_cursor(s: raw.Ptr<abi.Str>) uses raw {
+  let cur = raw.addr_of(&cursor)
+  if cur.s == s { cur.s = raw.null() }
+}
+
+/// Forget the cursor whatever string it is in (the heap sweep).
+pub export fn auk__str_cursor_reset() uses raw {
+  let cur = raw.addr_of(&cursor)
+  cur.s = raw.null()
+}
+
 pub export fn auk__str_byte_offset(s: raw.Ptr<abi.Str>, i: i64): i64 uses raw {
   if s.is_null() { return 0 }
   if s.is_ascii { return i }
   if i >= s.len_chars { return s.len_bytes }
   let p = s.data
   let n = s.len_bytes
+  let cur = raw.addr_of(&cursor)
   var b: i64 = 0
   var c: i64 = 0
+  if cur.s == s {
+    if cur.c <= i {
+      b = cur.b
+      c = cur.c
+    } else if cur.c - i < i {
+      // nearer the cursor than the start: count back
+      b = cur.b
+      c = cur.c
+      while c > i {
+        b -= 1
+        while (p.at(b) & 0xC0) == 0x80 { b -= 1 }
+        c -= 1
+      }
+    }
+  }
   while c < i {
     b += 1
     while b < n && (p.at(b) & 0xC0) == 0x80 { b += 1 }
     c += 1
   }
+  cur.s = s
+  cur.c = i
+  cur.b = b
   b
 }
 
-pub export fn auk_str_char_at(s: raw.Ptr<abi.Str>, i: i64, loc: raw.Ptr<u8>): u32 uses raw, ffi {
+/// s[i]: inlined into programs for the common case (an ASCII string, i in range), so that an
+/// index loop over text is a byte load, not a call per char.
+pub inline export fn auk_str_char_at(s: raw.Ptr<abi.Str>, i: i64, loc: raw.Ptr<u8>): u32 uses raw, ffi {
+  if !s.is_null() && s.is_ascii && u64(i) < u64(s.len_bytes) { return u32(s.data.at(i)) }
+  auk__str_char_at_slow(s, i, loc)
+}
+
+/// The rest of auk_str_char_at: out of range (a panic), or a string with non-ASCII text.
+pub noinline export fn auk__str_char_at_slow(s: raw.Ptr<abi.Str>, i: i64, loc: raw.Ptr<u8>): u32 uses raw, ffi {
   let n = auk_str_len(s)
   if i < 0 || i >= n {
     var b = abi.StrBuf {}
@@ -460,15 +514,32 @@ pub export fn auk_str_slice(s: raw.Ptr<abi.Str>, a: i64, b: i64, loc: raw.Ptr<u8
     raw.unreachable()
   }
   if a == 0 && b == n && !s.is_null() { return raw.cast(rc.retain(raw.cast(s))) }
+  if is_ascii(s) { return auk__str_raw(sdata(s).offset(a), b - a, b - a, true) }
+  // one scan: the end is found from the start, not from byte 0 again
   let ba = auk__str_byte_offset(s, a)
-  let bb = auk__str_byte_offset(s, b)
-  auk__str_raw(sdata(s).offset(ba), bb - ba, b - a, is_ascii(s))
+  let p = s.data
+  let nb = s.len_bytes
+  var bb = ba
+  var c = a
+  while c < b {
+    bb += 1
+    while bb < nb && (p.at(bb) & 0xC0) == 0x80 { bb += 1 }
+    c += 1
+  }
+  if b < s.len_chars {
+    // the next slice usually starts where this one ends
+    let cur = raw.addr_of(&cursor)
+    cur.s = s
+    cur.c = b
+    cur.b = bb
+  }
+  auk__str_raw(p.offset(ba), bb - ba, b - a, false)
 }
 
 pub inline export fn auk_str_concat(a: raw.Ptr<abi.Str>, b: raw.Ptr<abi.Str>): raw.Ptr<abi.Str> uses raw, ffi {
   let na = slen(a)
   let nb = slen(b)
-  let s: raw.Ptr<abi.Str> = raw.cast(rc.auk__alloc(raw.size_of<abi.Str>() + usize(na + nb) + 1, abi.K_STR))
+  let s: raw.Ptr<abi.Str> = raw.cast(rc.auk__alloc_nz(raw.size_of<abi.Str>() + usize(na + nb) + 1, abi.K_STR))
   raw.copy(s.data, sdata(a), na)
   raw.copy(s.data.offset(na), sdata(b), nb)
   s.data.at(na + nb) = 0
@@ -477,6 +548,10 @@ pub inline export fn auk_str_concat(a: raw.Ptr<abi.Str>, b: raw.Ptr<abi.Str>): r
   s.is_ascii = is_ascii(a) && is_ascii(b)
   s
 }
+
+/// Header flags bits 16 to 21: log2 of the capacity (bytes from the header on) of a string that
+/// auk_str_append grew; 0 when unknown.
+raw let CAP_SHIFT: u32 = 16
 
 pub export fn auk_str_append(ps: raw.Ptr<raw.Ptr<abi.Str>>, b0: raw.Ptr<abi.Str>) uses raw, ffi {
   var a = ps.load()
@@ -493,10 +568,17 @@ pub export fn auk_str_append(ps: raw.Ptr<raw.Ptr<abi.Str>>, b0: raw.Ptr<abi.Str>
   let chars = auk_str_len(b)
   let ascii = is_ascii(b)
   let need = raw.size_of<abi.Str>() + usize(na + nb) + 1
-  if auk__heap_usable(raw.field_addr(a, .h)) < need {
-    let want = raw.size_of<abi.Str>() + usize(na + nb) * 2 + 1
+  // a string grown here before remembers its capacity (a power of two, its exponent in the
+  // header's flags), so that a run of appends doesn't ask the allocator for it each time
+  let e = (a.h.flags >> CAP_SHIFT) & 63
+  let have = if e != 0 { usize(1) << usize(e) } else { auk__heap_usable(raw.field_addr(a, .h)) }
+  if have < need {
+    var ne: u32 = 6
+    while (usize(1) << usize(ne)) < need { ne += 1 }
     let self = a == b
-    a = raw.cast(auk__heap_resize(raw.field_addr(a, .h), want))
+    if !a.is_ascii { forget_cursor(a) }
+    a = raw.cast(auk__heap_resize(raw.field_addr(a, .h), usize(1) << usize(ne)))
+    a.h.flags = (a.h.flags & ~(u32(63) << CAP_SHIFT)) | (ne << CAP_SHIFT)
     if self { b = a }
   }
   raw.move(a.data.offset(na), b.data, nb)  // b isn't null: nb > 0
@@ -544,7 +626,10 @@ pub inline export fn auk_str_cmp(a: raw.Ptr<abi.Str>, b: raw.Ptr<abi.Str>): i32 
 
 pub inline export fn auk_str_hash(s: raw.Ptr<abi.Str>): u64 uses raw, ffi = auk_hash_bytes(sdata(s), usize(slen(s)))
 
-pub export fn auk__str_free(s: raw.Ptr<abi.Str>) uses raw, ffi = rc.auk__free_obj(raw.cast(s))
+pub export fn auk__str_free(s: raw.Ptr<abi.Str>) uses raw, ffi {
+  if !s.is_ascii { forget_cursor(s) }
+  rc.auk__free_obj(raw.cast(s))
+}
 
 // the element ops of `str`: here, so that the string functions inline into them
 
@@ -576,11 +661,21 @@ export var auk_ops_str: abi.ElemOps = abi.ElemOps {
 fn find_bytes(hay: raw.Ptr<u8>, hn: i64, needle: raw.Ptr<u8>, nn: i64, from: i64): i64 uses raw, ffi {
   if nn == 0 { return if from <= hn { from } else { -1 } }
   var i = from
-  while i + nn <= hn {
-    let at = c_memchr(hay.offset(i), i32(needle.at(0)), usize(hn - nn + 1 - i))
-    if at.is_null() { return -1 }
-    i = i64(at.int()) - i64(hay.int())
-    if raw.compare(hay.offset(i), needle, nn) == 0 { return i }
+  let c0 = needle.at(0)
+  let last = hn - nn  // the last offset a match can start at
+  while i <= last {
+    // a few bytes inline first: when the first byte is common, a memchr call per candidate
+    // costs more than the bytes it skips
+    let stop = if i + 16 <= last { i + 16 } else { last + 1 }
+    while i < stop && hay.at(i) != c0 { i += 1 }
+    if i > last { return -1 }
+    if hay.at(i) != c0 {
+      let at = c_memchr(hay.offset(i), i32(c0), usize(last + 1 - i))
+      if at.is_null() { return -1 }
+      i = i64(at.int()) - i64(hay.int())
+    }
+    // the last byte first: a needle whose first byte is common mostly fails here, inline
+    if hay.at(i + nn - 1) == needle.at(nn - 1) && raw.compare(hay.offset(i), needle, nn) == 0 { return i }
     i += 1
   }
   -1
@@ -709,6 +804,18 @@ pub inline export fn auk_str_ends_with(s: raw.Ptr<abi.Str>, suf: raw.Ptr<abi.Str
 pub export fn auk_str_contains(s: raw.Ptr<abi.Str>, sub: raw.Ptr<abi.Str>): bool uses raw, ffi =
   find_bytes(sdata(s), slen(s), sdata(sub), slen(sub), 0) >= 0
 
+/// Does s contain the char c? Without building a string for c.
+pub export fn auk_str_contains_char(s: raw.Ptr<abi.Str>, c: u32): bool uses raw, ffi {
+  let n = slen(s)
+  if n == 0 { return false }
+  if c < 0x80 { return !c_memchr(s.data, i32(c), usize(n)).is_null() }
+  if s.is_ascii { return false }
+  var buf: u64 = 0
+  let b: raw.Ptr<u8> = raw.cast(raw.addr_of(&buf))
+  let bn = i64(utf8_encode(c, b))
+  find_bytes(s.data, n, b, bn, 0) >= 0
+}
+
 pub export fn auk_str_find(s: raw.Ptr<abi.Str>, sub: raw.Ptr<abi.Str>): abi.OptInt uses raw, ffi {
   let p = sdata(s)
   let at = find_bytes(p, slen(s), sdata(sub), slen(sub), 0)
@@ -722,11 +829,14 @@ pub export fn auk_str_replace(s: raw.Ptr<abi.Str>, from: raw.Ptr<abi.Str>, to: r
   let p = sdata(s)
   let n = slen(s)
   if fn_ == 0 { return if s.is_null() { auk_str_lit("") } else { raw.cast(rc.retain(raw.cast(s))) } }
+  var first = find_bytes(p, n, f, fn_, 0)
+  if first < 0 { return if s.is_null() { auk_str_lit("") } else { raw.cast(rc.retain(raw.cast(s))) } }
   var b = abi.StrBuf {}
   let bp = raw.addr_of(&b)
   var st: i64 = 0
   loop {
-    let at = find_bytes(p, n, f, fn_, st)
+    let at = if first >= 0 { first } else { find_bytes(p, n, f, fn_, st) }
+    first = -1
     if at < 0 { break }
     auk_sb_bytes(bp, p.offset(st), at - st)
     auk_sb_str(bp, to)
@@ -770,7 +880,7 @@ pub export fn auk_str_repeat(s: raw.Ptr<abi.Str>, n: i64, loc: raw.Ptr<u8>): raw
     rc.auk_panic_overflow(loc, "repeat")
     raw.unreachable()
   }
-  let r: raw.Ptr<abi.Str> = raw.cast(rc.auk__alloc(raw.size_of<abi.Str>() + usize(total) + 1, abi.K_STR))
+  let r: raw.Ptr<abi.Str> = raw.cast(rc.auk__alloc_nz(raw.size_of<abi.Str>() + usize(total) + 1, abi.K_STR))
   if bl > 0 {
     let src = sdata(s)
     var i: i64 = 0
@@ -854,7 +964,7 @@ fn str_of_chars(cs: raw.Ptr<u32>, n: i64): raw.Ptr<abi.Str> uses raw, ffi {
       i += 1
     }
   }
-  let s: raw.Ptr<abi.Str> = raw.cast(rc.auk__alloc(raw.size_of<abi.Str>() + usize(bytes) + 1, abi.K_STR))
+  let s: raw.Ptr<abi.Str> = raw.cast(rc.auk__alloc_nz(raw.size_of<abi.Str>() + usize(bytes) + 1, abi.K_STR))
   var d = s.data
   if ascii {
     i = 0

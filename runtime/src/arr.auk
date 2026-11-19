@@ -20,6 +20,18 @@ extern fn auk_sb_finish(b: raw.Ptr<abi.StrBuf>): raw.Ptr<abi.Str> = "void *auk_s
 /// Address of element i.
 fn elem(a: raw.Ptr<abi.Arr>, i: i64): raw.Ptr<u8> uses raw = a.data.offset(i * i64(a.ops.size))
 
+/// Copy one element of sz bytes: 8 and 16, the common sizes, as constant-size copies (inline
+/// loads and stores, no memmove call; alignment is not assumed).
+fn copy_elem(dst: raw.Ptr<u8>, src: raw.Ptr<u8>, sz: usize) uses raw {
+  if sz == 8 {
+    raw.copy(dst, src, 8)
+  } else if sz == 16 {
+    raw.copy(dst, src, 16)
+  } else {
+    raw.copy(dst, src, sz)
+  }
+}
+
 fn retain_elem(ops: raw.Ptr<abi.ElemOps>, e: raw.Ptr<u8>) uses raw {
   let f = ops.retain
   if !f.is_null() { f(raw.cast(e)) }
@@ -117,6 +129,9 @@ inline export fn auk_arr_get_opt(a: raw.Ptr<abi.Arr>, i: i64, out: raw.Ptr<()>):
   if i < 0 || i >= auk_arr_len(a) {
     return false
   }
+  // a memmove call, not copy_elem: inlined into push loops, the faster copy made them stall
+  // (without alias information, a list's header fields are reloaded after every element
+  // store, and those loads stalled once nothing spaced them out)
   raw.copy(out, elem(a, i), a.ops.size)
   retain_elem(a.ops, raw.cast(out))
   true
@@ -195,7 +210,23 @@ raw struct Scratch {
   w: [u64; 4],
 }
 
-pub export fn auk_arr_push(pa: raw.Ptr<raw.Ptr<abi.Arr>>, e: raw.Ptr<()>) uses raw, ffi {
+/// `noinline`: generated code already inlines its own fast path for scalar elements and calls
+/// this when that fails; inlined here too, it added a second copy and spills to push loops.
+pub noinline export fn auk_arr_push(pa: raw.Ptr<raw.Ptr<abi.Arr>>, e: raw.Ptr<()>) uses raw, ffi {
+  let a = pa.load()
+  // unique with room: no copy-on-write and no realloc, so e (even an element of a) stays put
+  if raw.likely(!a.is_null() && a.len < a.cap && a.base.is_null() && refcount(a) == 1) {
+    let dst = elem(a, a.len)
+    copy_elem(dst, raw.cast(e), a.ops.size)
+    retain_elem(a.ops, dst)
+    a.len += 1
+    return
+  }
+  auk__arr_push_slow(pa, e)
+}
+
+/// auk_arr_push when the list must grow or be copied first.
+noinline export fn auk__arr_push_slow(pa: raw.Ptr<raw.Ptr<abi.Arr>>, e: raw.Ptr<()>) uses raw, ffi {
   let sz = pa.load().ops.size
   if sz <= raw.size_of<Scratch>() {
     var b: Scratch
@@ -212,11 +243,11 @@ fn push_via(pa: raw.Ptr<raw.Ptr<abi.Arr>>, e: raw.Ptr<()>, t: raw.Ptr<u8>) uses 
   let a0 = pa.load()
   let sz = a0.ops.size
   // e may point into *pa itself: copy before a possible realloc or copy-on-write
-  raw.copy(t, e, sz)
+  copy_elem(t, raw.cast(e), sz)
   retain_elem(a0.ops, t)
   ensure_unique_cap(pa, a0.len + 1)
   let a = pa.load()
-  raw.copy(elem(a, a.len), t, sz)
+  copy_elem(elem(a, a.len), t, sz)
   a.len += 1
 }
 
@@ -706,13 +737,28 @@ export fn auk_arr_sorted(a: raw.Ptr<abi.Arr>): raw.Ptr<abi.Arr> uses raw, ffi {
 // ---- queries -------------------------------------------------------------------------------
 
 export fn auk_arr_index_of(a: raw.Ptr<abi.Arr>, e: raw.Ptr<()>): abi.OptInt uses raw, ffi {
+  let n = auk_arr_len(a)
+  if n == 0 {
+    return abi.OptInt {}
+  }
   var i: i64 = 0
-  while i < auk_arr_len(a) {
-    let eq = a.ops.eq
-    if eq.is_null() {
-      rc.auk__panic_rt("contains: element type has no eq")
-      raw.unreachable()
+  if a.ops.int() == rc.ops_int().int() {
+    let d: raw.Ptr<i64> = raw.cast(a.data)
+    let x = raw.cast<i64>(e).load()
+    while i < n {
+      if d.at(i) == x {
+        return abi.OptInt { some: true, val: i }
+      }
+      i += 1
     }
+    return abi.OptInt {}
+  }
+  let eq = a.ops.eq
+  if eq.is_null() {
+    rc.auk__panic_rt("contains: element type has no eq")
+    raw.unreachable()
+  }
+  while i < n {
     if eq(raw.cast(elem(a, i)), e) {
       return abi.OptInt { some: true, val: i }
     }
@@ -731,13 +777,21 @@ pub export fn auk_arr_eq(a: raw.Ptr<abi.Arr>, b: raw.Ptr<abi.Arr>): bool uses ra
   if n != auk_arr_len(b) {
     return false
   }
+  if n == 0 {
+    return true
+  }
+  let o = a.ops.int()
+  if o == rc.ops_int().int() || o == rc.ops_char().int() {
+    // plain values with no padding: equal elements are equal bytes
+    return raw.compare(a.data, b.data, usize(n) * a.ops.size) == 0
+  }
+  let eq = a.ops.eq
+  if eq.is_null() {
+    rc.auk__panic_rt("element type has no eq")
+    raw.unreachable()
+  }
   var i: i64 = 0
   while i < n {
-    let eq = a.ops.eq
-    if eq.is_null() {
-      rc.auk__panic_rt("element type has no eq")
-      raw.unreachable()
-    }
     if !eq(raw.cast(elem(a, i)), raw.cast(elem(b, i))) {
       return false
     }

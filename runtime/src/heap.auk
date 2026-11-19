@@ -20,6 +20,7 @@
 
 // the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
 // pthreads
+extern fn auk__str_cursor_reset() = "void auk__str_cursor_reset(void)"
 extern fn pthread_mutex_init(m: raw.Ptr<cfacts.PthreadMutex>, attr: raw.Ptr<()>): i32 =
   "int pthread_mutex_init(void *, const void *)"
 extern fn pthread_mutex_destroy(m: raw.Ptr<cfacts.PthreadMutex>): i32 = "int pthread_mutex_destroy(void *)"
@@ -167,14 +168,14 @@ fn block_free(base: raw.Ptr<()>, c: i64) uses raw {
   }
 }
 
-/// Zeroed memory for an object of total bytes; sets *class to its class.
-fn block_alloc(total: usize, class: raw.Ptr<i64>): raw.Ptr<()> uses raw, ffi {
+/// Memory for an object of total bytes (zeroed when zero); sets *class to its class.
+fn block_alloc(total: usize, class: raw.Ptr<i64>, zero: bool): raw.Ptr<()> uses raw, ffi {
   let c = class_for(total)
   class.store(c)
   if c == 0 {
-    return rc.auk__xcalloc(1, total)
+    return if zero { rc.auk__xcalloc(1, total) } else { rc.auk__xmalloc(total) }
   }
-  raw.cast(pool_alloc(c))
+  raw.cast(if zero { pool_alloc(c) } else { pool_take(c) })
 }
 
 // ---- buffers: memory whose size its owner keeps (a list's elements, a map's tables) ----------
@@ -358,12 +359,18 @@ export fn auk_heap_new(): raw.Ptr<()> uses raw, ffi = raw.cast(auk__heap_new())
 
 /// Allocate size zeroed bytes for an object of kind in the current heap (untracked when there
 /// is none, or for a handle kind). Returns the header's address.
-pub export fn auk__heap_alloc(size: usize, kind: u32): raw.Ptr<abi.Header> uses raw, ffi {
+pub export fn auk__heap_alloc(size: usize, kind: u32): raw.Ptr<abi.Header> uses raw, ffi = alloc_in(size, kind, true)
+
+/// auk__heap_alloc without zeroing: only the header (but its rc) and the Link are set; the
+/// caller writes every other byte it reads.
+pub export fn auk__heap_alloc_nz(size: usize, kind: u32): raw.Ptr<abi.Header> uses raw, ffi = alloc_in(size, kind, false)
+
+fn alloc_in(size: usize, kind: u32, zero: bool): raw.Ptr<abi.Header> uses raw, ffi {
   let handle = abi.is_handle(kind)
   let hp: raw.Ptr<Heap> = if handle { raw.null() } else { cur_heap }
   var c: i64 = 0
   if hp.is_null() {
-    let h: raw.Ptr<abi.Header> = raw.cast(block_alloc(size, raw.addr_of(&c)))
+    let h: raw.Ptr<abi.Header> = raw.cast(block_alloc(size, raw.addr_of(&c), zero || handle))
     h.kind = kind
     h.flags = u32(c) << CLASS_SHIFT
     if handle {
@@ -371,7 +378,7 @@ pub export fn auk__heap_alloc(size: usize, kind: u32): raw.Ptr<abi.Header> uses 
     }
     return h
   }
-  let l: raw.Ptr<Link> = raw.cast(block_alloc(raw.size_of<Link>() + size, raw.addr_of(&c)))
+  let l: raw.Ptr<Link> = raw.cast(block_alloc(raw.size_of<Link>() + size, raw.addr_of(&c), zero))
   let h = header_of(l)
   h.kind = kind
   h.flags = abi.TRACKED | (u32(c) << CLASS_SHIFT)
@@ -489,6 +496,8 @@ pub export fn auk__heap_sweep(hp: raw.Ptr<Heap>) uses raw, ffi {
   if hp.is_null() {
     return
   }
+  // strings in the heap are going without auk__str_free: forget str.auk's index cursor
+  auk__str_cursor_reset()
   var n: i64 = 0
   var cap: i64 = 0
   var objs: raw.Ptr<raw.Ptr<abi.Header>> = raw.null()

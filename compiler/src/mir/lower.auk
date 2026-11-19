@@ -2942,15 +2942,13 @@ fn assign_place(lw: var Lower, target: ast.Expr, v: Val) {
 
 fn assign(lw: var Lower, e: ast.Expr, op: ast.BinOp?, target: ast.Expr, value: ast.Expr) {
   if op == none && lw.fused_map_update(target, value) { return }
-  // `s = s + x` on a local string is `s += x`
+  // `s = s + a + b` on a string or list is `s += a; s += b`: in place when s is unique, so
+  // building one up in a loop is linear, not quadratic
   if op == none {
-    match value.kind {
-      Binary(Add, lhs, rhs) => if (target.kind is ast.ExprKind.Name(_)) && lw.same_operand(target, lhs) &&
-        lw.pure_read(rhs) && !lw.t.calls.contains(value.id) && lw.ty(target.id) == types.Ty.Str &&
-        !lw.has_coercions(value.id) {
-        return lw.assign(e, some(ast.BinOp.Add), target, rhs)
-      }
-      _ => {}
+    let parts = lw.append_chain(target, value)
+    if parts.len() > 0 {
+      for p in parts { lw.assign(e, some(ast.BinOp.Add), target, p) }
+      return
     }
   }
   if op != none && lw.t.calls.contains(e.id) {
@@ -3000,6 +2998,119 @@ fn assign(lw: var Lower, e: ast.Expr, op: ast.BinOp?, target: ast.Expr, value: a
       }
     }
   }
+}
+
+/// When `value` is `target + a + b + ...` (built-in `+` on a `str` or a list, `target` a local
+/// or a field or list element of one), the pieces `a, b, ...` that appending to `target` in turn
+/// gives the same result with; else `[]`. Every piece must be a pure read, and none after the
+/// first may read the variable being changed (it would see the earlier appends).
+fn append_chain(lw: var Lower, target: ast.Expr, value: ast.Expr): [ast.Expr] {
+  let is_seq = match lw.ty(target.id) {
+    Str => true
+    List(_) => true
+    _ => false
+  }
+  if !is_seq { return [] }
+  let root = lw.place_root(target) else return []
+  var pieces: [ast.Expr] = []
+  var v = value
+  loop {
+    match v.kind {
+      Binary(Add, lhs, rhs) => {
+        if lw.t.calls.contains(v.id) || lw.has_coercions(v.id) || !lw.append_piece(rhs) {
+          return []
+        }
+        pieces.push(rhs)
+        if lw.same_place(target, lhs) { break }
+        v = lhs
+      }
+      _ => return []
+    }
+  }
+  // pieces is last-first; all but the first appended must not read the root variable
+  var out: [ast.Expr] = []
+  var i = pieces.len() - 1
+  while i >= 0 {
+    if i < pieces.len() - 1 && lw.reads_local(pieces[i], root) { return [] }
+    out.push(pieces[i])
+    i -= 1
+  }
+  out
+}
+
+/// Can `e` be evaluated after earlier appends without changing anything: a pure read, or a
+/// list literal of them.
+fn append_piece(lw: var Lower, e: ast.Expr): bool = match e.kind {
+  List(xs) => {
+    for x in xs {
+      if !lw.pure_read(x) { return false }
+    }
+    true
+  }
+  _ => lw.pure_read(e)
+}
+
+/// The local a place (`x`, `x.f`, `x.0`, `x[i]` of a list with `i` a local or literal) is in.
+fn place_root(lw: var Lower, e: ast.Expr): int? = match e.kind {
+  Name(_) => match lw.t.names.get(e.id) {
+    some(Local(l)) => some(l)
+    _ => none
+  }
+  Field(x, _) | TupleField(x, _) => if lw.t.names.contains(e.id) { none } else { lw.place_root(x) }
+  Index(x, i) => if (lw.ty(x.id) is types.Ty.List(_)) && lw.simple_operand(i) {
+    lw.place_root(x)
+  } else {
+    none
+  }
+  _ => none
+}
+
+/// Do two places name the same storage (as `place_root` allows them)?
+fn same_place(lw: var Lower, a: ast.Expr, b: ast.Expr): bool = match (a.kind, b.kind) {
+  (Name(_), Name(_)) => lw.same_operand(a, b)
+  (Field(x, f), Field(y, g)) => f.name == g.name &&
+    !lw.t.names.contains(a.id) &&
+    !lw.t.names.contains(b.id) &&
+    lw.same_place(x, y)
+  (TupleField(x, i), TupleField(y, j)) => i == j && lw.same_place(x, y)
+  (Index(x, i), Index(y, j)) => lw.simple_operand(i) && lw.same_operand(i, j) && lw.same_place(x, y)
+  _ => false
+}
+
+/// Might `e` read local `l`? Conservative: anything but the expressions `pure_read` accepts
+/// (and list literals) counts as reading it.
+fn reads_local(lw: var Lower, e: ast.Expr, l: int): bool = match e.kind {
+  Lit(_) => false
+  Name(_) => match lw.t.names.get(e.id) {
+    some(Local(x)) => x == l
+    some(_) => false
+    none => true
+  }
+  Measured(x, _) | Field(x, _) | TupleField(x, _) | Unary(_, x) => lw.reads_local(x, l)
+  Index(x, i) => lw.reads_local(x, l) || lw.reads_local(i, l)
+  Slice(x, lo, hi, _) => lw.reads_local(x, l) || lw.reads_local(lo, l) || lw.reads_local(hi, l)
+  Binary(_, a, b) => lw.reads_local(a, l) || lw.reads_local(b, l)
+  List(xs) => lw.any_reads_local(xs, l)
+  Interp(parts) => {
+    for p in parts {
+      match p {
+        Expr(x, _) => if lw.reads_local(x, l) { return true }
+        _ => {}
+      }
+    }
+    false
+  }
+  Call(c, args) => lw.reads_local(c, l) || lw.any_reads_local(args, l)
+  Pipe(x, c, args) => lw.reads_local(x, l) || lw.reads_local(c, l) || lw.any_reads_local(args, l)
+  MethodCall(r, _, args) => lw.reads_local(r, l) || lw.any_reads_local(args, l)
+  _ => true
+}
+
+fn any_reads_local(lw: var Lower, xs: [ast.Expr], l: int): bool {
+  for x in xs {
+    if lw.reads_local(x, l) { return true }
+  }
+  false
 }
 
 /// Is `e` a local variable or a literal (cheap, pure, the same every time it's evaluated)?

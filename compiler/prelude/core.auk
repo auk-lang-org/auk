@@ -101,8 +101,9 @@ pub extern fn replace(s: str, from: str, to: str): str = "auk_str_replace"
 /// The char index of the first occurrence of `sub`.
 pub extern fn find(s: str, sub: str): int? = "auk_str_find"
 /// Does `s` contain `x` (a `str` or a `char`)?
-pub fn contains<T: Needle>(s: str, x: T): bool = contains_str(s, x.needle())
+pub fn contains<T: Needle>(s: str, x: T): bool = x.found_in(s)
 extern fn contains_str(s: str, sub: str): bool = "auk_str_contains"
+extern fn contains_char(s: str, c: char): bool = "auk_str_contains_char"
 pub extern fn upper(s: str): str = "auk_str_upper"
 pub extern fn lower(s: str): str = "auk_str_lower"
 pub extern fn chars(s: str): [char] = "auk_str_chars"
@@ -113,9 +114,9 @@ pub extern fn byte_len(s: str): int = "auk_str_byte_len"
 pub extern fn repeat(s: str, n: int): str = "auk_str_repeat +loc"
 
 /// What `contains` on a `str` looks for.
-shape Needle { fn needle(self): str }
-fn needle(s: str): str = s
-fn needle(c: char): str = str(c)
+shape Needle { fn found_in(self, s: str): bool }
+fn found_in(sub: str, s: str): bool = contains_str(s, sub)
+fn found_in(c: char, s: str): bool = contains_char(s, c)
 
 pub extern fn is_digit(c: char): bool = "auk_char_is_digit"
 /// Is `c` a digit in base `radix` (2 to 36; letters in either case past 9)?
@@ -323,24 +324,13 @@ pub fn max<T: Ord>(a: T, b: T): T = if b > a { b } else { a }
 /// A sorted copy (stable).
 pub extern fn sort<T: Ord>(xs: [T]): [T] = "auk_arr_sorted"
 
-/// A copy sorted by `key` (a stable merge sort).
+/// A copy sorted by `key` (stable). `key` is called once per element.
 pub fn sort_by<T, K: Ord>(xs: [T], key: (T) => K): [T] {
   if xs.len() <= 1 { return xs }
-  let a = xs.take(xs.len() / 2).sort_by(key)
-  let b = xs.skip(xs.len() / 2).sort_by(key)
-  var out: [T] = []
-  var i = 0
-  var j = 0
-  while i < a.len() && j < b.len() {
-    if key(b[j]) < key(a[i]) {
-      out.push(b[j])
-      j += 1
-    } else {
-      out.push(a[i])
-      i += 1
-    }
-  }
-  out + a.skip(i) + b.skip(j)
+  // sort (key, index) pairs: the index keeps equal keys in their original order
+  var ks: [(K, int)] = []
+  for i, x in xs { ks.push((key(x), i)) }
+  ks.sort().map(p => xs[p.1])
 }
 
 /// How many times each distinct element occurs, in first-seen order.
@@ -366,7 +356,8 @@ pub fn zip<A, B>(xs: [A], ys: [B]): [(A, B)] {
 }
 
 /// The `Show` text of each element, separated by `sep`.
-pub fn join<T: Show>(xs: [T], sep: str): str = join_strs(xs.map(x => x.show()), sep)
+pub fn join<T: Show>(xs: [T], sep: str): str = join_shown(xs, sep)
+extern fn join_shown<T>(xs: [T], sep: str): str = "auk_arr_join"
 
 /// Consecutive pieces of `n` elements; the last one may be shorter.
 pub fn chunks<T>(xs: [T], n: int): [[T]]
@@ -375,7 +366,7 @@ pub fn chunks<T>(xs: [T], n: int): [[T]]
   var out: [[T]] = []
   var i = 0
   while i < xs.len() {
-    out.push(xs.skip(i).take(n))
+    out.push(xs[i..min(i + n, xs.len())])
     i += n
   }
   out
@@ -388,7 +379,7 @@ pub fn windows<T>(xs: [T], n: int): [[T]]
   var out: [[T]] = []
   var i = 0
   while i + n <= xs.len() {
-    out.push(xs.skip(i).take(n))
+    out.push(xs[i..i + n])
     i += 1
   }
   out
@@ -440,7 +431,11 @@ pub extern fn remove<K, V>(m: var {K: V}, k: K): V? = "auk_map_remove"
 /// The keys in insertion order.
 pub extern fn keys<K, V>(m: {K: V}): [K] = "auk_map_keys"
 pub extern fn values<K, V>(m: {K: V}): [V] = "auk_map_values"
-pub fn entries<K, V>(m: {K: V}): [(K, V)] = m.keys().map(k => (k, m[k]))
+pub fn entries<K, V>(m: {K: V}): [(K, V)] {
+  var out: [(K, V)] = []
+  for k, v in m { out.push((k, v)) }
+  out
+}
 
 // ---- sets ----
 

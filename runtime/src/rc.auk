@@ -100,6 +100,14 @@ pub export fn auk__alloc(size: usize, kind: u32): raw.Ptr<()> uses raw, ffi {
   raw.cast(h)
 }
 
+/// auk__alloc without zeroing the object's body (strings, which write every byte).
+pub export fn auk__alloc_nz(size: usize, kind: u32): raw.Ptr<()> uses raw, ffi {
+  let h = heap.auk__heap_alloc_nz(size, kind)
+  raw.atomic_store(raw.field_addr(h, .rc), 1, raw.Order.Relaxed)
+  let _ = raw.atomic_add(raw.addr_of(&live_objects), 1, raw.Order.Relaxed)
+  raw.cast(h)
+}
+
 /// Free the object memory itself (and update the live counter).
 pub export fn auk__free_obj(p: raw.Ptr<()>) uses raw, ffi {
   let _ = raw.atomic_sub(raw.addr_of(&live_objects), 1, raw.Order.Relaxed)

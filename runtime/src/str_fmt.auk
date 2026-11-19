@@ -202,33 +202,62 @@ pub export fn auk__fmt_float_shortest(v: float, out: raw.Ptr<u8>, outn: usize) u
     auk__cstr_copy(res, 40, if sign_bit(v) { "-0.0" } else { "0.0" })
     k = str.cstr_len(res)
   } else {
-    // the smallest precision that round-trips (17 digits always do; a precision that
-    // round-trips means every larger one does too)
-    var tmp_buf = Bytes40 {}
-    let tmp: raw.Ptr<u8> = raw.cast(raw.addr_of(&tmp_buf))
-    var lo: i32 = 0
-    var hi: i32 = 16
-    while lo < hi {
-      let mid = (lo + hi) / 2
-      if round_trips(v, mid, tmp, 40) { hi = mid } else { lo = mid + 1 }
-    }
-    let _ = round_trips(v, lo, tmp, 40)
-    // tmp = [-]d[.ddd]e(+|-)XX
-    var p: i64 = 0
-    let neg = tmp.at(0) == 0x2D  // '-'
-    if neg { p += 1 }
     var digits_buf = Bytes24 {}
     let digits: raw.Ptr<u8> = raw.cast(raw.addr_of(&digits_buf))
     var nd: i64 = 0
-    while tmp.at(p) != 0 && tmp.at(p) != 0x65 {  // 'e'
-      if tmp.at(p) != 0x2E {  // '.'
-        digits.at(nd) = tmp.at(p)
-        nd += 1
+    var exp: i64 = 0
+    var neg = sign_bit(v)
+    // Fast path, for a value that is a short decimal: the fewest decimal places k at which
+    // m = round(|v| * 10^k) gives |v| back as m / 10^k. m and 10^k are exact floats and the
+    // division rounds correctly, so that is the test "the text m / 10^k reads back as v", and
+    // the first k that passes has the fewest digits: the digits the search below finds.
+    let av = if neg { 0.0 - v } else { v }
+    var found = false
+    if av >= 0.000001 && av < 1000000000000000.0 {
+      var p10 = 1.0
+      var k10: i64 = 0
+      while k10 <= 20 && !found {
+        let scaled = av * p10
+        if scaled >= 1000000000000000.0 { break }
+        let m = i64(scaled + 0.5)
+        if m > 0 && float(m) / p10 == av {
+          var ibuf: Bytes24
+          let ip: raw.Ptr<u8> = raw.cast(raw.addr_of(&ibuf))
+          nd = i64(auk__fmt_i64(ip, m))
+          raw.copy(digits, ip, nd)
+          exp = nd - 1 - k10
+          found = true
+        }
+        p10 = p10 * 10.0
+        k10 += 1
       }
-      p += 1
+    }
+    if !found {
+      // the smallest precision that round-trips (17 digits always do; a precision that
+      // round-trips means every larger one does too)
+      var tmp_buf = Bytes40 {}
+      let tmp: raw.Ptr<u8> = raw.cast(raw.addr_of(&tmp_buf))
+      var lo: i32 = 0
+      var hi: i32 = 16
+      while lo < hi {
+        let mid = (lo + hi) / 2
+        if round_trips(v, mid, tmp, 40) { hi = mid } else { lo = mid + 1 }
+      }
+      let _ = round_trips(v, lo, tmp, 40)
+      // tmp = [-]d[.ddd]e(+|-)XX
+      var p: i64 = 0
+      neg = tmp.at(0) == 0x2D  // '-'
+      if neg { p += 1 }
+      while tmp.at(p) != 0 && tmp.at(p) != 0x65 {  // 'e'
+        if tmp.at(p) != 0x2E {  // '.'
+          digits.at(nd) = tmp.at(p)
+          nd += 1
+        }
+        p += 1
+      }
+      exp = if tmp.at(p) == 0x65 { i64(c_atoi(tmp.offset(p + 1))) } else { 0 }
     }
     while nd > 1 && digits.at(nd - 1) == 0x30 { nd -= 1 }
-    let exp: i64 = if tmp.at(p) == 0x65 { i64(c_atoi(tmp.offset(p + 1))) } else { 0 }
     if neg {
       res.at(k) = 0x2D
       k += 1

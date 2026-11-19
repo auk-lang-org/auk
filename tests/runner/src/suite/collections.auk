@@ -5,6 +5,7 @@
 pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("collection_extras_pass_their_tests", collection_extras_pass_their_tests),
   t.test("chunks_and_windows_need_a_positive_size", chunks_and_windows_need_a_positive_size),
+  t.test("appends_and_text_indexing_pass_their_tests", appends_and_text_indexing_pass_their_tests),
 ]
 
 fn auk_cmd(): cmd.Cmd uses env, ffi = t.auk().setenv("AUK_LEAK_CHECK", "1")
@@ -15,6 +16,16 @@ fn collection_extras_pass_their_tests() uses env, ffi, time {
   t.eq(
     o.stdout,
     "ok chunks\nok windows\nok flat_map\nok group_by\nok unique\n5 passed, 0 failed\n",
+    o.stderr,
+  )
+}
+
+fn appends_and_text_indexing_pass_their_tests() uses env, ffi, time {
+  let o = auk_cmd().args(["test", "tests/fixtures/appends.auk"]).output()
+  t.check(o.success(), "{o.stdout}\n{o.stderr}")
+  t.eq(
+    o.stdout,
+    "ok appends keep their meaning\nok appending in a loop\nok indexing non-ASCII text\n3 passed, 0 failed\n",
     o.stderr,
   )
 }
