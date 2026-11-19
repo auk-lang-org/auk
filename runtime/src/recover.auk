@@ -1,4 +1,5 @@
-/// Recovery points for `catch` and task threads (was runtime/c/catch.c, ported line by line).
+/// Recovery points for `catch` and task threads (was runtime/c/catch.c, ported line by line;
+/// the module isn't `catch`, a keyword, so that stack.auk can call it by path).
 ///
 /// A thread keeps a stack of recovery points (setjmp buffers); a panic (rc.c auk__panic) on a
 /// thread with one records its message here and jumps back to the innermost one instead of
@@ -10,12 +11,11 @@
 /// section 7). C's `sigsetjmp(jb, 0)`/`siglongjmp` are `raw.setjmp`/`raw.longjmp` here: libc's
 /// `_setjmp`/`_longjmp`, which don't save or restore the signal mask either.
 ///
-/// stack.c's stack-overflow handler (still C) reaches the same frames through
-/// `auk__catch_active`, `auk__catch_top_addr` and `auk__catch_throw_overflow`.
+/// stack.auk's stack-overflow handler reaches the same frames through `auk__catch_active`,
+/// `auk__catch_top_addr` and `auk__catch_throw_overflow`.
 
 // the rest of the runtime (C, for now)
 extern fn auk__xmalloc(n: usize): raw.Ptr<()> = "void *auk__xmalloc(size_t)"
-extern fn auk__stack_overflow_loc(): raw.Ptr<u8> = "const char *auk__stack_overflow_loc(void)"
 extern fn auk__trace_save(depth: raw.Ptr<i64>, mute: raw.Ptr<i32>) = "void auk__trace_save(int64_t *, int *)"
 extern fn auk__trace_restore(depth: i64, mute: i32) = "void auk__trace_restore(int64_t, int)"
 extern fn auk__dbg_save(top: raw.Ptr<raw.Ptr<()>>, depth: raw.Ptr<i64>) = "void auk__dbg_save(void **, int64_t *)"
@@ -62,10 +62,10 @@ fn run_at(fr: raw.Ptr<CatchFrame>, f: raw.Fn<(raw.Ptr<()>, raw.Ptr<()>) => ()>, 
   1
 }
 
-export fn auk__catch_active(): i32 uses raw = if top.is_null() { 0 } else { 1 }
+pub export fn auk__catch_active(): i32 uses raw = if top.is_null() { 0 } else { 1 }
 
 /// Where the innermost recovery point lives (0: none).
-export fn auk__catch_top_addr(): usize uses raw = usize(top.int())
+pub export fn auk__catch_top_addr(): usize uses raw = usize(top.int())
 
 fn copy_bytes(p: raw.Ptr<u8>, n: usize): raw.Ptr<u8> uses raw, ffi {
   let s: raw.Ptr<u8> = raw.cast(auk__xmalloc(n + 1))
@@ -83,8 +83,7 @@ export fn auk__catch_throw(loc: raw.Ptr<u8>, msg: raw.Ptr<u8>, n: usize) uses ra
   raw.longjmp(raw.field_addr(top, .jb))
 }
 
-/// _Noreturn, as auk__catch_throw.
-export fn auk__catch_throw_overflow() uses raw {
+pub export fn auk__catch_throw_overflow(): never uses raw {
   caught_overflow = true
   raw.longjmp(raw.field_addr(top, .jb))
 }
@@ -94,7 +93,7 @@ export fn auk__catch_take(msg: raw.Ptr<raw.Ptr<u8>>, loc: raw.Ptr<raw.Ptr<u8>>) 
     caught_overflow = false
     raw.free(caught_msg)
     raw.free(caught_loc)
-    let l = auk__stack_overflow_loc()
+    let l = stack.auk__stack_overflow_loc()
     caught_msg = copy_bytes("stack overflow", 14)
     caught_loc = copy_bytes(l, strlen(l))
   }

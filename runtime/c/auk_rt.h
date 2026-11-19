@@ -432,7 +432,7 @@ void auk__panic_free(AukPanic *p);
 AukErr *auk__panic_err(const AukPanic *p);
 AUK_API AukErr *auk_catch(AukThunk f, void *env, void *out);
 
-/* ---- stack.c ----------------------------------------------------------------------------- */
+/* ---- stack: runtime/src/stack.auk -------------------------------------------------------- */
 
 /* The stack of the thread a program's `main` and each test run on, and of each task. */
 static const size_t AUK_MAIN_STACK = (size_t)256 << 20;
