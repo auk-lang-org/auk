@@ -573,6 +573,20 @@ New findings:
 9. Unchanged from the C: on an x86-64 Mac a struct-returning `objc_msgSend` would need
    `objc_msgSend_stret` (`m_rect`); there is no `macos-x86_64` cfacts, so only arm64 runs it.
 
+10. **Linux-only files aren't type-checked on macOS:** `stackos.linux.auk` had a local `str`
+   (E0116 once `str.auk` existed), so `./build.sh` failed on Linux at 483bd00; renamed
+   `strtab`. Only the variants' agreement (E0422) is checked for other targets, so run the
+   container build after touching a per-OS file.
+
+**Checks:** `./build.sh --check --test` (stage 2 = stage 3, 72/72, runner 382/382), ASan
+72/72, `check.sh golden bench`, the runner's 3 ignored window tests; the examples
+`gui_gradient`, `gui_text`, `gui_bench` under `AUK_GUI_TRACE=1` (the same lines, timings
+within the machine's noise) and `AUK_GUI_SNAP` (the PPM byte-identical before/after); an
+audio program (each validation error, a planar play, two beeps) identical. Linux (container,
+`--from-seed --check --test`, all green): gui.open fails with the C's message, the host says
+"only on macOS" and exits 1, audio reports the missing libpulse (no PulseAudio in the image,
+so the playing path ran only on macOS).
+
 **build.sh:** `-fblocks` stays (tls.c is its one user, and Clang enables blocks on Darwin
 anyway); gui_host never linked a framework (all `dlopen`), so no link flag goes with it.
 `runtime/c/test/run.sh`'s `-framework Network/Security/CoreFoundation` are tls.c's.
