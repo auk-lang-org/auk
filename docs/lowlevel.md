@@ -127,9 +127,9 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   (64-bit). `int` and `i64` are interchangeable (they unify: arguments, results, fields,
   globals, constants), but each keeps its arithmetic: `int`'s `+` checks overflow as everywhere
   in Auk, `i64`'s wraps; an operation takes its left operand's type. An integer literal takes the fixed-width type its context expects (`x + 1`,
-  `let b: u8 = 250`; it must fit); a literal on the left of an operator whose right side is
-  fixed-width does not (write `x + 1`, not `1 + x`). Shift amounts are taken modulo the width.
-  Integer `/` and `%` by zero trap; `f32` has `%` (`frem`). A string literal (no
+  `let b: u8 = 250`; it must fit), on either side of an operator (`1 + x`, `1 << n`, `0 < x`
+  with `x`/`n` fixed-width take its type, as `x + 1` does). Shift amounts are taken modulo the
+  width. Integer `/` and `%` by zero trap; `f32` has `%` (`frem`). A string literal (no
   interpolation) where a `raw.Ptr<u8>` is expected is a C string: a private constant,
   NUL-terminated (`auk__panic3(loc, "expected Int, got ", …)`, `fn name(): raw.Ptr<u8> = "Int"`).
 - **`raw type NAME = T`** (`pub` to export it) is a transparent alias of a raw type, C's

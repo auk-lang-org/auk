@@ -234,6 +234,12 @@ pub fn binary(c: var check.Checker, e: ast.Expr, op: ast.BinOp, l: ast.Expr, r: 
         return lt
       }
       let rt = c.infer(r, types.Ty.Int)
+      if types.is_fixed_int(c.shallow(rt)) && num_lit(l) {
+        // the runtime's dialect: `1 << n` as `n << 1` would type it: the literal takes `n`'s type
+        let lt2 = c.infer(l, rt)
+        c.operand_with(r, lt2, rt, op, l)
+        return rt
+      }
       if ok && c.bit_operand(r, rt, op.symbol(), true) { types.Ty.Int } else { types.Ty.Error }
     }
     _ => c.arith(e, op, l, r, exp)
@@ -399,6 +405,14 @@ pub fn arith(c: var check.Checker, e: ast.Expr, op: ast.BinOp, l: ast.Expr, r: a
       if c.shallow(rt) is types.Ty.Measured(_, _) {
         return c.unit_operands(e, op, l, r, lt, rt)
       }
+      // the runtime's dialect: `1 + x` with `x` fixed-width: the literal takes `x`'s type, as
+      // in `x + 1`
+      let wrap_f32 = c.shallow(rt) == types.Ty.Fixed(types.Fx.F32) && !(op == ast.BinOp.Add || op == ast.BinOp.Sub || op == ast.BinOp.Mul || op == ast.BinOp.Div || op == ast.BinOp.Rem)
+      if (c.shallow(rt) is types.Ty.Fixed(_)) && num_lit(l) && !wrap_f32 {
+        let lt2 = c.infer(l, rt)
+        c.operand_with(r, lt2, rt, op, l)
+        return lt2
+      }
       c.operand_with(r, lt, rt, op, l)
     } else {
       c.check_operand(r, lt, op, l)
@@ -493,6 +507,13 @@ pub fn arith(c: var check.Checker, e: ast.Expr, op: ast.BinOp, l: ast.Expr, r: a
 }
 
 /// The right operand of a primitive arithmetic operator: same type as the left.
+/// A number literal (`1`, `2.5`, `-1`)?
+fn num_lit(e: ast.Expr): bool = match e.kind {
+  Lit(Int(_)) | Lit(Float(_)) => true
+  Unary(Neg, x) => x.kind is ast.ExprKind.Lit(ast.Lit.Int(_)) || x.kind is ast.ExprKind.Lit(ast.Lit.Float(_))
+  _ => false
+}
+
 pub fn check_operand(c: var check.Checker, r: ast.Expr, lt: types.Ty, op: ast.BinOp, l: ast.Expr) {
   let rt = c.infer(r, lt)
   c.operand_with(r, lt, rt, op, l)
@@ -509,6 +530,12 @@ pub fn number_compare(c: var check.Checker, e: ast.Expr, op: ast.BinOp, l: ast.E
   }
   let rt = c.infer(r, lt)
   let rr = c.resolve(rt)
+  if (rr is types.Ty.Fixed(_)) && num_lit(l) {
+    // the runtime's dialect: `1 < x` as `x > 1`: the literal takes `x`'s fixed-width type
+    let lt2 = c.infer(l, rt)
+    if c.resolve(lt2) != rr { let _ = c.coerce_at(r, rt, lt2, false) }
+    return true
+  }
   if !(lr is types.Ty.Measured(_, _)) && !(rr is types.Ty.Measured(_, _)) {
     let _ = c.coerce_at(r, rt, lt, false)
     return true

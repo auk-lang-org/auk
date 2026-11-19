@@ -18,6 +18,13 @@ fn wrap(): int {
   let hd = Header { rc: 1, kind: 2, flags: 3 }
   print("{int(hd.rc) + int(hd.kind) + int(hd.flags)}")
   if d == 7 && a > 200 { print("cmp ok") }
+  // a literal on the left takes the right side's type, as on the right
+  let l1 = 1 + d
+  let l2 = 255 - a
+  let l3 = 1 << d
+  let l4 = -1 * f
+  let l5 = 0.5 * fl
+  if 7 == d && 200 < a && 251 > a && l1 == 8 && l2 == 5 && l3 == 128 && l4 == 5 && l5 == 0.75 { print("left ok") }
   0
 }
 

@@ -81,7 +81,7 @@ fn codes(main: str): [str] uses env, ffi, time {
 
 fn fixed_width_arithmetic_wraps() uses env, fs, ffi, time {
   let main = fixture("arith", "arith.auk")
-  t.eq(passes(main), "4 -2147483648 4 -3 8 3.0 44 true -56\n6\ncmp ok\n", "")
+  t.eq(passes(main), "4 -2147483648 4 -3 8 3.0 44 true -56\n6\ncmp ok\nleft ok\n", "")
 }
 
 fn pointers_on_malloced_memory() uses env, fs, ffi, time { let _ = passes(fixture("ptr", "ptr.auk")) }
