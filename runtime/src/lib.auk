@@ -8,4 +8,5 @@
 /// - ported from runtime/c: `value` (with `auk_ops_value`), `err`, `recover` (catch.c: `catch` is
 ///   a keyword), `pixels`, `copy`, `heap` (+ `heap_os`), `chan`, `ffi`, `str` and `str_fmt`
 ///   (str.c), `arr`, `map`, `stack` (+ `stackos`, `cpu`), `testing`, `compiler`, `tls` (+ `tls_os`:
-///   Network.framework on macOS, OpenSSL on Linux).
+///   Network.framework on macOS, OpenSSL on Linux), `core_*` (core.c: fs, net, env, time, proc;
+///   + `core_os`).
