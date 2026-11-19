@@ -177,9 +177,8 @@ and after; the hot loops (fill, blend, composite, blit_mask) as fast as the C). 
    Fine, but each `raw thread var` touched there is a call.
 3. **The same C prototypes in every module** (`auk__xmalloc`, `strlen`, `auk__sb_put_cstr`, …):
    no shared module of the runtime's own C functions yet. When `str`, `arr` and `rc` move, these
-   `extern fn`s name functions the same package then defines as `export fn`s; whether one LLVM
-   module accepts both for a symbol isn't tested yet (drop the `extern fn`s and call the module
-   then).
+   `extern fn`s name functions the same package then defines as `export fn`s: **that breaks**
+   (found by the `stack` port, below): drop the `extern fn`s and call the module.
 4. Known ones met again: `never` (`auk__panic_sb`, `auk__catch_throw` are `()` with
    `raw.unreachable()` after the calls), a literal on the left of a fixed-width operator
    (`u32(255) - sa`), `match` on raw constants (none needed), C's `continue` in a counted loop
@@ -376,6 +375,62 @@ Self-compile (`auk build compiler/src/main.auk`, interleaved, load 6–20): best
 compiler/, 15 runs each): 0.987x and 1.014x best. The compiler's binary is 2.4% larger
 (6,153,040 → 6,303,568 bytes: more runtime inlined).
 
+## Found by the 7c port of `stack`, `testing`, `compiler`, `auk_ops_value` (2026-11-19)
+
+Same rules as before (symbols, C ABI, messages byte for byte; `auk_rt.h`'s declarations
+untouched). `value_ops.c` is gone: `auk_ops_value` is an `export var` of `value.auk` built from
+`raw.fn_of`s of private functions (the `auk__value_elem_*` symbols are gone; the copy slot is a
+private wrapper over copy.c's `auk__value_copy_elem`, since a constant's `raw.fn_of` names an
+Auk function, not an `extern fn`). New findings:
+
+1. **An `extern fn` for a symbol the package defines is renamed, not merged.** `stack.auk`
+   declared `extern fn auk__catch_active(): i32 = "int auk__catch_active(void)"` while
+   `catch.auk` defines it as an `export fn`: in the one LLVM module of `auk build --lib` the
+   declaration became `@auk__catch_active.130` (likewise `auk__catch_top_addr.145`,
+   `auk__catch_throw_overflow.131`, and catch's `extern fn auk__stack_overflow_loc` became
+   `.14`): no error from `auk`, an undefined symbol at the first link (`nm` shows
+   `U _auk__catch_active.130`). Fix used: call the defining module by path
+   (`recover.auk__catch_active()`, `stack.auk__stack_overflow_loc()`), the `export fn` marked
+   `pub` (`pub export fn` works). **Every module that moves must do this for its callers that
+   are already Auk** (`value`, `err`, `recover`, `pixels`, `testing`, `compiler` declare
+   `auk__xmalloc`, `auk__sb_put_cstr`, `auk_str_cstr`, `auk_arr_len`, `auk_map_next`,
+   `auk_release`, …). A compiler fix (an `extern fn` whose symbol an `export fn` of the program
+   defines resolves to it, or an error when the signatures differ) would make the order of the
+   ports irrelevant. **The same for `extern var`s:** two modules declaring `extern var
+   auk_ops_float` link to `auk_ops_float` and `auk_ops_float.1` (identical `extern fn`s in
+   several modules, `strlen` & co., are merged fine). compiler.auk takes value.auk's (`pub
+   extern var`) as a constant address: `raw let OPS_FLOAT: raw.Ptr<abi.ElemOps> =
+   raw.addr_of(&value.auk_ops_float)` (`raw.addr_of(&m.g)` of another module's global works
+   in a constant only).
+2. **The module `catch` can't be named:** `catch` is a keyword, so `catch.f()` is a parse error
+   (E0021) and no other module could call it. `catch.auk` is now `recover.auk` (same contents
+   and symbols; `auk__catch_throw_overflow` is `never` now).
+3. **A local hides a module of the same name** (E0116: `let err = cfacts.stderr()`, then
+   `err.auk_err_show(e)`): rename the local (`errf`).
+4. **Per-CPU code has no file kind of its own:** variants are `<os>-<arch>`, `<os>` or plain, so
+   stack.c's one CPU difference (on x86-64 `redirect` leaves SP 8 below 16-byte alignment, where
+   a `call` would have pushed the return address) is a module: `cpu.auk` (AArch64,
+   `RET_SLOT = 0`) and `cpu.linux-x86_64.auk`/`cpu.macos-x86_64.auk` (8). The per-OS parts
+   (stack bounds: `pthread_get_stackaddr_np` vs `pthread_getattr_np`; the Linux `.symtab`
+   reader) are `stackos.macos.auk`/`stackos.linux.auk`; `stackos.SymBuf` (the reader's buffer)
+   is 1 byte on macOS, so the handler doesn't zero 256 unused bytes there. The 13 `#if`s are
+   gone: `cfacts.uc_pc`/`uc_sp` (pointers into the context, read and written) cover the four
+   OS × CPU register slots.
+5. **The signal handler and the `pthread_once`/`pthread_create` start routines are private
+   functions** given to C by `raw.fn_of` (numbers and raw pointers only, so they have C
+   addresses; no new exported symbols). A private function returning `()` returns an `i8` in
+   the IR (C ignores it); `export fn`s and `raw.Fn` calls are C's `void`. The handler allocates
+   nothing (checked in the IR: its calls are `strlen`, `strncmp`, `dladdr`, `signal`, `write`,
+   `_exit`, `_longjmp`, `auk__trace_on_overflow` and stdio's `ftrylockfile`/`fflush`, as the C).
+6. **`pid_t` isn't known to the prototype parser** (E0040; `ssize_t`, `size_t`, `pthread_t`,
+   `FILE *` are): `fork`, `getpid`, `waitpid` are declared with `int` (`pid_t` is `i32`).
+7. **A call whose C result is unused** must be dropped explicitly when it ends a block whose
+   value is `()` (`let _ = sigaction(…)`, or a helper like compiler.auk's `putc`); in the
+   middle of a block it's fine.
+8. C's `char buf[N]` locals are one-field raw structs (`raw struct NumBuf { b: [u8; 24] }`),
+   zeroed (C left them uninitialized); `_Atomic bool auk_trace_live` is read as an
+   `extern var … : u8` with `raw.atomic_load` (atomics take integers and pointers).
+
 ## Per file
 
 Lines are of the C today. "Globals" counts file-scope variables (thread-locals and atomics
@@ -384,7 +439,7 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | file | lines | needs from the dialect | not line-by-line |
 |---|---:|---|---|
 | `auk_rt.h` | 1013 | the shared `raw struct`s (header, str, arr, map, err, obj, task, frames; flexible array members `data[]`, `slots[]`), the one union (`AukValue`), 12 function-pointer typedefs (`raw.Fn`), `_Static_assert`s → `raw assert` | stays the C contract until the C is gone (lowlevel.md, section 8) |
-| ~~`value.c`~~ | 239 | **done** (2026-11-19, the pilot): `runtime/src/value.auk` | `auk_ops_value` stays C (`value_ops.c`): no addresses in raw initializers yet |
+| ~~`value.c`~~ | 239 | **done** (2026-11-19, the pilot): `runtime/src/value.auk`; `auk_ops_value` too (`value_ops.c` deleted) | — |
 | ~~`err.c`~~ | 125 | **done** (2026-11-19): `runtime/src/err.auk` | — |
 | ~~`copy.c`~~ | 170 | **done** (2026-11-19): `runtime/src/copy.auk` | the ops tables over its `auk__*_copy_elem` stay in `rc.c` |
 | ~~`map.c`~~ | 398 | **done** (2026-11-19): `runtime/src/map.auk` | — |
@@ -394,14 +449,23 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | ~~`catch.c`~~ | 142 | **done** (2026-11-19): `runtime/src/catch.auk`; `sigsetjmp(jb, 0)`/`siglongjmp` are `raw.setjmp`/`raw.longjmp` (libc `_setjmp`/`_longjmp`) | the setjmp half of `auk__catch_run` is its own `optnone` function (`run_at`), the frame in the optimized caller's memory |
 | `compiler.c` | 169 | 2 globals (the imprint file, its mutex), `FILE *` (`fputc`/`fwrite`) | — |
 | ~~`str.c`~~ | 1556 | **done** (2026-11-19): `runtime/src/str.auk`, `str_fmt.auk` (see "Found porting `str.c`") | float formatting still through `cwrap.c`'s `snprintf` and libc `strtod` (7b: "Ryu → Auk"); `auk_ops_str`'s table stays in `rc.c` |
+
+| `copy.c` | 170 | atomics, callbacks (element copy ops) | — |
+| `map.c` | 398 | callbacks (hash/eq/show ops), `const` tables | — |
+| `arr.c` | 727 | callbacks (element ops, sort comparator), `ctz`/`clz` | — |
+| `chan.c` | 168 | pthread mutex/cond (opaque layouts, initializers) | — |
+| `heap.c` | 298 | 1 thread-local, atomics; `malloc_size` (macOS) / `malloc_usable_size` (Linux) | per-OS `#ifdef` |
+| ~~`catch.c`~~ | 142 | **done** (2026-11-19): `runtime/src/catch.auk` (now `recover.auk`: `catch` is a keyword); `sigsetjmp(jb, 0)`/`siglongjmp` are `raw.setjmp`/`raw.longjmp` (libc `_setjmp`/`_longjmp`) | the setjmp half of `auk__catch_run` is its own `optnone` function (`run_at`), the frame in the optimized caller's memory |
+| ~~`compiler.c`~~ | 169 | **done** (2026-11-19): `runtime/src/compiler.auk` | — |
+| `str.c` | 1556 | 2 thread-locals (show budget, debugger flag), atomics; `snprintf %.*e/%.*f` through `cwrap.c`; `strtod` | float formatting through libc is the 7b item "Ryu, Unicode tables → Auk" |
 | `rc.c` | 792 | 4 globals (1 thread-local, 2 atomic), 1 function-local static, overflow builtins, `atexit` callback, `%g` through `cwrap.c` | — |
-| `testing.c` | 309 | 4 globals, `fork`/`waitpid` and the `W*` status macros, `flockfile`, `stdout`/`stderr` | — |
+| ~~`testing.c`~~ | 309 | **done** (2026-11-19): `runtime/src/testing.auk` | — |
 | `task.c` | 467 | 6 globals (1 thread-local), atomics, `pthread_create` callback | — |
 | ~~`pixels.c`~~ | 446 | **done** (2026-11-19): `runtime/src/pixels.auk` (the statics are module `raw var`s, `raw.add/mul_overflow`) | — |
 | ~~`ffi.c`~~ | 298 | **done** (2026-11-19): `runtime/src/ffi.auk` | — |
 | `core.c` | 1116 | 5 globals + 1 function-local static, `environ` (extern global), `qsort` callback, sockets/`getaddrinfo`/`posix_spawnp` structs, `S_ISDIR`, `W*` macros; `fcntl`/`ioctl`/`open` through `cwrap.c` | 5 `#if`s (OS, `SO_NOSIGPIPE`, `MSG_NOSIGNAL`, `arc4random_buf`/`getrandom`) |
 | `trace.c` | 668 | 20 globals (5 thread-locals), 3 function-local statics, `sigaction` + `atexit` callbacks, `open` through `cwrap.c` | its fatal-signal handler re-raises with `signal(sig, SIG_DFL)`: fine as an `export fn` |
-| `stack.c` | 376 | 3 thread-locals, `pthread_once`/`pthread_create` callbacks, `sigaltstack` | **the signal handler edits the interrupted context** (`ucontext_t` PC/SP per OS and CPU, 13 `#if`s) to return into `overflow_resume`; per-OS/arch `raw struct`s for `mcontext`, Linux ELF `.symtab` reading (`ElfW`) |
+| ~~`stack.c`~~ | 376 | **done** (2026-11-19): `runtime/src/stack.auk`, `stackos.<os>.auk`, `cpu.auk` | the context's PC/SP through `cfacts.uc_pc`/`uc_sp`; x86-64's return-address slot is `cpu.RET_SLOT` |
 | `dbg.c` | 2141 | 50 globals (5 thread-locals, atomics), `pthread_key_create` destructor, `pthread_create`, `atexit`, `signal(SIGINT)` callbacks, Unix sockets | — (largest file; translate last among the plain ones) |
 | `audio_out.c` | 328 | 6 globals (`dlsym`'d function tables: `raw.Fn` fields), `pthread_once` | per-OS `#if` (AudioToolbox / PulseAudio) and a byte-order `#if` |
 | `gui.c` | 1301 | 26 globals, 2 `raw union`s (cmsg buffers), `CMSG_*`, `environ`, `posix_spawn` (+ the macOS `_np` call), `mmap`/`shm_open` (through `cwrap.c`), overflow builtins | 5 `#if`s (OS, `SO_NOSIGPIPE`) |

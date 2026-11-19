@@ -725,7 +725,7 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
 ### 7c. Port
 - [ ] Same order as Phase 1c, one module at a time, C and Auk linked together meanwhile.
       Done: `value` (the 7a pilot); `err`, `catch` (`raw.setjmp`; same frames, stack.c's
-      overflow recovery unchanged), `pixels` (2026-11-19; runtime-port.md, "Found by the 7c
+      overflow recovery unchanged; now `recover.auk`, `catch` being a keyword), `pixels` (2026-11-19; runtime-port.md, "Found by the 7c
       port"); `copy`, `heap` (+ `heap_os.<os>`), `chan`, `ffi` (2026-11-19: line by line, same
       symbols, `auk_rt.h` unchanged; stage 2 = stage 3, C tests 72/72, runner green, ASan, TSan
       `conc` clean, also with the Auk half instrumented (`SAN_AUK=1`); a spawn/await, channel and
@@ -737,6 +737,9 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       within noise but `s += x` +6–13% while `heap.c`'s usable-size call wasn't inlined across
       the C/Auk boundary: runtime-port.md, "Found porting `str.c`"). `arr`, `map` (2026-11-19;
       perf and the gaps they hit: runtime-port.md, "Found porting `arr.c` and `map.c`").
+      `stack` (+ `stackos.<os>`, `cpu`: the overflow handler rewrites the context through
+      `cfacts.uc_pc`/`uc_sp`), `testing`, `compiler`, `auk_ops_value` (into `value.auk`;
+      `value_ops.c` gone) (2026-11-19; runtime-port.md, "Found by the 7c port of `stack`…").
       Next: `rc`, `task`.
 - [ ] `auk_rt.bc` is produced by the Auk compiler; `libauk_rt.a` via LLVM's archive writer.
 - [ ] Same C tests (called through `export fn`), then rewrite them as Auk tests. The first
