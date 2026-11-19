@@ -9,4 +9,5 @@
 ///   a keyword), `pixels`, `copy`, `heap` (+ `heap_os`), `chan`, `ffi`, `str` and `str_fmt`
 ///   (str.c), `arr`, `map`, `stack` (+ `stackos`, `cpu`), `testing`, `compiler`, `tls` (+ `tls_os`:
 ///   Network.framework on macOS, OpenSSL on Linux), `core_*` (core.c: fs, net, env, time, proc;
-///   + `core_os`), `audio_out` (+ `audio_os`), `gui` (+ `gui_os`), `gui_host` (`.macos`/`.linux`).
+///   + `core_os`), `audio_out` (+ `audio_os`), `gui` (+ `gui_os`), `gui_host` (`.macos`/`.linux`), `rc`,
+///   `task`.
