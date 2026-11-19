@@ -2,15 +2,16 @@
 
 ## VS Code
 
-The VS Code extension lives in its own repository, [auk-vscode](https://github.com/auk-lang-org/auk-vscode). It has syntax highlighting, the
-language server and the debugger.
+The VS Code extension has syntax highlighting, the language server and the debugger. Install
+the latest release:
 
 ```console
-$ git clone https://github.com/auk-lang-org/auk-vscode && cd auk-vscode
-$ npm install
-$ npx @vscode/vsce package
-$ code --install-extension auk-lang-0.1.0.vsix
+$ curl -LO https://github.com/auk-lang-org/auk-vscode/releases/latest/download/auk-lang.vsix
+$ code --install-extension auk-lang.vsix
 ```
+
+The source is in its own repository, [auk-vscode](https://github.com/auk-lang-org/auk-vscode),
+whose README covers building it yourself.
 
 It finds `auk` on the `PATH` or in `~/.auk/bin`; the setting `auk.path` names another binary.
 
