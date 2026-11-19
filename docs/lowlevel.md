@@ -221,3 +221,28 @@ The verify block's third argument, `complete`, is a block the framework made: ca
 - `dispatch_sync` and `dispatch_data_apply` don't copy, so a stack literal there needs no
   helpers even when its captures own something.
 
+## 11. Targets: per-OS code and the C headers' facts
+
+The runtime chooses by OS and CPU in 30 places (`#if`), and needs what C headers provide
+(docs/runtime-port.md, "Gaps"). No conditional compilation in the language; instead:
+
+- **Per-target files** (`raw` packages only): beside `os.auk` a module may have `os.macos.auk`,
+  `os.linux.auk`, `os.linux-arm64.auk`, … The resolver loads the most specific one matching the
+  target (`<os>-<arch>`, then `<os>`, then the plain file), and only that one; all variants must
+  declare the same public items (checked when the variants are compiled for their targets, and by
+  CI on each platform). Like Go's `_linux.go`.
+- **The headers' facts, generated:** `runtime/gen/cfacts.sh` compiles a small C program on a
+  platform that prints the constants and layouts the runtime uses (`O_*`, `F_*`, `SIG*`, `E*`,
+  `SO_*`, `AF_*`, the `W*` status tests as functions, `PTHREAD_*_INITIALIZER` bytes, `struct stat`,
+  `sigaction`, `sockaddr_*`, `msghdr`/`cmsghdr`, `pthread_*_t` sizes, `ucontext` register offsets)
+  as `runtime/src/cfacts.<os>-<arch>.auk`: `raw let`s and `raw struct`s, checked in. While the C
+  runtime exists, `raw assert`s compare them with the headers at build time. A new platform runs
+  the script once.
+- **`errno` and C's macros over functions:** `errno` is `os.errno()` per OS (`*__error()` on
+  macOS, `*__errno_location()` on glibc); `stdout`/`stderr` are `extern var`s (`__stdoutp` /
+  `stdout`) in the per-OS files; `CMSG_*`, `S_ISDIR`, `WIFEXITED`… are small `raw` functions over
+  the facts.
+- **Bit and overflow intrinsics:** `raw.add_overflow(a, b): (T, bool)` (and `sub`, `mul`:
+  `llvm.s/uadd.with.overflow`), `raw.ctz`, `raw.clz`, `raw.popcount`, `raw.bswap`.
+- Function-local statics become module-level `raw var`s; `_Static_assert`/`offsetof` are
+  `raw assert` and `raw.offset_of`.
