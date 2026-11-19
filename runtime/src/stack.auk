@@ -21,7 +21,6 @@
 /// a function's entry SP (`cpu`, per CPU).
 
 // the rest of the runtime (C, for now)
-extern fn auk__trace_on_overflow(fn_name: raw.Ptr<u8>) = "void auk__trace_on_overflow(const char *)"
 extern fn auk__dbg_thread_handoff(): i64 = "int64_t auk__dbg_thread_handoff(void)"
 extern fn auk__dbg_thread_adopt(id: i64) = "void auk__dbg_thread_adopt(int64_t)"
 // libc
@@ -198,7 +197,7 @@ fn on_fault(sig: i32, si: raw.Ptr<()>, uc: raw.Ptr<()>) uses raw, ffi {
     recover.auk__catch_throw_overflow()
   }
   flush_stdout()
-  auk__trace_on_overflow(loc)
+  trace.auk__trace_on_overflow(loc)
   put("panic: stack overflow\n  at ")
   put(loc)
   put("\n")
@@ -227,7 +226,7 @@ fn install() uses raw, ffi {
 /// in a process whose runtime started before the program (the self-hosted compiler running the
 /// program it compiled) the tracer's handler would otherwise come first, and an overflow would
 /// end as a bare signal instead of a panic.
-export fn auk__stack_handlers_first() uses raw, ffi {
+pub export fn auk__stack_handlers_first() uses raw, ffi {
   install()
 }
 

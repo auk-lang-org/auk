@@ -10,4 +10,4 @@
 ///   (str.c), `arr`, `map`, `stack` (+ `stackos`, `cpu`), `testing`, `compiler`, `tls` (+ `tls_os`:
 ///   Network.framework on macOS, OpenSSL on Linux), `core_*` (core.c: fs, net, env, time, proc;
 ///   + `core_os`), `audio_out` (+ `audio_os`), `gui` (+ `gui_os`), `gui_host` (`.macos`/`.linux`), `rc`,
-///   `task`.
+///   `task`, `trace`.

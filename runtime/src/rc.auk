@@ -13,8 +13,6 @@
 // the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
 extern fn auk__dbg_on_panic(loc: raw.Ptr<u8>, msg: raw.Ptr<u8>, n: usize, caught: bool) =
   "void auk__dbg_on_panic(const char *, const char *, size_t, bool)"
-extern fn auk__trace_on_panic(loc: raw.Ptr<u8>, msg: raw.Ptr<u8>, n: usize, caught: bool) =
-  "void auk__trace_on_panic(const char *, const char *, size_t, bool)"
 extern fn auk__conn_free(p: raw.Ptr<()>) = "void auk__conn_free(void *)"
 extern fn auk__listener_free(p: raw.Ptr<()>) = "void auk__listener_free(void *)"
 // the C library
@@ -339,7 +337,7 @@ pub export fn auk__panic(loc: raw.Ptr<u8>, msg: raw.Ptr<u8>, n0: usize): never u
   let caught = recover.auk__catch_active() != 0
   auk__dbg_on_panic(place, msg, n, caught)
   if caught {
-    auk__trace_on_panic(loc, msg, n, true)
+    trace.auk__trace_on_panic(loc, msg, n, true)
     recover.auk__catch_throw(place, msg, n)
   }
   let e = cfacts.stderr()
@@ -349,7 +347,7 @@ pub export fn auk__panic(loc: raw.Ptr<u8>, msg: raw.Ptr<u8>, n0: usize): never u
   let _ = c_fputs(place, e)
   let _ = c_fputs("\n", e)
   let _ = c_fflush(e)
-  auk__trace_on_panic(loc, msg, n, false)
+  trace.auk__trace_on_panic(loc, msg, n, false)
   c_exit(101)
 }
 

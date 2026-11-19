@@ -6,7 +6,6 @@ extern fn auk__xmalloc(n: usize): raw.Ptr<()> = "void *auk__xmalloc(size_t)"
 extern fn auk_release(p: raw.Ptr<()>) = "void auk_release(void *)"
 extern fn auk_arr_len(a: raw.Ptr<abi.Arr>): i64 = "int64_t auk_arr_len(const void *)"
 extern fn auk__wait_fd(fd: i32, write: bool) = "void auk__wait_fd(int, bool)"
-extern fn auk__trace_flush() = "void auk__trace_flush(void)"
 extern fn auk_leak_check(): i64 = "int64_t auk_leak_check(void)"
 extern fn c_fcntl(fd: i32, cmd: i32, ...): i32 = "int fcntl(int, int, ...)"
 // libc
@@ -130,7 +129,7 @@ export fn auk_proc_exit(code: i64, loc: raw.Ptr<u8>): never uses raw, ffi {
   }
   fflush(cfacts.stdout())
   fflush(cfacts.stderr())
-  auk__trace_flush()
+  trace.auk__trace_flush()
   if auk_leak_check() != 0 {
     c_exit(102)
   }

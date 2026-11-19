@@ -21,8 +21,6 @@ extern fn auk_arr_make_unique(pa: raw.Ptr<raw.Ptr<abi.Arr>>): raw.Ptr<()> = "voi
 extern fn auk_arr_push(pa: raw.Ptr<raw.Ptr<abi.Arr>>, e: raw.Ptr<()>) = "void auk_arr_push(void *, const void *)"
 extern fn auk_arr_slice(a: raw.Ptr<abi.Arr>, lo: i64, hi: i64, loc: raw.Ptr<u8>): raw.Ptr<abi.Arr> =
   "void *auk_arr_slice(void *, int64_t, int64_t, const char *)"
-// trace.c's flag: the tracer is showing values
-extern var auk_trace_live: bool = "auk_trace_live"
 
 // the C library
 extern fn c_strlen(s: raw.Ptr<u8>): usize = "size_t strlen(const char *)"
@@ -55,11 +53,11 @@ export fn auk__dbg_set_busy(b: bool): bool {
 
 export fn auk__show_left(): i64 = show_left
 
-export fn auk__set_show_left(v: i64) {
+pub export fn auk__set_show_left(v: i64) {
   show_left = v
 }
 
-fn showing(): bool uses raw = raw.atomic_load(raw.addr_of(&auk_trace_live), raw.Order.Relaxed) || dbg_busy
+fn showing(): bool uses raw = raw.atomic_load(raw.addr_of(&trace.auk_trace_live), raw.Order.Relaxed) || dbg_busy
 
 pub export fn auk__show_exhausted(): bool uses raw = showing() && show_left == 0
 

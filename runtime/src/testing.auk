@@ -15,16 +15,6 @@ extern fn auk_str_byte_len(s: raw.Ptr<abi.Str>): i64 = "int64_t auk_str_byte_len
 extern fn auk__fmt_i64(out: raw.Ptr<u8>, v: i64): i32 = "int auk__fmt_i64(char *, int64_t)"
 extern fn auk_env_set_args(argc: i32, argv: raw.Ptr<raw.Ptr<u8>>) = "void auk_env_set_args(int, char **)"
 extern fn auk_env_args(): raw.Ptr<abi.Arr> = "void *auk_env_args(void)"
-extern fn auk__trace_peek(loc: raw.Ptr<u8>, src_text: raw.Ptr<u8>, shown: raw.Ptr<abi.Str>) =
-  "void auk__trace_peek(const char *, const char *, const void *)"
-extern fn auk__trace_tail_mode(): bool = "bool auk__trace_tail_mode(void)"
-extern fn auk__trace_dir(): raw.Ptr<u8> = "const char *auk__trace_dir(void)"
-extern fn auk__trace_test_begin(name: raw.Ptr<u8>, tail_path: raw.Ptr<u8>) = "void auk__trace_test_begin(const char *, const char *)"
-extern fn auk__trace_test_end(name: raw.Ptr<u8>, ok: bool, tail_path: raw.Ptr<u8>) =
-  "void auk__trace_test_end(const char *, bool, const char *)"
-extern fn auk__trace_flush() = "void auk__trace_flush(void)"
-/// C: `_Atomic bool`
-extern var auk_trace_live: u8 = "auk_trace_live"
 // libc
 extern fn strlen(s: raw.Ptr<u8>): usize = "size_t strlen(const char *)"
 extern fn strstr(s: raw.Ptr<u8>, sub: raw.Ptr<u8>): raw.Ptr<u8> = "char *strstr(const char *, const char *)"
@@ -88,8 +78,8 @@ export fn auk_peek(loc: raw.Ptr<u8>, src_text: raw.Ptr<u8>, shown: raw.Ptr<abi.S
   fwrite(raw.cast(auk_str_cstr(shown)), 1, usize(auk_str_byte_len(shown)), errf)
   fputc(10, errf) // '\n'
   funlockfile(errf)
-  if raw.atomic_load(raw.addr_of(&auk_trace_live), raw.Order.Relaxed) != 0 {
-    auk__trace_peek(loc, src_text, shown)
+  if raw.atomic_load(raw.addr_of(&trace.auk_trace_live), raw.Order.Relaxed) {
+    trace.auk__trace_peek(loc, src_text, shown)
   }
 }
 
@@ -205,8 +195,8 @@ export fn auk_test_main(argc: i32, argv: raw.Ptr<raw.Ptr<u8>>): i32 uses raw, ff
   let errf = cfacts.stderr()
   var passed: i64 = 0
   var failed: i64 = 0
-  let tail = auk__trace_tail_mode()
-  let traced = tail || !auk__trace_dir().is_null()
+  let tail = trace.auk__trace_tail_mode()
+  let traced = tail || !trace.auk__trace_dir().is_null()
   var tail_buf = PathBuf {}
   let tail_path: raw.Ptr<u8> = raw.cast(raw.addr_of(&tail_buf))
   if tail {
@@ -248,7 +238,7 @@ export fn auk_test_main(argc: i32, argv: raw.Ptr<raw.Ptr<u8>>): i32 uses raw, ff
       dup2(fds.w, 2)
       close(fds.w)
       if traced {
-        auk__trace_test_begin(t.name, tail_ptr)
+        trace.auk__trace_test_begin(t.name, tail_ptr)
       }
       var tr = TestRun { func: t.func }
       stack.auk__run_on_big_stack(raw.fn_of(run_test), raw.cast(raw.addr_of(&tr)))
@@ -260,10 +250,10 @@ export fn auk_test_main(argc: i32, argv: raw.Ptr<raw.Ptr<u8>>): i32 uses raw, ff
         fwrite(raw.cast(auk_str_cstr(s)), 1, usize(auk_str_byte_len(s)), errf)
         fputc(10, errf)
         fflush(errf)
-        auk__trace_flush()
+        trace.auk__trace_flush()
         c_exit(1)
       }
-      auk__trace_flush()
+      trace.auk__trace_flush()
       if auk_leak_check() != 0 {
         c_exit(1)
       }
@@ -280,7 +270,7 @@ export fn auk_test_main(argc: i32, argv: raw.Ptr<raw.Ptr<u8>>): i32 uses raw, ff
     }
     let ok = cfacts.wifexited(status) && cfacts.wexitstatus(status) == 0
     if traced {
-      auk__trace_test_end(t.name, ok, tail_ptr)
+      trace.auk__trace_test_end(t.name, ok, tail_ptr)
     }
     if ok {
       passed += 1
