@@ -703,8 +703,10 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       [runtime-port.md](runtime-port.md), "Found by the pilot".
 
 ### 7b. Things that were C-only
-- [ ] `catch` without setjmp in C: either an LLVM setjmp/longjmp intrinsic, or (better) move
-      `catch` to LLVM landing pads / unwinding — decide early, it affects codegen.
+- [x] `catch` without setjmp in C: either an LLVM setjmp/longjmp intrinsic, or (better) move
+      `catch` to LLVM landing pads / unwinding — decide early, it affects codegen. Done
+      (2026-11-19): `runtime/src/catch.auk` on `raw.setjmp`/`raw.longjmp` (libc's
+      `_setjmp`/`_longjmp`, lowlevel.md §7); codegen unchanged.
 - [ ] ObjC: call `objc_msgSend`/`sel_registerName`/`objc_getClass` via FFI to replace
       `gui_host.m` and `audio_out.m`; blocks (if any AppKit API needs them) via a small
       block-literal layout in Auk.
@@ -722,7 +724,9 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
 
 ### 7c. Port
 - [ ] Same order as Phase 1c, one module at a time, C and Auk linked together meanwhile.
-      Done: `value` (the 7a pilot). Next: `err`, `copy`, `heap`, `rc`.
+      Done: `value` (the 7a pilot); `err`, `catch` (`raw.setjmp`; same frames, stack.c's
+      overflow recovery unchanged), `pixels` (2026-11-19; runtime-port.md, "Found by the 7c
+      port"). Next: `copy`, `heap`, `rc`.
 - [ ] `auk_rt.bc` is produced by the Auk compiler; `libauk_rt.a` via LLVM's archive writer.
 - [ ] Same C tests (called through `export fn`), then rewrite them as Auk tests. The first
       half holds for the ported modules (`run.sh` links the Auk half).

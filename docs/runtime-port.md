@@ -158,6 +158,33 @@ What the dialect lacked, or does differently from C:
    as is: the `macosx` form carries a deployment version, which LLVM's code generation reads
    (libcall availability), so switching isn't a no-op on generated code.
 
+## Found by the 7c port of `err`, `catch`, `pixels` (2026-11-19)
+
+The three moved as the pilot did (same names and symbols, C's messages byte for byte; output of
+a program over every `pixels` entry point, `AUK_GUI_TRACE=1` reports included, identical before
+and after; the hot loops (fill, blend, composite, blit_mask) as fast as the C). New findings:
+
+1. **No `var` without an initializer:** `var fr: CatchFrame` is E0020, so C's uninitialized
+   `CatchFrame fr` (a 320-byte `jmp_buf`) is a zeroed literal. In the `optnone` function that
+   calls `raw.setjmp`, the literal goes through two temporaries (a memset and two 328-byte
+   copies), so the non-panicking `catch` cost 30 ns against C's 8. `catch.auk` splits
+   `auk__catch_run`: the optimized half makes the frame (one memset), a private `optnone`
+   `run_at` calls `raw.setjmp`; 18 ns. The frame stays in the caller's memory, at the bottom of
+   its stack frame, with `run_at`'s ~200 bytes below it: inside the 512 bytes stack.c's
+   `redirect` leaves under the recovery point.
+2. **Thread-locals in `optnone` code** are reached through the TLV getter on each access (macOS):
+   the address is kept in a callee-saved register across `_setjmp`, which `_longjmp` restores.
+   Fine, but each `raw thread var` touched there is a call.
+3. **The same C prototypes in every module** (`auk__xmalloc`, `strlen`, `auk__sb_put_cstr`, …):
+   no shared module of the runtime's own C functions yet. When `str`, `arr` and `rc` move, these
+   `extern fn`s name functions the same package then defines as `export fn`s; whether one LLVM
+   module accepts both for a symbol isn't tested yet (drop the `extern fn`s and call the module
+   then).
+4. Known ones met again: `never` (`auk__panic_sb`, `auk__catch_throw` are `()` with
+   `raw.unreachable()` after the calls), a literal on the left of a fixed-width operator
+   (`u32(255) - sa`), `match` on raw constants (none needed), C's `continue` in a counted loop
+   (a `while` whose body is an `if`).
+
 ## Per file
 
 Lines are of the C today. "Globals" counts file-scope variables (thread-locals and atomics
@@ -179,7 +206,7 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | `rc.c` | 792 | 4 globals (1 thread-local, 2 atomic), 1 function-local static, overflow builtins, `atexit` callback, `%g` through `cwrap.c` | — |
 | `testing.c` | 309 | 4 globals, `fork`/`waitpid` and the `W*` status macros, `flockfile`, `stdout`/`stderr` | — |
 | `task.c` | 467 | 6 globals (1 thread-local), atomics, `pthread_create` callback | — |
-| `pixels.c` | 446 | atomics, 2 function-local statics, overflow builtins | — |
+| ~~`pixels.c`~~ | 446 | **done** (2026-11-19): `runtime/src/pixels.auk` (the statics are module `raw var`s, `raw.add/mul_overflow`) | — |
 | `ffi.c` | 298 | `dlsym`; values through `raw.Ptr` | — |
 | `core.c` | 1116 | 5 globals + 1 function-local static, `environ` (extern global), `qsort` callback, sockets/`getaddrinfo`/`posix_spawnp` structs, `S_ISDIR`, `W*` macros; `fcntl`/`ioctl`/`open` through `cwrap.c` | 5 `#if`s (OS, `SO_NOSIGPIPE`, `MSG_NOSIGNAL`, `arc4random_buf`/`getrandom`) |
 | `trace.c` | 668 | 20 globals (5 thread-locals), 3 function-local statics, `sigaction` + `atexit` callbacks, `open` through `cwrap.c` | its fatal-signal handler re-raises with `signal(sig, SIG_DFL)`: fine as an `export fn` |
