@@ -21,7 +21,7 @@ Measured 2026-11-18 (the C after "Write C that will translate to Auk later" was 
   switch). Constants are `enum`s or typed `static const`s (`AUK_MAIN_STACK`, `STACK_GUARD`...).
 - **No bit-fields** (none were left).
 - **Unions: three, all `raw union`s:** `AukValue.u` (`auk_rt.h`: bool / i64 / f64 / three
-  pointers; the pilot module `value.c` uses it), and in `gui.c` the two control-message
+  pointers; the pilot module, now `runtime/src/value.auk`, uses it), and in `gui.c` the two control-message
   buffers of `send_msg`/`read_full` (`union { struct cmsghdr h; uint8_t b[N]; }`: the
   `cmsghdr` member is there only for alignment).
 
@@ -138,6 +138,38 @@ except as listed under "Still open" below; 6 and 8 need nothing new.
   (defined by the C files themselves, not taken from headers); `INFINITY` (a float literal);
   `jmp_buf` (the dialect's `raw.JmpBuf`, asserted at least as big as the platform's).
 
+## Found by the pilot (`value.c`, 2026-11-19)
+
+How a module moves: write `runtime/src/<module>.auk` (it is part of the package as soon as it
+exists: `auk build --lib` compiles every module of `src/`), delete `runtime/c/<module>.c` in the
+same commit (a C definition and an `export fn` of one name must never both be linked), keep
+`auk_rt.h`'s declarations as they are, and run `./build.sh --check --test`. The layouts come
+from `abi` (`abi.Value`, `abi.Str`, …); the rest of the runtime is reached through `extern fn`
+prototypes over raw types (`void *` for the runtime's own pointer types: the prototype parser
+doesn't know `AukStr`).
+
+What the dialect lacked, or does differently from C:
+
+1. **C string constants:** none, so the panic messages and tag names had no spelling. Added
+   (lowlevel.md 7a): a string literal where a `raw.Ptr<u8>` is expected is a C string.
+2. **Addresses in raw initializers** (`raw.fn_of(f)` in an `export var`'s initializer): not yet,
+   so a constant table of function pointers (`auk_ops_value`, and every `AukElemOps`,
+   `auk_ops_*`, in `rc.c`, `copy.c`, …) stays C over `export fn`s. Needed before `rc.c`.
+3. **`never` is core's only:** a `_Noreturn` C function (`auk__panic3`) is declared returning
+   `()`, and its callers follow the call with `raw.unreachable()`.
+4. **`()` results are `i8`:** an `export fn` returning `()` (or a `raw.Fn<(…) => ()>`) returns
+   Auk's unit byte where C has `void`. Harmless on arm64 and x86-64 (the caller ignores the
+   register), but not C's signature; `auk_value_retain`'s IR says `i8`.
+5. **`match` can't name a `raw let`:** an arm `V_NULL => …` binds a new name (E0401 on the
+   arms after it), so C's `switch` over enum constants became `if`/`else if` chains.
+6. **Parameters have no address:** `raw.addr_of(&param)` needs a `var` copy first (C takes
+   `&val` of a parameter).
+7. **Calls named `auk_retain`/`auk_release`** are compiled as the compiler's reference-counting
+   fast path (inline atomics, `auk__free_last` on the last reference), not as calls: equivalent,
+   but `rc.c`'s port defines those two, and must not rely on calls to them being calls.
+8. **The target triple:** auk names LLVM's default (`arm64-apple-darwin27.2.0`), clang its
+   normalized form (`arm64-apple-macosx27.2.0`); `llvm-link` warns (build.sh filters it).
+
 ## Per file
 
 Lines are of the C today. "Globals" counts file-scope variables (thread-locals and atomics
@@ -146,7 +178,7 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | file | lines | needs from the dialect | not line-by-line |
 |---|---:|---|---|
 | `auk_rt.h` | 1013 | the shared `raw struct`s (header, str, arr, map, err, obj, task, frames; flexible array members `data[]`, `slots[]`), the one union (`AukValue`), 12 function-pointer typedefs (`raw.Fn`), `_Static_assert`s → `raw assert` | stays the C contract until the C is gone (lowlevel.md, section 8) |
-| `value.c` | 239 | union `AukValue`, structs by value; nothing else (the pilot) | — |
+| ~~`value.c`~~ | 239 | **done** (2026-11-19, the pilot): `runtime/src/value.auk` | `auk_ops_value` stays C (`value_ops.c`): no addresses in raw initializers yet |
 | `err.c` | 125 | atomics (rc) | — |
 | `copy.c` | 170 | atomics, callbacks (element copy ops) | — |
 | `map.c` | 398 | callbacks (hash/eq/show ops), `const` tables | — |

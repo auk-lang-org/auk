@@ -677,9 +677,27 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
 - [x] `raw.setjmp`/`raw.longjmp` (libc's `_setjmp`/`_longjmp`: LLVM's `llvm.eh.sjlj.*` do
       nothing on AArch64; lowlevel.md §7).
 - [x] `auk build --lib`: an object or bitcode with the exported symbols, no `main`.
-- [ ] `build.sh` links C and Auk runtime objects into one `libauk_rt.a` / `auk_rt.bc`.
-- [ ] Pilot: one small module ported (`value.c`: unions, structs by value, calls into C),
-      checked by the whole suite and perf.
+- [x] `build.sh` links C and Auk runtime objects into one `libauk_rt.a` / `auk_rt.bc`
+      (2026-11-19): `runtime/` is the package `auk_rt` (`runtime/raft.toml`, module root
+      `runtime/src/lib.auk`); step 1 compiles `runtime/c` with clang as before and
+      `runtime/src` with the seed (`auk build --lib`, and `--bc`), archives the objects together
+      and llvm-links the bitcode. **Bootstrap:** the runtime's Auk half is built by the seed,
+      before stage 1 (which embeds the finished runtime). A seed that predates the dialect builds
+      `compiler/` first as *stage 0*, embedding only the C half (`auk build --lib` links no
+      runtime), and stage 0 builds the Auk half: so old seeds (and the Rust `auk` the `seeds`
+      workflow starts from) still bootstrap, one compiler build slower. `--check` also has stage
+      2 rebuild the Auk half; if that differs from step 1's (the seed was an older compiler), the
+      whole build runs again with stage 2 as the seed, so the runtime stage 2 embeds and links is
+      the one its own source compiles. `runtime/c/test/run.sh` links the Auk half too (built by
+      `target/bin/auk`, or `$AUK`). A C definition and an Auk `export fn` never share a symbol:
+      a module's C file goes when its Auk file comes.
+- [x] Pilot: `value.c` → `runtime/src/value.auk` (2026-11-19), line by line: every `AUK_API`
+      function under its C symbol, `AukValue` by value through the C ABI, calls into the C
+      runtime as `extern fn` prototypes over raw types. `auk_ops_value` (a table of function
+      addresses) stays C in `value_ops.c` until raw globals can be initialized with addresses.
+      C tests 72/72, the suite 373/373, stage 2 = stage 3, bench smoke, macOS and Linux;
+      `auk build` inlines the same Value functions as before (rtlink). Gaps found on the way:
+      [runtime-port.md](runtime-port.md), "Found by the pilot".
 
 ### 7b. Things that were C-only
 - [ ] `catch` without setjmp in C: either an LLVM setjmp/longjmp intrinsic, or (better) move
@@ -701,8 +719,10 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
 
 ### 7c. Port
 - [ ] Same order as Phase 1c, one module at a time, C and Auk linked together meanwhile.
+      Done: `value` (the 7a pilot). Next: `err`, `copy`, `heap`, `rc`.
 - [ ] `auk_rt.bc` is produced by the Auk compiler; `libauk_rt.a` via LLVM's archive writer.
-- [ ] Same C tests (called through `export fn`), then rewrite them as Auk tests.
+- [ ] Same C tests (called through `export fn`), then rewrite them as Auk tests. The first
+      half holds for the ported modules (`run.sh` links the Auk half).
 - [ ] ASan/UBSan equivalent: build the runtime with LLVM sanitizer passes from the Auk compiler.
 - [ ] ±5% perf bar against Phase 1 numbers.
 
