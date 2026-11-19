@@ -32,54 +32,10 @@ static AukErr *err_code_sb(AukStrBuf *b, int code) {
     return e;
 }
 
-static AukRes_unit unit_ok(void) {
-    AukRes_unit r = {0};
-    r.ok = true;
-    return r;
-}
-
-static AukRes_unit unit_err(AukErr *e) {
-    AukRes_unit r = {0};
-    r.err = e;
-    return r;
-}
-
 static AukRes_str str_err(AukErr *e) {
     AukRes_str r = {0};
     r.err = e;
     return r;
-}
-
-static AukRes_arr arr_ok(AukArr *a) {
-    AukRes_arr r = {0};
-    r.ok = true;
-    r.val = a;
-    return r;
-}
-
-static AukRes_arr arr_err(AukErr *e) {
-    AukRes_arr r = {0};
-    r.err = e;
-    return r;
-}
-
-/* An [int] as bytes (malloc'd, *n of them), or NULL with the first index and value outside
- * 0..255 in *bad_i and *bad_x. */
-static uint8_t *arr_to_bytes(const AukArr *a, int64_t *n, int64_t *bad_i, int64_t *bad_x) {
-    int64_t len = auk_arr_len(a);
-    const int64_t *xs = len > 0 ? (const int64_t *)a->data : NULL;
-    uint8_t *buf = auk__xmalloc((size_t)len + 1);
-    for (int64_t i = 0; i < len; i++) {
-        if (xs[i] < 0 || xs[i] > 255) {
-            free(buf);
-            *bad_i = i;
-            *bad_x = xs[i];
-            return NULL;
-        }
-        buf[i] = (uint8_t)xs[i];
-    }
-    *n = len;
-    return buf;
 }
 
 /* A growable byte buffer. */
@@ -119,27 +75,7 @@ static int slurp(FILE *f, Bytes *b) {
     return 0;
 }
 
-/* ---- print ------------------------------------------------------------------------------- */
-
-static void write_line(FILE *f, const void *p, size_t n) {
-    flockfile(f);
-    fwrite(p, 1, n, f);
-    fputc('\n', f);
-    funlockfile(f);
-}
-
-AUK_API void auk_print(const AukStr *s) {
-    write_line(stdout, auk_str_cstr(s), (size_t)auk_str_byte_len(s));
-}
-
-AUK_API void auk_print_lit(const char *cstr) {
-    write_line(stdout, cstr == NULL ? "" : cstr, cstr == NULL ? 0 : strlen(cstr));
-}
-
-AUK_API void auk_eprint(const AukStr *s) {
-    fflush(stdout);
-    write_line(stderr, auk_str_cstr(s), (size_t)auk_str_byte_len(s));
-}
+/* print: runtime/src/core_env.auk */
 
 /* fs: runtime/src/core_fs.auk; auk__bytes_to_arr: core_util.auk */
 
@@ -303,144 +239,7 @@ AUK_API AukArr *auk_rand_bytes(int64_t n, const char *loc) {
     return a;
 }
 
-/* ---- env --------------------------------------------------------------------------------- */
-
-static pthread_mutex_t args_lock = PTHREAD_MUTEX_INITIALIZER;
-static AukArr *args;
-
-AUK_API AukOpt_str auk_env_get(const AukStr *key) {
-    AukOpt_str r = {0};
-    const char *v = getenv(auk_str_cstr(key));
-    if (v == NULL) {
-        return r;
-    }
-    r.some = true;
-    r.val = auk_str_lit(v);
-    return r;
-}
-
-AUK_API void auk_env_set_args(int argc, char **argv) {
-    AukArr *a = auk_arr_new(&auk_ops_str, argc);
-    for (int i = 0; i < argc; i++) {
-        AukStr *s = auk_str_lit(argv[i]);
-        auk_arr_push(&a, &s);
-        auk_release(s);
-        auk__make_immortal(s);
-    }
-    auk__make_immortal(a);
-    /* a previous array is immortal and simply abandoned */
-    pthread_mutex_lock(&args_lock);
-    args = a;
-    pthread_mutex_unlock(&args_lock);
-}
-
-AUK_API AukArr *auk_env_args(void) {
-    pthread_mutex_lock(&args_lock);
-    if (args == NULL) {
-        args = auk_arr_new(&auk_ops_str, 0);
-        auk__make_immortal(args);
-    }
-    AukArr *a = args;
-    pthread_mutex_unlock(&args_lock);
-    return a;
-}
-
-/* Whether file descriptor fd (0 stdin, 1 stdout, 2 stderr) is a terminal. */
-AUK_API bool auk_env_is_terminal(int64_t fd) {
-    return fd >= 0 && fd <= 2 && isatty((int)fd) == 1;
-}
-
-/* The terminal's width in columns: from stdout, stderr or stdin (the first that is a terminal),
- * else $COLUMNS, else none. */
-AUK_API AukOpt_int auk_env_columns(void) {
-    AukOpt_int r = {0};
-    int fds[3] = {1, 2, 0};
-    for (int i = 0; i < 3; i++) {
-        struct winsize ws;
-        if (auk__c_ioctl_ptr(fds[i], TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
-            r.some = true;
-            r.val = ws.ws_col;
-            return r;
-        }
-    }
-    const char *v = getenv("COLUMNS");
-    if (v != NULL) {
-        /* a whole number, surrounding whitespace allowed */
-        while (*v == ' ' || (*v >= '\t' && *v <= '\r')) {
-            v++;
-        }
-        char *end = NULL;
-        errno = 0;
-        long long n = strtoll(v, &end, 10);
-        if (end != v && errno == 0) {
-            while (*end == ' ' || (*end >= '\t' && *end <= '\r')) {
-                end++;
-            }
-            if (*end == 0 && n > 0) {
-                r.some = true;
-                r.val = n;
-            }
-        }
-    }
-    return r;
-}
-
-/* stdin: read through stdio (one buffer shared by read_line, read_all and lines). Stdout is
- * flushed first, so a prompt printed without a newline-terminated flush still shows. */
-
-AUK_API AukOpt_str auk_env_read_line(void) {
-    AukOpt_str r = {0};
-    fflush(stdout);
-    char *line = NULL;
-    size_t cap = 0;
-    ssize_t n = getline(&line, &cap, stdin);
-    if (n < 0) {
-        free(line);
-        return r;
-    }
-    if (n > 0 && line[n - 1] == '\n') {
-        n--;
-    }
-    if (n > 0 && line[n - 1] == '\r') {
-        n--;
-    }
-    r.some = true;
-    r.val = auk_str_from_bytes(line, n); /* invalid UTF-8 becomes U+FFFD */
-    free(line);
-    return r;
-}
-
-AUK_API AukRes_str auk_env_read_all(void) {
-    fflush(stdout);
-    Bytes b = {0};
-    int err = slurp(stdin, &b);
-    if (err != 0) {
-        free(b.p);
-        clearerr(stdin);
-        return str_err(auk__err_errno("env.read_all: stdin", NULL, err));
-    }
-    AukRes_str r = auk_str_try_from_bytes((const char *)b.p, b.n);
-    free(b.p);
-    if (!r.ok) {
-        AukErr *e = auk_err_new_cstr("env.read_all: stdin");
-        e->cause = r.err; /* moves the reference */
-        r.err = e;
-    }
-    return r;
-}
-
-AUK_API AukArr *auk_env_lines(void) {
-    fflush(stdout);
-    Bytes b = {0};
-    if (slurp(stdin, &b) != 0) {
-        clearerr(stdin); /* keep what was read before the error */
-    }
-    AukStr *s = auk_str_from_bytes((const char *)b.p, b.n);
-    free(b.p);
-    AukArr *a = auk_str_lines(s);
-    auk_release(s);
-    return a;
-}
+/* env: runtime/src/core_env.auk */
 
 /* ---- proc -------------------------------------------------------------------------------- */
 
