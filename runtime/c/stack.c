@@ -16,6 +16,8 @@
  * handler allocates nothing and writes with write(2).
  *
  * auk: own translation unit (system ucontext headers) */
+/* A macro because glibc reads it while the headers below are included (dladdr's Dl_info and the
+ * ucontext register names, REG_RIP); the Auk port declares those itself, no switch needed. */
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE
 #endif
@@ -41,10 +43,10 @@
 
 /* Bytes below a thread's stack that count as an overflow when touched: the guard pages, and
  * a frame that jumped past them. */
-#define STACK_SLACK ((uintptr_t)1 << 20)
+static const uintptr_t STACK_SLACK = (uintptr_t)1 << 20;
 /* The guard below the stacks this runtime starts (a big frame can skip a small one). */
-#define STACK_GUARD ((size_t)256 << 10)
-#define ALT_STACK_SIZE ((size_t)64 << 10)
+static const size_t STACK_GUARD = (size_t)256 << 10;
+static const size_t ALT_STACK_SIZE = (size_t)64 << 10;
 
 static _Thread_local uintptr_t stack_lo;
 static _Thread_local void *alt_stack;

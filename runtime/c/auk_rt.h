@@ -25,7 +25,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Marks an entry point generated code calls (read by build.rs; expands to nothing). */
+/* Marks an entry point generated code calls (read by build.rs; expands to nothing). A macro
+ * because it is a marker on declarations, not a value: the Auk port spells it `export fn`. */
 #define AUK_API
 
 /* ---- object kinds ------------------------------------------------------------------------ */
@@ -434,8 +435,8 @@ AUK_API AukErr *auk_catch(AukThunk f, void *env, void *out);
 /* ---- stack.c ----------------------------------------------------------------------------- */
 
 /* The stack of the thread a program's `main` and each test run on, and of each task. */
-#define AUK_MAIN_STACK ((size_t)256 << 20)
-#define AUK_TASK_STACK ((size_t)32 << 20)
+static const size_t AUK_MAIN_STACK = (size_t)256 << 20;
+static const size_t AUK_TASK_STACK = (size_t)32 << 20;
 
 /* At the start and end of every Auk thread: stack bounds and an alternate signal stack, so a
  * stack overflow is a panic. */
