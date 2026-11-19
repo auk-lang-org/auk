@@ -311,6 +311,19 @@ The runtime chooses by OS and CPU in 30 places (`#if`), and needs what C headers
   as `runtime/src/cfacts.<os>-<arch>.auk`: `raw let`s and `raw struct`s, checked in. While the C
   runtime exists, `raw assert`s compare them with the headers at build time. A new platform runs
   the script once.
+  **As implemented** (2026-11-18): `runtime/gen/cfacts.sh` compiles `runtime/gen/cfacts.c` with
+  the platform's `cc`; the files for `macos-arm64`, `linux-arm64` and `linux-x86_64` are checked
+  in (the last two made in `ci/linux`'s image, `--platform=linux/amd64` for x86-64). Besides
+  `raw let`s and `raw struct`s (padding as `_pad<n>` fields, every offset a `raw assert` of the
+  value C printed), a file holds the opaque types as words of their alignment (so
+  `PTHREAD_*_INITIALIZER` are raw struct literals), `HAS_X` flags for the optional constants,
+  and the per-OS code §11 leaves to "small raw functions": `uc_pc`/`uc_sp`/`si_addr`, the `W*`,
+  `S_IS*` and `CMSG_*` macros, `errno()`, `stdout()`/`stderr()` (so no `os.*.auk` is needed for
+  them). The comparison with the headers is `runtime/test/abi/run.sh` (a `--lib` probe linked
+  with C), not a build-time step; it also checks that the files declare the same items above
+  their "only on <os>" part (macOS: `DISPATCH_TIME_*`; Linux: the ELF structs). The shared
+  types of `auk_rt.h` are `runtime/src/abi.auk`, checked the same way. docs/runtime-port.md
+  lists what each holds and what's left out.
 - **`errno` and C's macros over functions:** `errno` is `os.errno()` per OS (`*__error()` on
   macOS, `*__errno_location()` on glibc); `stdout`/`stderr` are `extern var`s (`__stdoutp` /
   `stdout`) in the per-OS files; `CMSG_*`, `S_ISDIR`, `WIFEXITED`… are small `raw` functions over

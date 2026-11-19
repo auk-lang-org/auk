@@ -5,7 +5,7 @@
 /// value; a library (`auk build --lib`) linked with C that checks layouts against C's, calls
 /// both ways and thread-locals across pthreads; its bitcode (`--bc`); C data (`extern var`);
 /// the gate (E0418), the no-RC type rule (E0419), compile-time constants (E0421); `auk fmt`
-/// and `auk check` on the dialect.
+/// and `auk check` on the dialect; runtime/src/abi.auk and cfacts against C (runtime/test/abi).
 
 pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("fixed_width_arithmetic_wraps", fixed_width_arithmetic_wraps),
@@ -24,6 +24,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("fmt_and_check_handle_the_dialect", fmt_and_check_handle_the_dialect),
   t.test("overflow_and_bit_intrinsics", overflow_and_bit_intrinsics),
   t.test("per_target_module_files", per_target_module_files),
+  t.test("abi_and_cfacts_match_c", abi_and_cfacts_match_c),
 ]
 
 let TOML = "[package]\nname = \"auk_rt\"\nversion = \"0.1.0\"\neffects = [\"raw\", \"ffi\"]\n"
@@ -248,4 +249,14 @@ fn per_target_module_files() uses env, fs, ffi, time {
   t.rm_rf(paths.join(src, "plat.{os}-{a}.auk"))
   let o3 = auk(["run", main])
   t.eq(o3.stdout, "plain\n", o3.stderr)
+}
+
+/// runtime/src/abi.auk and this platform's cfacts.<os>-<arch>.auk against C: their raw asserts,
+/// every size, offset, constant and initializer through an `auk build --lib` probe linked with
+/// C (the real auk_rt.h and system headers), and the same public items on every platform.
+fn abi_and_cfacts_match_c() uses env, fs, ffi, time {
+  t.skip_if_lacks("cc", "a C compiler to link the probe with")
+  let o = cmd.new("bash").args(["runtime/test/abi/run.sh", t.auk_bin()]).unsetenv("AUK_LEAK_CHECK").output()
+  t.check(o.success(), "runtime/test/abi/run.sh:\n{o.stdout}{o.stderr}")
+  t.has(o.stdout, "ok: abi.auk and cfacts.")
 }
