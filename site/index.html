@@ -171,6 +171,7 @@ footer a:not(.brand):hover { color: var(--accent-text); }
     </nav>
     <div class="hero">
       <div>
+        <p class="eyebrow" style="color:#6fbbe2">Auk 1.0 is out</p>
         <h1>Short to write. <em>Hard to get wrong.</em></h1>
         <p class="lede">Auk is a statically typed language that compiles to native code with LLVM. It is built so that code, <b>especially code an AI model writes</b>, takes few tokens and gets checked hard before it runs.</p>
         <div class="cta">
@@ -427,13 +428,13 @@ weather 0.1.0   uses net
       <div class="text">
         <p class="eyebrow">Get started</p>
         <h2>Build from source</h2>
-        <p>Auk is at version 0.1. You need Rust and LLVM 23; <code>auk build</code> also needs a system linker. <code>auk run</code> and <code>auk test</code> compile in memory, so they start right away.</p>
+        <p>Auk is at version 1.0. Download <code>auk</code> and <code>raft</code> for macOS (arm64) or Linux (arm64, x86-64) from the <a href="https://github.com/auk-lang-org/auk/releases/latest">latest release</a>, or build them from source: you need LLVM 23 and a system linker, no C compiler. <code>auk run</code> and <code>auk test</code> compile in memory, so they start right away.</p>
         <p>Then read the language reference with <code>auk spec</code> and try the programs in <code>examples/</code>: start with <code>hello.auk</code>, <code>fib.auk</code> and <code>tour.auk</code>.</p>
       </div>
       <div class="steps">
-        <div class="step"><div><p>Install LLVM 23 and build the compiler and package manager.</p>
+        <div class="step"><div><p>Install LLVM 23 and build the compiler and package manager into <code>~/.auk/bin</code>.</p>
           <div class="win"><pre class="out"><span class="pr">$ </span>brew install llvm@23
-<span class="pr">$ </span>cargo install --path .</pre></div></div></div>
+<span class="pr">$ </span>./build.sh --install</pre></div></div></div>
         <div class="step"><div><p>Write a program.</p>
           <div class="win"><div class="win-bar"><span>hello.auk</span></div><pre data-auk>fn main() {
   print("Hello from Auk!")
