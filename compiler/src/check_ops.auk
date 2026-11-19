@@ -52,6 +52,29 @@ pub fn place(c: var check.Checker, e: ast.Expr, mutate: bool, use_: check.PlaceU
       }
       t
     }
+    Field(x, name) when c.prog.raw_ok(c.cur_module()) => {
+      // the runtime's dialect: a field through a `raw.Ptr` needn't be a mutable place
+      let bt = c.place(x, false, use_)
+      if mutate && !(c.shallow(bt) is types.Ty.Ptr(_)) { let _ = c.place(x, true, use_) }
+      let t = c.field_of(e, x, bt, name)
+      c.record(e.id, t)
+      t
+    }
+    MethodCall(_, name, _) when name.name == "at" && c.prog.raw_ok(c.cur_module()) => {
+      // `p.at(i) = v`: element `i` of the array at `p`
+      let t = c.infer(e, none)
+      let is_at = match c.cx.t.calls.get(e.id) {
+        some(call) => match call.callee {
+          Fn(f, _) => c.fns[f].kind is typed.FnKind.Intrinsic(typed.Intrinsic.Raw("at"), _)
+          _ => false
+        }
+        none => false
+      }
+      if mutate && !is_at && !t.has_error() {
+        c.err(diag.new("E0027", e.span, "this expression can't be changed"))
+      }
+      t
+    }
     Field(x, name) => {
       let bt = c.place(x, mutate, use_)
       let t = c.field_of(e, x, bt, name)

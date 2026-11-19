@@ -1429,6 +1429,8 @@ fn expr_inner(lw: var Lower, e: ast.Expr, tail: bool): Val = match e.kind {
     lw.adopt(ty, val)
   }
   OptChain(x, name, args) => lw.opt_chain(e, x, name, args != none)
+  TypeArgs(x, _) => lw.expr_inner(x, tail)
+  FieldSel(_) => val_unit()
   Else(x, arm) => lw.else_expr(e, x, arm)
   Await(x) => lw.await_(e, x)
   Catch(x) => lw.catch_(e, x)
@@ -1814,6 +1816,17 @@ fn call(lw: var Lower, e: ast.Expr, first0: Val?, tail: bool): Val {
     (Instance(i), Task(_)) => match lw.tp.instances[i].body {
       Fn(f) => if lw.tp.fns[f].is_async { return lw.spawn(i, args, ret) }
       _ => {}
+    }
+    _ => {}
+  }
+  match target {
+    Intrinsic(Raw(n), _) => {
+      var targs: [types.Ty] = []
+      match call.callee {
+        Fn(_, ts) => for t in ts { targs.push(types.subst(t, lw.subst)) }
+        _ => {}
+      }
+      return mir.lower.lowlevel.intrinsic(&lw, e, n, targs, args, ret)
     }
     _ => {}
   }
@@ -2571,6 +2584,7 @@ fn expr_borrow_if(lw: var Lower, e: ast.Expr, rest_pure: bool): Val = if rest_pu
 fn field_val(lw: var Lower, e: ast.Expr, b: Val, name: str): Val {
   let bt = b.ty
   let ft = lw.ty(e.id)
+  if bt is types.Ty.Ptr(_) { return mir.lower.lowlevel.ptr_field(&lw, b.c, bt, name, ft) }
   if bt is types.Ty.Named(_, _) {
     if b.is_never() { return val_never() }
     let i = lw.field_index(bt, name) else return val_never()
@@ -2674,11 +2688,14 @@ fn place(lw: var Lower, e: ast.Expr): (mir.Ex, types.Ty) = match e.kind {
       _ => lw.place_tmp(e)
     }
   }
+  MethodCall(_, name, _) when name.name == "at" && lw.t.calls.contains(e.id) && mir.lower.lowlevel.is_raw_call(&lw, e.id) =>
+    mir.lower.lowlevel.at_place(&lw, e)
   _ => lw.place_tmp(e)
 }
 
 /// The place of field `name` of the struct place `b` (of type `bt`), for writing.
 fn place_field(lw: var Lower, e: ast.Expr, b: mir.Ex, bt: types.Ty, name: str): (mir.Ex, types.Ty) {
+  if bt is types.Ty.Ptr(_) { return mir.lower.lowlevel.ptr_field_place(&lw, b, bt, name) }
   let ft = match bt {
     Named(dd, args) when types.is_struct(lw.tp.defs, dd) => {
       let s = types.subst_of(lw.tp.defs, dd, args)
@@ -4182,7 +4199,8 @@ fn changes(sc: var Scan, x: ast.Expr) {
 
 fn scan(sc: var Scan, e: ast.Expr) {
   match e.kind {
-    Lit(_) | Hole => {}
+    Lit(_) | Hole | FieldSel(_) => {}
+    TypeArgs(x, _) => sc.scan(x)
     Name(n) => sc.names[n] = true
     Measured(x, _) | Field(x, _) | TupleField(x, _) | Unary(_, x) => sc.scan(x)
     Unwrap(x) | Await(x) | AwaitAny(x) | Catch(x) | Assert(x) | Peek(x) => sc.scan(x)

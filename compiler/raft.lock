@@ -5,4 +5,4 @@ name = "llvm"
 version = "0.1.0"
 source = "path:../packages/llvm"
 effects = ["ffi"]
-checksum = "sha256:7e491640c970ab91ce12ff15c42c91381a509f1df81c6af46f1246a6b4861062"
+checksum = "sha256:e0e40af08ca0025cb11a0fa0738d63b98284f341e79bd8608860631d78f97b47"

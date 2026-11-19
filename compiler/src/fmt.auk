@@ -1157,6 +1157,14 @@ fn expr_inner(f: var Fmt, e: ast.Expr, cx: Cx): fmt.doc.Doc {
       }
     }
     Continue => text("continue")
+    TypeArgs(x, ts) => match x.kind {
+      MethodCall(recv, name, xs) => concat([
+        text("{f.text_of(recv.span)}.{name.name}<{tys(ts)}>"),
+        f.args(xs, x.span),
+      ])
+      _ => text(f.text_of(e.span))
+    }
+    FieldSel(n) => text(".{n.name}")
     Peek(x) => {
       let d = if peek_operand_ok(x) {
         f.expr(x, Cx { min: 1, last: cx.last, ..CX0 })

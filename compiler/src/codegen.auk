@@ -391,6 +391,13 @@ pub fn program(g: var Gen, ex: Exports): ()! uses ffi {
     llvm.values.set_linkage(fv, if export { llvm.EXTERNAL_LINKAGE } else { llvm.INTERNAL_LINKAGE })
     for (k, a) in sig.attrs { llvm.values.add_attribute_at_index(fv, k, a) }
     for a in fattrs { llvm.values.add_attribute_at_index(fv, llvm.ATTRIBUTE_FUNCTION_INDEX, a) }
+    if rawgen.calls_setjmp(f.body) {
+      // after `raw.setjmp` returns the second time, every local must hold its last value
+      // (C's `volatile` rule): no optimization keeps one in a register across it
+      for a in ["optnone", "noinline"] {
+        llvm.values.add_attribute_at_index(fv, llvm.ATTRIBUTE_FUNCTION_INDEX, enum_attr(g, a))
+      }
+    }
     g.funcs.push((fv, sig))
   }
   for gl in prog.globals {
@@ -613,7 +620,7 @@ pub fn store(g: Gen, v: llvm.Value, at: llvm.Value) uses ffi {
 pub fn load_ty(g: Gen, t: llvm.Type, at: llvm.Value): llvm.Value uses ffi =
   llvm.builder.build_load2(g.b, t, at, "")
 
-fn temp(g: var Gen, t: mir.MTy): llvm.Value uses ffi = alloca(&g, t)
+pub fn temp(g: var Gen, t: mir.MTy): llvm.Value uses ffi = alloca(&g, t)
 
 fn zero_mem(g: var Gen, at: llvm.Value, t: mir.MTy) uses ffi {
   let l = lay(&g, t)
@@ -689,13 +696,13 @@ fn label_block(g: var Gen, l: int): llvm.BasicBlock uses ffi {
 }
 
 /// An i1 from an Auk bool (i8).
-fn truth(g: Gen, v: llvm.Value): llvm.Value uses ffi {
+pub fn truth(g: Gen, v: llvm.Value): llvm.Value uses ffi {
   let t = llvm.values.type_of(v)
   if t == g.t_i1 { return v }
   llvm.builder.build_icmp(g.b, llvm.INT_NE, v, llvm.values.const_null(t), "")
 }
 
-fn bool8(g: Gen, v: llvm.Value): llvm.Value uses ffi = llvm.builder.build_zext(g.b, v, g.t_i8, "")
+pub fn bool8(g: Gen, v: llvm.Value): llvm.Value uses ffi = llvm.builder.build_zext(g.b, v, g.t_i8, "")
 
 fn stmts(g: var Gen, ss: [mir.Stmt]): ()! uses ffi {
   for s in ss { stmt(&g, s)? }
@@ -1233,6 +1240,10 @@ fn bin(g: var Gen, op: mir.BOp, a: mir.Ex, b: mir.Ex): llvm.Value uses ffi {
   let is_ptr = llvm.values.type_of(x) == g.t_ptr
   let t_i64 = g.t_i64
   let t_ptr = g.t_ptr
+  // the runtime's dialect: an address plus a byte offset is a GEP (`p.offset(i)`, `p.at(i)`)
+  if op == mir.BOp.Add && (a.ty is mir.MTy.D(types.Ty.Ptr(_))) {
+    return llvm.builder.build_gep2(bld, g.t_i8, x, [y0], "")
+  }
   // arithmetic on pointers goes through integers
   let arith = (f: (llvm.Builder, llvm.Value, llvm.Value, str) => llvm.Value) => {
     if is_ptr {
@@ -1333,6 +1344,7 @@ fn call(g: var Gen, cl: mir.Callee, args: [mir.Ex], ret: mir.MTy): V uses ffi = 
     c_result(&g, c, out, rp, ret)
   }
   Rt(sym) => {
+    if rawgen.is_raw(sym) { return rawgen.call(&g, sym, args, ret) }
     match intrin.rt_inline(&g, sym, args, ret) {
       some(v) => return v
       none => {}

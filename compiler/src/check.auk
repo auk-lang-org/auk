@@ -122,6 +122,8 @@ pub struct BodyCx {
   /// > 0 while inferring expressions whose context already failed (no follow-up errors).
   quiet: int,
   local_start: int,
+  /// The explicit type arguments of the call being checked (`raw.size_of<T>()`).
+  explicit: [types.Ty]?,
 }
 
 pub struct Checker {
@@ -515,6 +517,7 @@ fn empty_cx(m: int): BodyCx = BodyCx {
   direct_await: false,
   quiet: 0,
   local_start: 0,
+  explicit: none,
 }
 
 // ---- diagnostics ----
@@ -1970,6 +1973,7 @@ pub fn new_cx(c: Checker, module: int, body: typed.BodyRef, generics: GenScope):
   direct_await: false,
   quiet: 0,
   local_start: c.tables[module].locals.len(),
+  explicit: none,
 }
 
 /// Start checking a body (Rust's `self.cxs.push(cx)`).
@@ -2383,6 +2387,7 @@ fn finish_body(c: var Checker) {
       c.tables[m].locals[l].ty = fixed
     }
   }
+  if c.prog.raw_ok(m) && !c.prog.is_core(m) { check_raw.validate(&c, cx.t, m) }
   c.raw_body_types(cx)
   if unresolved.len() > 0 && c.errs.len() == 0 {
     // report at the first (in source order) expression whose type is unknown
@@ -2445,6 +2450,9 @@ fn raw_body_types(c: var Checker, cx: BodyCx) {
     }
   }
 }
+
+/// Is `f` an `export fn` (C's calling convention, its name as the symbol)?
+pub fn is_export(c: Checker, f: int): bool = false
 
 fn raw_type_diag(c: Checker, span: diag.Span, t: types.Ty, what: str): diag.Diag =
   diag.new("E0419", span, "{what} of type `{c.defs.show(t)}` in `uses raw` code, which has no reference counting")

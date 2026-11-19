@@ -5,17 +5,18 @@
 /// A memory order for the atomics (C11's `memory_order`, without `consume`).
 pub enum Order { Relaxed, Acquire, Release, AcqRel, SeqCst }
 
-/// The buffer of `setjmp`/`longjmp` (`__builtin_setjmp`'s five words).
-pub raw struct JmpBuf { w: [usize; 5] }
+/// The buffer of `setjmp`/`longjmp`: C's `jmp_buf` (320 bytes, enough for every supported
+/// platform's).
+pub raw struct JmpBuf { w: [u64; 40] }
 
 /// The `T` at `p`.
 pub extern fn load<T>(p: Ptr<T>): T uses raw = "@raw_load"
 /// Write `v` at `p`.
 pub extern fn store<T>(p: Ptr<T>, v: T) uses raw = "@raw_store"
 /// Element `i` of the array at `p` (also a place: `p.at(i) = v`).
-pub extern fn at<T>(p: Ptr<T>, i: int): T uses raw = "@raw_at"
+pub extern fn at<T, I>(p: Ptr<T>, i: I): T uses raw = "@raw_at"
 /// The address of element `i` (in units of `T`).
-pub extern fn offset<T>(p: Ptr<T>, i: int): Ptr<T> uses raw = "@raw_offset"
+pub extern fn offset<T, I>(p: Ptr<T>, i: I): Ptr<T> uses raw = "@raw_offset"
 /// The address as an integer (the space keeps `int<` from reading as a unit).
 pub extern fn int <T>(p: Ptr<T>): int uses raw = "@raw_ptr_int"
 /// Is it NULL?
@@ -27,7 +28,7 @@ pub extern fn field_addr<T, F>(p: Ptr<T>, f: F): Ptr<F> uses raw = "@raw_field_a
 /// A pointer (or `ffi.Ptr`, `extern type`, `raw.Fn`) as a pointer to `U`: `raw.cast<U>(p)`.
 pub extern fn cast<U, T>(p: T): Ptr<U> uses raw = "@raw_cast"
 /// The pointer at address `n`.
-pub extern fn from_int<T>(n: int): Ptr<T> uses raw = "@raw_from_int"
+pub extern fn from_int<T, I>(n: I): Ptr<T> uses raw = "@raw_from_int"
 /// NULL.
 pub extern fn null<T>(): Ptr<T> uses raw = "@raw_null"
 /// The size of `T` in bytes (a compile-time constant).
@@ -41,17 +42,17 @@ pub extern fn offset_of<T, F>(f: F): usize uses raw = "@raw_offset_of"
 pub extern fn fn_of<F>(f: F): F uses raw = "@raw_fn_of"
 
 /// Copy `n` bytes (`memcpy`: the areas don't overlap).
-pub extern fn copy<T, U>(dst: Ptr<T>, src: Ptr<U>, n: usize) uses raw = "@raw_copy"
+pub extern fn copy<T, U, N>(dst: Ptr<T>, src: Ptr<U>, n: N) uses raw = "@raw_copy"
 /// Copy `n` bytes that may overlap (`memmove`).
-pub extern fn move<T, U>(dst: Ptr<T>, src: Ptr<U>, n: usize) uses raw = "@raw_move"
+pub extern fn move<T, U, N>(dst: Ptr<T>, src: Ptr<U>, n: N) uses raw = "@raw_move"
 /// Set `n` bytes to `b` (`memset`).
-pub extern fn fill<T>(dst: Ptr<T>, b: u8, n: usize) uses raw = "@raw_fill"
+pub extern fn fill<T, N>(dst: Ptr<T>, b: u8, n: N) uses raw = "@raw_fill"
 /// Compare `n` bytes (`memcmp`): negative, zero or positive.
-pub extern fn compare<T, U>(a: Ptr<T>, b: Ptr<U>, n: usize): i32 uses raw = "@raw_compare"
+pub extern fn compare<T, U, N>(a: Ptr<T>, b: Ptr<U>, n: N): i32 uses raw = "@raw_compare"
 /// `n` bytes of C memory (`malloc`; aborts when out of memory).
-pub extern fn alloc(n: usize): Ptr<()> uses raw = "@raw_alloc"
+pub extern fn alloc<N>(n: N): Ptr<()> uses raw = "@raw_alloc"
 /// Resize C memory (`realloc`; aborts when out of memory).
-pub extern fn realloc<T>(p: Ptr<T>, n: usize): Ptr<()> uses raw = "@raw_realloc"
+pub extern fn realloc<T, N>(p: Ptr<T>, n: N): Ptr<()> uses raw = "@raw_realloc"
 /// Free C memory (`free`).
 pub extern fn free<T>(p: Ptr<T>) uses raw = "@raw_free"
 
@@ -77,8 +78,9 @@ pub extern fn atomic_or<T>(p: Ptr<T>, v: T, order: Order): T uses raw = "@raw_at
 /// A memory fence.
 pub extern fn fence(order: Order) uses raw = "@raw_fence"
 
-/// `__builtin_setjmp` (`llvm.eh.sjlj.setjmp`): false when called, true when `longjmp` comes
-/// back to it. Only memory is reliable after the jump back (C's rule for `volatile`).
+/// `_setjmp` (no signal mask, no unwinding): false when called, true when `longjmp` comes
+/// back to it. A function that calls it is compiled without optimizations (`optnone`), so its
+/// locals hold their last values after the jump back.
 pub extern fn setjmp(buf: Ptr<JmpBuf>): bool uses raw = "@raw_setjmp"
-/// `__builtin_longjmp` (`llvm.eh.sjlj.longjmp`): back to the `setjmp` that filled `buf`.
+/// `_longjmp`: back to the `setjmp` that filled `buf` (its function must not have returned).
 pub extern fn longjmp(buf: Ptr<JmpBuf>): never uses raw = "@raw_longjmp"

@@ -621,6 +621,12 @@ fn expr(out: var [str], d: int, e: ast.Expr) {
       }
     }
     Continue => line(&out, d, head + "continue")
+    TypeArgs(x, tys) => {
+      line(&out, d, head + "type-args")
+      for t in tys { ty(&out, d + 1, t) }
+      expr(&out, d + 1, x)
+    }
+    FieldSel(n) => line(&out, d, head + "field-sel {n.name}")
     Peek(x) => {
       line(&out, d, head + "peek")
       expr(&out, d + 1, x)

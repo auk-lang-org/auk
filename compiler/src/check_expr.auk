@@ -320,6 +320,8 @@ pub fn mismatch(c: var check.Checker, e: ast.Expr, have: types.Ty, want: types.T
 
 pub fn expr_inner(c: var check.Checker, e: ast.Expr, exp: check.Exp): types.Ty {
   match e.kind {
+    TypeArgs(x, tys) => check_raw.type_args(&c, x, tys, exp)
+    FieldSel(_) => check_raw.field_sel(&c, e)
     Lit(l) => {
       match raw_lit(&c, e, l, false, check.exp_ty(exp)) {
         some(t) => return t
@@ -1131,6 +1133,10 @@ pub fn field_of(c: var check.Checker, e: ast.Expr, base: ast.Expr, t: types.Ty, 
     }
     Error => return types.Ty.Error
     Var(_) => return c.cant_infer(base.span, "`{c.text(base.span)}`")
+    Ptr(_) => match check_raw.ptr_field(&c, e, st, name) {
+      some(t) => return t
+      none => {}
+    }
     _ => {}
   }
   let s = c.defs.show(c.resolve(st))
@@ -1277,6 +1283,9 @@ pub fn quiet_args(c: var check.Checker, args: [check.ArgSrc]): types.Ty {
 /// `module.f(args)`: functions and variant constructors of that module.
 pub fn path_call(c: var check.Checker, e: ast.Expr, target: int, name: ast.Ident, args: [check.ArgSrc], exp: check.Exp, direct: bool): types.Ty {
   let m = c.cur_module()
+  if some(target) == c.prog.raw_module() && check_raw.is_special(name.name) {
+    return check_raw.special(&c, e, target, name, args)
+  }
   let fs = c.fns_in(m, target, name.name)
   if fs.len() > 0 { return c.call_fns(e, name.span, name.name, fs, args, exp, direct) }
   let hint = c.variant_hint(exp)
@@ -1767,6 +1776,15 @@ pub fn call_fns(c: var check.Checker, e: ast.Expr, span: diag.Span, name: str, c
   }
   if is_fail_fn(c, f) { return c.fail_call(e, args) }
   let (s, targs) = c.instantiate(f)
+  match check_raw.take_explicit(&c) {
+    some(ex) => {
+      if ex.len() > targs.len() {
+        c.err(diag.new("E0106", span, "`{name}` takes {targs.len()} type argument(s), found {ex.len()}"))
+      }
+      for (a, x) in targs.zip(ex) { let _ = c.unify(a, x) }
+    }
+    none => {}
+  }
   let info = c.fns[f]
   var ps = info.params.map(p => p.ty.subst(s))
   var ret = info.ret.subst(s)

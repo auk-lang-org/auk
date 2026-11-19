@@ -126,7 +126,8 @@ pub fn check(tp: typed.TypedProgram): [diag.FileDiag] {
 pub fn children(e: ast.Expr): [ast.Expr] {
   var out: [ast.Expr] = []
   match e.kind {
-    Lit(_) | Name(_) | Hole | Continue => {}
+    Lit(_) | Name(_) | Hole | Continue | FieldSel(_) => {}
+    TypeArgs(x, _) => out.push(x)
     Interp(parts) => for p in parts {
       match p {
         Expr(x, _) => out.push(x)

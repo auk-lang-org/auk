@@ -131,6 +131,7 @@ extern fn e0415(): str = "#embed ../../docs/errors/E0415.md"
 extern fn e0418(): str = "#embed ../../docs/errors/E0418.md"
 extern fn e0419(): str = "#embed ../../docs/errors/E0419.md"
 extern fn e0420(): str = "#embed ../../docs/errors/E0420.md"
+extern fn e0421(): str = "#embed ../../docs/errors/E0421.md"
 
 /// Every code with a page, in order.
 pub let CODES = [
@@ -264,6 +265,7 @@ pub let CODES = [
   "E0418",
   "E0419",
   "E0420",
+  "E0421",
 ]
 
 /// The markdown page for `code`.
@@ -398,5 +400,6 @@ pub fn page(code: str): str? uses ffi = match code {
   "E0418" => e0418()
   "E0419" => e0419()
   "E0420" => e0420()
+  "E0421" => e0421()
   _ => none
 }

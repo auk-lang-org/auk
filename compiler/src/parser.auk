@@ -205,6 +205,8 @@ fn compound_op(t: token.Tok): ast.BinOp? = match t {
 fn is_lvalue(e: ast.Expr): bool = match e.kind {
   Name(_) => true
   Field(x, _) | TupleField(x, _) | Index(x, _) => is_lvalue(x)
+  // the runtime's dialect: `p.at(i) = v` (the checker allows it only there)
+  MethodCall(_, n, args) => n.name == "at" && args.len() == 1
   _ => false
 }
 
@@ -1492,6 +1494,15 @@ fn postfix(p: var Parser, e0: ast.Expr, stop_at_try: bool): ast.Expr!diag.Fail {
           }
           _ => {
             let name = p.member("a field or method name after `.`")?
+            // the runtime's dialect: `raw.size_of<T>()`, explicit type arguments
+            if p.at(token.Lt) && !p.toks[p.pos].space_before && e.kind == ast.ExprKind.Name("raw") {
+              p.bump()
+              let tys = type_list(&p, token.Gt, "type argument")?
+              let args = call_args(&p)?
+              let call = p.mk(ast.ExprKind.MethodCall(e, name, args), start)
+              e = p.mk(ast.ExprKind.TypeArgs(call, tys), start)
+              continue
+            }
             if p.at(token.LParen) {
               let args = call_args(&p)?
               ast.ExprKind.MethodCall(e, name, args)
@@ -1592,6 +1603,12 @@ fn call_args(p: var Parser): [ast.Expr]!diag.Fail {
 
 fn call_arg(p: var Parser): ast.Expr!diag.Fail {
   let start = p.span()
+  // the runtime's dialect: `.f` names a field (`raw.offset_of<T>(.f)`)
+  if p.at(token.Dot) && p.peek_at(1) is Ident(_) {
+    p.bump()
+    let name = p.ident("a field name")?
+    return p.mk(ast.ExprKind.FieldSel(name), start)
+  }
   if !p.eat(token.Amp) { return expr(&p) }
   let e = await_expr(&p)?
   if !is_lvalue(e) {

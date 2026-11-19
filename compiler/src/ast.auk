@@ -239,6 +239,10 @@ pub enum ExprKind {
   List(xs: [Expr]),
   Map(entries: [(Expr, Expr)]),
   Tuple(xs: [Expr]),
+  /// The runtime's dialect: `raw.f<T, U>(args)`, a call (`expr`) with explicit type arguments.
+  TypeArgs(expr: Expr, tys: [Type]),
+  /// The runtime's dialect: `.f`, a field named in `raw.offset_of<T>(.f)`, `raw.field_addr(p, .f)`.
+  FieldSel(name: Ident),
 }
 
 /// The part after `else`: an optional error binder (`e =>`) and the fallback.

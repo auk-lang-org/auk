@@ -778,7 +778,8 @@ fn expr(f: var Finder, e: ast.Expr, parent: ast.Expr?) {
   if !f.at(e.span, Hit.Expr(e, parent)) { return }
   let me = some(e)
   match e.kind {
-    Lit(_) | Name(_) | Hole | Continue => {}
+    Lit(_) | Name(_) | Hole | Continue | FieldSel(_) => {}
+    TypeArgs(x, _) => f.expr(x, me)
     Measured(x, _) => f.expr(x, me)
     Interp(ps) => for p in ps {
       match p {

@@ -453,3 +453,12 @@ pub extern fn build_atomic_cmp_xchg(
   failure: int,
   single_thread: int,
 ): llvm.Value = "LLVMValueRef LLVMBuildAtomicCmpXchg(LLVMBuilderRef, LLVMValueRef Ptr, LLVMValueRef Cmp, LLVMValueRef New, int SuccessOrdering, int FailureOrdering, int SingleThread)"
+
+pub extern fn build_mem_move(
+  b: llvm.Builder,
+  dst: llvm.Value,
+  dst_align: int,
+  src: llvm.Value,
+  src_align: int,
+  size: llvm.Value,
+): llvm.Value = "LLVMValueRef LLVMBuildMemMove(LLVMBuilderRef B, LLVMValueRef Dst, unsigned DstAlign, LLVMValueRef Src, unsigned SrcAlign, LLVMValueRef Size)"

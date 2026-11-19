@@ -112,6 +112,10 @@ pub fn intrinsic_name(i: Intrinsic): str = match i {
 pub enum RawNode {
   /// `u8(x)`, `int(x)`, `bool(x)`, ...: a numeric conversion to `to`.
   Conv(to: types.Ty),
+  /// `raw.field_addr(p, .f)` / `raw.offset_of<T>(.f)`: field `i` of the raw struct `d`.
+  Field(d: int, i: int),
+  /// `raw.fn_of(f)`: the C address of the function its argument names.
+  FnOf,
 }
 
 pub struct ConstInfo {
