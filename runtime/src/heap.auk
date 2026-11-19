@@ -136,7 +136,7 @@ export fn auk__heap_new(): raw.Ptr<Heap> uses raw, ffi {
 
 export fn auk__heap_current(): raw.Ptr<Heap> = cur_heap
 
-export fn auk__heap_switch(h: raw.Ptr<Heap>): raw.Ptr<Heap> {
+pub export fn auk__heap_switch(h: raw.Ptr<Heap>): raw.Ptr<Heap> {
   let old = cur_heap
   cur_heap = h
   old

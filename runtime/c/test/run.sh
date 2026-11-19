@@ -10,13 +10,17 @@
 # any test fails. The filter keeps only tests whose name contains it.
 #
 # AUK is the auk that builds the Auk half: by default the checkout's target/bin/auk (build.sh),
-# else `auk` on the PATH. The sanitizers below instrument the C half only.
+# else `auk` on the PATH. The sanitizers below instrument the C half only, unless SAN_AUK=1.
 #
 # ASAN=1 builds with AddressSanitizer and UBSan. CC overrides the compiler; by default it is
 # Homebrew's clang (/opt/homebrew/opt/llvm@23/bin/clang) when present, else cc. Under ASAN=1
 # the Homebrew clang is used only if it has the sanitizer runtimes; otherwise Apple's cc.
 # TSAN=1 builds with ThreadSanitizer instead (the concurrency tests in test_conc.c are what it
 # is for: `TSAN=1 sh runtime/c/test/run.sh conc`).
+# SAN_AUK=1 (with ASAN=1 or TSAN=1) instruments the Auk half as well: `auk build --lib --bc`,
+# every function given the sanitizer's attribute, LLVM's pass (`opt`), then clang -c. Without
+# it the Auk modules' own loads, stores and atomics are invisible to the sanitizer (their
+# pthread and malloc calls are still intercepted).
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -69,7 +73,24 @@ objs=""
 auk=${AUK:-$rt/../../target/bin/auk}
 [ -x "$auk" ] || auk=$(command -v auk || true)
 [ -n "$auk" ] || { echo "run.sh: no auk to build runtime/src with (run ./build.sh, or set AUK)" >&2; exit 1; }
-"$auk" build --lib "$rt/../src/lib.auk" -o "$build/rt_auk.o"
+if [ -n "$san" ] && [ "${SAN_AUK:-0}" = 1 ]; then
+    # The Auk half instrumented too: its bitcode, every function marked for the sanitizer, run
+    # through LLVM's pass (tsan, or asan: memory and atomics), compiled by clang
+    llvm_bin=$(dirname "$CC")
+    [ -x "$llvm_bin/opt" ] || llvm_bin=/opt/homebrew/opt/llvm@23/bin
+    case "$san" in
+    *thread*) attr=sanitize_thread passes='tsan-module,function(tsan)' ;;
+    *) attr=sanitize_address passes=asan ;;
+    esac
+    "$auk" build --lib --bc "$rt/../src/lib.auk" -o "$build/rt_auk.bc"
+    "$llvm_bin/llvm-dis" "$build/rt_auk.bc" -o "$build/rt_auk.ll"
+    sed -E "s/^(attributes #[0-9]+ = \{)/\1 $attr /" "$build/rt_auk.ll" > "$build/rt_auk_san.ll"
+    "$llvm_bin/opt" -passes="$passes" "$build/rt_auk_san.ll" -o "$build/rt_auk_san.bc"
+    "$llvm_bin/clang" -c -O1 -Wno-override-module "$build/rt_auk_san.bc" -o "$build/rt_auk.o"
+    echo "the Auk half instrumented too ($attr)"
+else
+    "$auk" build --lib "$rt/../src/lib.auk" -o "$build/rt_auk.o"
+fi
 objs="$build/rt_auk.o"
 for src in "$rt"/*.c; do
     obj="$build/rt_$(basename "$src" .c).o"

@@ -52,7 +52,7 @@ export fn auk_str_copy(s: raw.Ptr<abi.Str>): raw.Ptr<abi.Str> uses raw, ffi {
 }
 
 /// Copy one element of ops from src to dst (a byte copy plus a retain without a `copy`).
-export fn auk__copy_elem(ops: raw.Ptr<abi.ElemOps>, src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw {
+pub export fn auk__copy_elem(ops: raw.Ptr<abi.ElemOps>, src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw {
   let cp = ops.copy
   if !cp.is_null() {
     cp(src, dst)

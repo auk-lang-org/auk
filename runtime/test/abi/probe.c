@@ -1,10 +1,27 @@
 /* The C side of the layout probe (run.sh): compares runtime/src/abi.auk and the platform's
  * runtime/src/cfacts.<os>-<arch>.auk, compiled by `auk build --lib`, with the C compiler's view
  * of runtime/c/auk_rt.h and the system headers. run.sh puts the generated tables
- * (tables.awk) and task.c's/chan.c's private structs in front of this file. Prints
- * "ok <n> checks" or what differs. */
+ * (tables.awk) and task.c's private struct in front of this file. Prints "ok <n> checks" or
+ * what differs. */
 #include <stdio.h>
 #include <string.h>
+
+/* chan.c's channel, as the C defined it before the port (runtime/src/chan.auk uses abi.Chan):
+ * abi.auk's layout is still checked against C's. */
+struct AukChan {
+    AukHeader h;
+    pthread_mutex_t lock;
+    pthread_cond_t cv;
+    const AukElemOps *ops;
+    /* the queue: a ring of cap slots of size bytes, count of them from head */
+    uint8_t *items;
+    size_t size;
+    int64_t cap;
+    int64_t head;
+    int64_t count;
+    bool closed;
+};
+
 
 static int bad = 0;
 static int nchecked = 0;
