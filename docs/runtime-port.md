@@ -173,7 +173,7 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | `arr.c` | 727 | callbacks (element ops, sort comparator), `ctz`/`clz` | — |
 | `chan.c` | 168 | pthread mutex/cond (opaque layouts, initializers) | — |
 | `heap.c` | 298 | 1 thread-local, atomics; `malloc_size` (macOS) / `malloc_usable_size` (Linux) | per-OS `#ifdef` |
-| `catch.c` | 142 | 4 thread-locals (the recovery-point stack) | `sigsetjmp`/`siglongjmp`: replaced by `raw.setjmp`/`raw.longjmp` (LLVM sjlj, lowlevel.md section 7), not translated |
+| ~~`catch.c`~~ | 142 | **done** (2026-11-19): `runtime/src/catch.auk`; `sigsetjmp(jb, 0)`/`siglongjmp` are `raw.setjmp`/`raw.longjmp` (libc `_setjmp`/`_longjmp`) | the setjmp half of `auk__catch_run` is its own `optnone` function (`run_at`), the frame in the optimized caller's memory |
 | `compiler.c` | 169 | 2 globals (the imprint file, its mutex), `FILE *` (`fputc`/`fwrite`) | — |
 | `str.c` | 1556 | 2 thread-locals (show budget, debugger flag), atomics; `snprintf %.*e/%.*f` through `cwrap.c`; `strtod` | float formatting through libc is the 7b item "Ryu, Unicode tables → Auk" |
 | `rc.c` | 792 | 4 globals (1 thread-local, 2 atomic), 1 function-local static, overflow builtins, `atexit` callback, `%g` through `cwrap.c` | — |
