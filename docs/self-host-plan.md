@@ -710,13 +710,16 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
 - [ ] ObjC: call `objc_msgSend`/`sel_registerName`/`objc_getClass` via FFI to replace
       `gui_host.m` and `audio_out.m`; blocks (if any AppKit API needs them) via a small
       block-literal layout in Auk.
-- [ ] Network.framework/OpenSSL bindings via FFI. Blocks: **proven workable without `-fblocks`**
+- [x] Network.framework/OpenSSL bindings via FFI. Blocks: **proven workable without `-fblocks`**
       (2026-11-18): hand-made block literals (raw structs per Clang's Block ABI: global, stack,
       stack + copy/dispose) drive every Network.framework / Security / dispatch API tls.c uses,
       incl. the verify block and a real TLS round trip; ASan/UBSan clean, 0 leaks
       (`runtime/c/test/spike/blocks.c`, recipe in [lowlevel.md](lowlevel.md) §10). Needs
       `extern var` (C data symbols: `_NSConcreteStackBlock`, …) in the dialect. No OpenSSL
-      fallback needed on macOS.
+      fallback needed on macOS. Done (2026-11-19): `runtime/src/tls.auk` + `tls_os.macos.auk`
+      (Network.framework, the blocks hand-made as above, without signatures: a C string isn't
+      a constant yet) / `tls_os.linux.auk` (OpenSSL via dlopen); `tls.c` and `-fblocks` gone
+      (runtime-port.md, "Found porting `tls.c`").
 - [ ] Ryu, Unicode tables, `buf_printf` → Auk.
 - [x] Varargs: none in our API (Phase 1 rule); libc varargs (`snprintf` of a double, `open`
       with mode, `shm_open`, `fcntl`, `ioctl`) only through the fixed-argument wrappers in
@@ -740,7 +743,8 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       `stack` (+ `stackos.<os>`, `cpu`: the overflow handler rewrites the context through
       `cfacts.uc_pc`/`uc_sp`), `testing`, `compiler`, `auk_ops_value` (into `value.auk`;
       `value_ops.c` gone) (2026-11-19; runtime-port.md, "Found by the 7c port of `stack`…").
-      Next: `rc`, `task`.
+      `tls` (+ `tls_os.<os>`; 2026-11-19, 7b's blocks; runtime-port.md, "Found porting
+      `tls.c`"). Next: `rc`, `task`.
 - [ ] `auk_rt.bc` is produced by the Auk compiler; `libauk_rt.a` via LLVM's archive writer.
 - [ ] Same C tests (called through `export fn`), then rewrite them as Auk tests. The first
       half holds for the ported modules (`run.sh` links the Auk half).

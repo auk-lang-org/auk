@@ -7,4 +7,5 @@
 ///   runtime/gen/cfacts.sh);
 /// - ported from runtime/c: `value` (with `auk_ops_value`), `err`, `recover` (catch.c: `catch` is
 ///   a keyword), `pixels`, `copy`, `heap` (+ `heap_os`), `chan`, `ffi`, `str` and `str_fmt`
-///   (str.c), `arr`, `map`, `stack` (+ `stackos`, `cpu`), `testing`, `compiler`.
+///   (str.c), `arr`, `map`, `stack` (+ `stackos`, `cpu`), `testing`, `compiler`, `tls` (+ `tls_os`:
+///   Network.framework on macOS, OpenSSL on Linux).

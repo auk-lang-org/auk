@@ -429,6 +429,63 @@ Auk function, not an `extern fn`). New findings:
    zeroed (C left them uninitialized); `_Atomic bool auk_trace_live` is read as an
    `extern var … : u8` with `raw.atomic_load` (atomics take integers and pointers).
 
+## Found porting `tls.c` (2026-11-19)
+
+`runtime/src/tls.auk` holds what both platforms share (`check_args`, `valid_host`, the
+"net.tls <host>:<port>" prefix, the Err builders); the sessions are a per-OS module,
+`tls_os.macos.auk` and `tls_os.linux.auk`, each defining `auk_net_tls`, `auk__tls_read`,
+`auk__tls_write`, `auk__tls_free`. (Not `tls.macos.auk`: the loader takes the most specific
+variant of a module *instead of* the plain file, so shared code needs its own module, as
+`heap`/`heap_os`.) Messages byte for byte as the C's (both backends' tables of reasons copied
+verbatim; the C tests' and the runner's TLS checks pass, real hosts too).
+
+macOS, the blocks (lowlevel.md §10, as the spike did, now in the runtime): `BlockHdr`,
+`BlockDesc`, `BlockDescCD` raw structs; `_NSConcreteStackBlock`/`_NSConcreteGlobalBlock` are
+`extern var … : [u8; 0]` (their addresses are the `isa`s), `_nw_content_context_default_stream`
+an `extern var … : raw.Ptr<()>` (its value); the TCP configure block is a global literal (a `raw
+var` whose `invoke`/`descriptor` are relocations); TLS configure, verify, state handler and
+`dispatch_sync`'s outcome reader are stack literals without helpers (they capture the session,
+which lives until `auk__tls_free` waits for the cancelled state); receive and send completions
+are stack literals with copy/dispose helpers that retain/release the op (`NwOp.refs` starts at 1,
+the caller's; each framework copy holds one), replacing tls.c's hand-counted `refs = 2`; the
+data applier is a stack literal (`dispatch_data_apply` doesn't copy). Invoke functions and
+helpers are private functions given by `raw.fn_of`. The block-taking SDK functions, and every
+other Network/Security/CoreFoundation/dispatch call, are `extern fn`s with `void *` objects
+and blocks; the SDK's enum values are `raw let`s (checked against the headers with a C probe
+when written: `nw_error_domain_*`, `nw_connection_state_*`, `errSec*`,
+`kCFStringEncodingUTF8`, `tls_protocol_version_TLSv12`). Linux: libssl's entry points are a
+raw struct of `raw.Fn`s in a `raw var` filled by `dlsym` under `pthread_once` (a private
+`ssl_load` by `raw.fn_of`); each call copies the pointer to a local first (a function pointer
+in a global's field isn't callable in place).
+
+Gaps hit:
+
+1. **A C string literal isn't a constant** (E0421 in a global's initializer), so a block
+   descriptor can't point at its signature string: the literals carry no
+   `BLOCK_HAS_SIGNATURE` and null signatures (Clang's encodings are comments). Nothing tls
+   hands blocks to reads them (the spike's `SPIKE_NO_SIGNATURE` run showed it first; the runtime
+   now runs that way). A string literal as a constant (a private C string with a relocation)
+   would restore them.
+2. **`{` in a string literal is interpolation**: block signatures (`^{nw_error=}`) need `{{`/`}}`
+   wherever they're spelled as strings.
+3. **`when` is a keyword** (a parameter of `dispatch_time`).
+4. Known ones met again: no fixed-array locals (`char ports[24]`, OpenSSL's `char buf[256]`,
+   inet_pton's `addr[16]`: one-field raw structs), a local can't share a module's name (C's
+   `err`, `tls`, `str` locals renamed), a function pointer stored in a global struct's field is
+   called through a local, `auk__xcalloc`/`auk__xmalloc` are `raw.alloc` + `raw.fill` (abort on
+   failure; rc.c's `oom` message isn't printed), and `err.auk`'s `auk__err_errno` is now `pub`
+   so tls calls it by path. The C functions still in C (`task.c`'s `auk__on_task`,
+   `auk__task_cancelled`, `auk__check_cancel`, `auk__wait_fd`; `core.c`'s `auk__conn_new`,
+   `auk__bytes_to_arr`, `auk__tcp_connect`; `rc.c`'s `auk_release`) are `extern fn`s: once
+   those modules move, calls by path are the preferred style (codegen now merges an `extern fn`
+   with the package's definition either way).
+5. A cancelled wait called `auk__check_cancel` and then fell through in the C (it never returns
+   then); here a `raw.trap()` follows it, so the freed session is never touched.
+
+`build.sh` and `runtime/c/test/run.sh` compile the C half with `-fno-blocks` on macOS (was
+`-fblocks`; no C file uses blocks now: clang enables them by default on Darwin, so the flag
+makes it a compile error to start again).
+
 ## Per file
 
 Lines are of the C today. "Globals" counts file-scope variables (thread-locals and atomics
@@ -468,7 +525,7 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | `audio_out.c` | 328 | 6 globals (`dlsym`'d function tables: `raw.Fn` fields), `pthread_once` | per-OS `#if` (AudioToolbox / PulseAudio) and a byte-order `#if` |
 | `gui.c` | 1301 | 26 globals, 2 `raw union`s (cmsg buffers), `CMSG_*`, `environ`, `posix_spawn` (+ the macOS `_np` call), `mmap`/`shm_open` (through `cwrap.c`), overflow builtins | 5 `#if`s (OS, `SO_NOSIGPIPE`) |
 | `gui_host.c` | 1661 | 11 globals, 22 typed `objc_msgSend` wrappers (`raw.Fn` casts, as today: no Objective-C source), CoreFoundation run-loop source callbacks, `dlopen`/`dlsym`, `mmap` | macOS only (`#if __APPLE__` around the whole host) |
-| `tls.c` | 916 | OpenSSL side: 4 globals, a `dlsym`'d function table (`raw.Fn`), `pthread_once` | **Network.framework side: blocks** (8 block literals: state, receive, send, verify handlers) and dispatch queues/semaphores: needs the block-literal layout in Auk (self-host-plan 7b) or another TLS API; the one file built with `-fblocks` |
+| ~~`tls.c`~~ | 916 | **done** (2026-11-19): `runtime/src/tls.auk` (shared checks and messages) + `tls_os.macos.auk` (Network.framework, hand-made blocks) / `tls_os.linux.auk` (OpenSSL through dlopen) | the 8 kinds of blocks are raw structs per lowlevel.md §10; the op refcount is the completion blocks' copy/dispose helpers; `-fblocks` gone from build.sh |
 | `cwrap.c` | 52 | nothing: it is the C half of the varargs boundary | **stays C** (or becomes varargs FFI support in the compiler; self-host-plan 7b) |
 
 ### Non-translatable, in short
@@ -477,7 +534,7 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
   the same frames; lowlevel.md section 7).
 - `stack.c`: rewriting the interrupted thread's registers from a signal handler; per-OS, per-CPU
   context layouts.
-- `tls.c` (macOS): blocks and libdispatch.
+- ~~`tls.c` (macOS): blocks and libdispatch.~~ Done by hand-made block literals (lowlevel.md §10).
 - `cwrap.c`: calling C varargs functions.
 - Everywhere: the `#if`s, the C library macros and per-OS constants, `environ` (items 1, 2, 4
   above).

@@ -33,7 +33,7 @@ trap 'rm -rf "$build"' EXIT INT TERM
 cflags="-std=c11 -O1 -g -I $rt"
 case "$(uname -s)" in
 Darwin)
-    cflags="$cflags -fblocks"
+    cflags="$cflags -fno-blocks"
     libs="-framework Network -framework Security -framework CoreFoundation"
     ;;
 *)

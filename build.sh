@@ -142,7 +142,8 @@ say "runtime (runtime/c with $CLANG, runtime/src with the seed)"
 CDIR="$ROOT/runtime/c"
 RT="$BUILD/rt"
 rm -rf "$RT"; mkdir -p "$RT"
-if [ "$OS" = macos ]; then PLATFORM=(-fblocks); else PLATFORM=(-D_GNU_SOURCE); fi
+# macOS: no C file uses blocks since tls.c moved to Auk (clang enables them by default there)
+if [ "$OS" = macos ]; then PLATFORM=(-fno-blocks); else PLATFORM=(-D_GNU_SOURCE); fi
 FLAGS=(-std=c11 -O2 -fno-strict-aliasing -fno-stack-protector -fPIC -ffunction-sections
   -fdata-sections -Wall -Wextra -Wno-unused-parameter "${PLATFORM[@]}" -I "$CDIR")
 units=()
