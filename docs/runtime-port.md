@@ -821,6 +821,58 @@ escape loop, `malloc`/`free` of the shown strings and `memmove`; instructions 14
 fib is ~175 ns per call for both. The non-traced runs only differ by item 4 (noise: trees
 swung 0.86x on a load spike).
 
+## Found porting `dbg.c` (2026-11-19)
+
+`runtime/src/dbg.auk` (the engine: threads, all-stop, the command loop, the entry points, the
+reader, `auk_dbg_init`), `dbg_text.auk` (C's `DText`, JSON strings, words, numbers, cutting at a
+UTF-8 boundary), `dbg_info.auk` (the debug info and breakpoint specs), `dbg_show.auk` (frames,
+values shown with the budget, the walk of parts: `auk_dbg_kid*`, locals in scope) and
+`dbg_expr.auk` (the eval hook, the mailbox `auk_dbg_eval_*` that compiler/src/dbg_eval.auk
+serves, the cache of compiled expressions copied under its lock, the Ctrl-C flag), line by line.
+Same symbols (`auk_dbg_*`, `auk__dbg_*`; `auk_dbg_armed` an `export var`), `auk_rt.h`
+untouched; every event and reply built by the same appends, so byte for byte (the `debug` suite
+and mcp's `auk_debug` compare them). Every Phase 1 fix kept: the frame_op Dekker handshake
+(sequentially consistent store then load on both sides, release store to lower the flag), the
+re-check of a breakpoint's count after its condition ran unlocked, the pause counted behind
+queued commands, `send` with `core_net.auk__send_flags` (no SIGPIPE), the eval cache entry
+copied out under `evals_lock`. stack, recover and rc call `dbg.auk__dbg_*` by path (their
+`extern fn`s are gone); `str.auk__dbg_busy/_set_busy/__show_left/__set_show_left`,
+`map.auk_map_next` and `core_net.auk__send_flags` became `pub`.
+
+1. **Each basic block that touches a `raw thread var` looks it up again** (codegen addresses
+   the global directly, without `llvm.threadlocal.address`, so nothing is CSE'd and the
+   AArch64/Darwin back end emits a TLV call per block), and an inlined `str.auk__dbg_busy()`
+   after `||` became a select: its thread-local was read on every call. The first port's
+   `auk_dbg_enter` made 6 TLV calls on the fast path (C: 4) and `auk debug` of a call-heavy
+   program was ~1.3x the C's. Fixed in the source: C's five thread-locals are one struct
+   (`cur`); enter/leave are split by hand so the registered fast path is two straight-line
+   blocks after the tid test (the park loop, with the busy check after lowering the flag, is a
+   separate function), and the unregistered path's tail differs from the other's so LLVM
+   doesn't merge them into a third block. Now 3 TLV calls; a C loop of `auk_dbg_enter` +
+   `auk_dbg_leave` (best of 7 × 100M, the load 8–20): **3.7 ns detached, 4.5 ns attached; C
+   4.9 and 6.4**. `codegen` emitting `llvm.threadlocal.address` would make this automatic.
+2. **Adding the module changed LLVM's inlining elsewhere in the Auk half:** with the dbg modules
+   in the one LLVM module, rc's private `oom` is inlined into `auk__xmalloc`, which is then
+   inlined into str's `sb_reserve` and that into `auk__sb_put`, which grows past what programs
+   inline (rtlink offers it, LLVM declines). The compiler binary's text is 575 KB smaller
+   (7.23 → 6.64 MB), hello world 16 KB. Measured, no cost: bench/perf within noise (median
+   ratios 0.99–1.06 on a machine at load 8–16, minimums 0.93–1.04), a show/interpolation
+   micro 1.00x, `auk check` of the compiler 1.00x, `auk build` of it faster (minimums 23.7 → 19.8 s over 3
+   loaded rounds: less inlined code to optimize). Not
+   changed in rc (a `noinline export fn auk__oom` restores `oom`'s call but not the rest of
+   the chain); a `noinline`/`cold` for private functions is the dialect fix.
+3. A function named `is` is a parse error (`is` is a keyword); the `strcmp(c0, "…") == 0`
+   chain uses `named(c0, "…")`.
+4. Known ones met again: `{`/`}` in string literals (`"{{\"ev\":"`), `raw.realloc` of a
+   `raw.cast` can't infer its type (pass the typed pointer), `rc.auk_release` isn't `pub` (the
+   package's `rc.release`), a null function pointer global is a `raw.Ptr<()>` cast where it's
+   called (the eval hook, the answer's initializer), `pthread_key_t` by value is passed as a
+   `u64` (`cfacts.PthreadKey.w0`, one register on every target), `_IOLBF` isn't in `cfacts`
+   (1 on both), C's `volatile sig_atomic_t` is an `i32` with relaxed atomics (taken with a swap).
+   Allocation is `raw.alloc`/`raw.realloc` (C's `auk__x*`: abort on failure without the "out
+   of memory" line). Messages go through `dbg_text.Text` instead of the string builder
+   (`no such`, the "debugger at" line: same bytes, one `fwrite`).
+
 ## Per file
 
 Lines are of the C today. "Globals" counts file-scope variables (thread-locals and atomics
@@ -856,7 +908,7 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | ~~`core.c`~~ | 1116 | **done** (2026-11-19): `runtime/src/core_{util,fs,net,env,time,proc}.auk`, `core_os.{macos,linux}.auk`; 5 globals + 1 function-local static, `environ` (extern global), `qsort` callback, sockets/`getaddrinfo`/`posix_spawnp` structs, `S_ISDIR`, `W*` macros; `fcntl`/`ioctl`/`open` (varargs calls, since `cwrap.c` went) | 5 `#if`s (OS, `SO_NOSIGPIPE`, `MSG_NOSIGNAL`, `arc4random_buf`/`getrandom`) |
 | ~~`trace.c`~~ | 668 | **done** (2026-11-19): `runtime/src/trace.auk` (see "Found porting `trace.c`") | the fatal-signal handler is a private `fn` given by `raw.fn_of`; it re-raises with `signal(sig, SIG_DFL)` as before |
 | ~~`stack.c`~~ | 376 | **done** (2026-11-19): `runtime/src/stack.auk`, `stackos.<os>.auk`, `cpu.auk` | the context's PC/SP through `cfacts.uc_pc`/`uc_sp`; x86-64's return-address slot is `cpu.RET_SLOT` |
-| `dbg.c` | 2141 | 50 globals (5 thread-locals, atomics), `pthread_key_create` destructor, `pthread_create`, `atexit`, `signal(SIGINT)` callbacks, Unix sockets | — (largest file; translate last among the plain ones) |
+| ~~`dbg.c`~~ | 2141 | **done** (2026-11-19): `runtime/src/dbg.auk` (+ `dbg_text`, `dbg_info`, `dbg_show`, `dbg_expr`); the five thread-locals are one `raw thread var` struct; the key destructor, reader thread, `atexit` and `SIGINT` handler are `raw.fn_of`s of private functions | enter/leave hand-split so the fast path is straight-line (each block re-looks-up the thread-local) |
 | ~~`audio_out.c`~~ | 328 | **done** (2026-11-19): `runtime/src/audio_out.auk` + `audio_os.<os>.auk` | the per-OS `#if` is `audio_os`; the byte-order `#if` is gone (all Linux targets are little-endian) |
 | ~~`gui.c`~~ | 1301 | **done** (2026-11-19): `runtime/src/gui.auk` + `gui_os.<os>.auk` | the `#if`s are `gui_os.SUPPORTED`, `cfacts.HAS_SO_NOSIGPIPE` and gui_os's setters for the per-OS field widths |
 | ~~`gui_host.c`~~ | 1661 | **done** (2026-11-19): `runtime/src/gui_host.macos.auk` (+ `gui_host.linux.auk`) | — |
