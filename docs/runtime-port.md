@@ -746,6 +746,81 @@ Bootstrap: the runtime now uses `...`, which a seed older than this compiler can
 by the seed) and stage 0 builds runtime/src, as for any new dialect feature, until the seed is
 re-cut.
 
+## Found porting `trace.c` (2026-11-19)
+
+`runtime/src/trace.auk`, line by line: the same symbols (`auk_trace_init/begin/call/exit/ret/err`,
+`auk__trace_*`), `auk_trace_live` a `pub export var … : bool` (C's `_Atomic bool`, read and
+written with relaxed `raw.atomic_*`), the five `_Thread_local`s and the event buffer `scratch`
+`raw thread var`s, the 64 KB output buffer a `raw var` of a one-field raw struct, C's three
+function-local statics module `raw var`s; `trace.c` deleted, `auk_rt.h` untouched. The callers
+moved to paths: `stack.auk` (`trace.auk__trace_on_overflow`), `recover.auk` (save/restore),
+`rc.auk` (`auk__trace_on_panic`), `str.auk` (`trace.auk_trace_live`, its `extern var` gone),
+`testing.auk` (peek, tail/dir mode, per-test begin/end, flush; its `u8` `extern var` gone),
+`core_proc.auk` (flush). `str.auk__set_show_left` and `stack.auk__stack_handlers_first` became
+`pub`. The crash handler is a private `fn on_signal(sig: i32)` given to `sigaction` by
+`raw.fn_of` (`SA_ONSTACK | SA_RESETHAND`, its own 64 KB `sigaltstack`), installed for SEGV, BUS,
+FPE, ILL, ABRT and then **`stack.auk__stack_handlers_first()`**, so the overflow handler stays in
+front and passes other faults on to it, as before; checked in the IR that `on_signal` and
+`auk__trace_on_overflow` allocate nothing (`write`, `__error`, `signal`, `raise`, `strlen`).
+`atexit` takes `raw.fn_of(flush_at_exit)`. Output byte for byte as the C's: the trace suite,
+`--trace-limit`, a caught and an uncaught panic, an error result, a 1000-char value cut at 200
+with `...`, control characters as `\u00XX`, a stack overflow and a segfault through FFI under
+`--trace=json` and `--trace=<file>` (`{"ev":"signal","signal":11}` last, the buffered file
+dumped by the handler) all compared against the C build: identical.
+
+What it ran into:
+
+1. **`{` in a string literal is interpolation** (met by tls too): every JSON literal is spelled
+   `"{{\"ev\":…"` / `"}}\n"`.
+2. **No `inline` for private functions:** clang inlined C's static `puts_` into `field`/`head`,
+   folding `strlen` of each literal and turning the 1–7 byte `memcpy`s into stores. LLVM left the
+   Auk `puts_` out of line (it inlined `put`, realloc path and all, into it), so each literal cost
+   a `strlen` and a `memcpy` call: +4.9% instructions per traced call. `put`'s growth is now a
+   separate `grow`, and the literals go through `put(l, "…", n)` with their byte length (as C's
+   `put(l, u, 6)` did for `\u00XX`): +1.3%. `puts_` remains for C strings of unknown length.
+3. **Thread-locals cost a call per access on macOS:** clang's `llvm.threadlocal.address` lets
+   LLVM reuse a TLV address within a function; Auk codegen loads `@tls` directly, so each access
+   in another block is a `_tlv_get_addr` call (sampled: 122 vs 72 samples in the micro-benchmark
+   below). Left as is (codegen, not this module: grouping the thread-locals into one struct
+   would halve them).
+4. **Connecting the tracer to `auk__panic` moved LLVM's inlining in the whole Auk half:** with
+   `trace.put` (reachable from `rc.auk__panic`) calling `rc.auk__xrealloc`, `str.sb_reserve` is
+   no longer inlined into most builder calls (41 call sites in the object → 281;
+   `auk_gui_present_rects`, `auk_test_main`, `arr`'s `unique` shrink by 25–55%), and through
+   rtlink every program is smaller: the compiler's text 5.47 → 5.02 MB (stage 2 7.83 → 7.12 MB),
+   raft 624 → 592 KB. Bisected in a copy of `runtime/src`: unconnected, or with `put` calling
+   `raw.realloc` instead, the object is as before (41); with `auk__trace_on_panic` a `noinline
+   export fn`, still 281 (it isn't inlining into `auk__panic`). Kept `rc.auk__xrealloc` (C's OOM
+   message, "panic: out of memory"); no benchmark moved (below), `auk check` of the compiler
+   even. An inliner heuristic shift, so the C/Auk size comparisons above don't carry over.
+
+**Checks:** `./build.sh --check --test` (stage 2 = stage 3; C tests 72/72 incl. `test_trace`;
+runner 390/390: the `trace` suite, hatch's retry prompt, `test --trace`); `ASAN=1 run.sh`
+72/72, `SAN_AUK=1 ASAN=1 run.sh` 72/72; `TSAN=1 run.sh conc` and `SAN_AUK=1 TSAN=1 run.sh conc`
+(×4) 9/9 (`conc_trace_threads`: the trace lock and the Auk half's accesses instrumented);
+`scripts/check.sh golden bench`; the Linux container (`--from-seed --check --test`).
+
+**Perf** (macOS arm64, machine shared with other agents' builds, load 3–30; the C build is
+this commit's parent rebuilt with this commit's stage 2 as seed, so both runtimes' Auk halves
+come from the same compiler), interleaved, 7 rounds, CPU
+time (user + sys), medians and minimums; instructions from `/usr/bin/time -l` where they decide.
+
+| run | C median (s) | Auk median (s) | median ratio | min ratio |
+|---|---:|---:|---:|---:|
+| `auk run --trace=/dev/null --trace-limit 1e8` fib 30 (2.69M traced calls, 5.4M events) | 0.560 | 0.570 | 1.018 | 0.980 |
+| the same untraced | 0.020 | 0.020 | 1.000 | 1.000 |
+| bench/perf fib 38 / sieve 50M / nbody 5M | 0.140 / 0.490 / 0.500 | 0.140 / 0.480 / 0.490 | 1.00 / 0.98 / 0.98 | 1.00 / 0.98 / 1.00 |
+| bench/perf hashmap 5M / trees 18 / strings 5M / sort 10M | 0.46 / 5.71 / 0.59 / 0.19 | 0.46 / 4.92 / 0.59 / 0.19 | 1.00 / 0.86 / 1.00 / 1.00 | 0.92 / 0.95 / 1.05 / 1.00 |
+| `auk check compiler/src/main.auk` | 1.000 | 0.980 | 0.980 | 0.988 |
+
+**Tracing cost per call** (`runtime/c`-style micro-benchmark linked against each
+`libauk_rt.a`: site slot, begin, call with one shown int, exit, ret with one, to `/dev/null`;
+3M calls, 5 runs): ~155–175 ns per traced call either way, the time dominated by the JSON
+escape loop, `malloc`/`free` of the shown strings and `memmove`; instructions 14.23G (C) vs
+14.10–14.39G (Auk, −0.9% median; +4.9% before item 2), cycles +1%. Through the JIT the traced
+fib is ~175 ns per call for both. The non-traced runs only differ by item 4 (noise: trees
+swung 0.86x on a load spike).
+
 ## Per file
 
 Lines are of the C today. "Globals" counts file-scope variables (thread-locals and atomics
@@ -779,7 +854,7 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | ~~`pixels.c`~~ | 446 | **done** (2026-11-19): `runtime/src/pixels.auk` (the statics are module `raw var`s, `raw.add/mul_overflow`) | — |
 | ~~`ffi.c`~~ | 298 | **done** (2026-11-19): `runtime/src/ffi.auk` | — |
 | ~~`core.c`~~ | 1116 | **done** (2026-11-19): `runtime/src/core_{util,fs,net,env,time,proc}.auk`, `core_os.{macos,linux}.auk`; 5 globals + 1 function-local static, `environ` (extern global), `qsort` callback, sockets/`getaddrinfo`/`posix_spawnp` structs, `S_ISDIR`, `W*` macros; `fcntl`/`ioctl`/`open` (varargs calls, since `cwrap.c` went) | 5 `#if`s (OS, `SO_NOSIGPIPE`, `MSG_NOSIGNAL`, `arc4random_buf`/`getrandom`) |
-| `trace.c` | 668 | 20 globals (5 thread-locals), 3 function-local statics, `sigaction` + `atexit` callbacks, `open` (called directly; `cwrap.c` is gone) | its fatal-signal handler re-raises with `signal(sig, SIG_DFL)`: fine as an `export fn` |
+| ~~`trace.c`~~ | 668 | **done** (2026-11-19): `runtime/src/trace.auk` (see "Found porting `trace.c`") | the fatal-signal handler is a private `fn` given by `raw.fn_of`; it re-raises with `signal(sig, SIG_DFL)` as before |
 | ~~`stack.c`~~ | 376 | **done** (2026-11-19): `runtime/src/stack.auk`, `stackos.<os>.auk`, `cpu.auk` | the context's PC/SP through `cfacts.uc_pc`/`uc_sp`; x86-64's return-address slot is `cpu.RET_SLOT` |
 | `dbg.c` | 2141 | 50 globals (5 thread-locals, atomics), `pthread_key_create` destructor, `pthread_create`, `atexit`, `signal(SIGINT)` callbacks, Unix sockets | — (largest file; translate last among the plain ones) |
 | ~~`audio_out.c`~~ | 328 | **done** (2026-11-19): `runtime/src/audio_out.auk` + `audio_os.<os>.auk` | the per-OS `#if` is `audio_os`; the byte-order `#if` is gone (all Linux targets are little-endian) |

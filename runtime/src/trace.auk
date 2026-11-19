@@ -118,14 +118,20 @@ fn new_line(): Line uses raw {
   l
 }
 
+/// Room for `need` bytes. Out of line, so that put (and puts_, with a literal's length known)
+/// stays small enough to inline: C's static functions were.
+fn grow(l: raw.Ptr<Line>, need: usize) uses raw, ffi {
+  var cap: usize = if l.cap == 0 { 256 } else { l.cap * 2 }
+  while cap < need {
+    cap *= 2
+  }
+  l.p = raw.cast(rc.auk__xrealloc(raw.cast(l.p), cap))
+  l.cap = cap
+}
+
 fn put(l: raw.Ptr<Line>, s: raw.Ptr<u8>, n: usize) uses raw, ffi {
   if l.n + n > l.cap {
-    var cap: usize = if l.cap == 0 { 256 } else { l.cap * 2 }
-    while cap < l.n + n {
-      cap *= 2
-    }
-    l.p = raw.cast(rc.auk__xrealloc(raw.cast(l.p), cap))
-    l.cap = cap
+    grow(l, l.n + n)
   }
   raw.copy(l.p.offset(l.n), s, n)
   l.n += n
@@ -173,7 +179,7 @@ fn put_int(l: raw.Ptr<Line>, v: i64) uses raw, ffi {
 fn put_json(l: raw.Ptr<Line>, s: raw.Ptr<u8>, n: usize, max: usize, cut0: bool) uses raw, ffi {
   let hex: raw.Ptr<u8> = "0123456789abcdef"
   var cut = cut0
-  puts_(l, "\"")
+  put(l, "\"", 1)
   var chars: usize = 0
   var i: usize = 0
   while i < n {
@@ -186,17 +192,17 @@ fn put_json(l: raw.Ptr<Line>, s: raw.Ptr<u8>, n: usize, max: usize, cut0: bool) 
       chars += 1
     }
     if c == 34 { // '"'
-      puts_(l, "\\\"")
+      put(l, "\\\"", 2)
     } else if c == 92 { // '\\'
-      puts_(l, "\\\\")
+      put(l, "\\\\", 2)
     } else if c == 10 {
-      puts_(l, "\\n")
+      put(l, "\\n", 2)
     } else if c == 13 {
-      puts_(l, "\\r")
+      put(l, "\\r", 2)
     } else if c == 9 {
-      puts_(l, "\\t")
+      put(l, "\\t", 2)
     } else if c < 0x20 || c == 0x7f {
-      puts_(l, "\\u00")
+      put(l, "\\u00", 4)
       put_byte(l, hex.at(c >> 4))
       put_byte(l, hex.at(c & 15))
     } else {
@@ -205,9 +211,9 @@ fn put_json(l: raw.Ptr<Line>, s: raw.Ptr<u8>, n: usize, max: usize, cut0: bool) 
     i += 1
   }
   if cut {
-    puts_(l, "...")
+    put(l, "...", 3)
   }
-  puts_(l, "\"")
+  put(l, "\"", 1)
 }
 
 /// A JSON string of a C string (NULL: "").
@@ -273,7 +279,7 @@ fn out_bytes_locked(p: raw.Ptr<u8>, n: usize) uses raw, ffi {
 fn emit_ev(l0: Line, last: bool) uses raw, ffi {
   var l = l0
   let lp = raw.addr_of(&l)
-  puts_(lp, "\n")
+  put(lp, "\n", 1)
   pthread_mutex_lock(raw.addr_of(&trace_lock))
   if trace_mode == T_STREAM && last {
     out_bytes_locked(l.p, l.n)
@@ -283,9 +289,9 @@ fn emit_ev(l0: Line, last: bool) uses raw, ffi {
     if trace_count >= trace_limit {
       var t = Line {}
       let tp = raw.addr_of(&t)
-      puts_(tp, "{{\"ev\":\"truncated\",\"limit\":")
+      put(tp, "{{\"ev\":\"truncated\",\"limit\":", 26)
       put_int(tp, trace_limit)
-      puts_(tp, "}}\n")
+      put(tp, "}}\n", 2)
       out_bytes_locked(t.p, t.n)
       raw.free(t.p)
       set_live(false)
@@ -317,21 +323,21 @@ fn emit(l: Line) uses raw, ffi {
 }
 
 fn head(l: raw.Ptr<Line>, ev: raw.Ptr<u8>) uses raw, ffi {
-  puts_(l, "{{\"ev\":\"")
+  put(l, "{{\"ev\":\"", 7)
   puts_(l, ev)
-  puts_(l, "\"")
+  put(l, "\"", 1)
 }
 
 fn field(l: raw.Ptr<Line>, name: raw.Ptr<u8>) uses raw, ffi {
-  puts_(l, ",\"")
+  put(l, ",\"", 2)
   puts_(l, name)
-  puts_(l, "\":")
+  put(l, "\":", 2)
 }
 
 fn end_depth(l: raw.Ptr<Line>, d: i64) uses raw, ffi {
   field(l, "depth")
   put_int(l, d)
-  puts_(l, "}}")
+  put(l, "}}", 1)
 }
 
 /// Write everything recorded so far (T_TAIL: the ring, oldest first). Async-signal-safe enough
@@ -600,17 +606,17 @@ export fn auk_trace_call(fname: raw.Ptr<u8>, loc: raw.Ptr<u8>, n: i32, args: raw
   field(lp, "loc")
   put_cjson(lp, if trace_call_site.is_null() { loc } else { trace_call_site })
   field(lp, "args")
-  puts_(lp, "[")
+  put(lp, "[", 1)
   var i: i32 = 0
   while i < n {
     if i != 0 {
-      puts_(lp, ",")
+      put(lp, ",", 1)
     }
     put_value(lp, args.at(i))
     rc.release(raw.cast(args.at(i)))
     i += 1
   }
-  puts_(lp, "]")
+  put(lp, "]", 1)
   end_depth(lp, trace_depth)
   emit(l)
   trace_depth += 1
@@ -639,7 +645,7 @@ export fn auk_trace_ret(fname: raw.Ptr<u8>, shown: raw.Ptr<abi.Str>) uses raw, f
     put_value(lp, shown)
     rc.release(raw.cast(shown))
   } else {
-    puts_(lp, "\"()\"")
+    put(lp, "\"()\"", 4)
   }
   end_depth(lp, trace_depth)
   emit(l)
@@ -698,12 +704,12 @@ pub export fn auk__trace_on_panic(loc: raw.Ptr<u8>, msg: raw.Ptr<u8>, n0: usize,
   put_json(lp, msg, n, 0, false)
   field(lp, "loc")
   if loc.is_null() {
-    puts_(lp, "\"<unknown>\"")
+    put(lp, "\"<unknown>\"", 11)
   } else {
     put_cjson(lp, loc)
   }
   if caught {
-    puts_(lp, ",\"caught\":true")
+    put(lp, ",\"caught\":true", 14)
   }
   end_depth(lp, trace_depth)
   emit_ev(l, true)
