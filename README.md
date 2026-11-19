@@ -162,12 +162,12 @@ source ─▶ lexer ─▶ parser ─▶ resolve ─▶ checker ─▶ patterns/
   [`docs/errors/`](docs/errors/) (`auk explain E0400`).
 
 The compiler is written in Auk itself (it was ported from Rust, tag `v0-rust-final`; see
-[`docs/self-host-plan.md`](docs/self-host-plan.md)). [`docs/compiler.md`](docs/compiler.md) has the full architecture: source layout, runtime ABI, and
+[`design/self-host-plan.md`](design/self-host-plan.md)). [`docs/compiler.md`](docs/compiler.md) has the full architecture: source layout, runtime ABI, and
 how contracts, holes, tests, `peek` and `imprint` compile.
 
 ## Editors
 
-[`editors/vscode/`](editors/vscode/) is a VS Code extension: syntax highlighting plus the
+[auk-vscode](https://github.com/auk-lang-org/auk-vscode) is the VS Code extension: syntax highlighting plus the
 language server (`auk lsp`) for diagnostics, quick fixes, hover, go to definition, formatting and the outline view.
 
 ## License

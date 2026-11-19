@@ -15,7 +15,7 @@
  * 5. NULL means "" wherever an AukStr * is read; retain/release accept NULL.
  * 6. `loc` parameters are "file:line:col" strings for panic messages.
  *
- * The C is written to translate to Auk later (docs/self-host-plan.md, Phase 7): plain
+ * The C is written to translate to Auk later (design/self-host-plan.md, Phase 7): plain
  * functions and structs, no macro-generated code, no varargs, no bit-fields. */
 #ifndef AUK_RT_H
 #define AUK_RT_H

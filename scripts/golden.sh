@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The golden corpus (docs/self-host-plan.md, Phase 0): what an `auk` makes of every .auk file in
+# The golden corpus (design/self-host-plan.md, Phase 0): what an `auk` makes of every .auk file in
 # tests/, examples/, packages/ (without .raft/ copies) and compiler/ (with its prelude), recorded
 # so another build can be diffed against it (the Rust compiler was the reference through Phase
 # 5; now a previous build is: e.g. the installed auk against a change in target/bin/auk).

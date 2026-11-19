@@ -736,7 +736,7 @@ fn declare_type(c: var Checker, m: int, i: int) {
   c.items[m].types[name.name] = TypeItem.Def(id)
 }
 
-// ---- user-level FFI (docs/ffi-plan.md) ----
+// ---- user-level FFI (design/ffi-plan.md) ----
 
 /// E0036 unless `m`'s package declares the `ffi` effect in its raft.toml.
 fn ffi_allowed(c: var Checker, m: int, at: diag.Span): bool {

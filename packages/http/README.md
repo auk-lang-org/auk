@@ -106,6 +106,6 @@ These are public, so you can test or reuse them:
 - Bodies must be UTF-8 text.
 - There is no keep-alive, compression or proxy support.
 - URLs can't carry credentials.
-- The server runs one connection at a time. A slow client holds up the others, and there are no timeouts yet: core has no `timeout` (see docs/package-list.md §6, gap 8).
+- The server runs one connection at a time. A slow client holds up the others, and there are no timeouts yet: core has no `timeout` (see design/package-list.md §6, gap 8).
 - A handler that panics stops the server.
 - There is no server-side TLS.

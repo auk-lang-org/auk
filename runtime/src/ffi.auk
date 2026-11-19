@@ -1,4 +1,4 @@
-/// User-level FFI (docs/ffi-plan.md): the core `ffi` module (`ffi.Ptr`, raw memory) and the
+/// User-level FFI (design/ffi-plan.md): the core `ffi` module (`ffi.Ptr`, raw memory) and the
 /// helpers generated code calls to marshal values to and from C: C strings and C arrays of list
 /// elements. An `ffi.Ptr` (and every `extern type` of user code) is a plain machine address: not
 /// reference counted, never freed automatically. (Was runtime/c/ffi.c, ported line by line.)

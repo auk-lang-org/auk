@@ -1,4 +1,4 @@
-/// Micro-benchmarks for the performance cliffs in docs/pilot-report.md (in-place mutation,
+/// Micro-benchmarks for the performance cliffs in design/pilot-report.md (in-place mutation,
 /// moving out of a container, string building, `match` on `str`, slicing). Build with `auk build` and run with
 /// an iteration count: `auk build compiler/bench/cliffs.auk -o /tmp/cliffs && /tmp/cliffs 80000`.
 

@@ -1,5 +1,5 @@
 /* A C library for tests/ffi.rs: one function per marshalling case of user-level FFI
- * (docs/ffi-plan.md). Built into a shared library by the test and named by path in the test
+ * (design/ffi-plan.md). Built into a shared library by the test and named by path in the test
  * project's raft.toml `[link] libs`. */
 #include <stdbool.h>
 #include <stdint.h>

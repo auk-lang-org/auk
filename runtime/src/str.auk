@@ -5,7 +5,7 @@
 ///
 /// Each `export fn` is `pub` too: another module of the package calls it as `str.name(…)`, never
 /// through an `extern fn` of the same symbol (which the compiler would rename: see
-/// docs/runtime-port.md, "Found porting str.c").
+/// design/runtime-port.md, "Found porting str.c").
 
 // the rest of the runtime (C, or another module's `export fn`, which such an `extern fn` resolves to)
 extern fn auk__xmalloc(n: usize): raw.Ptr<u8> = "void *auk__xmalloc(size_t)"

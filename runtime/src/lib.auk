@@ -1,4 +1,4 @@
-/// The runtime in Auk (docs/self-host-plan.md, Phase 7): the module root of the `auk_rt`
+/// The runtime in Auk (design/self-host-plan.md, Phase 7): the module root of the `auk_rt`
 /// package. build.sh compiles it with `auk build --lib` (every module of src/, the `export fn`s
 /// external under their C names) into libauk_rt.a, the bitcode into auk_rt.bc (runtime/c has no
 /// C left: only auk_rt.h, the ABI contract, and the C tests). The modules:

@@ -1,6 +1,6 @@
 # Low-level Auk (`raw`): the dialect the runtime is written in
 
-docs/self-host-plan.md, Phase 7a. The runtime (`runtime/c`, ~15k lines of C) moves to Auk. It
+design/self-host-plan.md, Phase 7a. The runtime (`runtime/c`, ~15k lines of C) moves to Auk. It
 needs what ordinary Auk deliberately lacks: raw memory, C layouts, mutable globals, atomics, no
 reference counting, and functions C calls by a fixed name. This document is the dialect: small,
 explicit in every signature, and unavailable outside the runtime.
@@ -404,7 +404,7 @@ The verify block's third argument, `complete`, is a block the framework made: ca
 ## 11. Targets: per-OS code and the C headers' facts
 
 The runtime chooses by OS and CPU in 30 places (`#if`), and needs what C headers provide
-(docs/runtime-port.md, "Gaps"). No conditional compilation in the language; instead:
+(design/runtime-port.md, "Gaps"). No conditional compilation in the language; instead:
 
 - **Per-target files** (`raw` packages only): beside `os.auk` a module may have `os.macos.auk`,
   `os.linux.auk`, `os.linux-arm64.auk`, … The resolver loads the most specific one matching the
@@ -429,7 +429,7 @@ The runtime chooses by OS and CPU in 30 places (`#if`), and needs what C headers
   them). The comparison with the headers is `runtime/test/abi/run.sh` (a `--lib` probe linked
   with C), not a build-time step; it also checks that the files declare the same items above
   their "only on <os>" part (macOS: `DISPATCH_TIME_*`; Linux: the ELF structs). The shared
-  types of `auk_rt.h` are `runtime/src/abi.auk`, checked the same way. docs/runtime-port.md
+  types of `auk_rt.h` are `runtime/src/abi.auk`, checked the same way. design/runtime-port.md
   lists what each holds and what's left out.
 - **`errno` and C's macros over functions:** `errno` is `os.errno()` per OS (`*__error()` on
   macOS, `*__errno_location()` on glibc); `stdout`/`stderr` are `extern var`s (`__stdoutp` /

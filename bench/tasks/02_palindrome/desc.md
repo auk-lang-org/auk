@@ -1,1 +1,0 @@
-Return true if the string is a palindrome when considering only ASCII letters and digits and ignoring case (all other characters are skipped). A string with no letters or digits, including the empty string, is a palindrome.

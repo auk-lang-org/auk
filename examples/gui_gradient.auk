@@ -1,4 +1,4 @@
-// A native window showing pixels drawn in Auk (M0 of docs/gui-plan.md).
+// A native window showing pixels drawn in Auk (M0 of design/gui-plan.md).
 // A gradient fills the window and a white square follows the mouse; resizing redraws it.
 // Moving the square redraws only the area it left and the area it moved to, and the
 // `graphics.canvas` shows only those.

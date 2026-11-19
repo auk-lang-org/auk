@@ -1,4 +1,4 @@
-// Text in a native window (M3 of docs/gui-plan.md), drawn by `graphics.font` on a
+// Text in a native window (M3 of design/gui-plan.md), drawn by `graphics.font` on a
 // `graphics.canvas`: after the first frame, an edit redraws and shows only the input box and the
 // status line. Type to edit the line under the heading; ←/→ and clicks move the caret, ⌫ deletes.
 // Close it with the close button, ⌘Q or Escape.

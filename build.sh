@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build Auk with LLVM and the system linker alone (docs/self-host-plan.md, Phases 6 and 7): the
+# Build Auk with LLVM and the system linker alone (design/self-host-plan.md, Phases 6 and 7): the
 # runtime, the compiler and raft, all Auk, from a seed `auk`. No C compiler.
 #
 #   ./build.sh [--check] [--test] [--install [<dir>]] [--seed <auk> | --from-seed]

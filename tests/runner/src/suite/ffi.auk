@@ -1,4 +1,4 @@
-/// tests/ffi.rs: user-level FFI (docs/ffi-plan.md), end to end through the real binary:
+/// tests/ffi.rs: user-level FFI (design/ffi-plan.md), end to end through the real binary:
 /// - every marshalling case against a small C library built here (tests/fixtures/ffi/testlib.c,
 ///   linked by path through `[link] libs`), in the JIT and in `auk build`, under the leak check;
 /// - libc functions already in the process, with no `[link]` at all;

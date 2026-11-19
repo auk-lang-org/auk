@@ -1,4 +1,4 @@
-# The runtime (docs/lowlevel.md, docs/runtime-port.md): the package of the `raw` dialect, built by
+# The runtime (docs/lowlevel.md, design/runtime-port.md): the package of the `raw` dialect, built by
 # build.sh with `auk build --lib src/lib.auk` and linked with runtime/c into libauk_rt.a and
 # auk_rt.bc. No dependencies.
 [package]

@@ -19,7 +19,7 @@ name = "http"
 version = "0.1.1"
 source = "registry"
 effects = ["net"]
-checksum = "sha256:89dd529f4fddb4f089d4f8ac53fcf87f45df80b9f9f52f5f7ab048dccc313c8c"
+checksum = "sha256:48cbe4a29c911304e2f053c070f869b3a6e5675f047d4fd1bc91302379830fe8"
 
 [[package]]
 name = "json"

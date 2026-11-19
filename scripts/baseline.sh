@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# The perf baseline (docs/self-host-plan.md, Phase 0): bench/perf numbers and compile times of
-# the current build, written to docs/perf-baseline.md (or $1) with the machine, date and commit.
+# The perf baseline (design/self-host-plan.md, Phase 0): tests/perf numbers and compile times of
+# the current build, written to design/perf-baseline.md (or $1) with the machine, date and commit.
 # Every later phase compares against it. Run it on a quiet machine.
 #   scripts/baseline.sh [out.md]        RUNS=n (default 5): best of n for every number
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-OUT="${1:-docs/perf-baseline.md}"
+OUT="${1:-design/perf-baseline.md}"
 RUNS="${RUNS:-5}"
 AUK="$ROOT/target/bin/auk"
 ./build.sh > /dev/null
@@ -19,8 +19,8 @@ trap 'rm -rf "$SCRATCH"' EXIT
 # dependency, which dominates their times; one row measures that)
 cp examples/hello.auk examples/tour.auk examples/life.auk "$SCRATCH/"
 
-echo "baseline: bench/perf (RUNS=$RUNS)..." >&2
-BENCH="$(RUNS="$RUNS" AUK="$AUK" sh bench/perf/run.sh)"
+echo "baseline: tests/perf (RUNS=$RUNS)..." >&2
+BENCH="$(RUNS="$RUNS" AUK="$AUK" sh tests/perf/run.sh)"
 
 echo "baseline: compile times..." >&2
 find tests examples packages compiler -name '*.auk' -not -path '*/.raft/*' \
@@ -97,9 +97,9 @@ below when a phase changes them.
 - **Load average when it started:** $load (a busy machine inflates every number)
 - **Method:** best of $RUNS runs (corpus-wide rows: best of $(( RUNS / 2 > 0 ? RUNS / 2 : 1 ))), wall time
 
-## Generated code: bench/perf
+## Generated code: tests/perf
 
-\`bench/perf/run.sh\` (see [bench/perf/README.md](../bench/perf/README.md)): the same seven
+\`tests/perf/run.sh\` (see [tests/perf/README.md](../tests/perf/README.md)): the same seven
 programs in Auk (\`auk build\`) and Rust (\`-C opt-level=3 -C target-cpu=native\`).
 
 $BENCH

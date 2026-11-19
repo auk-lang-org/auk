@@ -1,4 +1,4 @@
-/// tests/gaps.rs: language gaps found by the self-hosting pilot (docs/pilot-report.md,
+/// tests/gaps.rs: language gaps found by the self-hosting pilot (design/pilot-report.md,
 /// self-host-plan 2d): bare variants through `T?`/`T!`/`T!E`, or-patterns, `var` parameters in
 /// function types, stack overflow reporting, and the small string/number helpers.
 

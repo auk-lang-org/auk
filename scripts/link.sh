@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Link an executable with the system linker, called directly: no C compiler driver
-# (docs/self-host-plan.md, 7d). The same command line `auk build` makes
+# (design/self-host-plan.md, 7d). The same command line `auk build` makes
 # (compiler/src/native.auk; keep the two in step):
 #   macOS  Apple's ld (the Command Line Tools'): -arch, -platform_version macos <min> <sdk>,
 #          -syslibroot <the SDK>, -lSystem (which brings the C start code), -export_dynamic.

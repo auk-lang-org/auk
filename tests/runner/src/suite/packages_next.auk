@@ -1,4 +1,4 @@
-/// tests/packages_next.rs: the packages from `docs/packages-next.md`: `auk test` passes for each
+/// tests/packages_next.rs: the packages from `design/packages-next.md`: `auk test` passes for each
 /// with the leak checker on, and raft installs each one into a fresh project.
 
 pub fn tests(): [t.Test] uses env, fs, ffi, time = [

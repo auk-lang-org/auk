@@ -1,4 +1,4 @@
-/// tests/llvm_package.rs: the `llvm` binding package (packages/llvm, docs/self-host-plan.md 2c):
+/// tests/llvm_package.rs: the `llvm` binding package (packages/llvm, design/self-host-plan.md 2c):
 /// its tests pass under the leak checker (a module built in Auk, verified, printed, emitted, run
 /// in ORC LLJIT and called, plus a piece of codegen.rs ported), and its example runs in the JIT
 /// and as an executable, which itself links an object file with `cc`.
