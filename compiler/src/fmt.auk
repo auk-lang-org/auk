@@ -786,6 +786,7 @@ fn clause(f: var Fmt, c: ast.FnClause, method: bool): fmt.doc.Doc {
   if !method { head += vis(c.public) }
   if c.export == 1 { head += "export " }
   if c.export == 2 { head += "inline export " }
+  if c.export == 3 { head += "noinline export " }
   if c.body is some(Extern(_)) { head += "extern " }
   if c.is_async { head += "async " }
   head += "fn {c.name.name}{generics(c.generics)}"

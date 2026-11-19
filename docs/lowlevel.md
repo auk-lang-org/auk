@@ -175,7 +175,9 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   and `raw.addr_of(&name)` need `uses raw` (E0410).
 - **`export fn`:** one clause, no type parameters, raw types only (E0419); C's calling
   convention as `mir/layout.auk` classifies it (below); external linkage under its own name, so dead-code elimination keeps
-  it; `inline export fn` is the same plus `inlinehint`. `raw.fn_of(f)` takes an `export fn`, or a
+  it; `inline export fn` is the same plus `inlinehint`; `noinline export fn` plus `noinline`:
+  never inlined, not into the runtime's other functions nor (rtlink offers it as a declaration
+  only) into programs (`auk_arr_new`: inlined into programs it changed their push loops). `raw.fn_of(f)` takes an `export fn`, or a
   function whose parameters and result are numbers, `bool` and raw pointers.
 - **`auk build --lib [--bc] <file> -o <out>`** writes an object (or bitcode) at O2 with every
   function of the program, the `export fn`s and `export var`s external, no `main` and nothing

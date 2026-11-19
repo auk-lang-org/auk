@@ -66,7 +66,9 @@ inline export fn auk_arr_len(a: raw.Ptr<abi.Arr>): i64 uses raw = if a.is_null()
 inline export fn auk_arr_data(a: raw.Ptr<abi.Arr>): raw.Ptr<()> uses raw =
   if a.is_null() { raw.null() } else { raw.cast(a.data) }
 
-pub export fn auk_arr_new(ops: raw.Ptr<abi.ElemOps>, cap: i64): raw.Ptr<abi.Arr> uses raw, ffi {
+/// `noinline`: inlined into programs (rtlink), it made their push loops slower
+/// (docs/runtime-port.md, arr and map).
+pub noinline export fn auk_arr_new(ops: raw.Ptr<abi.ElemOps>, cap: i64): raw.Ptr<abi.Arr> uses raw, ffi {
   if ops.is_null() {
     auk__panic_rt("auk_arr_new: missing element ops")
     raw.unreachable()

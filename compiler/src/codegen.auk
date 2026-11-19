@@ -465,11 +465,14 @@ pub fn program(g: var Gen, ex: Exports): ()! uses ffi {
     let name = if is_entry { ex.entry } else { f.name }
     let fv = llvm.ir.add_function(g.m, name, sig.ty)
     // an `export fn` is an ordinary external definition (never dropped as unused), an `inline
-    // export fn` also `inlinehint` (for the runtime's bitcode, `rtlink`)
+    // export fn` also `inlinehint` (for the runtime's bitcode, `rtlink`), a `noinline export
+    // fn` `noinline`
     let raw_export = prog.exports.get(i) else 0
     let export = is_entry || ex.all || ex.names.contains(f.name) || raw_export > 0
     llvm.values.set_linkage(fv, if export { llvm.EXTERNAL_LINKAGE } else { llvm.INTERNAL_LINKAGE })
     if raw_export == 2 { llvm.values.add_attribute_at_index(fv, llvm.ATTRIBUTE_FUNCTION_INDEX, enum_attr(g, "inlinehint")) }
+    // a `noinline export fn`: kept out of its callers, and out of programs (`rtlink`)
+    if raw_export == 3 { llvm.values.add_attribute_at_index(fv, llvm.ATTRIBUTE_FUNCTION_INDEX, enum_attr(g, "noinline")) }
     for (k, a) in sig.attrs { llvm.values.add_attribute_at_index(fv, k, a) }
     for a in fattrs { llvm.values.add_attribute_at_index(fv, llvm.ATTRIBUTE_FUNCTION_INDEX, a) }
     if rawgen.calls_setjmp(f.body) {

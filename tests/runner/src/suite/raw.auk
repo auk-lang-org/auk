@@ -34,6 +34,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("per_target_variants_agree_e0422", per_target_variants_agree_e0422),
   t.test("abi_and_cfacts_match_c", abi_and_cfacts_match_c),
   t.test("uninitialized_locals", uninitialized_locals),
+  t.test("noinline_export_fns", noinline_export_fns),
 ]
 
 let TOML = "[package]\nname = \"auk_rt\"\nversion = \"0.1.0\"\neffects = [\"raw\", \"ffi\"]\n"
@@ -418,4 +419,24 @@ fn uninitialized_locals() uses env, fs, ffi, time {
   t.lacks_text(body("scratch"), "llvm.memset")
   t.has(body("run_lit"), "llvm.memset")
   t.lacks_text(body("run_lit"), "llvm.memcpy")
+}
+
+/// `noinline export fn`: LLVM's `noinline` (and `auk fmt` keeps it); outside the runtime, E0418.
+fn noinline_export_fns() uses env, fs, ffi, time {
+  let src = "noinline export fn auk_big(n: i64): i64 = n * 3\nexport fn auk_small(n: i64): i64 = auk_big(n) + 1\n"
+  let o = t.auk().args(["fmt", "-"]).stdin(src).output()
+  t.eq(o.stdout, src, "auk fmt keeps `noinline export fn`")
+  let main = project("noinline", src + "fn main(): int = int(auk_small(2)) - 7\n")
+  let _ = passes(main)
+  let plain = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n"
+  let gate = project_with("noinline_gate", plain, "noinline export fn f(): int = 1\nfn main() {{}}\n")
+  t.eq("{codes(gate)}", "[\"E0418\"]", "")
+  let dis = llvm_dis() else return t.skip("llvm-dis not found")
+  let bc = paths.join(dir_of(main), "n.bc")
+  let b = auk(["build", "--lib", "--bc", main, "-o", bc])
+  t.check(b.success(), b.stderr)
+  let ll = cmd.new(dis).args([bc, "-o", "-"]).output().stdout
+  // the call stays a call at O2
+  t.has(ll.split("@auk_small(")[1].split("\n}}\n")[0], "call i64 @auk_big(")
+  t.has(ll, "noinline")
 }

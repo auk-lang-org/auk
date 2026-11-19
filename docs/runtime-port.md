@@ -366,9 +366,9 @@ and 0.97x medians in three runs).
   program's loop comes out differently (the index in a register and stored each iteration,
   rather than kept in its stack slot): 1.2x on 3M-element lists, the same on 1000-element ones.
   Checked by making `auk_arr_new` touch a private `raw var` (so rtlink doesn't offer it): the
-  program's code is then instruction for instruction the C build's, and the time 0.98x. Not
-  fixed (no `noinline` in the dialect, and a fake global would be worse); `bench/perf/sort`,
-  which pushes 10M ints, is 0.99x.
+  program's code is then instruction for instruction the C build's, and the time 0.98x.
+  `bench/perf/sort`, which pushes 10M ints, is 0.99x. **Fixed** (2026-11-19): `auk_arr_new` is
+  a `noinline export fn` (lowlevel.md 7a), which rtlink never offers to programs.
 
 Self-compile (`auk build compiler/src/main.auk`, interleaved, load 6–20): best 18.81 s (C) vs
 18.84 s (Auk), medians 19.9 s vs 20.1 s; the front end alone (`auk check`, `auk ir` of

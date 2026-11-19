@@ -520,17 +520,19 @@ fn item(p: var Parser): Raw!diag.Fail {
     p.bump()
     return RItem(ast.Item.Global(global_def(&p, doc, public, start, 3)?))
   }
-  // `export fn`, `inline export fn`
+  // `export fn`, `inline export fn`, `noinline export fn`
   let export = if p.peek() == token.Ident("export") && p.peek_at(1) == token.Fn {
     1
   } else if p.peek() == token.Ident("inline") && p.peek_at(1) == token.Ident("export") && p.peek_at(2) == token.Fn {
     2
+  } else if p.peek() == token.Ident("noinline") && p.peek_at(1) == token.Ident("export") && p.peek_at(2) == token.Fn {
+    3
   } else {
     0
   }
   if export > 0 {
     p.bump()
-    if export == 2 { p.bump() }
+    if export >= 2 { p.bump() }
     var c = fn_clause(&p, doc, public, start)?
     c.export = export
     return RClause(c)

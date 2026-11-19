@@ -27,6 +27,13 @@ extern fn c_buffer(
 
 extern fn value_ptr(v: llvm.Value): ffi.Ptr = "(void *)"
 
+// NULL when the function lacks the attribute
+extern fn c_enum_attr(
+  f: llvm.Value,
+  idx: int,
+  kind: int,
+): llvm.Attribute? = "LLVMAttributeRef LLVMGetEnumAttributeAtIndex(LLVMValueRef, unsigned, unsigned)"
+
 // LLVMGetOperand may give NULL (a missing operand)
 extern fn c_get_operand(
   v: llvm.Value,
@@ -163,8 +170,13 @@ pub fn link(cx: llvm.Context, m: llvm.Module): bool uses ffi {
     }
     used.push(u)
   }
-  // unsafe: touches state itself, or reaches an unsafe internal function
-  var bad = used.map(u => u.state)
+  // unsafe: touches state itself, or reaches an unsafe internal function; a `noinline export
+  // fn` is never offered (its callers in programs keep calling the runtime's copy)
+  let noinline = llvm.ir.get_enum_attribute_kind_for_name("noinline")
+  var bad: [bool] = []
+  for i, f in fns {
+    bad.push(used[i].state || c_enum_attr(f, llvm.ATTRIBUTE_FUNCTION_INDEX, noinline) != none)
+  }
   loop {
     var changed = false
     for i in 0..fns.len() {

@@ -345,7 +345,7 @@ fn pub_items(a: ast.Module): {str: [(str, diag.Span)]} {
           none => ""
         }
         let effs = if c.effects.len() == 0 { "" } else { " uses {c.effects.map(e => e.name).sort().join(", ")}" }
-        let kw = ["fn", "export fn", "inline export fn"][c.export]
+        let kw = ["fn", "export fn", "inline export fn", "noinline export fn"][c.export]
         add_item(&out, g.name, "{kw} {g.name}{gens}({ps.join(", ")}){ret}{effs}", c.name.span)
       }
       Struct(d) => if d.public {
