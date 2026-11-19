@@ -70,7 +70,7 @@ Every ported module imports two modules of the runtime package (2026-11-18):
   files themselves (`tables.awk`): an `auk build --lib` library returning every
   `raw.size_of`/`align_of`/`offset_of`, constant and initializer, linked with C that compares
   them with `sizeof`/`_Alignof`/`offsetof`, the macros and the bytes of the initializers (the
-  real `auk_rt.h`, task.c's and chan.c's structs, the system headers), and `probe.c`, which
+  real `auk_rt.h`, task.c's struct and chan.c's as it was (now in `probe.c`), the system headers), and `probe.c`, which
   calls the functions (the `W*` macros over every 16-bit status, `CMSG_*`, the ucontext slots,
   errno, a `stat(2)` read through `cfacts.Stat`, a mutex made from the initializer, `abi`
   structs by value both ways, a function pointer in an `ElemOps`). It does not see a field's
@@ -185,6 +185,51 @@ and after; the hot loops (fill, blend, composite, blit_mask) as fast as the C). 
    (`u32(255) - sa`), `match` on raw constants (none needed), C's `continue` in a counted loop
    (a `while` whose body is an `if`).
 
+## Found by `copy`, `heap`, `chan`, `ffi` (Phase 7c, 2026-11-19)
+
+The four moved the same way as the pilot (`runtime/src/copy.auk`, `heap.auk` with
+`heap_os.<os>.auk`, `chan.auk`, `ffi.auk`; their C files deleted). What they ran into:
+
+1. **A local can't share a module's name** (E0116, "`heap.` is ambiguous"): once `heap.auk`
+   and `copy.auk` exist, a local `heap` or `copy` followed by `.` is refused in every module of
+   the package. heap.c's `heap` locals are `hp`; copy.c's `copy` function-pointer locals `cp`.
+   Every future module name (`str`, `map`, `arr`, `task`, …) takes the name from locals.
+2. **`if` with a literal first arm is `int`:** `let cap = if c.cap == 0 { 8 } else { c.cap * 2 }`
+   is E0200 (`int` vs `i64`): the literal doesn't take the other arm's type. Annotate the local
+   (`let cap: i64 = …`).
+3. **No fixed-array locals:** `char buf[32]` (ffi.c's messages and `"0x"` buffer) is a local of
+   a one-field `raw struct Buf32 { b: [u8; 32] }`, passed as `raw.cast(raw.addr_of(&buf))`.
+4. **No uninitialized locals:** `AukTmp tmp;` (264 bytes, chan.c's send and receive) is
+   `var tmp = abi.Tmp {}`, zeroed on every call where C left it uninitialized (a 264-byte
+   memset per send/recv; not visible in the benchmark below).
+5. **Calls between ported modules are direct** (`heap.auk__heap_switch(…)`,
+   `copy.auk__copy_elem(…)`): an `export fn` another module calls must be `pub export fn`
+   (E0120 otherwise). Direct calls inline (chan's heap switches become TLS stores); an
+   `extern fn` of a symbol another module of the package defines would not.
+6. **Per-OS calls in a small module:** `malloc_size` (macOS) / `malloc_usable_size` (glibc) are
+   `heap_os.macos.auk` / `heap_os.linux.auk` (one `pub fn usable_size`), the loader's per-target
+   files, instead of two copies of heap.auk.
+7. **Reading a `raw thread var` needs no effect** (E0411 "declares `raw` but doesn't use it" on
+   `auk__heap_current`); `raw.atomic_*`, `raw.field_addr`, `raw.cast` do.
+8. **`time_t`/`suseconds_t` widths differ** (cfacts' `Timeval.tv_usec` is `i32` on macOS, `i64` on
+   Linux): `i64(now.tv_usec)` reads it on both.
+9. Not hit: static `PTHREAD_*_INITIALIZER`s (chan.c and heap.c call `pthread_*_init` on each
+   new object, so no constant initializer is needed); `never` (the `_Noreturn` panics are
+   followed by `raw.unreachable()`, as in value.auk); `match` on raw constants (ffi.c's
+   `switch (kind)` is `if`/`else if` over `abi.FFI_*`, as the pilot did); parameters' addresses
+   (ffi.c's `memcpy(&v, …)` of a parameter goes through a `var` copy). The element-ops tables
+   that point at copy.auk's `auk__*_copy_elem` stay C in `rc.c` (no addresses in initializers).
+
+**Sanitizers:** `ASAN=1`/`TSAN=1 sh runtime/c/test/run.sh` instrument the C half; the Auk
+half's own loads, stores and atomics are invisible to them (its `pthread_*`, `malloc`/`free`
+calls are still intercepted, so locks and frees made from Auk code are seen). `SAN_AUK=1` (new)
+instruments the Auk half too: `auk build --lib --bc`, every function given `sanitize_thread`
+(or `sanitize_address`), LLVM's `tsan`/`asan` pass with `opt`, `clang -c`. It works: with
+auk_chan_close's lock removed on purpose, `SAN_AUK=1 TSAN=1 … conc_chan` reports the race
+between `auk_chan_close` and `chan_recv` (Auk frames by name); the real modules are clean under
+`SAN_AUK=1 TSAN=1` (conc) and `SAN_AUK=1 ASAN=1` (all 72). A compiler flag that sets the
+attribute itself would replace the `sed` (self-host-plan 7c, "ASan/UBSan equivalent").
+
 ## Per file
 
 Lines are of the C today. "Globals" counts file-scope variables (thread-locals and atomics
@@ -195,11 +240,11 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | `auk_rt.h` | 1013 | the shared `raw struct`s (header, str, arr, map, err, obj, task, frames; flexible array members `data[]`, `slots[]`), the one union (`AukValue`), 12 function-pointer typedefs (`raw.Fn`), `_Static_assert`s → `raw assert` | stays the C contract until the C is gone (lowlevel.md, section 8) |
 | ~~`value.c`~~ | 239 | **done** (2026-11-19, the pilot): `runtime/src/value.auk` | `auk_ops_value` stays C (`value_ops.c`): no addresses in raw initializers yet |
 | ~~`err.c`~~ | 125 | **done** (2026-11-19): `runtime/src/err.auk` | — |
-| `copy.c` | 170 | atomics, callbacks (element copy ops) | — |
+| ~~`copy.c`~~ | 170 | **done** (2026-11-19): `runtime/src/copy.auk` | the ops tables over its `auk__*_copy_elem` stay in `rc.c` |
 | `map.c` | 398 | callbacks (hash/eq/show ops), `const` tables | — |
 | `arr.c` | 727 | callbacks (element ops, sort comparator), `ctz`/`clz` | — |
-| `chan.c` | 168 | pthread mutex/cond (opaque layouts, initializers) | — |
-| `heap.c` | 298 | 1 thread-local, atomics; `malloc_size` (macOS) / `malloc_usable_size` (Linux) | per-OS `#ifdef` |
+| ~~`chan.c`~~ | 168 | **done** (2026-11-19): `runtime/src/chan.auk` (`abi.Chan`; locks made with `pthread_*_init`) | — |
+| ~~`heap.c`~~ | 298 | **done** (2026-11-19): `runtime/src/heap.auk` + `heap_os.<os>.auk` | the `#ifdef` is the per-OS `heap_os` module |
 | ~~`catch.c`~~ | 142 | **done** (2026-11-19): `runtime/src/catch.auk`; `sigsetjmp(jb, 0)`/`siglongjmp` are `raw.setjmp`/`raw.longjmp` (libc `_setjmp`/`_longjmp`) | the setjmp half of `auk__catch_run` is its own `optnone` function (`run_at`), the frame in the optimized caller's memory |
 | `compiler.c` | 169 | 2 globals (the imprint file, its mutex), `FILE *` (`fputc`/`fwrite`) | — |
 | `str.c` | 1556 | 2 thread-locals (show budget, debugger flag), atomics; `snprintf %.*e/%.*f` through `cwrap.c`; `strtod` | float formatting through libc is the 7b item "Ryu, Unicode tables → Auk" |
@@ -207,7 +252,7 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | `testing.c` | 309 | 4 globals, `fork`/`waitpid` and the `W*` status macros, `flockfile`, `stdout`/`stderr` | — |
 | `task.c` | 467 | 6 globals (1 thread-local), atomics, `pthread_create` callback | — |
 | ~~`pixels.c`~~ | 446 | **done** (2026-11-19): `runtime/src/pixels.auk` (the statics are module `raw var`s, `raw.add/mul_overflow`) | — |
-| `ffi.c` | 298 | `dlsym`; values through `raw.Ptr` | — |
+| ~~`ffi.c`~~ | 298 | **done** (2026-11-19): `runtime/src/ffi.auk` | — |
 | `core.c` | 1116 | 5 globals + 1 function-local static, `environ` (extern global), `qsort` callback, sockets/`getaddrinfo`/`posix_spawnp` structs, `S_ISDIR`, `W*` macros; `fcntl`/`ioctl`/`open` through `cwrap.c` | 5 `#if`s (OS, `SO_NOSIGPIPE`, `MSG_NOSIGNAL`, `arc4random_buf`/`getrandom`) |
 | `trace.c` | 668 | 20 globals (5 thread-locals), 3 function-local statics, `sigaction` + `atexit` callbacks, `open` through `cwrap.c` | its fatal-signal handler re-raises with `signal(sig, SIG_DFL)`: fine as an `export fn` |
 | `stack.c` | 376 | 3 thread-locals, `pthread_once`/`pthread_create` callbacks, `sigaltstack` | **the signal handler edits the interrupted context** (`ucontext_t` PC/SP per OS and CPU, 13 `#if`s) to return into `overflow_resume`; per-OS/arch `raw struct`s for `mcontext`, Linux ELF `.symtab` reading (`ElfW`) |

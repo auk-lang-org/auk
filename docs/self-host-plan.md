@@ -726,11 +726,18 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
 - [ ] Same order as Phase 1c, one module at a time, C and Auk linked together meanwhile.
       Done: `value` (the 7a pilot); `err`, `catch` (`raw.setjmp`; same frames, stack.c's
       overflow recovery unchanged), `pixels` (2026-11-19; runtime-port.md, "Found by the 7c
-      port"). Next: `copy`, `heap`, `rc`.
+      port"); `copy`, `heap` (+ `heap_os.<os>`), `chan`, `ffi` (2026-11-19: line by line, same
+      symbols, `auk_rt.h` unchanged; stage 2 = stage 3, C tests 72/72, runner green, ASan, TSan
+      `conc` clean, also with the Auk half instrumented (`SAN_AUK=1`); spawn/await, channel and
+      deep-copy microbenchmarks within noise; runtime-port.md, "Found by copy, heap, chan,
+      ffi"). Next: `rc`, `task`.
 - [ ] `auk_rt.bc` is produced by the Auk compiler; `libauk_rt.a` via LLVM's archive writer.
 - [ ] Same C tests (called through `export fn`), then rewrite them as Auk tests. The first
       half holds for the ported modules (`run.sh` links the Auk half).
 - [ ] ASan/UBSan equivalent: build the runtime with LLVM sanitizer passes from the Auk compiler.
+      A first step (2026-11-19): `SAN_AUK=1` in `runtime/c/test/run.sh` runs the Auk half's
+      bitcode through `opt`'s tsan/asan passes (the attribute added with `sed`); it catches a
+      planted race in chan.auk. Left: a compiler flag that sets the attribute, UBSan's checks.
 - [ ] ±5% perf bar against Phase 1 numbers.
 
 ### 7d. Drop the C compiler from the toolchain
