@@ -446,7 +446,7 @@ fn eval_global(c: var check.Checker, ev: var Eval, g: int) {
     some((v, t)) => {
       if want == types.Ty.Error && d.ty == none {
         c.globals[g].ty = t
-      } else if t != want && t != types.Ty.Error && want != types.Ty.Error {
+      } else if !same(t, want) {
         c.err_in(m, diag.new("E0200", d.value.span, "expected `{c.defs.show(want)}`, found `{c.defs.show(t)}`"))
       }
       c.globals[g].value = v
@@ -488,6 +488,13 @@ fn ci(n: int, t: types.Ty): (typed.ConstVal, types.Ty)? = some((typed.ConstVal.I
 fn is_unsigned(t: types.Ty): bool = match t {
   Fixed(k) => !types.fx_signed(k)
   _ => false
+}
+
+/// Do constants of types `a` and `b` mix? Equal types, `int` and `i64` (the same machine
+/// type), and an error on either side (already reported).
+fn same(a: types.Ty, b: types.Ty): bool {
+  var inf = types.new_infer()
+  a == b || types.can_unify(&inf, a, b)
 }
 
 /// `p < q`, unsigned when `u`.
@@ -549,12 +556,12 @@ fn eval(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr, want: types.Ty?
       let (b, bt) = eval(&c, &ev, m, r, some(at0))?
       var a = a0
       var at = at0
-      if at != bt && (l.kind is ast.ExprKind.Lit(_)) {
+      if !same(at, bt) && (l.kind is ast.ExprKind.Lit(_)) {
         let (a2, at2) = eval(&c, &ev, m, l, some(bt))?
         a = a2
         at = at2
       }
-      if at != bt {
+      if !same(at, bt) {
         c.err_in(m, diag.new("E0260", e.span, "can't apply `{op.symbol()}` to `{c.defs.show(at)}` and `{c.defs.show(bt)}`"))
         return none
       }
@@ -651,7 +658,7 @@ fn eval(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr, want: types.Ty?
         }
         let x = fi.value else return not_const(&c, m, e)
         let (v, t) = eval(&c, &ev, m, x, some(fs[i].ty))?
-        if t != fs[i].ty && fs[i].ty != types.Ty.Error {
+        if !same(t, fs[i].ty) {
           c.err_in(m, diag.new("E0200", x.span, "expected `{c.defs.show(fs[i].ty)}`, found `{c.defs.show(t)}`"))
         }
         out.push((i, v))
@@ -671,7 +678,7 @@ fn eval(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr, want: types.Ty?
       var out: [(int, typed.ConstVal)] = []
       for i, x in xs {
         let (v, t) = eval(&c, &ev, m, x, some(et))?
-        if t != et && et != types.Ty.Error && t != types.Ty.Error {
+        if !same(t, et) {
           c.err_in(m, diag.new("E0200", x.span, "expected `{c.defs.show(et)}`, found `{c.defs.show(t)}`"))
         }
         out.push((i, v))

@@ -1,6 +1,7 @@
 /// The runtime's low-level dialect (docs/lowlevel.md): raw memory, C layouts, atomics,
 /// `setjmp`/`longjmp`. Only the runtime package (`name = "auk_rt"`) can name this module, and
-/// everything here `uses raw`. The intrinsics are compiled inline (`@raw_...`).
+/// everything here `uses raw` but the layout constants (`size_of`, `align_of`, `offset_of`). The
+/// intrinsics are compiled inline (`@raw_...`).
 
 /// A memory order for the atomics (C11's `memory_order`, without `consume`).
 pub enum Order { Relaxed, Acquire, Release, AcqRel, SeqCst }
@@ -32,11 +33,11 @@ pub extern fn from_int<T, I>(n: I): Ptr<T> uses raw = "@raw_from_int"
 /// NULL.
 pub extern fn null<T>(): Ptr<T> uses raw = "@raw_null"
 /// The size of `T` in bytes (a compile-time constant).
-pub extern fn size_of<T>(): usize uses raw = "@raw_size_of"
+pub extern fn size_of<T>(): usize = "@raw_size_of"
 /// The alignment of `T` in bytes (a compile-time constant).
-pub extern fn align_of<T>(): usize uses raw = "@raw_align_of"
+pub extern fn align_of<T>(): usize = "@raw_align_of"
 /// The offset of field `f` in the raw struct `T`: `raw.offset_of<T>(.f)` (a compile-time constant).
-pub extern fn offset_of<T, F>(f: F): usize uses raw = "@raw_offset_of"
+pub extern fn offset_of<T, F>(f: F): usize = "@raw_offset_of"
 /// The C address of an `export fn` (or a raw `fn` with C types): a `raw.Fn<F>` (the checker
 /// types it).
 pub extern fn fn_of<F>(f: F): F uses raw = "@raw_fn_of"

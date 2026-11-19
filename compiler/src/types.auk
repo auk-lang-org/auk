@@ -534,6 +534,9 @@ pub fn unify(inf: var Infer, a: Ty, b: Ty): bool {
     (Named(d1, xs), Named(d2, ys)) => d1 == d2 && xs.len() == ys.len() && unify_all(&inf, xs, ys)
     (Fn(p1, r1), Fn(p2, r2)) =>
       p1.len() == p2.len() && unify_all(&inf, p1, p2) && unify(&inf, r1, r2)
+    // the runtime's dialect: `int` is `i64` (each keeps its arithmetic: `int` checks overflow,
+    // `i64` wraps); only the runtime package can name `i64`
+    (Int, Fixed(Fx.I64)) | (Fixed(Fx.I64), Int) => true
     (x, y) => x == y
   }
 }

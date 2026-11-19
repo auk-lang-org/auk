@@ -54,7 +54,7 @@ unwinding; codegen unchanged); **the port is module by module**, C and Auk linke
 | `raw.addr_of(&x)`, `raw.field_addr(p, .f)` | the address of a raw local/global, of a field |
 | `raw.cast<U>(p)`, `p.int()`, `raw.from_int<T>(n)` | pointer casts, to and from integers |
 | `raw.null<T>()`, `p.is_null()` | |
-| `raw.size_of<T>()`, `raw.align_of<T>()`, `raw.offset_of<T>(.f)` | compile-time constants |
+| `raw.size_of<T>()`, `raw.align_of<T>()`, `raw.offset_of<T>(.f)` | compile-time constants (no `uses raw` needed) |
 | `raw.copy(dst, src, n)`, `raw.move(…)`, `raw.fill(dst, b, n)`, `raw.compare(a, b, n)` | `llvm.memcpy/memmove/memset`, `memcmp` |
 | `raw.alloc(n)`, `raw.realloc(p, n)`, `raw.free(p)` | `malloc`/`realloc`/`free` (abort on failure, as `auk__xmalloc`) |
 | `raw.unreachable()`, `raw.trap()`, `raw.likely(b)` | |
@@ -124,7 +124,9 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   lowers to TLV descriptors and ELF to `__tls_get_addr` (relaxed by the linker in an
   executable). The runtime itself is never JIT-compiled (`auk` links it), so this costs nothing.
 - **Types:** there is no `f64` (it is `float`, as §2 says); `isize`/`usize` are their own types
-  (64-bit). An integer literal takes the fixed-width type its context expects (`x + 1`,
+  (64-bit). `int` and `i64` are interchangeable (they unify: arguments, results, fields,
+  globals, constants), but each keeps its arithmetic: `int`'s `+` checks overflow as everywhere
+  in Auk, `i64`'s wraps; an operation takes its left operand's type. An integer literal takes the fixed-width type its context expects (`x + 1`,
   `let b: u8 = 250`; it must fit); a literal on the left of an operator whose right side is
   fixed-width does not (write `x + 1`, not `1 + x`). Shift amounts are taken modulo the width.
   Integer `/` and `%` by zero trap; `f32` has `%` (`frem`). A string literal (no

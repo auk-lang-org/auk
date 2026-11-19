@@ -14,6 +14,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("globals_constants_and_raw_assert", globals_constants_and_raw_assert),
   t.test("addresses_in_constant_initializers", addresses_in_constant_initializers),
   t.test("constants_of_other_modules", constants_of_other_modules),
+  t.test("int_and_i64_mix", int_and_i64_mix),
   t.test("thread_vars_are_refused_by_the_jit", thread_vars_are_refused_by_the_jit),
   t.test("setjmp_longjmp_out_of_nested_calls", setjmp_longjmp_out_of_nested_calls),
   t.test("export_fns_by_value_and_fn_pointers", export_fns_by_value_and_fn_pointers),
@@ -118,6 +119,8 @@ fn constants_of_other_modules() uses env, fs, ffi, time {
   t.write(main, "raw let H = facts.HIDDEN\nfn main() {{}}\n")
   t.check(codes(main).contains("E0120"), "{codes(main)}")
 }
+
+fn int_and_i64_mix() uses env, fs, ffi, time { let _ = passes(fixture("int_i64", "int_i64.auk")) }
 
 fn thread_vars_are_refused_by_the_jit() uses env, fs, ffi, time {
   let main = fixture("tls_jit", "globals.auk")

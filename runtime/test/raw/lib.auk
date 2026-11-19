@@ -15,7 +15,7 @@ raw assert raw.size_of<Str>() == 40
 raw assert raw.offset_of<Str>(.data) == 33
 
 /// The layouts, for C to compare with sizeof/offsetof.
-export fn auk_size(k: i32): i64 uses raw = match int(k) {
+export fn auk_size(k: i32): i64 = match int(k) {
   0 => i64(raw.size_of<Header>())
   1 => i64(raw.size_of<Str>())
   2 => i64(raw.offset_of<Str>(.data))
