@@ -35,6 +35,14 @@ programs live in [`examples/`](examples/): start with `hello.auk`, `fib.auk` and
 
 ## Usage
 
+Install the latest release (macOS arm64, Linux arm64 and x86-64) into `~/.auk/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/auk-lang-org/auk/main/install.sh | sh
+```
+
+(`AUK_VERSION=1.0.0` picks a release, `AUK_INSTALL=<dir>` the place.) Or build from source.
+
 Requires LLVM 23 (`brew install llvm@23` on macOS; `llvm-23-dev` and `lld-23` from
 apt.llvm.org on Linux) and the system linker: Apple's `ld` and the macOS SDK (the Command Line
 Tools, `xcode-select --install`) on macOS; LLVM's `ld.lld` (or binutils' `ld`) and the C
