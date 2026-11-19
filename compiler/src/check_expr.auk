@@ -322,6 +322,7 @@ pub fn expr_inner(c: var check.Checker, e: ast.Expr, exp: check.Exp): types.Ty {
   match e.kind {
     TypeArgs(x, tys) => check_raw.type_args(&c, x, tys, exp)
     FieldSel(_) => check_raw.field_sel(&c, e)
+    Uninit => check_raw.uninit(&c, e, exp)
     Lit(l) => {
       match raw_lit(&c, e, l, false, check.exp_ty(exp)) {
         some(t) => return t

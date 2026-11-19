@@ -49,7 +49,7 @@ fn slot(c: raw.Ptr<abi.Chan>, i: i64): raw.Ptr<u8> uses raw =
 
 /// `c.send(x)`: queue a copy of *x. Panics on a closed channel.
 export fn auk_chan_send(c: raw.Ptr<abi.Chan>, x: raw.Ptr<()>, loc: raw.Ptr<u8>) uses raw, ffi {
-  var tmp = abi.Tmp {}
+  var tmp: abi.Tmp
   let buf = auk__tmp_get(raw.addr_of(&tmp), c.size)
   let old = heap.auk__heap_switch(raw.null())
   copy.auk__copy_elem(c.ops, x, raw.cast(buf))
@@ -123,7 +123,7 @@ fn wait_ms(c: raw.Ptr<abi.Chan>, ms: i64) uses raw, ffi {
 /// on a task thread.
 fn chan_recv(c: raw.Ptr<abi.Chan>, ms: i64, out: raw.Ptr<()>): bool uses raw, ffi {
   let end: i64 = if ms < 0 { 0 } else { now_ms() + ms }
-  var tmp = abi.Tmp {}
+  var tmp: abi.Tmp
   let buf = auk__tmp_get(raw.addr_of(&tmp), c.size)
   let _ = pthread_mutex_lock(raw.field_addr(c, .lock))
   while true {

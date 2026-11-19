@@ -53,7 +53,7 @@ fn opt(e: ast.Expr?, out: var [ast.Expr]) {
 pub fn visit_expr(e: ast.Expr, out: var [ast.Expr]) {
   out.push(e)
   match e.kind {
-    Lit(_) | Name(_) | Hole | Continue | FieldSel(_) => {}
+    Lit(_) | Name(_) | Hole | Continue | FieldSel(_) | Uninit => {}
     TypeArgs(x, _) => visit_expr(x, &out)
     Measured(x, _) => visit_expr(x, &out)
     Interp(ps) => for p in ps {

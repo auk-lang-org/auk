@@ -47,7 +47,7 @@ fn int_digits(v: i64, buf: raw.Ptr<u8>): i64 uses raw {
 }
 
 pub inline export fn auk_str_from_int(v: i64): raw.Ptr<abi.Str> uses raw, ffi {
-  var buf = Bytes24 {}
+  var buf: Bytes24
   let p: raw.Ptr<u8> = raw.cast(raw.addr_of(&buf))
   let at = int_digits(v, p)
   str.auk__str_raw(p.offset(at), i64(20) - at, i64(20) - at, true)
@@ -55,7 +55,7 @@ pub inline export fn auk_str_from_int(v: i64): raw.Ptr<abi.Str> uses raw, ffi {
 
 /// Append v in decimal (what interpolating an int does: no temporary string).
 pub inline export fn auk_sb_int(b: raw.Ptr<abi.StrBuf>, v: i64) uses raw, ffi {
-  var buf = Bytes24 {}
+  var buf: Bytes24
   let p: raw.Ptr<u8> = raw.cast(raw.addr_of(&buf))
   let at = int_digits(v, p)
   str.auk__sb_put(b, p.offset(at), i64(20) - at)
@@ -68,7 +68,7 @@ pub inline export fn auk_sb_int(b: raw.Ptr<abi.StrBuf>, v: i64) uses raw, ffi {
 
 /// v in decimal into out (at least 21 bytes), NUL-terminated: its length (`%lld`).
 pub export fn auk__fmt_i64(out: raw.Ptr<u8>, v: i64): i32 uses raw {
-  var buf = Bytes24 {}
+  var buf: Bytes24
   let p: raw.Ptr<u8> = raw.cast(raw.addr_of(&buf))
   let at = int_digits(v, p)
   let n = i64(20) - at
@@ -79,7 +79,7 @@ pub export fn auk__fmt_i64(out: raw.Ptr<u8>, v: i64): i32 uses raw {
 
 /// v in decimal into out (at least 21 bytes), NUL-terminated: its length (`%llu`).
 pub export fn auk__fmt_u64(out: raw.Ptr<u8>, v0: u64): i32 uses raw {
-  var buf = Bytes24 {}
+  var buf: Bytes24
   let p: raw.Ptr<u8> = raw.cast(raw.addr_of(&buf))
   var v = v0
   var i: i64 = 20
@@ -99,7 +99,7 @@ pub export fn auk__fmt_u64(out: raw.Ptr<u8>, v0: u64): i32 uses raw {
 /// 17 bytes), NUL-terminated: its length (`%llx`, `%016llx`, `%X`).
 pub export fn auk__fmt_hex(out: raw.Ptr<u8>, v0: u64, min_digits: i32, upper: bool): i32 uses raw {
   let digits: raw.Ptr<u8> = if upper { "0123456789ABCDEF" } else { "0123456789abcdef" }
-  var buf = Bytes24 {}
+  var buf: Bytes24
   let p: raw.Ptr<u8> = raw.cast(raw.addr_of(&buf))
   var v = v0
   var i: i64 = 16
@@ -130,7 +130,7 @@ pub export fn auk__cstr_copy(out: raw.Ptr<u8>, cap: usize, s: raw.Ptr<u8>) uses 
 
 /// Append v in decimal, outside the show budget.
 pub export fn auk__sb_u64(b: raw.Ptr<abi.StrBuf>, v: u64) uses raw, ffi {
-  var buf = Bytes24 {}
+  var buf: Bytes24
   let p: raw.Ptr<u8> = raw.cast(raw.addr_of(&buf))
   let n = auk__fmt_u64(p, v)
   str.auk__sb_put(b, p, i64(n))
@@ -138,7 +138,7 @@ pub export fn auk__sb_u64(b: raw.Ptr<abi.StrBuf>, v: u64) uses raw, ffi {
 
 /// Append v in hex (see auk__fmt_hex), outside the show budget.
 pub export fn auk__sb_hex(b: raw.Ptr<abi.StrBuf>, v: u64, min_digits: i32, upper: bool) uses raw, ffi {
-  var buf = Bytes24 {}
+  var buf: Bytes24
   let p: raw.Ptr<u8> = raw.cast(raw.addr_of(&buf))
   let n = auk__fmt_hex(p, v, min_digits, upper)
   str.auk__sb_put(b, p, i64(n))
@@ -301,7 +301,7 @@ pub export fn auk_str_from_float(v: float): raw.Ptr<abi.Str> uses raw, ffi {
 }
 
 pub export fn auk_str_from_char(c: u32): raw.Ptr<abi.Str> uses raw, ffi {
-  var b = str.Bytes4 {}
+  var b: str.Bytes4
   let p: raw.Ptr<u8> = raw.cast(raw.addr_of(&b))
   let n = str.utf8_encode(c, p)
   str.auk__str_raw(p, i64(n), 1, n == 1)

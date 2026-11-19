@@ -120,6 +120,9 @@ pub enum K {
   CStr(b: [int]),
   /// The zero value of the type (NULL, 0, false, an all-zero aggregate).
   Zero,
+  /// The runtime's dialect: no value (`var x: T` without one). A `Let` of it leaves the
+  /// variable's memory as it is; used as a value it is a zero.
+  Undef,
   /// The address of a function (type `Code`).
   FnAddr(f: FRef),
   /// The address of a global (generated, or a runtime one like `auk_ops_int`).

@@ -261,8 +261,7 @@ export fn auk_map_make_unique(pm: raw.Ptr<raw.Ptr<abi.Map>>): raw.Ptr<()> uses r
 }
 
 /// Scratch room for a key or a value of up to 32 bytes (every scalar, `str`, `Value`, small
-/// tuples): zeroing it costs two stores, where an `abi.Tmp` (no uninitialized locals in the
-/// dialect) would be 256 bytes of memset on every insert.
+/// tuples), uninitialized as `abi.Tmp` is, without tmp_get's size test.
 raw struct Scratch {
   w: [u64; 4],
 }
@@ -272,13 +271,13 @@ pub export fn auk_map_set(pm: raw.Ptr<raw.Ptr<abi.Map>>, k_in: raw.Ptr<()>, v_in
   let ks = m0.kops.size
   let vs = m0.vops.size
   if ks <= raw.size_of<Scratch>() && vs <= raw.size_of<Scratch>() {
-    var kb = Scratch {}
-    var vb = Scratch {}
+    var kb: Scratch
+    var vb: Scratch
     set_via(pm, k_in, v_in, raw.cast(raw.addr_of(&kb)), raw.cast(raw.addr_of(&vb)))
     return
   }
-  var kt = abi.Tmp {}
-  var vt = abi.Tmp {}
+  var kt: abi.Tmp
+  var vt: abi.Tmp
   set_via(pm, k_in, v_in, tmp_get(raw.addr_of(&kt), ks), tmp_get(raw.addr_of(&vt), vs))
   tmp_done(raw.addr_of(&kt))
   tmp_done(raw.addr_of(&vt))
@@ -346,7 +345,7 @@ export fn auk_map_remove(pm: raw.Ptr<raw.Ptr<abi.Map>>, k_in: raw.Ptr<()>, out: 
     return false
   }
   let ks = pm.load().kops.size
-  var kt = abi.Tmp {}
+  var kt: abi.Tmp
   let k = tmp_get(raw.addr_of(&kt), ks)
   raw.copy(k, k_in, ks)
   let kretain = pm.load().kops.retain

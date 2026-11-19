@@ -1284,6 +1284,11 @@ fn stmt(p: var Parser): ast.Expr!diag.Fail {
   let mutable = p.bump().tok == token.Var
   let pat = pattern(&p)?
   let t: ast.Type? = if p.eat(token.Colon) { ty(&p)? } else { none }
+  // the runtime's dialect: `var x: T` without a value (the checker allows it only there)
+  if mutable && t != none && (p.at(token.Newline) || p.at(token.RBrace)) {
+    let value = ast.Expr { id: p.id(), span: p.prev, kind: ast.ExprKind.Uninit }
+    return ast.Expr { id: p.id(), span: start.to(p.prev), kind: ast.ExprKind.Let(mutable, pat, t, value, none) }
+  }
   p.expect(token.Eq, "and a value")?
   let value = pipe_expr(&p)?
   let els: ast.ElseArm? = if p.eat(token.Else) { else_arm(&p)? } else { none }

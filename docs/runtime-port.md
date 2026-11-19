@@ -164,7 +164,7 @@ The three moved as the pilot did (same names and symbols, C's messages byte for 
 a program over every `pixels` entry point, `AUK_GUI_TRACE=1` reports included, identical before
 and after; the hot loops (fill, blend, composite, blit_mask) as fast as the C). New findings:
 
-1. **No `var` without an initializer:** `var fr: CatchFrame` is E0020, so C's uninitialized
+1. **Fixed** (2026-11-19, lowlevel.md 7a "Uninitialized locals": `var x: T`; catch, arr, map, chan, str and str_fmt's integer paths use it): **No `var` without an initializer:** `var fr: CatchFrame` is E0020, so C's uninitialized
    `CatchFrame fr` (a 320-byte `jmp_buf`) is a zeroed literal. In the `optnone` function that
    calls `raw.setjmp`, the literal goes through two temporaries (a memset and two 328-byte
    copies), so the non-panicking `catch` cost 30 ns against C's 8. `catch.auk` splits
@@ -196,9 +196,9 @@ The four moved the same way as the pilot (`runtime/src/copy.auk`, `heap.auk` wit
 2. **`if` with a literal first arm is `int`:** `let cap = if c.cap == 0 { 8 } else { c.cap * 2 }`
    is E0200 (`int` vs `i64`): the literal doesn't take the other arm's type. Annotate the local
    (`let cap: i64 = …`).
-3. **No fixed-array locals:** `char buf[32]` (ffi.c's messages and `"0x"` buffer) is a local of
+3. **Fixed** (2026-11-19, lowlevel.md 7a "Uninitialized locals": `var x: T`; catch, arr, map, chan, str and str_fmt's integer paths use it): **No fixed-array locals:** `char buf[32]` (ffi.c's messages and `"0x"` buffer) is a local of
    a one-field `raw struct Buf32 { b: [u8; 32] }`, passed as `raw.cast(raw.addr_of(&buf))`.
-4. **No uninitialized locals:** `AukTmp tmp;` (264 bytes, chan.c's send and receive) is
+4. **Fixed** (2026-11-19, lowlevel.md 7a "Uninitialized locals": `var x: T`; catch, arr, map, chan, str and str_fmt's integer paths use it): **No uninitialized locals:** `AukTmp tmp;` (264 bytes, chan.c's send and receive) is
    `var tmp = abi.Tmp {}`, zeroed on every call where C left it uninitialized (a 264-byte
    memset per send/recv; not visible in the benchmark below).
 5. **Calls between ported modules are direct** (`heap.auk__heap_switch(…)`,
@@ -254,7 +254,7 @@ More of what the dialect lacks (the pilot's list above still holds; 3, 4, 5 were
    `auk_ops_str` became `auk_ops_str.1` (undefined), and `raw.addr_of(&other.var)` can't name
    another module's `extern var` (E0102). str.auk declares `auk_ops_str`, `auk_ops_char`,
    `auk_ops_int` and offers `str.ops_str()`; value.auk uses it.
-11. **No uninitialized locals, no array literals:** `var buf: [u8; 24]` needs a value and
+11. **Fixed** (2026-11-19, lowlevel.md 7a "Uninitialized locals": `var x: T`; catch, arr, map, chan, str and str_fmt's integer paths use it): **No uninitialized locals, no array literals:** `var buf: [u8; 24]` needs a value and
    `[0; 24]` doesn't parse, so C's `char buf[24]` is a raw struct `Bytes24 { b: [u8; 24] }`,
    `var buf = Bytes24 {}` (zeroed: an extra `memset` C doesn't do; 24 bytes on the integer
    paths, 2048 in `auk__panic_sb`).
@@ -301,7 +301,7 @@ hashing, probing and insertion order unchanged; golden and the fixed point agree
 2. **Two `extern var`s of one symbol in two modules:** the second is renamed the same way
    (`auk_ops_str.1`), and `raw.addr_of(&value.auk_ops_str)` doesn't take a qualified name: arr
    reaches `auk_ops_str`/`auk_ops_float` through `value.ops_str()`/`ops_float()`.
-3. **No uninitialized locals:** `var tmp = abi.Tmp {}` is a 256-byte memset on every call, where
+3. **Fixed** (2026-11-19, lowlevel.md 7a "Uninitialized locals": `var x: T`; catch, arr, map, chan, str and str_fmt's integer paths use it): **No uninitialized locals:** `var tmp = abi.Tmp {}` is a 256-byte memset on every call, where
    C's `AukTmp tmp;` costs nothing; two of them made `auk_map_set` 1.4x slower. `auk_map_set` and
    `auk_arr_push` use a 32-byte scratch struct for elements up to 32 bytes (every scalar, `str`,
    `Value`) and `abi.Tmp` above that (the less hot `set`/`insert`/`remove`/`reverse` keep `Tmp`).

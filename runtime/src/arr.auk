@@ -195,7 +195,7 @@ export fn auk_arr_set(pa: raw.Ptr<raw.Ptr<abi.Arr>>, i: i64, e: raw.Ptr<()>, loc
   }
   let sz = pa.load().ops.size
   // copy + retain the new value first: e may point into *pa
-  var tmp = abi.Tmp {}
+  var tmp: abi.Tmp
   let t = tmp_get(raw.addr_of(&tmp), sz)
   raw.copy(t, e, sz)
   retain_elem(pa.load().ops, t)
@@ -206,8 +206,8 @@ export fn auk_arr_set(pa: raw.Ptr<raw.Ptr<abi.Arr>>, i: i64, e: raw.Ptr<()>, loc
   tmp_done(raw.addr_of(&tmp))
 }
 
-/// Scratch room for an element of up to 32 bytes: zeroing it costs two stores, where an
-/// `abi.Tmp` (no uninitialized locals in the dialect) is 256 bytes of memset on every push.
+/// Scratch room for an element of up to 32 bytes (uninitialized, as `abi.Tmp`; without
+/// tmp_get's size test).
 raw struct Scratch {
   w: [u64; 4],
 }
@@ -215,11 +215,11 @@ raw struct Scratch {
 pub export fn auk_arr_push(pa: raw.Ptr<raw.Ptr<abi.Arr>>, e: raw.Ptr<()>) uses raw, ffi {
   let sz = pa.load().ops.size
   if sz <= raw.size_of<Scratch>() {
-    var b = Scratch {}
+    var b: Scratch
     push_via(pa, e, raw.cast(raw.addr_of(&b)))
     return
   }
-  var tmp = abi.Tmp {}
+  var tmp: abi.Tmp
   push_via(pa, e, tmp_get(raw.addr_of(&tmp), sz))
   tmp_done(raw.addr_of(&tmp))
 }
@@ -266,7 +266,7 @@ export fn auk_arr_insert(pa: raw.Ptr<raw.Ptr<abi.Arr>>, i: i64, e: raw.Ptr<()>, 
     oob(loc, i, n)
   }
   let sz = pa.load().ops.size
-  var tmp = abi.Tmp {}
+  var tmp: abi.Tmp
   let t = tmp_get(raw.addr_of(&tmp), sz)
   raw.copy(t, e, sz)
   retain_elem(pa.load().ops, t)
@@ -383,7 +383,7 @@ export fn auk_arr_extend(pa: raw.Ptr<raw.Ptr<abi.Arr>>, b: raw.Ptr<abi.Arr>) use
 
 fn reverse_in_place(a: raw.Ptr<abi.Arr>) uses raw, ffi {
   let sz = a.ops.size
-  var tmp = abi.Tmp {}
+  var tmp: abi.Tmp
   let t = tmp_get(raw.addr_of(&tmp), sz)
   var i: i64 = 0
   var j = a.len - 1

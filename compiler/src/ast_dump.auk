@@ -260,6 +260,7 @@ pub fn expr_dump(e: ast.Expr): str = match e.kind {
   Lit(l) => lit_dump(l)
   TypeArgs(x, tys) => "(type-args {expr_dump(x)} {tys.map(t => ast.type_dump(t)).join(" ")})"
   FieldSel(n) => "(.{n.name})"
+  Uninit => "uninit"
   Measured(x, us) => "{expr_dump(x)}<{units.text(us)}>"
   Interp(parts) => {
     let ps = jn(parts, p => match p {

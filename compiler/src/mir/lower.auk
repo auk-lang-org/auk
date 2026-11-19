@@ -303,6 +303,12 @@ pub fn register_local(lw: var Lower, c: mir.Ex, ty: types.Ty) {
   lw.f.scopes[i].owned.push((c, ty))
 }
 
+/// A raw struct or union (the runtime's dialect)?
+pub fn is_raw_struct(lw: var Lower, ty: types.Ty): bool = match ty {
+  Named(d, _) => types.is_raw_def(lw.tp.defs, d)
+  _ => false
+}
+
 pub fn unregister(lw: var Lower, c: mir.Ex) {
   var si = lw.f.scopes.len() - 1
   while si >= 0 {
@@ -1436,6 +1442,10 @@ fn expr_inner(lw: var Lower, e: ast.Expr, tail: bool): Val = match e.kind {
   OptChain(x, name, args) => lw.opt_chain(e, x, name, args != none)
   TypeArgs(x, _) => lw.expr_inner(x, tail)
   FieldSel(_) => val_unit()
+  Uninit => {
+    let ty = lw.ty(e.id)
+    plain(mir.ex(mir.K.Undef, d(ty)), ty)
+  }
   Else(x, arm) => lw.else_expr(e, x, arm)
   Await(x) => lw.await_(e, x)
   Catch(x) => lw.catch_(e, x)
@@ -3664,6 +3674,13 @@ pub fn bind_value(lw: var Lower, pat: ast.Pat, v: Val) {
   match pat.kind {
     Bind(_) => if !lw.t.variants.contains(pat.id) {
       match lw.t.binds.get(pat.id) {
+        // a raw struct made for this binding (a literal, a call's result) is the variable
+        // itself, not copied into another (unoptimized code would keep the copy)
+        some(l) when v.owned && v.c.is_var() && lw.is_raw_struct(ty) => {
+          lw.unregister(v.c)
+          lw.register_local(v.c, ty)
+          lw.bind_name(l, Slot { c: v.c, ty })
+        }
         some(l) => {
           let o = lw.own_as(v, ty)
           let n = lw.decl(ty, o)
@@ -4209,7 +4226,7 @@ fn changes(sc: var Scan, x: ast.Expr) {
 
 fn scan(sc: var Scan, e: ast.Expr) {
   match e.kind {
-    Lit(_) | Hole | FieldSel(_) => {}
+    Lit(_) | Hole | FieldSel(_) | Uninit => {}
     TypeArgs(x, _) => sc.scan(x)
     Name(n) => sc.names[n] = true
     Measured(x, _) | Field(x, _) | TupleField(x, _) | Unary(_, x) => sc.scan(x)

@@ -39,17 +39,16 @@ raw thread var caught_loc: raw.Ptr<u8> = raw.null()
 raw thread var caught_overflow: bool = false
 
 export fn auk__catch_run(f: raw.Fn<(raw.Ptr<()>, raw.Ptr<()>) => ()>, env: raw.Ptr<()>, out: raw.Ptr<()>): i32 uses raw {
-  // C's uninitialized `CatchFrame fr` (a raw struct literal is zeroed: one memset, here at O2)
-  var fr = CatchFrame {}
+  // uninitialized, as C's `CatchFrame fr` (setjmp fills jb)
+  var fr: CatchFrame
   fr.prev = top
   run_at(raw.addr_of(&fr), f, env, out)
 }
 
 /// auk__catch_run's body after the frame is made. It calls raw.setjmp, so the compiler makes
 /// it `optnone noinline` (its locals hold their last values after the jump back); the frame
-/// itself is in the caller's memory, as in C. Split from auk__catch_run because an `optnone`
-/// function builds a struct literal through two temporaries (a memset and two 328-byte copies
-/// per catch).
+/// itself is in the caller's memory, as in C. Split from auk__catch_run so that only this part
+/// is unoptimized.
 fn run_at(fr: raw.Ptr<CatchFrame>, f: raw.Fn<(raw.Ptr<()>, raw.Ptr<()>) => ()>, env: raw.Ptr<()>, out: raw.Ptr<()>): i32 uses raw {
   // _setjmp: no signal-mask syscall per catch (C's sigsetjmp savemask 0)
   if !raw.setjmp(raw.field_addr(fr, .jb)) {

@@ -488,6 +488,7 @@ fn ex(pr: var Printer, e: mir.Ex): str = match e.k {
     }
   }
   CStr(s) => c_str(s)
+  Undef => "/* undefined */"
   Zero => {
     let c = ct(&pr, e.ty)
     let agg = match e.ty {

@@ -645,6 +645,7 @@ fn expr(out: var [str], d: int, e: ast.Expr) {
       expr(&out, d + 1, x)
     }
     FieldSel(n) => line(&out, d, head + "field-sel {n.name}")
+    Uninit => line(&out, d, head + "uninit")
     Peek(x) => {
       line(&out, d, head + "peek")
       expr(&out, d + 1, x)

@@ -1134,6 +1134,7 @@ fn expr_inner(f: var Fmt, e: ast.Expr, cx: Cx): fmt.doc.Doc {
         none => ""
       }
       let head = text("{if mutable { "var" } else { "let" }} {f.pat(p, false)}{ts}")
+      if value.kind is ast.ExprKind.Uninit { return head }
       let vcx = Cx { min: PIPE, last: els is none, ..CX0 }
       var v = [head, f.assign_rhs("=", value, vcx, Rhs.Let)]
       match els {
@@ -1177,6 +1178,7 @@ fn expr_inner(f: var Fmt, e: ast.Expr, cx: Cx): fmt.doc.Doc {
       _ => text(f.text_of(e.span))
     }
     FieldSel(n) => text(".{n.name}")
+    Uninit => text("")
     Peek(x) => {
       let d = if peek_operand_ok(x) {
         f.expr(x, Cx { min: 1, last: cx.last, ..CX0 })

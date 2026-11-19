@@ -204,6 +204,15 @@ points; a signal handler is an `export fn` passed to `sigaction`.
 - **Addresses of locals:** `raw.addr_of(&x)` takes any local (`let` or `var`), parameter (it
   lives in the frame from then on, never read in place) or global but a `raw let` (a value) and
   a `raw thread var` in a constant.
+- **Uninitialized locals:** `var x: T` without `= value` (the runtime package only, E0418;
+  `T` a raw type: numbers, `bool`, raw pointers, raw structs and unions, `[T; N]`, else E0419)
+  is C's `T x;`: its memory is left as it is, so reading it before writing it reads garbage
+  (the programmer's problem, as in C). It is how the runtime's scratch memory is declared
+  (`var fr: CatchFrame` before `raw.setjmp`, `var tmp: abi.Tmp`, `var buf: [u8; 24]`: a
+  fixed-array local, written and read through `raw.cast<u8>(raw.addr_of(&buf))`). A raw
+  struct literal is still zeroed where fields are missing; one bound by `let`/`var` is built
+  in the variable itself (no temporary and copy, which an `optnone` function would keep).
+  There is no `[x; N]` literal.
 - **Constant patterns:** in a `match` (or any pattern) of the runtime package, a bare name that
   is an integer `raw let` of the module (`V_NULL => …`) compares with its value, as C's `case`
   does, instead of binding a new name (a local of that name still binds; another module's

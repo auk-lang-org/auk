@@ -33,6 +33,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("per_target_module_files", per_target_module_files),
   t.test("per_target_variants_agree_e0422", per_target_variants_agree_e0422),
   t.test("abi_and_cfacts_match_c", abi_and_cfacts_match_c),
+  t.test("uninitialized_locals", uninitialized_locals),
 ]
 
 let TOML = "[package]\nname = \"auk_rt\"\nversion = \"0.1.0\"\neffects = [\"raw\", \"ffi\"]\n"
@@ -390,4 +391,31 @@ fn per_target_variants_agree_e0422() uses env, fs, ffi, time {
   // another target's file that doesn't parse
   t.write(paths.join(src, other), "pub fn name(: str = 1\n")
   t.check(codes(main).len() > 0, "a parse error in {other}")
+}
+
+/// `var x: T` without a value: undefined contents (C's uninitialized local), for raw types in
+/// the runtime package only; nothing zeroes it, and a literal in an `optnone` function is
+/// built in its variable (one memset, no copies).
+fn uninitialized_locals() uses env, fs, ffi, time {
+  let _ = passes(fixture("uninit", "uninit.auk"))
+  let src = t.read("runtime/test/raw/uninit.auk")
+  let o = t.auk().args(["fmt", "-"]).stdin(src).output()
+  t.eq(o.stdout, src, "auk fmt keeps `var x: T`")
+  // only raw types, only in the runtime
+  t.eq("{codes(project("uninit_rc", "fn main() {{\n  var s: str\n  s = \"a\"\n  print(s)\n}}\n"))}", "[\"E0419\"]", "")
+  let plain = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n"
+  let gate = project_with("uninit_gate", plain, "fn main() {{\n  var n: int\n  n = 1\n  print(n)\n}}\n")
+  t.eq("{codes(gate)}", "[\"E0418\"]", "")
+  let dis = llvm_dis() else return t.skip("llvm-dis not found")
+  let main = fixture("uninit_lib", "uninit_lib.auk")
+  let bc = paths.join(dir_of(main), "u.bc")
+  let b = auk(["build", "--lib", "--bc", main, "-o", bc])
+  t.check(b.success(), b.stderr)
+  let ll = cmd.new(dis).args([bc, "-o", "-"]).output().stdout
+  let body = (name: str) => ll.split("@{name}(")[1].split("\n}}\n")[0]
+  t.lacks_text(body("run_undef"), "llvm.memset")
+  t.lacks_text(body("run_undef"), "llvm.memcpy")
+  t.lacks_text(body("scratch"), "llvm.memset")
+  t.has(body("run_lit"), "llvm.memset")
+  t.lacks_text(body("run_lit"), "llvm.memcpy")
 }

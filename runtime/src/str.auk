@@ -279,7 +279,7 @@ pub inline export fn auk_sb_str_own(b: raw.Ptr<abi.StrBuf>, s: raw.Ptr<abi.Str>)
 }
 
 pub export fn auk_sb_char(b: raw.Ptr<abi.StrBuf>, c: u32) uses raw, ffi {
-  var buf = Bytes4 {}
+  var buf: Bytes4
   let p: raw.Ptr<u8> = raw.cast(raw.addr_of(&buf))
   let n = utf8_encode(c, p)
   auk_sb_bytes(b, p, i64(n))
@@ -306,7 +306,7 @@ raw struct Bytes2048 {
 /// Panic with the builder's text (it is consumed).
 pub export fn auk__panic_sb(loc: raw.Ptr<u8>, b: raw.Ptr<abi.StrBuf>) uses raw, ffi {
   // copied out (bounded like every panic message) so the builder can be freed first
-  var m = Bytes2048 {}
+  var m: Bytes2048
   let n: i64 = if b.len < 2048 { b.len } else { 2048 }
   raw.copy(raw.addr_of(&m), sb_data(b), n)
   auk_sb_free(b)

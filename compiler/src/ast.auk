@@ -280,6 +280,9 @@ pub enum ExprKind {
   TypeArgs(expr: Expr, tys: [Type]),
   /// The runtime's dialect: `.f`, a field named in `raw.offset_of<T>(.f)`, `raw.field_addr(p, .f)`.
   FieldSel(name: Ident),
+  /// The runtime's dialect: the missing value of `var x: T` (no initializer; the contents are
+  /// undefined until written, as a C local's).
+  Uninit,
 }
 
 /// The part after `else`: an optional error binder (`e =>`) and the fallback.

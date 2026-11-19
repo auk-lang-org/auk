@@ -706,6 +706,39 @@ pub fn load_ty(g: Gen, t: llvm.Type, at: llvm.Value): llvm.Value uses ffi =
 
 pub fn temp(g: var Gen, t: mir.MTy): llvm.Value uses ffi = alloca(&g, t)
 
+/// The aggregate `e` (an `Agg` or a `Zero`) built at `a`: zeroed, then the members given.
+fn agg_into(g: var Gen, a: llvm.Value, e: mir.Ex) uses ffi {
+  zero_mem(&g, a, e.ty)
+  let ms = match e.k {
+    Agg(ms) => ms
+    _ => return
+  }
+  for (s, v) in ms {
+    let off = offset(&g, e.ty, s)
+    let mt = mir.types.member_ty(g.lay.info, e.ty, s, g.prog.aggs)
+    let x = ex(&g, v)
+    let p = gep(g, a, off)
+    store_at(&g, p, mt, x, v.ty)
+  }
+}
+
+/// A raw struct literal (or zero) declaring a variable: built in the variable's memory rather
+/// than in a temporary that is then copied, which unoptimized (`optnone`) code would keep. Its
+/// members are simple values (the lowering puts each in a variable first), never the variable
+/// being declared.
+fn raw_agg(g: Gen, e: mir.Ex): bool {
+  let d = match e.ty {
+    D(Named(d, _)) => d
+    _ => return false
+  }
+  if !types.is_raw_def(g.lay.info.defs, d) { return false }
+  match e.k {
+    Zero => true
+    Agg(ms) => ms.all(m => mir.is_simple(m.1))
+    _ => false
+  }
+}
+
 fn zero_mem(g: var Gen, at: llvm.Value, t: mir.MTy) uses ffi {
   let l = lay(&g, t)
   let _ = llvm.builder.build_mem_set(
@@ -814,6 +847,8 @@ fn stmt(g: var Gen, s: mir.Stmt): ()! uses ffi {
   }
   ensure_open(&g)
   match s {
+    Let(_, e) when e.k is mir.K.Undef => {}
+    Let(v, e) when raw_agg(g, e) => agg_into(&g, g.vars[v], e)
     Let(v, e) => {
       let t = g.prog.funcs[g.fi].vars[v]
       let x = ex(&g, e)
@@ -1192,7 +1227,7 @@ pub fn ex(g: var Gen, e: mir.Ex): V uses ffi = match e.k {
   }
   Float(x) => V.S(llvm.values.const_real(g.t_f64, x))
   CStr(s) => V.S(cstr_addr(&g, s))
-  Zero => match scalar(g, e.ty) {
+  Zero | Undef => match scalar(g, e.ty) {
     some(t) => V.S(llvm.values.const_null(t))
     none => V.Nil
   }
@@ -1255,16 +1290,9 @@ pub fn ex(g: var Gen, e: mir.Ex): V uses ffi = match e.k {
     }
   }
   Call(cl, args) => call(&g, cl, args, e.ty)
-  Agg(ms) => {
+  Agg(_) => {
     let a = temp(&g, e.ty)
-    zero_mem(&g, a, e.ty)
-    for (s, v) in ms {
-      let off = offset(&g, e.ty, s)
-      let mt = mir.types.member_ty(g.lay.info, e.ty, s, g.prog.aggs)
-      let x = ex(&g, v)
-      let p = gep(g, a, off)
-      store_at(&g, p, mt, x, v.ty)
-    }
+    agg_into(&g, a, e)
     V.M(a)
   }
   Cond(cnd, a, b) => {

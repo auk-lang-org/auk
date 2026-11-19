@@ -910,3 +910,21 @@ fn raw_const_call(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr, ts: [
   }
   not_const(&c, m, e)
 }
+
+/// The missing value of `var x: T` (the runtime's dialect): undefined contents of a raw type,
+/// as C's uninitialized local.
+pub fn uninit(c: var check.Checker, e: ast.Expr, exp: check.Exp): types.Ty {
+  let m = c.cur_module()
+  if !c.prog.raw_ok(m) {
+    c.err(effect_check.raw_only(e.span, "a `var` without a value is the runtime's dialect").note("write `var x: T = value`"))
+    return types.Ty.Error
+  }
+  let t = check.exp_ty(exp) else return types.Ty.Error
+  if !check.raw_allowed(c.defs, c.shallow(t)) {
+    c.err(
+      diag.new("E0419", e.span, "a `var` without a value must have a raw type, not `{c.show(t)}`")
+        .note("only numbers, `bool`, raw pointers, raw structs and `[T; N]` start undefined; give it a value"),
+    )
+  }
+  t
+}
