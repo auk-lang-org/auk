@@ -167,7 +167,7 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 |---|---:|---|---|
 | `auk_rt.h` | 1013 | the shared `raw struct`s (header, str, arr, map, err, obj, task, frames; flexible array members `data[]`, `slots[]`), the one union (`AukValue`), 12 function-pointer typedefs (`raw.Fn`), `_Static_assert`s → `raw assert` | stays the C contract until the C is gone (lowlevel.md, section 8) |
 | ~~`value.c`~~ | 239 | **done** (2026-11-19, the pilot): `runtime/src/value.auk` | `auk_ops_value` stays C (`value_ops.c`): no addresses in raw initializers yet |
-| `err.c` | 125 | atomics (rc) | — |
+| ~~`err.c`~~ | 125 | **done** (2026-11-19): `runtime/src/err.auk` | — |
 | `copy.c` | 170 | atomics, callbacks (element copy ops) | — |
 | `map.c` | 398 | callbacks (hash/eq/show ops), `const` tables | — |
 | `arr.c` | 727 | callbacks (element ops, sort comparator), `ctz`/`clz` | — |
