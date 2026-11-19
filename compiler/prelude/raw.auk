@@ -18,8 +18,9 @@ pub extern fn store<T>(p: Ptr<T>, v: T) uses raw = "@raw_store"
 pub extern fn at<T, I>(p: Ptr<T>, i: I): T uses raw = "@raw_at"
 /// The address of element `i` (in units of `T`).
 pub extern fn offset<T, I>(p: Ptr<T>, i: I): Ptr<T> uses raw = "@raw_offset"
-/// The address as an integer (the space keeps `int<` from reading as a unit).
-pub extern fn int <T>(p: Ptr<T>): int uses raw = "@raw_ptr_int"
+/// The address as an `i64`, whose arithmetic wraps (the space keeps `int<` from reading as a
+/// unit).
+pub extern fn int <T>(p: Ptr<T>): i64 uses raw = "@raw_ptr_int"
 /// Is it NULL?
 pub extern fn is_null<P>(p: P): bool uses raw = "@raw_is_null"
 /// The address of a raw local or global: `raw.addr_of(&x)`.

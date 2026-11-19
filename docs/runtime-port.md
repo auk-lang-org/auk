@@ -258,7 +258,7 @@ More of what the dialect lacks (the pilot's list above still holds; 3, 4, 5 were
    `[0; 24]` doesn't parse, so C's `char buf[24]` is a raw struct `Bytes24 { b: [u8; 24] }`,
    `var buf = Bytes24 {}` (zeroed: an extra `memset` C doesn't do; 24 bytes on the integer
    paths, 2048 in `auk__panic_sb`).
-12. **`p.int()` is `int`, whose arithmetic is checked:** `at.int() - hay.int()` compiled to a call
+12. **Fixed** (2026-11-19: `p.int()` is an `i64`): **`p.int()` is `int`, whose arithmetic is checked:** `at.int() - hay.int()` compiled to a call
    to `auk_sub` (overflow panic) in raw code. Convert first: `i64(at.int()) - i64(hay.int())`.
 13. **Thread vars need no `uses raw`** (an `extern var` does): the four show-budget accessors
    were flagged E0411 for declaring it.

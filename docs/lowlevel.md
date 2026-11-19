@@ -152,8 +152,9 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   is what the context expects (`let f: raw.Fn<…> = raw.cast(p)`, `let q: raw.Ptr<T> =
   raw.cast(p)`). So a pointer to function pointers is written by its type: `let slots:
   raw.Ptr<raw.Fn<…>> = raw.cast(p)`. `is_null` works on `raw.Ptr`
-  and `raw.Fn`; `raw.null()` is a `raw.Ptr`. `p.int()` is declared `fn int <T>` in the prelude
-  (a space: `int<` would read as a unit of measure). A `raw.Fn` value is called like a function
+  and `raw.Fn`; `raw.null()` is a `raw.Ptr`. `p.int()` is the address as an `i64` (address
+  arithmetic wraps: `end.int() - start.int()` is never an overflow check); it is declared `fn
+  int <T>` in the prelude (a space: `int<` would read as a unit of measure). A `raw.Fn` value is called like a function
   (`f(x)`), a global one of the module too (`raw var hook: raw.Fn<…>`, `hook(x)`); calling one
   stored in a struct field, or another module's global, needs it in a local first.
 - **Explicit type arguments** are written only after `raw.` (`raw.size_of<T>()`): the parser

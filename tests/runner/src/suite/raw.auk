@@ -36,6 +36,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("uninitialized_locals", uninitialized_locals),
   t.test("noinline_export_fns", noinline_export_fns),
   t.test("no_cancellation_points_in_the_runtime", no_cancellation_points_in_the_runtime),
+  t.test("ptr_int_is_i64", ptr_int_is_i64),
 ]
 
 let TOML = "[package]\nname = \"auk_rt\"\nversion = \"0.1.0\"\neffects = [\"raw\", \"ffi\"]\n"
@@ -454,4 +455,20 @@ fn no_cancellation_points_in_the_runtime() uses env, fs, ffi, time {
   let plain = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n"
   let app = project_with("cancel_app", plain, src)
   t.has(body(auk(["ir", app]).stdout), "auk_cancel_check")
+}
+
+/// `p.int()` is an `i64`: address arithmetic wraps (no overflow check, no call to auk_add).
+fn ptr_int_is_i64() uses env, fs, ffi, time {
+  let main = project("ptr_int", r"""
+    fn main(): int uses raw {
+      let p = raw.from_int<u8>(0x7fffffffffffffff)
+      let q = p.int() + 1
+      if q >= 0 { return 1 }
+      let a: raw.Ptr<u8> = raw.cast(raw.alloc(16))
+      if a.offset(5).int() - a.int() != 5 { return 2 }
+      raw.free(a)
+      0
+    }
+    """)
+  let _ = passes(main)
 }
