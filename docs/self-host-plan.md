@@ -658,7 +658,13 @@ ASan-instrumented runtime (Rust's `AUK_RT_SANITIZE`; the C tests still run under
 
 The dialect is specified in [lowlevel.md](lowlevel.md). Decided 2026-11-18: gated by an
 effect, `raw`, only the runtime package may declare; `catch` stays a runtime call, on LLVM's
-sjlj intrinsics; the port goes module by module.
+sjlj intrinsics; the port goes module by module. The per-file checklist (what each C file
+needs from the dialect, what does not translate line by line, and the gaps the dialect still
+has: conditional compilation, C library macros, per-OS struct layouts, `extern` globals,
+overflow intrinsics) is [runtime-port.md](runtime-port.md).
+- [x] The C made line-by-line translatable (2026-11-18): no varargs calls outside `cwrap.c`'s
+      fixed-argument wrappers, no `goto`, no macros but the include guard, `AUK_API` and
+      `_GNU_SOURCE`, no bit-fields; three unions, all `raw union`s.
 - [ ] The gate: the `raw` effect (E0418 outside `runtime/`), the declarations allowed only there.
 - [ ] Types: fixed-width ints (wrapping), `raw.Ptr<T>`, `raw struct`/`raw union` (C layout,
       flexible array member), `[T; N]`, `raw.Fn<…>`; refcounted types rejected in `uses raw`
@@ -688,8 +694,9 @@ sjlj intrinsics; the port goes module by module.
       `extern var` (C data symbols: `_NSConcreteStackBlock`, …) in the dialect. No OpenSSL
       fallback needed on macOS.
 - [ ] Ryu, Unicode tables, `buf_printf` → Auk.
-- [ ] Varargs: none in our API by then (Phase 1 rule); calling libc varargs (`printf`, `open`
-      with mode) via fixed-arg wrappers or varargs FFI support.
+- [x] Varargs: none in our API (Phase 1 rule); libc varargs (`snprintf` of a double, `open`
+      with mode, `shm_open`, `fcntl`, `ioctl`) only through the fixed-argument wrappers in
+      `runtime/c/cwrap.c` (runtime-port.md). Varargs FFI support stays optional.
 
 ### 7c. Port
 - [ ] Same order as Phase 1c, one module at a time, C and Auk linked together meanwhile.
