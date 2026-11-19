@@ -9,7 +9,7 @@ extern fn auk_release(p: raw.Ptr<()>) = "void auk_release(void *)"
 extern fn auk__panic3(loc: raw.Ptr<u8>, a: raw.Ptr<u8>, b: raw.Ptr<u8>, c: raw.Ptr<u8>) =
   "void auk__panic3(const char *, const char *, const char *, const char *)"
 extern fn auk_hash_int(x: i64): u64 = "uint64_t auk_hash_int(int64_t)"
-extern var auk_ops_float: abi.ElemOps = "auk_ops_float"
+pub extern var auk_ops_float: abi.ElemOps = "auk_ops_float"
 extern fn auk__value_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) = "void auk__value_copy_elem(const void *, void *)"
 
 /// The element ops of `Value` (C: `const AukElemOps auk_ops_value`), over the elem_* functions
@@ -83,7 +83,7 @@ export fn auk_value_retain(v: abi.Value) uses raw, ffi {
 
 export fn auk_value_release(v: abi.Value) uses raw, ffi = auk_release(value_ptr(v))
 
-export fn auk_value_tag_name(t: u32): raw.Ptr<u8> {
+pub export fn auk_value_tag_name(t: u32): raw.Ptr<u8> {
   if t == abi.V_NULL {
     "Null"
   } else if t == abi.V_BOOL {
@@ -192,7 +192,7 @@ fn elem_release(p: raw.Ptr<()>) uses raw, ffi = auk_value_release(raw.cast<abi.V
 fn elem_eq(a: raw.Ptr<()>, b: raw.Ptr<()>): bool uses raw, ffi =
   auk_value_eq(raw.cast<abi.Value>(a).load(), raw.cast<abi.Value>(b).load())
 
-fn elem_hash(p: raw.Ptr<()>): u64 uses raw, ffi {
+pub fn elem_hash(p: raw.Ptr<()>): u64 uses raw, ffi {
   let v: raw.Ptr<abi.Value> = raw.cast(p)
   let t = v.tag
   if t == abi.V_STR {
