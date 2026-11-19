@@ -720,7 +720,10 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       (Network.framework, the blocks hand-made as above, without signatures: a C string isn't
       a constant yet) / `tls_os.linux.auk` (OpenSSL via dlopen); `tls.c` and `-fblocks` gone
       (runtime-port.md, "Found porting `tls.c`").
-- [ ] Ryu, Unicode tables, `buf_printf` → Auk.
+- [x] Ryu, Unicode tables, `buf_printf` → Auk: no Ryu needed (the shortest float is found by
+      round-tripping `snprintf`'s `%.*e`, called directly through the varargs FFI); no Unicode
+      tables (the runtime's case and class functions are ASCII); message building is the
+      string builder in `str.auk`.
 - [x] Varargs: none in our API (Phase 1 rule); libc varargs (`snprintf` of a double, `open`
       with mode, `shm_open`, `fcntl`, `ioctl`) went through the fixed-argument wrappers in
       `runtime/c/cwrap.c` until 2026-11-19, when the dialect got varargs calls: `extern fn
@@ -730,7 +733,7 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       has none.
 
 ### 7c. Port
-- [ ] Same order as Phase 1c, one module at a time, C and Auk linked together meanwhile.
+- [x] Same order as Phase 1c, one module at a time, C and Auk linked together meanwhile.
       Done: `value` (the 7a pilot); `err`, `catch` (`raw.setjmp`; same frames, stack.c's
       overflow recovery unchanged; now `recover.auk`, `catch` being a keyword), `pixels`
       (2026-11-19; runtime-port.md, "Found by the 7c port"); `copy`, `heap` (+ `heap_os.<os>`), `chan`, `ffi` (2026-11-19: line by line, same
@@ -762,7 +765,8 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       Phase 1 race fix kept; enter/leave faster than C; runtime-port.md, "Found porting
       `dbg.c`"). **The runtime is Auk: no `.c` left in runtime/c** (`auk_rt.h` stays as the ABI
       contract the tests and the ABI probe compile against).
-- [ ] `auk_rt.bc` is produced by the Auk compiler; `libauk_rt.a` via LLVM's archive writer.
+- [x] `auk_rt.bc` is produced by the Auk compiler (`auk build --lib --bc`), `libauk_rt.a` by
+      `auk build --lib` and `llvm-ar` (build.sh): no C half since dbg.c's port.
 - [x] Same C tests (called through `export fn`), then rewrite them as Auk tests (2026-11-20):
       `runtime/test/unit/` (`sh runtime/test/unit/run.sh [filter]`), the 72 tests of
       `runtime/c/test/*.c` one for one (same names, assertions and panic messages), modules of
@@ -778,7 +782,15 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       shown to catch a planted race (`auk_chan_close` without its lock) and a planted leak
       (`auk__chan_free` not freeing its buffer). Left: a compiler flag that sets the attribute,
       UBSan's checks (no pass for Auk code; UBSan was the C front end's).
-- [ ] ±5% perf bar against Phase 1 numbers.
+- [x] ±5% perf bar (2026-11-20, quiet machine, interleaved, min of 9 / median): the all-C runtime
+      (d7d5830, the same Auk compiler before 7c) against the all-Auk runtime (fa50575),
+      bench/perf built by each: fib 1.016 / 1.001, sieve 1.022 / 0.989, nbody 0.990 / 0.950,
+      hashmap 0.902 / 0.908, trees 1.004 / 1.004, strings 0.953 / 0.947, sort 1.014 / 1.018;
+      outputs identical. `auk check` of the compiler 0.996. **`auk build` of the compiler is
+      1.19x** (15.0 → 17.8 s, the same source for both): all of it from rtlink inlining more of
+      the Auk runtime into the program (with `AUK_NO_RT_INLINE=1` both take 14.7–14.8 s) —
+      the same inlining that makes programs equal or faster; tunable (`noinline export fn` on
+      the large runtime functions programs gain nothing from inlining).
 
 ### 7d. Drop the C compiler from the toolchain
 - [x] Linking (2026-11-19): `auk build` calls the system linker itself (compiler/src/native.auk;
@@ -808,10 +820,25 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       the sanitizer's runtime); the plain unit tests (`runtime/test/unit/run.sh`) link through
       `scripts/link.sh`. ci/linux's image installs gcc for those tests only (`TEST_CC`); GitHub's
       runners have one.
-- [ ] Delete `runtime/c/` (`auk_rt.h` and the C tests remain).
+- [ ] Delete `runtime/c/`: what's left is `auk_rt.h` alone, the ABI contract (the C programs that
+      call into Auk compile against it: the abi probe, the raw suite's C mains). It could move
+      to `runtime/auk_rt.h`; the C tests are gone (Auk, 2026-11-20).
 
 **Done when:** no `.c`, `.h`, `.m`, `.rs` in the repo; a fresh machine with LLVM and the seed
 builds and passes everything.
+
+**Status (2026-11-20): done, with these left on purpose.** The compiler, the runtime and their
+tests are Auk; building needs `auk` (or the seed), LLVM and the system linker — no C compiler
+(proven: ci/linux `--no-cc`, macOS with failing `cc`/`clang` shims). Seeds re-cut on all three
+platforms after the last runtime change, each rebuilding the same stage 2. What remains in C is
+test and tooling, not toolchain: `runtime/c/auk_rt.h` (the ABI contract), `runtime/gen/cfacts.c`
+(generates the checked-in per-platform C facts, run once per new platform), and the C fixtures
+that prove Auk interoperates with C (`runtime/test/abi/probe.c`, `runtime/test/raw/*_main.c`,
+`tests/fixtures/ffi/testlib.c`); plus `bench/perf/rust/*.rs`, the benchmarks' comparison
+programs. Open: a compiler flag for the sanitizer attribute (today `sed` over bitcode), UBSan
+for Auk code, tuning rtlink's inlining (above), and the AArch64 FastISel bug seen in the seed
+(`build.sh`: a `sext i1` of a loaded i1 after globalopt) — `auk run`'s O0/Light levels use
+FastISel but no globalopt, so they shouldn't meet it; a test would make sure.
 
 ---
 
