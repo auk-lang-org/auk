@@ -93,6 +93,7 @@ else
 fi
 objs="$build/rt_auk.o"
 for src in "$rt"/*.c; do
+    [ -e "$src" ] || continue  # no C half left (the whole runtime is Auk)
     obj="$build/rt_$(basename "$src" .c).o"
     $CC $cflags $san -c "$src" -o "$obj"
     objs="$objs $obj"
