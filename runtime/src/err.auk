@@ -120,7 +120,7 @@ export fn auk__err_free(e0: raw.Ptr<abi.Err>) uses raw, ffi {
 
 /// "<what> <subject>: <strerror>" (or "<what>: <strerror>") with code err. The subject is
 /// taken as a C string: it ends at an embedded NUL.
-export fn auk__err_errno(what: raw.Ptr<u8>, subject: raw.Ptr<abi.Str>, err: i32): raw.Ptr<abi.Err> uses raw, ffi {
+pub export fn auk__err_errno(what: raw.Ptr<u8>, subject: raw.Ptr<abi.Str>, err: i32): raw.Ptr<abi.Err> uses raw, ffi {
   let se = strerror(err)
   let subj: raw.Ptr<u8> = if subject.is_null() { raw.null() } else { auk_str_cstr(subject) }
   let nw: usize = if what.is_null() { 0 } else { strlen(what) }
