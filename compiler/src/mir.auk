@@ -224,6 +224,10 @@ pub struct Global {
   init: Ex?,
   /// Read-only data (element ops, vtables).
   constant: bool,
+  /// The runtime's dialect: 0 a generated global; 1 `raw var` (internal), 2 `raw thread var`
+  /// (internal, thread-local), 3 `raw let` (not a global), 4 `export var` (external, its name),
+  /// 5 `extern var` (a declaration of a C global).
+  kind: int,
 }
 
 /// A whole program.

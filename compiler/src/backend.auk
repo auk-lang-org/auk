@@ -160,6 +160,11 @@ pub fn jit(
   info: mir.types.TyInfo,
   level: Level,
 ): orcjit.Code! uses fs, env, proc, ffi {
+  // the JIT links objects without a platform runtime, so it has no thread-local storage
+  match prog.globals.find(g => g.kind == 2) {
+    some(g) => return fail("error: `raw thread var` (here `{g.name}`) is only in compiled code: `auk build` or `auk build --lib`, not `auk run`/`auk test`\n")
+    none => {}
+  }
   orcjit.open_libs(prog.links, prog.c_syms)?
   let b = build(prog, info, exports("dk_entry"), none, level, false, false)?
   let syms = b.rt_syms

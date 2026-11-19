@@ -35,9 +35,11 @@ pub struct ItemTable {
   fns: {str: [int]},
   consts: {str: int},
   variants: {str: [(int, int)]},
+  /// The runtime's dialect: `raw var`, `raw let`, ... globals.
+  globals: {str: int},
 }
 
-fn new_items(): ItemTable = ItemTable { types: {}, fns: {}, consts: {}, variants: {} }
+fn new_items(): ItemTable = ItemTable { types: {}, fns: {}, consts: {}, variants: {}, globals: {} }
 
 /// Well-known core definitions.
 pub struct Builtins { err: int, value: int, show: int, ord: int, eq: int, data: int }
@@ -152,6 +154,8 @@ pub struct Checker {
   /// Per body: the nodes whose targets monomorphization resolves.
   body_nodes: {typed.BodyRef: BodyNodes},
   main: typed.MainInfo?,
+  /// The runtime's dialect: `raw var`, `raw let`, ... globals.
+  globals: [typed.GlobalInfo],
   instances: [typed.Instance],
   /// Rust's `BTreeSet<Ty>`: sorted by `types.cmp`; `types_used_set` for membership.
   types_used: [types.Ty],
@@ -487,6 +491,7 @@ fn new_checker(prog: resolve.Program): Checker {
     or_binds: none,
     body_nodes: {},
     main: none,
+    globals: [],
     instances: [],
     types_used: [],
     types_used_set: {},
@@ -573,11 +578,14 @@ fn collect(c: var Checker) uses fs {
         Let(cd) => c.declare_const(m, i, cd, false)
         Imprint(cd) => c.declare_const(m, i, cd, true)
         Test(t) => c.tests.push(typed.TestInfo { name: t.name, module: m, item: i, span: t.span })
+        Global(d) => check_raw.declare_global(&c, m, d)
         _ => {}
       }
     }
     c.check_duplicate_fns(m)
   }
+  // the runtime's dialect: global initializers and `raw assert`s, evaluated now
+  check_raw.check_globals(&c)
 }
 
 /// E0418 for a package other than the runtime listing `raw` in its raft.toml's effects.
@@ -2387,7 +2395,10 @@ fn finish_body(c: var Checker) {
       c.tables[m].locals[l].ty = fixed
     }
   }
-  if c.prog.raw_ok(m) && !c.prog.is_core(m) { check_raw.validate(&c, cx.t, m) }
+  if c.prog.raw_ok(m) && !c.prog.is_core(m) {
+    check_raw.validate(&c, cx.t, m)
+    check_raw.extern_vars(&c, cx.t, m, cx.body)
+  }
   c.raw_body_types(cx)
   if unresolved.len() > 0 && c.errs.len() == 0 {
     // report at the first (in source order) expression whose type is unknown
@@ -2542,6 +2553,7 @@ fn finish(c: Checker): typed.TypedProgram = typed.TypedProgram {
   from_value_impls: c.from_value_impls,
   vtables: c.vtables,
   main: c.main,
+  globals: c.globals,
 }
 
 // ---- Methods of the other files ----

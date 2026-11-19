@@ -771,6 +771,13 @@ pub fn name_expr(c: var check.Checker, e: ast.Expr, n: str, exp: check.Exp): typ
 
 /// A constant, function value or variant named `n` in module `target`, seen from `m`.
 pub fn item_value(c: var check.Checker, e: ast.Expr, m: int, target: int, n: str, exp: check.Exp): types.Ty? {
+  match c.items[target].globals.get(n) {
+    some(g) => if target == m || c.globals[g].public {
+      c.cx.t.names[e.id] = typed.NameRef.Global(g)
+      return c.globals[g].ty
+    }
+    none => {}
+  }
   match c.items[target].consts.get(n) {
     some(k) => if target == m || c.consts[k].public {
       c.ensure_const(k)

@@ -4,6 +4,33 @@
 
 fn d(t: types.Ty): mir.MTy = mir.MTy.D(t)
 
+/// A compile-time constant as a MIR expression of type `t`.
+pub fn const_ex(lw: var mir.lower.Lower, v: typed.ConstVal, t: types.Ty): mir.Ex = match v {
+  Int(n) => mir.int_as(n, d(t))
+  Float(x) => mir.ex(mir.K.Float(x), d(types.Ty.Float)).cast(d(t))
+  Zero => mir.zero(d(t))
+  Agg(fs) => {
+    let (dd, args) = match t {
+      Named(dd, args) => (dd, args)
+      _ => return mir.zero(d(t))
+    }
+    let defs = types.fields(lw.tp.defs, dd)
+    let s = types.subst_of(lw.tp.defs, dd, args)
+    var ms: [(mir.Sel, mir.Ex)] = []
+    for (i, fv) in fs { ms.push((mir.Sel.F(i), lw.const_ex(fv, types.subst(defs[i].ty, s)))) }
+    mir.agg(d(t), ms)
+  }
+}
+
+/// A global of the runtime's dialect: a `raw let` is its value; the others are MIR globals
+/// (thread-local for `raw thread var`, its own name for `export var`), made on first use.
+pub fn global_ref(lw: var mir.lower.Lower, g: int): mir.lower.Val {
+  let gl = lw.tp.globals[g]
+  if gl.kind == 2 { return mir.lower.plain(lw.const_ex(gl.value, gl.ty), gl.ty) }
+  let ix = lw.g.raw_global(g, lw.const_ex(gl.value, gl.ty))
+  mir.lower.plain(lw.g.global_ex(ix), gl.ty)
+}
+
 /// Is the call at `node` one of core's `raw` intrinsics?
 pub fn is_raw_call(lw: var mir.lower.Lower, node: int): bool = match lw.tp.instances[lw.inst].resolved.get(node) {
   some(Intrinsic(Raw(_), _)) => true

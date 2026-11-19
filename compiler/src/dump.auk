@@ -170,6 +170,19 @@ fn item(out: var [str], d: int, it: ast.Item) {
     }
     Let(c) => const_def(&out, d, "let", c)
     Imprint(c) => const_def(&out, d, "imprint", c)
+    Global(g) => {
+      line(&out, d, "{ast.global_kw(g.kind)} #{g.id} {sp(g.span)}{vis(g.public)} {id(g.name)}")
+      doc(&out, d + 1, g.doc)
+      match g.ty {
+        some(t) => ty(&out, d + 1, t)
+        none => {}
+      }
+      expr(&out, d + 1, g.value)
+    }
+    RawAssert(a) => {
+      line(&out, d, "raw-assert #{a.id} {sp(a.span)}")
+      expr(&out, d + 1, a.expr)
+    }
     ExternType(t) => {
       line(&out, d, "extern-type #{t.id} {sp(t.span)}{vis(t.public)} {id(t.name)} {esc(t.c_type)}")
       doc(&out, d + 1, t.doc)
@@ -734,6 +747,8 @@ fn item_line(out: var [str], m: str, it: ast.Item) {
     Let(c) => ("let", c.name.name, c.public)
     Imprint(c) => ("imprint", c.name.name, c.public)
     ExternType(t) => ("extern-type", t.name.name, t.public)
+    Global(g) => ("global", g.name.name, g.public)
+    RawAssert(_) => return
   }
   line(&out, 1, "item {kind} {m}.{n}{vis(public)}")
   match it {
@@ -772,7 +787,11 @@ fn item_paths(it: ast.Item, acc: var [[ast.Ident]]) {
       some(t) => ty_paths(t, &acc)
       none => {}
     }
-    Test(_) | ExternType(_) => {}
+    Test(_) | ExternType(_) | RawAssert(_) => {}
+    Global(g) => match g.ty {
+      some(t) => ty_paths(t, &acc)
+      none => {}
+    }
   }
   var es: [ast.Expr] = []
   visit.visit_item_exprs(it, &es)
@@ -1214,6 +1233,7 @@ fn tables(out: var [str], tp: typed.TypedProgram, t: typed.Tables) {
           Fn(func, type_args) => "fn {fn_name(tp, func)}{targs(tp, type_args)}"
           Variant(v) => "variant {variant_name(tp, v.def, v.index)}{targs(tp, v.args)}"
           None => "none"
+          Global(g) => "global {tp.globals[g].name}#{g}"
         }
         s.push(" name=(" + r2 + ")")
       }

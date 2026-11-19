@@ -130,6 +130,14 @@ fn item_dump(it: ast.Item): str = match it {
   Let(c) => const_dump("let", c)
   Imprint(c) => const_dump("imprint", c)
   ExternType(t) => "({vis(t.public)}extern type {t.name.name} {debug_str(t.c_type)})"
+  Global(g) => {
+    let t = match g.ty {
+      some(x) => " {ast.type_dump(x)}"
+      none => ""
+    }
+    "({vis(g.public)}{ast.global_kw(g.kind)} {g.name.name}{t} {expr_dump(g.value)})"
+  }
+  RawAssert(a) => "(raw assert {expr_dump(a.expr)})"
 }
 
 fn const_dump(kw: str, c: ast.ConstDef): str {

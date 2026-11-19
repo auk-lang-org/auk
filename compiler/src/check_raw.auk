@@ -260,3 +260,397 @@ pub fn validate(c: var check.Checker, t: typed.Tables, m: int) {
     }
   }
 }
+
+/// E0410: a body that reads, writes or takes the address of an `extern var` without `uses raw`.
+pub fn extern_vars(c: var check.Checker, t: typed.Tables, m: int, body: typed.BodyRef) {
+  let raw = match body {
+    Fn(f) => c.fns[f].effects.contains("raw")
+    _ => false
+  }
+  if raw { return }
+  for n in t.names.keys().sort() {
+    match t.names[n] {
+      Global(g) => if c.globals[g].kind == 4 {
+        let span = c.first_span(m, [n]) else diag.NONE
+        c.err_in(
+          m,
+          diag.new("E0410", span, "`{c.globals[g].name}` is an `extern var` (C data), which needs `uses raw`")
+            .note("add `uses raw` to the function"),
+        )
+        return
+      }
+      _ => {}
+    }
+  }
+}
+
+// ---- globals: `raw var`, `raw thread var`, `raw let`, `export var`, `raw assert` ----
+
+/// Register a global (its initializer is evaluated by `check_globals`).
+pub fn declare_global(c: var check.Checker, m: int, d: ast.GlobalDef) {
+  if !c.prog.raw_ok(m) {
+    c.err_in(m, effect_check.raw_only(d.name.span, "`{ast.global_kw(d.kind)} {d.name.name}` is a C global"))
+  }
+  let n = d.name.name
+  if c.items[m].globals.contains(n) || c.items[m].consts.contains(n) {
+    c.err_in(m, diag.new("E0107", d.name.span, "`{n}` is defined twice in this module"))
+  }
+  var g = check.gen_scope()
+  let ty = match d.ty {
+    some(t) => c.resolve_type(m, t, &g)
+    none => {
+      if d.kind != 2 {
+        let kw = ast.global_kw(d.kind)
+        c.err_in(m, diag.new("E0360", d.name.span, "`{kw} {n}` needs its type: `{kw} {n}: T = ...`"))
+      }
+      types.Ty.Error
+    }
+  }
+  let flexible = match ty {
+    Array(_, k) => k < 0
+    _ => false
+  }
+  if !check.raw_allowed(c.defs, ty) || flexible {
+    c.err_in(m, diag.new("E0419", d.name.span, "a global of the runtime's dialect can't be `{c.defs.show(ty)}`"))
+  }
+  let c_name = if d.kind == 4 {
+    match d.value.kind {
+      Lit(Str(s)) => s
+      _ => {
+        c.err_in(m, diag.new("E0020", d.value.span, "`extern var` names its C symbol as a string: `extern var {n}: T = \"symbol\"`"))
+        ""
+      }
+    }
+  } else {
+    ""
+  }
+  let id = c.globals.len()
+  c.globals.push(typed.GlobalInfo { name: n, module: m, public: d.public, kind: d.kind, c_name, ty, value: typed.ConstVal.Zero, span: d.name.span })
+  c.items[m].globals[n] = id
+}
+
+/// A global used as a place (`counter += 1`, `raw.addr_of(&g)`), or none if `n` isn't one.
+pub fn global_place(c: var check.Checker, e: ast.Expr, n: str, mutate: bool): types.Ty? {
+  let m = c.cur_module()
+  let g = c.items[m].globals.get(n) else return none
+  c.cx.t.names[e.id] = typed.NameRef.Global(g)
+  let t = c.globals[g].ty
+  c.record(e.id, t)
+  if mutate && c.globals[g].kind == 2 {
+    c.err(diag.new("E0320", e.span, "can't change `{n}`: it is a `raw let` constant").note("declare it `raw var` to change it"))
+  }
+  t
+}
+
+/// The state of compile-time evaluation: per global, 0 todo, 1 busy, 2 done; the AST of each.
+struct Eval { state: [int], defs: [(int, ast.GlobalDef)] }
+
+/// Evaluate every global's initializer and every `raw assert` (E0421 when not constant or false).
+pub fn check_globals(c: var check.Checker) {
+  var asserts: [(int, ast.RawAssertDef)] = []
+  var ev = Eval { state: c.globals.map(_ => 0), defs: [] }
+  for m, md in c.prog.mods {
+    for it in md.ast.items {
+      match it {
+        Global(d) => ev.defs.push((m, d))
+        RawAssert(a) => asserts.push((m, a))
+        _ => {}
+      }
+    }
+  }
+  for g in 0..c.globals.len() { eval_global(&c, &ev, g) }
+  for (m, a) in asserts {
+    if !c.prog.raw_ok(m) {
+      c.err_in(m, effect_check.raw_only(a.span, "`raw assert` is a compile-time layout check"))
+      continue
+    }
+    match eval(&c, &ev, m, a.expr, some(types.Ty.Bool)) {
+      some((v, t)) => if t != types.Ty.Bool {
+        c.err_in(m, diag.new("E0421", a.expr.span, "`raw assert` needs a `bool`, found `{c.defs.show(t)}`"))
+      } else if v == typed.ConstVal.Int(0) {
+        let note = assert_note(&c, &ev, m, a.expr)
+        c.err_in(m, diag.new("E0421", a.expr.span, "this `raw assert` fails").note(note))
+      }
+      none => {}
+    }
+  }
+}
+
+/// For a failed comparison: both sides' values.
+fn assert_note(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr): str = match e.kind {
+  Binary(op, l, r) => match (eval(&c, &ev, m, l, none), eval(&c, &ev, m, r, none)) {
+    (some((a, _)), some((b, _))) => "the left side is {show_cv(a)}, the right side {show_cv(b)} (`{op.symbol()}`)"
+    _ => "the condition is false at compile time"
+  }
+  _ => "the condition is false at compile time"
+}
+
+fn show_cv(v: typed.ConstVal): str = match v {
+  Int(n) => "{n}"
+  Float(x) => "{x}"
+  Zero => "0"
+  Agg(_) => "a struct"
+}
+
+fn eval_global(c: var check.Checker, ev: var Eval, g: int) {
+  if ev.state[g] != 0 { return }
+  ev.state[g] = 1
+  let (m, d) = ev.defs[g]
+  if d.kind == 4 {
+    // defined in C
+    ev.state[g] = 2
+    return
+  }
+  let want = c.globals[g].ty
+  let w: types.Ty? = if want == types.Ty.Error { none } else { some(want) }
+  match eval(&c, &ev, m, d.value, w) {
+    some((v, t)) => {
+      if want == types.Ty.Error && d.ty == none {
+        c.globals[g].ty = t
+      } else if t != want && t != types.Ty.Error && want != types.Ty.Error {
+        c.err_in(m, diag.new("E0200", d.value.span, "expected `{c.defs.show(want)}`, found `{c.defs.show(t)}`"))
+      }
+      c.globals[g].value = v
+    }
+    none => {}
+  }
+  ev.state[g] = 2
+}
+
+fn not_const(c: var check.Checker, m: int, e: ast.Expr): (typed.ConstVal, types.Ty)? {
+  c.err_in(
+    m,
+    diag.new("E0421", e.span, "this isn't a compile-time constant")
+      .note("an initializer of a global and a `raw assert` use literals, `raw let`s, `raw.size_of<T>()`, `raw.align_of<T>()`, `raw.offset_of<T>(.f)`, `raw.null()`, conversions, arithmetic and raw struct literals"),
+  )
+  none
+}
+
+/// `n` as a value of the fixed-width type `t` (wrapped, sign- or zero-extended).
+fn norm(n: int, t: types.Ty): int = match t {
+  Fixed(k) => {
+    let bits = types.fx_bits(k)
+    if bits == 64 || k == types.Fx.F32 { return n }
+    let mask = (1 << bits) - 1
+    let v = n & mask
+    if types.fx_signed(k) && v >= 1 << (bits - 1) { v - (1 << bits) } else { v }
+  }
+  Bool => if n != 0 { 1 } else { 0 }
+  _ => n
+}
+
+fn layouts(c: check.Checker): mir.layout.Layouts {
+  let info = mir.types.TyInfo { defs: c.defs, value_def: some(c.b.value), err_def: c.b.err }
+  mir.layout.new(info, [], "aarch64")
+}
+
+fn ci(n: int, t: types.Ty): (typed.ConstVal, types.Ty)? = some((typed.ConstVal.Int(norm(n, t)), t))
+
+fn is_unsigned(t: types.Ty): bool = match t {
+  Fixed(k) => !types.fx_signed(k)
+  _ => false
+}
+
+/// `p < q`, unsigned when `u`.
+fn less(p: int, q: int, u: bool): bool {
+  let min = -9223372036854775807 - 1
+  if u { (p ^ min) < (q ^ min) } else { p < q }
+}
+
+/// Evaluate a constant expression of the runtime's dialect (the checker hasn't typed it).
+fn eval(c: var check.Checker, ev: var Eval, m: int, e: ast.Expr, want: types.Ty?): (typed.ConstVal, types.Ty)? {
+  let fx = match want {
+    some(Fixed(k)) => some(k)
+    _ => none
+  }
+  match e.kind {
+    Lit(l) => match l {
+      Int(n) => match fx {
+        some(k) when k != types.Fx.F32 => ci(n, types.Ty.Fixed(k))
+        _ => ci(n, types.Ty.Int)
+      }
+      Float(x) => {
+        let t = if fx == some(types.Fx.F32) { types.Ty.Fixed(types.Fx.F32) } else { types.Ty.Float }
+        some((typed.ConstVal.Float(x), t))
+      }
+      Bool(b) => ci(if b { 1 } else { 0 }, types.Ty.Bool)
+      Char(ch) => ci(int(ch), types.Ty.Char)
+      Str(_) => not_const(&c, m, e)
+    }
+    Unary(op, x) => {
+      let (v, t) = eval(&c, &ev, m, x, want)?
+      match v {
+        Int(n) => match op {
+          Neg => ci(0 -% n, t)
+          Not => ci(if n == 0 { 1 } else { 0 }, types.Ty.Bool)
+          BitNot => ci(-1 - n, t)
+        }
+        Float(f) => if op == ast.UnOp.Neg { some((typed.ConstVal.Float(-f), t)) } else { not_const(&c, m, e) }
+        _ => not_const(&c, m, e)
+      }
+    }
+    Binary(op, l, r) => {
+      let cmp = match op {
+        Eq | Ne | Lt | Le | Gt | Ge | And | Or => true
+        _ => false
+      }
+      let lwant = if cmp { none } else { want }
+      let (a0, at0) = eval(&c, &ev, m, l, lwant)?
+      let (b, bt) = eval(&c, &ev, m, r, some(at0))?
+      var a = a0
+      var at = at0
+      if at != bt && (l.kind is ast.ExprKind.Lit(_)) {
+        let (a2, at2) = eval(&c, &ev, m, l, some(bt))?
+        a = a2
+        at = at2
+      }
+      if at != bt {
+        c.err_in(m, diag.new("E0260", e.span, "can't apply `{op.symbol()}` to `{c.defs.show(at)}` and `{c.defs.show(bt)}`"))
+        return none
+      }
+      let u = is_unsigned(at)
+      match (a, b) {
+        (Int(x), Int(y)) => match op {
+          Add | AddWrap => ci(x +% y, at)
+          Sub | SubWrap => ci(x -% y, at)
+          Mul | MulWrap => ci(x *% y, at)
+          Div | Rem => if y == 0 {
+            c.err_in(m, diag.new("E0421", r.span, "division by zero in a constant"))
+            none
+          } else if op == ast.BinOp.Div {
+            ci(x / y, at)
+          } else {
+            ci(x % y, at)
+          }
+          BitAnd => ci(x & y, at)
+          BitOr => ci(x | y, at)
+          BitXor => ci(x ^ y, at)
+          Shl => ci(x << (y & 63), at)
+          Shr => ci(x >> (y & 63), at)
+          Eq => ci(if x == y { 1 } else { 0 }, types.Ty.Bool)
+          Ne => ci(if x != y { 1 } else { 0 }, types.Ty.Bool)
+          Lt => ci(if less(x, y, u) { 1 } else { 0 }, types.Ty.Bool)
+          Le => ci(if !less(y, x, u) { 1 } else { 0 }, types.Ty.Bool)
+          Gt => ci(if less(y, x, u) { 1 } else { 0 }, types.Ty.Bool)
+          Ge => ci(if !less(x, y, u) { 1 } else { 0 }, types.Ty.Bool)
+          And => ci(if x != 0 && y != 0 { 1 } else { 0 }, types.Ty.Bool)
+          Or => ci(if x != 0 || y != 0 { 1 } else { 0 }, types.Ty.Bool)
+          _ => not_const(&c, m, e)
+        }
+        (Float(x), Float(y)) => match op {
+          Add => some((typed.ConstVal.Float(x + y), at))
+          Sub => some((typed.ConstVal.Float(x - y), at))
+          Mul => some((typed.ConstVal.Float(x * y), at))
+          Div => some((typed.ConstVal.Float(x / y), at))
+          Eq => ci(if x == y { 1 } else { 0 }, types.Ty.Bool)
+          Ne => ci(if x != y { 1 } else { 0 }, types.Ty.Bool)
+          Lt => ci(if x < y { 1 } else { 0 }, types.Ty.Bool)
+          Gt => ci(if x > y { 1 } else { 0 }, types.Ty.Bool)
+          _ => not_const(&c, m, e)
+        }
+        _ => not_const(&c, m, e)
+      }
+    }
+    Name(n) => {
+      let g = c.items[m].globals.get(n) else return not_const(&c, m, e)
+      if c.globals[g].kind != 2 {
+        c.err_in(m, diag.new("E0421", e.span, "`{n}` is a `{ast.global_kw(c.globals[g].kind)}`, not a constant").note("only a `raw let` is a compile-time constant"))
+        return none
+      }
+      if ev.state[g] == 1 {
+        c.err_in(m, diag.new("E0421", e.span, "`{n}` is defined in terms of itself"))
+        return none
+      }
+      eval_global(&c, &ev, g)
+      some((c.globals[g].value, c.globals[g].ty))
+    }
+    TypeArgs(x, tys) => {
+      var g = check.gen_scope()
+      var ts: [types.Ty] = []
+      for t in tys { ts.push(c.resolve_type(m, t, &g)) }
+      raw_const_call(&c, m, x, ts, want)
+    }
+    MethodCall(_, _, _) => raw_const_call(&c, m, e, [], want)
+    Call(callee, args) => match callee.kind {
+      Name(n) when args.len() == 1 => {
+        let to = match types.fx_of(n) {
+          some(k) => types.Ty.Fixed(k)
+          none => match n {
+            "int" => types.Ty.Int
+            "bool" => types.Ty.Bool
+            _ => return not_const(&c, m, e)
+          }
+        }
+        let (v, _) = eval(&c, &ev, m, args[0], none)?
+        match v {
+          Int(k) => ci(k, to)
+          Float(x) => if to == types.Ty.Fixed(types.Fx.F32) { some((v, to)) } else { ci(int(x), to) }
+          _ => not_const(&c, m, e)
+        }
+      }
+      _ => not_const(&c, m, e)
+    }
+    Struct(path, fields, base) => {
+      let d = match c.lookup_type_path(m, path) {
+        some(Def(d)) => d
+        _ => return not_const(&c, m, e)
+      }
+      if !types.is_raw_def(c.defs, d) || base != none { return not_const(&c, m, e) }
+      let fs = c.defs.fields(d)
+      var out: [(int, typed.ConstVal)] = []
+      for fi in fields {
+        let i = fs.find_index(f => f.name == fi.name.name) else {
+          c.err_in(m, diag.new("E0221", fi.name.span, "the raw struct `{c.defs.types[d].name}` has no field `{fi.name.name}`"))
+          return none
+        }
+        let x = fi.value else return not_const(&c, m, e)
+        let (v, t) = eval(&c, &ev, m, x, some(fs[i].ty))?
+        if t != fs[i].ty && fs[i].ty != types.Ty.Error {
+          c.err_in(m, diag.new("E0200", x.span, "expected `{c.defs.show(fs[i].ty)}`, found `{c.defs.show(t)}`"))
+        }
+        out.push((i, v))
+      }
+      some((typed.ConstVal.Agg(out), types.Ty.Named(d, [])))
+    }
+    _ => not_const(&c, m, e)
+  }
+}
+
+/// `raw.size_of<T>()`, `raw.align_of<T>()`, `raw.offset_of<T>(.f)`, `raw.null()` in a constant.
+fn raw_const_call(c: var check.Checker, m: int, e: ast.Expr, ts: [types.Ty], want: types.Ty?): (typed.ConstVal, types.Ty)? {
+  let (recv, name, args) = match e.kind {
+    MethodCall(r, n, a) => (r, n, a)
+    _ => return not_const(&c, m, e)
+  }
+  if recv.kind != ast.ExprKind.Name("raw") { return not_const(&c, m, e) }
+  let usize = types.Ty.Fixed(types.Fx.Usize)
+  let n = name.name
+  if (n == "size_of" || n == "align_of") && ts.len() == 1 {
+    var l = layouts(c)
+    let x = mir.layout.lay(&l, mir.MTy.D(ts[0]))
+    return ci(if n == "size_of" { x.size } else { x.align }, usize)
+  }
+  if n == "offset_of" && ts.len() == 1 && args.len() == 1 {
+    let f = match args[0].kind {
+      FieldSel(x) => x
+      _ => return not_const(&c, m, e)
+    }
+    let (_, i, _) = raw_field(&c, ts[0], f)?
+    var l = layouts(c)
+    return ci(mir.layout.offset(&l, mir.MTy.D(ts[0]), mir.Sel.F(i)), usize)
+  }
+  if n == "null" {
+    let t = match ts.get(0) {
+      some(x) => types.Ty.Ptr(x)
+      none => match want {
+        some(Ptr(x)) => types.Ty.Ptr(x)
+        _ => {
+          c.err_in(m, diag.new("E0360", e.span, "`raw.null()` needs its pointer type here: `raw.null<T>()`"))
+          return none
+        }
+      }
+    }
+    return some((typed.ConstVal.Zero, t))
+  }
+  not_const(&c, m, e)
+}

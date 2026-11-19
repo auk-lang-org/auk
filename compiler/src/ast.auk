@@ -16,6 +16,35 @@ pub enum Item {
   Imprint(c: ConstDef),
   /// Prelude only: `extern type Err = "AukErr *"`.
   ExternType(d: ExternTypeDef),
+  /// The runtime's dialect: `raw var`, `raw thread var`, `raw let`, `export var`.
+  Global(d: GlobalDef),
+  /// The runtime's dialect: `raw assert e`, checked at compile time.
+  RawAssert(a: RawAssertDef),
+}
+
+/// `raw var NAME: T = e` (kind 0), `raw thread var` (1), `raw let NAME[: T] = e` (2), `export
+/// var NAME: T = e` (3), `extern var NAME: T = "c_symbol"` (4: a C global defined elsewhere;
+/// `value` is the symbol's string literal).
+pub struct GlobalDef {
+  id: int,
+  span: diag.Span,
+  name: Ident,
+  doc: str?,
+  public: bool,
+  kind: int,
+  ty: Type?,
+  value: Expr,
+}
+
+pub struct RawAssertDef { id: int, span: diag.Span, expr: Expr }
+
+/// The keywords of a `GlobalDef` of `kind`.
+pub fn global_kw(kind: int): str = match kind {
+  0 => "raw var"
+  1 => "raw thread var"
+  2 => "raw let"
+  3 => "export var"
+  _ => "extern var"
 }
 
 pub struct ExternTypeDef {

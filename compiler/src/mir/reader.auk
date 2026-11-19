@@ -112,7 +112,7 @@ pub fn read(text: str): (mir.Program, mir.types.TyInfo)! {
     } else {
       ex(&r)?
     }
-    globals.push(mir.Global { name, ty: t, init, constant })
+    globals.push(mir.Global { name, ty: t, init, constant, kind: 0 })
   }
   expect(&r, "funcs")?
   var funcs: [mir.Func] = []

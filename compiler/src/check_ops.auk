@@ -10,6 +10,12 @@
 pub fn place(c: var check.Checker, e: ast.Expr, mutate: bool, use_: check.PlaceUse): types.Ty {
   match e.kind {
     Name(n) => {
+      if c.lookup_local(n) == none && c.prog.raw_ok(c.cur_module()) {
+        match check_raw.global_place(&c, e, n, mutate) {
+          some(t) => return t
+          none => {}
+        }
+      }
       let l = c.lookup_local(n) else {
         let what = match use_ {
           Assign => "assign to"

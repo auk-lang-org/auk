@@ -491,6 +491,8 @@ fn symbols(s: Server, params: json.Json): json.Json {
       Test(t) => out.push(sym(src, "test {check_expr.debug_str(t.name)}", "", 12, t.span, t.span, []))
       Let(c) | Imprint(c) => out.push(sym(src, c.name.name, "", 14, c.span, c.name.span, []))
       ExternType(t) => out.push(sym(src, t.name.name, "", 23, t.span, t.name.span, []))
+      Global(g) => out.push(sym(src, g.name.name, "", 13, g.span, g.name.span, []))
+      RawAssert(_) => {}
     }
   }
   json.Json.Arr(out)
@@ -658,6 +660,14 @@ fn find_item_node(f: var Finder, i: int, item: ast.Item) {
     ExternType(t) => {
       let _ = f.at(t.name.span, Hit.Decl(t.name.span))
     }
+    Global(g) => {
+      let _ = f.at(g.name.span, Hit.Decl(g.name.span))
+      match g.ty {
+        some(t) => f.ty(t)
+        none => {}
+      }
+    }
+    RawAssert(_) => {}
   }
 }
 
@@ -991,6 +1001,7 @@ fn name_loc(tp: typed.TypedProgram, m: int, n: typed.NameRef): (int, diag.Span)?
   Fn(func, _) => fn_loc(tp, func)
   Variant(v) => variant_loc(tp, v.def, v.index)
   None => none
+  Global(g) => (tp.globals[g].module, tp.globals[g].span)
 }
 
 /// The call node whose callee is `e`, if any.
@@ -1335,6 +1346,10 @@ fn variant_text(tp: typed.TypedProgram, def: int, index: int): str? {
 }
 
 fn name_hover(tp: typed.TypedProgram, m: int, n: typed.NameRef): (str, str?)? = match n {
+  Global(g) => {
+    let gl = tp.globals[g]
+    ("{ast.global_kw(gl.kind)} {gl.name}: {tp.defs.show(gl.ty)}", none)
+  }
   Local(li) => {
     let l = tp.tables[m].locals[li]
     let kw = if l.mutable { "var" } else { "let" }

@@ -117,6 +117,85 @@ pub fn call(g: var codegen.Gen, sym: str, args: [mir.Ex], ret: mir.MTy): codegen
   }
 }
 
+/// A global of the runtime's dialect: `raw var` (internal, like a C `static`), `raw thread var`
+/// (also `_Thread_local`: LLVM's default general-dynamic model, which Mach-O lowers to TLV
+/// descriptors and ELF to `__tls_get_addr`; a linker relaxes it in an executable), `export var`
+/// (external, its own name). Its constant initializer is written out as bytes.
+pub fn global(g: var codegen.Gen, gl: mir.Global): llvm.Value! uses ffi {
+  let l = codegen.lay(&g, gl.ty)
+  if gl.kind == 5 {
+    // `extern var`: defined in C, declared here (no initializer)
+    let gv = llvm.values.add_global(g.m, llvm.ir.array_type2(g.t_i8, l.size), gl.name)
+    llvm.values.set_linkage(gv, llvm.EXTERNAL_LINKAGE)
+    return gv
+  }
+  let size = max(l.size, 1)
+  var bytes = (0..size).map(_ => 0)
+  match gl.init {
+    some(e) => fill(&g, &bytes, 0, gl.ty, e)?
+    none => {}
+  }
+  let ty = llvm.ir.array_type2(g.t_i8, size)
+  let init = if bytes.all(b => b == 0) { llvm.values.const_null(ty) } else { codegen.const_bytes(g, bytes) }
+  let gv = llvm.values.add_global(g.m, llvm.values.type_of(init), gl.name)
+  llvm.values.set_initializer(gv, init)
+  llvm.values.set_linkage(gv, if gl.kind == 4 { llvm.EXTERNAL_LINKAGE } else { llvm.INTERNAL_LINKAGE })
+  if gl.kind == 2 { llvm.values.set_thread_local(gv, 1) }
+  llvm.values.set_alignment(gv, max(l.align, 8))
+  gv
+}
+
+/// Write the constant `e` (of type `t`) into `bytes` at `off`.
+fn fill(g: var codegen.Gen, bytes: var [int], off: int, t: mir.MTy, e: mir.Ex): ()! uses ffi {
+  match e.k {
+    Int(n) => {
+      let sz = codegen.lay(&g, t).size
+      for k in 0..min(sz, 8) { bytes[off + k] = (n >> (8 * k)) & 255 }
+    }
+    Zero => {}
+    Float(x) => {
+      let sz = codegen.lay(&g, t).size
+      let bits = float_bits(x, sz == 4)
+      for k in 0..sz { bytes[off + k] = (bits >> (8 * k)) & 255 }
+    }
+    Cast(x) => fill(&g, &bytes, off, t, x)?
+    Agg(ms) => for (s, v) in ms {
+      let at = off + codegen.offset(&g, t, s)
+      let mt = mir.types.member_ty(g.lay.info, t, s, g.prog.aggs)
+      fill(&g, &bytes, at, mt, v)?
+    }
+    _ => return fail("an initializer of a raw global isn't constant")
+  }
+}
+
+/// The IEEE bits of `x` as a double, or as a float when `f32` (rounded to nearest even;
+/// subnormal floats become zero).
+fn float_bits(x: float, f32: bool): int uses ffi {
+  let p = ffi.alloc(8)
+  ffi.write_f64(p, 0, x)
+  let b = ffi.read_i64(p, 0)
+  ffi.free(p)
+  if !f32 { return b }
+  let sign = (b >> 63) & 1
+  let exp = (b >> 52) & 0x7ff
+  let man = b & ((1 << 52) - 1)
+  if exp == 0x7ff { return (sign << 31) | (0xff << 23) | (if man != 0 { 1 << 22 } else { 0 }) }
+  var e32 = exp - 1023 + 127
+  if exp == 0 || e32 <= 0 { return sign << 31 }
+  var m = man >> 29
+  let rest = man & ((1 << 29) - 1)
+  let half = 1 << 28
+  if rest > half || (rest == half && (m & 1) == 1) {
+    m += 1
+    if m == 1 << 23 {
+      m = 0
+      e32 += 1
+    }
+  }
+  if e32 >= 0xff { return (sign << 31) | (0xff << 23) }
+  (sign << 31) | (e32 << 23) | m
+}
+
 /// Does the body call `raw.setjmp` (so its function is compiled `optnone`)?
 pub fn calls_setjmp(ss: [mir.Stmt]): bool {
   for s in ss {

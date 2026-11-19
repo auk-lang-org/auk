@@ -1675,6 +1675,7 @@ fn name_ref(lw: var Lower, e: ast.Expr): Val {
       let z = lw.g.zero(ty)
       plain(z, ty)
     }
+    Global(g) => mir.lower.lowlevel.global_ref(&lw, g)
   }
 }
 
@@ -2647,6 +2648,10 @@ fn place(lw: var Lower, e: ast.Expr): (mir.Ex, types.Ty) = match e.kind {
       some(Local(l)) => match lw.f.locals.get(l) {
         some(s) => return (s.c, s.ty)
         none => {}
+      }
+      some(Global(g)) => if lw.tp.globals[g].kind != 2 {
+        let p = mir.lower.lowlevel.global_ref(&lw, g)
+        return (p.c, p.ty)
       }
       _ => {}
     }

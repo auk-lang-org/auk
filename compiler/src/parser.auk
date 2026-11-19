@@ -469,8 +469,14 @@ fn item(p: var Parser): Raw!diag.Fail {
       _ => false
     }
     if ok { return extern_item(&p, doc, public, start) }
+    // the runtime's dialect: `extern var name: T = "c_symbol"`, a C global defined elsewhere
+    if p.peek_at(1) == token.Var {
+      p.bump()
+      return RItem(ast.Item.Global(global_def(&p, doc, public, start, 4)?))
+    }
   }
-  // the runtime's dialect (docs/lowlevel.md): `raw struct`, `raw union`
+  // the runtime's dialect (docs/lowlevel.md): `raw struct`, `raw union`, `raw var`, `raw thread
+  // var`, `raw let`, `raw assert`, `export var`
   if p.peek() == token.Ident("raw") {
     let k = match p.peek_at(1) {
       Struct => 1
@@ -483,6 +489,28 @@ fn item(p: var Parser): Raw!diag.Fail {
       d.raw = k
       return RItem(ast.Item.Struct(d))
     }
+    let g = match p.peek_at(1) {
+      Var => 0
+      Ident(n) when n == "thread" && p.peek_at(2) == token.Var => 1
+      Let => 2
+      Assert => 4
+      _ => -1
+    }
+    if g == 4 {
+      p.bump()
+      p.bump()
+      let x = expr(&p)?
+      return RItem(ast.Item.RawAssert(ast.RawAssertDef { id: p.id(), span: start.to(p.prev), expr: x }))
+    }
+    if g >= 0 {
+      p.bump()
+      if g == 1 { p.bump() }
+      return RItem(ast.Item.Global(global_def(&p, doc, public, start, g)?))
+    }
+  }
+  if p.peek() == token.Ident("export") && p.peek_at(1) == token.Var {
+    p.bump()
+    return RItem(ast.Item.Global(global_def(&p, doc, public, start, 3)?))
   }
   match p.peek() {
     Fn => RClause(fn_clause(&p, doc, public, start)?)
@@ -798,6 +826,16 @@ fn shape_def(p: var Parser, doc: str?, public: bool, start: diag.Span): ast.Shap
     p.eat(token.Comma)
   }
   ast.ShapeDef { id: p.id(), span: start.to(p.prev), name, doc, public, generics, methods }
+}
+
+/// A global of the runtime's dialect, at its `var`/`let` (`kind`: see `ast.GlobalDef`).
+fn global_def(p: var Parser, doc: str?, public: bool, start: diag.Span, kind: int): ast.GlobalDef!diag.Fail {
+  p.bump()
+  let name = p.ident("a name for the global")?
+  let t: ast.Type? = if p.eat(token.Colon) { ty(&p)? } else { none }
+  p.expect(token.Eq, "and its initial value (a constant)")?
+  let value = expr(&p)?
+  ast.GlobalDef { id: p.id(), span: start.to(p.prev), name, doc, public, kind, ty: t, value }
 }
 
 /// Top-level `let NAME: T = e` or `imprint NAME: T = e`.

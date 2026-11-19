@@ -25,6 +25,33 @@ pub struct TypedProgram {
   from_value_impls: {types.Ty: Target},
   vtables: [Vtable],
   main: MainInfo?,
+  /// The runtime's dialect: `raw var`, `raw thread var`, `raw let`, `export var`.
+  globals: [GlobalInfo],
+}
+
+/// A global of the runtime's dialect, with its initializer evaluated at compile time.
+pub struct GlobalInfo {
+  name: str,
+  module: int,
+  public: bool,
+  /// As `ast.GlobalDef.kind`: 0 `raw var`, 1 `raw thread var`, 2 `raw let`, 3 `export var`, 4
+  /// `extern var`.
+  kind: int,
+  /// The C symbol of an `extern var` ("" otherwise).
+  c_name: str,
+  ty: types.Ty,
+  value: ConstVal,
+  span: diag.Span,
+}
+
+/// A compile-time constant of the runtime's dialect.
+pub enum ConstVal {
+  Int(n: int),
+  Float(x: float),
+  /// All zero bytes (`raw.null()`, a raw struct literal without fields).
+  Zero,
+  /// A raw struct literal: (field index, value).
+  Agg(fields: [(int, ConstVal)]),
 }
 
 /// One function: a clause group after splitting by first-parameter type.
@@ -251,6 +278,8 @@ pub enum NameRef {
   Variant(v: VariantRef),
   /// `none`.
   None,
+  /// The runtime's dialect: a `raw var` / `raw let` / ... global.
+  Global(g: int),
 }
 
 pub struct VariantRef { def: int, index: int, args: [types.Ty] }

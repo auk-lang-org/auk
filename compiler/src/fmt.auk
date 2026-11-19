@@ -745,6 +745,15 @@ fn item(f: var Fmt, it: ast.Item): fmt.doc.Doc {
       let c_type = f.text_of(f.toks[f.tok_end[end(t.span)]].span)
       text("{vis(t.public)}extern type {t.name.name} = {c_type}")
     }
+    Global(g) => {
+      let t = match g.ty {
+        some(x) => ": {ty(x)}"
+        none => ""
+      }
+      let head = text("{vis(g.public)}{ast.global_kw(g.kind)} {g.name.name}{t}")
+      concat([head, f.assign_rhs("=", g.value, cx_inner(), Rhs.Body)])
+    }
+    RawAssert(a) => concat([text("raw assert "), f.expr(a.expr, cx_inner())])
     Let(c) | Imprint(c) => {
       let kw = if it is Let(_) { "let" } else { "imprint" }
       let t = match c.ty {
@@ -1787,6 +1796,8 @@ fn item_span(i: ast.Item): diag.Span = match i {
   Test(d) => d.span
   Let(d) | Imprint(d) => d.span
   ExternType(d) => d.span
+  Global(d) => d.span
+  RawAssert(a) => a.span
 }
 
 fn vis(public: bool): str = if public { "pub " } else { "" }

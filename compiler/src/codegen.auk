@@ -410,6 +410,7 @@ pub fn program(g: var Gen, ex: Exports): ()! uses ffi {
 
 /// A global's definition: zeros, or bytes with function addresses at their offsets.
 fn global(g: var Gen, gl: mir.Global): llvm.Value! uses ffi {
+  if gl.kind != 0 { return rawgen.global(&g, gl) }
   let l = lay(&g, gl.ty)
   let size = max(l.size, 1)
   var ty = bytes_ty(g, size)
@@ -480,7 +481,7 @@ fn const_string(g: Gen, b: [int], dont_null_terminate: int): llvm.Value uses ffi
   v
 }
 
-fn const_bytes(g: Gen, b: [int]): llvm.Value uses ffi = const_string(g, b, 1)
+pub fn const_bytes(g: Gen, b: [int]): llvm.Value uses ffi = const_string(g, b, 1)
 
 // ---- function bodies ----
 

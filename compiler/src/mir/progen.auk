@@ -141,6 +141,8 @@ pub struct Gen {
   /// Instances still to emit.
   queue: [int],
   inst_fns: {int: int},
+  /// The MIR global of each global of the runtime's dialect used so far.
+  raw_globals: {int: int},
   /// Holes found in emitted bodies: "file:line:col: unfilled hole (expected T)".
   holes: [str],
   consts: {int: int},
@@ -177,6 +179,7 @@ pub fn take(g: var Gen): Gen {
     emitted: {},
     queue: [],
     inst_fns: {},
+    raw_globals: {},
     holes: [],
     consts: {},
     const_order: [],
@@ -220,6 +223,7 @@ pub fn new(tp: typed.TypedProgram, mode: Mode): Gen {
     emitted: {},
     queue: [],
     inst_fns: {},
+    raw_globals: {},
     holes: [],
     consts: {},
     const_order: [],
@@ -290,11 +294,26 @@ pub fn agg(g: var Gen, name: str, fields: [mir.MTy]): int {
 }
 
 pub fn global(g: var Gen, name: str, ty: mir.MTy, init: mir.Ex?, constant: bool): int {
-  g.prog.globals.push(mir.Global { name, ty, init, constant })
+  g.prog.globals.push(mir.Global { name, ty, init, constant, kind: 0 })
   g.prog.globals.len() - 1
 }
 
 pub fn global_ex(g: var Gen, gl: int): mir.Ex = mir.ex(mir.K.Global(gl), g.prog.globals[gl].ty)
+
+/// The MIR global of global `id` of the runtime's dialect (`typed.GlobalInfo`), made on first
+/// use with the constant `init`.
+pub fn raw_global(g: var Gen, id: int, init: mir.Ex): int {
+  match g.raw_globals.get(id) {
+    some(x) => return x
+    none => {}
+  }
+  let gl = g.tp.globals[id]
+  let name = if gl.kind == 4 { gl.c_name } else if gl.kind == 3 { gl.name } else { "dk_raw{id}_{sanitize(gl.name)}" }
+  g.prog.globals.push(mir.Global { name, ty: d(gl.ty), init: some(init), constant: false, kind: gl.kind + 1 })
+  let x = g.prog.globals.len() - 1
+  g.raw_globals[id] = x
+  x
+}
 
 pub fn member_ty(g: var Gen, t: mir.MTy, s: mir.Sel): mir.MTy = mir.types.member_ty(g.info, t, s, g.prog.aggs)
 
