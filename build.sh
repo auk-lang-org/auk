@@ -92,8 +92,12 @@ if [ "$FROM_SEED" = 1 ]; then
   say "seed ($bc, $(sed -n 's/^commit //p' "seed/$OS-$ARCH.txt" | cut -c1-12))"
   mkdir -p "$BUILD/seed"
   gzip -d -c "$bc" > "$BUILD/seed/seed.bc"
-  # code generation only (the bitcode is optimized already): -O0 with FastISel, as `clang -c`
-  "$LLVM_BIN/llc" -O0 -global-isel=0 -fast-isel -relocation-model=pic -filetype=obj \
+  # code generation only (the bitcode is optimized already): llc's -O0 defaults, as `clang -c`
+  # (GlobalISel on AArch64). Not FastISel: on AArch64 it miscompiles `sext i1` of a loaded i1,
+  # which O2's globalopt makes of a lazily initialized constant (ATTRIBUTE_FUNCTION_INDEX = -1
+  # became 1, so the seed put function attributes on the first parameter and built a different
+  # runtime than stage 2: cut_seed.sh's check caught it)
+  "$LLVM_BIN/llc" -O0 -relocation-model=pic -filetype=obj \
     "$BUILD/seed/seed.bc" -o "$BUILD/seed/seed.o" || die "compiling the seed failed"
   if [ "$OS" = macos ]; then
     libs=("$("$LLVM_CONFIG" --libdir)/libLLVM.dylib" -framework CoreFoundation -framework Security
