@@ -80,7 +80,7 @@ export fn auk_err_payload(e: raw.Ptr<abi.Err>, type_id: u32): raw.Ptr<()> uses r
   e.payload.data
 }
 
-export fn auk_err_show(e: raw.Ptr<abi.Err>): raw.Ptr<abi.Str> uses raw, ffi {
+pub export fn auk_err_show(e: raw.Ptr<abi.Err>): raw.Ptr<abi.Str> uses raw, ffi {
   var b = abi.StrBuf {}
   var c = e
   while !c.is_null() {

@@ -287,7 +287,7 @@ fn big_entry(p: raw.Ptr<()>): raw.Ptr<()> uses raw, ffi {
 
 /// Run f(arg) on a new thread with a stack of AUK_MAIN_STACK bytes and wait for it (on this
 /// thread, with overflow reporting, when no thread can be started).
-export fn auk__run_on_big_stack(f: raw.Fn<(raw.Ptr<()>) => ()>, arg: raw.Ptr<()>) uses raw, ffi {
+pub export fn auk__run_on_big_stack(f: raw.Fn<(raw.Ptr<()>) => ()>, arg: raw.Ptr<()>) uses raw, ffi {
   var r = BigRun { f, arg, dbg_id: auk__dbg_thread_handoff() }
   var attr = cfacts.PthreadAttr {}
   auk__stack_attr(raw.cast(raw.addr_of(&attr)), abi.MAIN_STACK)
