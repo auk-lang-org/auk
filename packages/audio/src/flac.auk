@@ -121,32 +121,47 @@ fn md5_new(): Md5 = Md5 { h: [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476], b
 
 fn md5_block(m: var Md5, d: [int], at: int) {
   var w: [int] = []
-  for j in 0..16 { w.push(audio.pcm.u32le(d, at + 4 * j)) }
+  for j in 0..16 {
+    let q = at + 4 * j
+    w.push(d[q] | (d[q + 1] << 8) | (d[q + 2] << 16) | (d[q + 3] << 24))
+  }
+  let ks = MD5_K
+  let ss = MD5_S
   var a = m.h[0]
   var b = m.h[1]
   var c = m.h[2]
   var dd = m.h[3]
-  for i in 0..64 {
-    var f = 0
-    var g = 0
-    if i < 16 {
-      f = (b & c) | (~b & M32 & dd)
-      g = i
-    } else if i < 32 {
-      f = (dd & b) | (~dd & M32 & c)
-      g = (5 * i + 1) % 16
-    } else if i < 48 {
-      f = b ^ c ^ dd
-      g = (3 * i + 5) % 16
-    } else {
-      f = c ^ (b | (~dd & M32))
-      g = (7 * i) % 16
-    }
-    f = (f + a + MD5_K[i] + w[g]) & M32
+  // the four rounds; every value stays below 2^32, so the sums can't overflow
+  for i in 0..16 {
+    let f = ((b & c) | (~b & M32 & dd)) + a + ks[i] + w[i] & M32
     a = dd
     dd = c
     c = b
-    let s = MD5_S[i]
+    let s = ss[i]
+    b = (b + (((f << s) | (f >> (32 - s))) & M32)) & M32
+  }
+  for i in 16..32 {
+    let f = ((dd & b) | (~dd & M32 & c)) + a + ks[i] + w[(5 * i + 1) & 15] & M32
+    a = dd
+    dd = c
+    c = b
+    let s = ss[i]
+    b = (b + (((f << s) | (f >> (32 - s))) & M32)) & M32
+  }
+  for i in 32..48 {
+    let f = (b ^ c ^ dd) + a + ks[i] + w[(3 * i + 5) & 15] & M32
+    a = dd
+    dd = c
+    c = b
+    let s = ss[i]
+    b = (b + (((f << s) | (f >> (32 - s))) & M32)) & M32
+  }
+  for i in 48..64 {
+    let f = (c ^ (b | (~dd & M32))) + a + ks[i] + w[(7 * i) & 15] & M32
+    a = dd
+    dd = c
+    c = b
+    let s = ss[i]
     b = (b + (((f << s) | (f >> (32 - s))) & M32)) & M32
   }
   m.h[0] = (m.h[0] + a) & M32
@@ -157,13 +172,22 @@ fn md5_block(m: var Md5, d: [int], at: int) {
 
 fn md5_update(m: var Md5, d: [int]) {
   m.total += d.len()
-  var data = m.buf + d
   var p = 0
-  while p + 64 <= data.len() {
-    m.md5_block(data, p)
+  // `buf` holds fewer than 64 bytes: complete its block first, then take blocks straight from `d`
+  if m.buf.len() > 0 {
+    let need = 64 - m.buf.len()
+    if d.len() < need {
+      m.buf = m.buf + d
+      return
+    }
+    m.md5_block(m.buf + d[0..need], 0)
+    p = need
+  }
+  while p + 64 <= d.len() {
+    m.md5_block(d, p)
     p += 64
   }
-  m.buf = data.skip(p)
+  m.buf = d[p..d.len()]
 }
 
 fn md5_finish(m: var Md5): [int] {
@@ -333,15 +357,15 @@ fn block_size(code: int): int = if code == 1 {
   256 << (code - 8)
 }
 
-// Reads one subframe of `n` samples at `bps` bits into `out`.
-fn subframe(b: var Bits, n: int, bps0: int, out: var [int]): ()! {
+// Reads one subframe of `n` samples at `bps` bits.
+fn subframe(b: var Bits, n: int, bps0: int): [int]! {
   if b.rd(1) != 0 { fail("subframe padding bit is set") }
   let kind = b.rd(6)
   var wasted = 0
   if b.rd(1) == 1 { wasted = b.unary() + 1 }
   let bps = bps0 - wasted
   if bps < 1 { fail("{wasted} wasted bits in a {bps0}-bit subframe") }
-  out = []
+  var out: [int] = []
   if kind == 0 {
     let v = b.srd(bps)
     for _ in 0..n { out.push(v) }
@@ -364,10 +388,12 @@ fn subframe(b: var Bits, n: int, bps0: int, out: var [int]): ()! {
     var coefs: [int] = []
     for _ in 0..order { coefs.push(b.srd(prec)) }
     residual(&b, n, order, &out)?
+    // Wrapping arithmetic: in a valid stream nothing overflows, while a damaged frame (caught
+    // by its CRC-16 once its subframes are read) mustn't panic first.
     for i in order..n {
       var sum = 0
-      for j in 0..order { sum += coefs[j] * out[i - 1 - j] }
-      out[i] = out[i] + (sum >> shift)
+      for j in 0..order { sum = sum +% coefs[j] *% out[i - 1 - j] }
+      out[i] = out[i] +% (sum >> shift)
     }
   } else {
     fail("reserved subframe type {kind}")
@@ -375,20 +401,24 @@ fn subframe(b: var Bits, n: int, bps0: int, out: var [int]): ()! {
   if wasted > 0 {
     for i in 0..n { out[i] = out[i] << wasted }
   }
+  out
 }
 
+// Wrapping arithmetic, as for LPC: a damaged frame mustn't overflow before its CRC is checked.
 fn fixed_restore(s: var [int], order: int) {
   let n = s.len()
   match order {
     0 => {}
-    1 => for i in 1..n { s[i] = s[i] + s[i - 1] }
-    2 => for i in 2..n { s[i] = s[i] + 2 * s[i - 1] - s[i - 2] }
-    3 => for i in 3..n { s[i] = s[i] + 3 * s[i - 1] - 3 * s[i - 2] + s[i - 3] }
-    _ => for i in 4..n { s[i] = s[i] + 4 * s[i - 1] - 6 * s[i - 2] + 4 * s[i - 3] - s[i - 4] }
+    1 => for i in 1..n { s[i] = s[i] +% s[i - 1] }
+    2 => for i in 2..n { s[i] = s[i] +% 2 *% s[i - 1] -% s[i - 2] }
+    3 => for i in 3..n { s[i] = s[i] +% 3 *% s[i - 1] -% 3 *% s[i - 2] +% s[i - 3] }
+    _ => for i in 4..n {
+      s[i] = s[i] +% 4 *% s[i - 1] -% 6 *% s[i - 2] +% 4 *% s[i - 3] -% s[i - 4]
+    }
   }
 }
 
-fn residual(b: var Bits, n: int, order: int, out: var [int]): ()! {
+fn residual(b: var Bits, n: int, order: int, out0: var [int]): ()! {
   let method = b.rd(2)
   if method > 1 { fail("reserved residual coding method {method}") }
   let pbits = 4 + method
@@ -396,6 +426,11 @@ fn residual(b: var Bits, n: int, order: int, out: var [int]): ()! {
   let porder = b.rd(4)
   let psize = n >> porder
   if (psize << porder) != n || psize < order { fail("partition order {porder} for {n} samples") }
+  // work on the list as a local (the caller's is emptied meanwhile, so pushes don't copy)
+  var out = out0
+  out0 = []
+  let d = b.d
+  let len = d.len()
   for p in 0..(1 << porder) {
     let cnt = if p == 0 { psize - order } else { psize }
     let k = b.rd(pbits)
@@ -403,13 +438,53 @@ fn residual(b: var Bits, n: int, order: int, out: var [int]): ()! {
       let nb = b.rd(5)
       for _ in 0..cnt { out.push(b.srd(nb)) }
     } else {
+      // Rice codes: `unary` then `rd(k)`, on local copies of the reader's state
+      var pos = b.pos
+      var acc = b.acc
+      var nb = b.n
       for _ in 0..cnt {
-        let v = (b.unary() << k) | b.rd(k)
+        var q = 0
+        loop {
+          if nb == 0 {
+            if pos > len + 8 { break }
+            acc = if pos < len { d[pos] } else { 0 }
+            pos += 1
+            nb = 8
+          }
+          if acc == 0 {
+            q += nb
+            nb = 0
+          } else {
+            while (acc >> (nb - 1)) == 0 {
+              nb -= 1
+              q += 1
+            }
+            nb -= 1
+            acc = acc & (1 << nb) - 1
+            break
+          }
+        }
+        var low = 0
+        if k != 0 {
+          while nb < k {
+            acc = (acc << 8) | if pos < len { d[pos] } else { 0 }
+            pos += 1
+            nb += 8
+          }
+          nb -= k
+          low = acc >> nb
+          acc = acc & (1 << nb) - 1
+        }
+        let v = (q << k) | low
         out.push((v >> 1) ^ -(v & 1))
       }
+      b.pos = pos
+      b.acc = acc
+      b.n = nb
     }
     if b.over() { fail("truncated") }
   }
+  out0 = out
 }
 
 // One frame: (frames decoded, next byte position), with each channel's samples appended to
@@ -461,29 +536,42 @@ fn frame(d: [int], at: int, s: Stream, chans: var [[int]]): (int, int)! {
   var subs: [[int]] = []
   for c in 0..nch {
     let side = (ch_code == 8 && c == 1) || (ch_code == 9 && c == 0) || (ch_code == 10 && c == 1)
-    var out: [int] = []
-    subframe(&b, n, bps + if side { 1 } else { 0 }, &out) else e => fail("{e} (frame at byte {at})")
+    let out = subframe(
+      &b,
+      n,
+      bps + if side { 1 } else { 0 },
+    ) else e => fail("{e} (frame at byte {at})")
     subs.push(out)
   }
   let fend = b.align()
   if b.over() { fail("truncated") }
   if b.rd(16) != crc16(d, at, fend) { fail("frame CRC-16 mismatch at byte {at}") }
-  // undo stereo decorrelation
-  if ch_code == 8 {
-    for i in 0..n { subs[1][i] = subs[0][i] - subs[1][i] }
-  } else if ch_code == 9 {
-    for i in 0..n { subs[0][i] = subs[0][i] + subs[1][i] }
-  } else if ch_code == 10 {
-    for i in 0..n {
-      let side = subs[1][i]
-      let mid = (subs[0][i] << 1) | (side & 1)
-      subs[0][i] = (mid + side) >> 1
-      subs[1][i] = (mid - side) >> 1
+  // undo stereo decorrelation (on the two lists as locals, so the writes are in place)
+  if ch_code >= 8 {
+    var l = subs[0]
+    var r = subs[1]
+    subs = []
+    // wrapping: a frame can pass its CRC and still hold samples out of range
+    if ch_code == 8 {
+      for i in 0..n { r[i] = l[i] -% r[i] }
+    } else if ch_code == 9 {
+      for i in 0..n { l[i] = l[i] +% r[i] }
+    } else {
+      for i in 0..n {
+        let side = r[i]
+        let mid = (l[i] << 1) | (side & 1)
+        l[i] = (mid +% side) >> 1
+        r[i] = (mid -% side) >> 1
+      }
     }
+    subs = [l, r]
   }
   if bps != s.bps { fail("frame at byte {at} has {bps} bits per sample, the stream {s.bps}") }
   for c in 0..nch {
-    for v in subs[c] { chans[c].push(v) }
+    var ch = chans[c]
+    chans[c] = []
+    for v in subs[c] { ch.push(v) }
+    chans[c] = ch
   }
   (n, fend + 2)
 }
@@ -589,33 +677,25 @@ struct Plan {
   bits: int,      // the coded size
 }
 
-fn zig(r: int): int = if r >= 0 { r << 1 } else { ((-r) << 1) - 1 }
-
-// The best partition order and Rice parameters for a residual: (porder, params, bits).
-fn rice(res: [int], n: int, order: int): (int, [int], int) {
-  // the highest order: partitions must divide n and hold more than `order` samples
+// The finest partition order for `n` samples predicted at `order`: partitions must divide n and
+// hold more than `order` samples.
+fn max_porder(n: int, order: int): int {
   var maxp = 0
   while maxp < 6 && (n % (2 << maxp)) == 0 && (n >> (maxp + 1)) > order { maxp += 1 }
-  // sums of zigzagged residuals per partition at the finest order
-  let parts = 1 << maxp
-  let psize = n >> maxp
-  var sums = audio.pcm.izeros(parts)
-  var i = 0
-  for p in 0..parts {
-    let cnt = if p == 0 { psize - order } else { psize }
-    var s = 0
-    for _ in 0..cnt {
-      s += zig(res[i])
-      i += 1
-    }
-    sums[p] = s
-  }
+  maxp
+}
+
+// The best partition order and Rice parameters, (porder, params, bits), for a residual of
+// n - order values whose zigzagged sums per partition at order `maxp` are `sums0`.
+fn rice(sums0: [int], n: int, order: int, maxp: int): (int, [int], int) {
+  var sums = sums0
   var best = (0, [0], -1)
   var po = maxp
   while po >= 0 {
     let np = 1 << po
     var params: [int] = []
     var bits = 0
+    var big = false
     for p in 0..np {
       let cnt = (n >> po) - if p == 0 { order } else { 0 }
       let s = sums[p]
@@ -629,9 +709,10 @@ fn rice(res: [int], n: int, order: int): (int, [int], int) {
         k += 1
       }
       params.push(k)
+      if k > 14 { big = true }
       bits += cost
     }
-    let pbits = if params.any(k => k > 14) { 5 } else { 4 }
+    let pbits = if big { 5 } else { 4 }
     bits += 6 + np * pbits
     if best.2 < 0 || bits < best.2 { best = (po, params, bits) }
     // merge pairs of partitions for the next order down
@@ -645,57 +726,209 @@ fn rice(res: [int], n: int, order: int): (int, [int], int) {
   best
 }
 
+// The sums of the zigzagged residuals of `res` (n - order values) in each of the 2^maxp
+// partitions, and the OR of them all (which is below 2^32 exactly when every residual fits in 32
+// bits).
+fn res_sums(res: [int], n: int, order: int, maxp: int): ([int], int) {
+  let psize = n >> maxp
+  var sums: [int] = []
+  var any = 0
+  var i = 0
+  for p in 0..(1 << maxp) {
+    let end = (p + 1) * psize - order
+    var s = 0
+    while i < end {
+      let r = res[i]
+      let u = (r << 1) ^ (r >> 63)
+      s += u
+      any = any | u
+      i += 1
+    }
+    sums.push(s)
+  }
+  (sums, any)
+}
+
+// `res_sums` of the fixed predictor's residual, without building it. Samples have at most 25
+// bits, so nothing here can overflow.
+fn fixed_sums(x: [int], order: int, maxp: int): ([int], int) {
+  let n = x.len()
+  let psize = n >> maxp
+  var sums: [int] = []
+  var any = 0
+  var t = order
+  for p in 0..(1 << maxp) {
+    let end = (p + 1) * psize
+    var s = 0
+    if order == 0 {
+      while t < end {
+        let r = x[t]
+        let u = (r << 1) ^ (r >> 63)
+        s = s +% u
+        any = any | u
+        t += 1
+      }
+    } else if order == 1 {
+      while t < end {
+        let r = x[t] -% x[t - 1]
+        let u = (r << 1) ^ (r >> 63)
+        s = s +% u
+        any = any | u
+        t += 1
+      }
+    } else if order == 2 {
+      while t < end {
+        let r = x[t] -% 2 *% x[t - 1] +% x[t - 2]
+        let u = (r << 1) ^ (r >> 63)
+        s = s +% u
+        any = any | u
+        t += 1
+      }
+    } else if order == 3 {
+      while t < end {
+        let r = x[t] -% 3 *% x[t - 1] +% 3 *% x[t - 2] -% x[t - 3]
+        let u = (r << 1) ^ (r >> 63)
+        s = s +% u
+        any = any | u
+        t += 1
+      }
+    } else {
+      while t < end {
+        let r = x[t] -% 4 *% x[t - 1] +% 6 *% x[t - 2] -% 4 *% x[t - 3] +% x[t - 4]
+        let u = (r << 1) ^ (r >> 63)
+        s = s +% u
+        any = any | u
+        t += 1
+      }
+    }
+    sums.push(s)
+  }
+  (sums, any)
+}
+
+// `fixed_sums` for orders 0 to 4 in one pass: each order's sums, then each order's OR. Needs
+// more than 4 samples and partitions of more than 4 (so every order has the same partitions).
+// The order-k residual is the difference of two neighbouring order-(k-1) residuals.
+fn fixed_sums5(x: [int], maxp: int): ([[int]], [int]) {
+  let n = x.len()
+  let psize = n >> maxp
+  var t0: [int] = []
+  var t1: [int] = []
+  var t2: [int] = []
+  var t3: [int] = []
+  var t4: [int] = []
+  var a0 = 0
+  var a1 = 0
+  var a2 = 0
+  var a3 = 0
+  var a4 = 0
+  // the previous sample and the previous residual of orders 1 to 3
+  var e0 = 0
+  var e1 = 0
+  var e2 = 0
+  var e3 = 0
+  var s0 = 0
+  var s1 = 0
+  var s2 = 0
+  var s3 = 0
+  var s4 = 0
+  // the first four samples: order k starts at sample k
+  for t in 0..4 {
+    let d0 = x[t]
+    let d1 = d0 -% e0
+    let d2 = d1 -% e1
+    let d3 = d2 -% e2
+    e0 = d0
+    e1 = d1
+    e2 = d2
+    e3 = d3
+    let u0 = (d0 << 1) ^ (d0 >> 63)
+    s0 = s0 +% u0
+    a0 = a0 | u0
+    if t >= 1 {
+      let u1 = (d1 << 1) ^ (d1 >> 63)
+      s1 = s1 +% u1
+      a1 = a1 | u1
+    }
+    if t >= 2 {
+      let u2 = (d2 << 1) ^ (d2 >> 63)
+      s2 = s2 +% u2
+      a2 = a2 | u2
+    }
+    if t >= 3 {
+      let u3 = (d3 << 1) ^ (d3 >> 63)
+      s3 = s3 +% u3
+      a3 = a3 | u3
+    }
+  }
+  var t = 4
+  for p in 0..(1 << maxp) {
+    let end = (p + 1) * psize
+    while t < end {
+      let d0 = x[t]
+      let d1 = d0 -% e0
+      let d2 = d1 -% e1
+      let d3 = d2 -% e2
+      let d4 = d3 -% e3
+      e0 = d0
+      e1 = d1
+      e2 = d2
+      e3 = d3
+      let u0 = (d0 << 1) ^ (d0 >> 63)
+      let u1 = (d1 << 1) ^ (d1 >> 63)
+      let u2 = (d2 << 1) ^ (d2 >> 63)
+      let u3 = (d3 << 1) ^ (d3 >> 63)
+      let u4 = (d4 << 1) ^ (d4 >> 63)
+      s0 = s0 +% u0
+      s1 = s1 +% u1
+      s2 = s2 +% u2
+      s3 = s3 +% u3
+      s4 = s4 +% u4
+      a0 = a0 | u0
+      a1 = a1 | u1
+      a2 = a2 | u2
+      a3 = a3 | u3
+      a4 = a4 | u4
+      t += 1
+    }
+    t0.push(s0)
+    t1.push(s1)
+    t2.push(s2)
+    t3.push(s3)
+    t4.push(s4)
+    s0 = 0
+    s1 = 0
+    s2 = 0
+    s3 = 0
+    s4 = 0
+  }
+  ([t0, t1, t2, t3, t4], [a0, a1, a2, a3, a4])
+}
+
 fn fixed_res(x: [int], order: int): [int] {
   let n = x.len()
   var r: [int] = []
-  for i in order..n {
-    r.push(
-      match order {
-        0 => x[i]
-        1 => x[i] - x[i - 1]
-        2 => x[i] - 2 * x[i - 1] + x[i - 2]
-        3 => x[i] - 3 * x[i - 1] + 3 * x[i - 2] - x[i - 3]
-        _ => x[i] - 4 * x[i - 1] + 6 * x[i - 2] - 4 * x[i - 3] + x[i - 4]
-      },
-    )
+  match order {
+    0 => for i in 0..n { r.push(x[i]) }
+    1 => for i in 1..n { r.push(x[i] -% x[i - 1]) }
+    2 => for i in 2..n { r.push(x[i] -% 2 *% x[i - 1] +% x[i - 2]) }
+    3 => for i in 3..n { r.push(x[i] -% 3 *% x[i - 1] +% 3 *% x[i - 2] -% x[i - 3]) }
+    _ => for i in 4..n {
+      r.push(x[i] -% 4 *% x[i - 1] +% 6 *% x[i - 2] -% 4 *% x[i - 3] +% x[i - 4])
+    }
   }
   r
 }
 
-fn fits32(r: [int]): bool = r.all(v => v >= -2147483648 && v <= 2147483647)
-
-fn plan_from(
-  kind: int,
-  order: int,
-  coefs: [int],
-  prec: int,
-  shift: int,
-  x: [int],
-  bps: int,
-  wasted: int,
-  res: [int],
-): Plan? {
-  if !fits32(res) { return none }
-  let n = x.len()
-  let (porder, params, rbits) = rice(res, n, order)
-  let head = 8 +
-    if wasted > 0 { wasted } else { 0 } +
-    order * bps +
-    if kind == 3 { 4 + 5 + order * prec } else { 0 }
-  some(Plan {
-    kind,
-    order,
-    coefs,
-    prec,
-    shift,
-    wasted,
-    bps,
-    res,
-    porder,
-    params,
-    bits: head + rbits,
-  })
-}
+// A subframe's size in bits before its residual.
+fn head_bits(kind: int, order: int, prec: int, bps: int, wasted: int): int = 8 +
+  if wasted > 0 { wasted } else { 0 } +
+  order * bps +
+  if kind == 3 {
+    4 + 5 + order * prec
+  } else {
+    0
+  }
 
 // The Tukey(0.5) window.
 fn tukey(n: int): [float] {
@@ -764,13 +997,14 @@ fn quantize(lp: [float], prec: int): ([int], int)? {
   some((q, shift))
 }
 
+// Samples have at most 25 bits and coefficients 15, so nothing here can overflow.
 fn lpc_res(x: [int], q: [int], shift: int): [int] {
   let order = q.len()
   var r: [int] = []
   for i in order..x.len() {
     var sum = 0
-    for j in 0..order { sum += q[j] * x[i - 1 - j] }
-    r.push(x[i] - (sum >> shift))
+    for j in 0..order { sum = sum +% q[j] *% x[i - 1 - j] }
+    r.push(x[i] -% (sum >> shift))
   }
   r
 }
@@ -791,7 +1025,42 @@ fn precision(n: int): int = if n <= 192 {
   13
 }
 
-fn best_subframe(x0: [int], bps0: int): Plan {
+// The autocorrelation of `xf` (more than 8 values) at lags 0 to 8. Each lag's sum adds its
+// terms in index order; the nine sums advance together.
+fn autocorr8(xf: [float]): [float] {
+  let n = xf.len()
+  var r: [float] = []
+  for lag in 0..9 {
+    var s = 0.0
+    for i in lag..8 { s += xf[i] * xf[i - lag] }
+    r.push(s)
+  }
+  var s0 = r[0]
+  var s1 = r[1]
+  var s2 = r[2]
+  var s3 = r[3]
+  var s4 = r[4]
+  var s5 = r[5]
+  var s6 = r[6]
+  var s7 = r[7]
+  var s8 = r[8]
+  for i in 8..n {
+    let v = xf[i]
+    s0 += v * v
+    s1 += v * xf[i - 1]
+    s2 += v * xf[i - 2]
+    s3 += v * xf[i - 3]
+    s4 += v * xf[i - 4]
+    s5 += v * xf[i - 5]
+    s6 += v * xf[i - 6]
+    s7 += v * xf[i - 7]
+    s8 += v * xf[i - 8]
+  }
+  [s0, s1, s2, s3, s4, s5, s6, s7, s8]
+}
+
+// `win` is the Tukey window for the usual block size (used when it is `x0`'s size).
+fn best_subframe(x0: [int], bps0: int, win: [float]): Plan {
   let n = x0.len()
   let verbatim = Plan {
     kind: 1,
@@ -806,35 +1075,68 @@ fn best_subframe(x0: [int], bps0: int): Plan {
     params: [],
     bits: 8 + n * bps0,
   }
-  if x0.all(v => v == x0[0]) {
-    return Plan { kind: 0, bits: 8 + bps0, ..verbatim }
-  }
-  // wasted bits: trailing zeros common to every sample
+  // constant, and wasted bits: trailing zeros common to every sample
+  var same = true
   var all = 0
-  for v in x0 { all = all | v }
+  if n > 0 {
+    let first = x0[0]
+    for v in x0 {
+      if v != first { same = false }
+      all = all | v
+    }
+  }
+  if same { return Plan { kind: 0, bits: 8 + bps0, ..verbatim } }
   var wasted = 0
   while wasted < bps0 - 1 && ((all >> wasted) & 1) == 0 { wasted += 1 }
   let x = if wasted > 0 { x0.map(v => v >> wasted) } else { x0 }
   let bps = bps0 - wasted
   var best = verbatim
+  // the fixed predictors: size each from its partition sums, and build only the winner's residual
+  var fo = -1
+  var fbest = (0, [0], -1)
+  // usually all five orders have the same partitions, and one pass sizes them all
+  let maxp4 = if n > 4 { max_porder(n, 4) } else { -1 }
+  let together = maxp4 >= 0 && maxp4 == max_porder(n, 0) && (n >> maxp4) > 4
+  let (sums5, any5) = if together { fixed_sums5(x, maxp4) } else { ([], []) }
   for order in 0..5 {
     if order < n {
-      match plan_from(2, order, [], 0, 0, x, bps, wasted, fixed_res(x, order)) {
-        some(p) when p.bits < best.bits => best = p
-        _ => {}
+      let maxp = if together { maxp4 } else { max_porder(n, order) }
+      let (sums, any) = if together {
+        (sums5[order], any5[order])
+      } else {
+        fixed_sums(x, order, maxp)
       }
+      if (any >> 32) == 0 {
+        let r = rice(sums, n, order, maxp)
+        let bits = head_bits(2, order, 0, bps, wasted) + r.2
+        if bits < if fo < 0 { best.bits } else { head_bits(2, fo, 0, bps, wasted) + fbest.2 } {
+          fo = order
+          fbest = r
+        }
+      }
+    }
+  }
+  if fo >= 0 {
+    best = Plan {
+      kind: 2,
+      order: fo,
+      coefs: [],
+      prec: 0,
+      shift: 0,
+      wasted,
+      bps,
+      res: [],
+      porder: fbest.0,
+      params: fbest.1,
+      bits: head_bits(2, fo, 0, bps, wasted) + fbest.2,
     }
   }
   let maxo = if n > 16 { 8 } else { 0 }
   if maxo > 0 {
-    let w = tukey(n)
-    let xf = (0..n).map(i => float(x[i]) * w[i])
-    var r: [float] = []
-    for lag in 0..maxo + 1 {
-      var s = 0.0
-      for i in lag..n { s += xf[i] * xf[i - lag] }
-      r.push(s)
-    }
+    let w = if win.len() == n { win } else { tukey(n) }
+    var xf: [float] = []
+    for i in 0..n { xf.push(float(x[i]) * w[i]) }
+    let r = autocorr8(xf)
     let (lpcs, errs) = levinson(r, maxo)
     if lpcs.len() > 0 {
       // estimate each order's size from its prediction error, then code the best
@@ -856,25 +1158,36 @@ fn best_subframe(x0: [int], bps0: int): Plan {
       if room < prec { prec = room }
       if prec >= 5 {
         match quantize(lpcs[bo - 1], prec) {
-          some((q, shift)) => match plan_from(
-            3,
-            bo,
-            q,
-            prec,
-            shift,
-            x,
-            bps,
-            wasted,
-            lpc_res(x, q, shift),
-          ) {
-            some(p) when p.bits < best.bits => best = p
-            _ => {}
+          some((q, shift)) => {
+            let res = lpc_res(x, q, shift)
+            let maxp = max_porder(n, bo)
+            let (sums, any) = res_sums(res, n, bo, maxp)
+            if (any >> 32) == 0 {
+              let (porder, params, rbits) = rice(sums, n, bo, maxp)
+              let bits = head_bits(3, bo, prec, bps, wasted) + rbits
+              if bits < best.bits {
+                best = Plan {
+                  kind: 3,
+                  order: bo,
+                  coefs: q,
+                  prec,
+                  shift,
+                  wasted,
+                  bps,
+                  res,
+                  porder,
+                  params,
+                  bits,
+                }
+              }
+            }
           }
           none => {}
         }
       }
     }
   }
+  if best.kind == 2 { best.res = fixed_res(x, best.order) }
   Plan { wasted, bps: if best.kind == 1 || best.kind == 0 { bps0 } else { bps }, ..best }
 }
 
@@ -917,23 +1230,50 @@ fn put_subframe(w: var W, p: Plan, x: [int]) {
   w.put(p.porder, 4)
   let n = x.len()
   let psize = n >> p.porder
+  let res = p.res
   var i = 0
   for part in 0..p.params.len() {
     let k = p.params[part]
     w.put(k, pbits)
     let cnt = if part == 0 { psize - p.order } else { psize }
+    // `put` for each code, on local copies of the writer's state (its list is emptied
+    // meanwhile, so pushes don't copy)
+    var out = w.out
+    w.out = []
+    var acc = w.acc
+    var nb = w.n
+    let low = (1 << k) - 1
     for _ in 0..cnt {
-      let u = zig(p.res[i])
+      let r = res[i]
+      let u = (r << 1) ^ (r >> 63)
       i += 1
       let q = u >> k
       if q + 1 + k <= 32 {
-        w.put((1 << k) | (u & (1 << k) - 1), q + 1 + k)
+        acc = (acc << (q + 1 + k)) | (1 << k) | (u & low)
+        nb += q + 1 + k
+        while nb >= 8 {
+          nb -= 8
+          out.push((acc >> nb) & 0xff)
+        }
+        acc = acc & (1 << nb) - 1
       } else {
+        w.out = out
+        out = []
+        w.acc = acc
+        w.n = nb
         w.put_zeros(q)
         w.put(1, 1)
         w.put(u, k)
+        out = w.out
+        w.out = []
+        acc = w.acc
+        nb = w.n
       }
     }
+    w.out = out
+    out = []  // drop this reference, or the writer's next push would copy
+    w.acc = acc
+    w.n = nb
   }
 }
 
@@ -980,6 +1320,7 @@ pub fn encode(a: audio.Audio, bits: int): [int]!audio.AErr {
   let (rcode, rval, rbits) = rate_code(a.rate)
   let bytes = (bits + 7) / 8
   var md = md5_new()
+  let win = if total >= block { tukey(block) } else { [] }
   var w = W { out: [], acc: 0, n: 0 }
   var minf = -1
   var maxf = 0
@@ -990,10 +1331,23 @@ pub fn encode(a: audio.Audio, bits: int): [int]!audio.AErr {
     let xs = ints.map(ch => ch[start..start + n])
     // the MD5 covers the samples interleaved, little-endian, in whole bytes
     var raw: [int] = []
-    for i in 0..n {
-      for c in 0..nch {
-        let v = xs[c][i]
-        for k in 0..bytes { raw.push((v >> (8 * k)) & 0xff) }
+    if nch == 2 && bytes == 2 {
+      let l = xs[0]
+      let r = xs[1]
+      for i in 0..n {
+        let a = l[i]
+        let b = r[i]
+        raw.push(a & 0xff)
+        raw.push((a >> 8) & 0xff)
+        raw.push(b & 0xff)
+        raw.push((b >> 8) & 0xff)
+      }
+    } else {
+      for i in 0..n {
+        for c in 0..nch {
+          let v = xs[c][i]
+          for k in 0..bytes { raw.push((v >> (8 * k)) & 0xff) }
+        }
       }
     }
     md.md5_update(raw)
@@ -1004,12 +1358,16 @@ pub fn encode(a: audio.Audio, bits: int): [int]!audio.AErr {
     if nch == 2 {
       let l = xs[0]
       let r = xs[1]
-      let side = (0..n).map(i => l[i] - r[i])
-      let mid = (0..n).map(i => (l[i] + r[i]) >> 1)
-      let pl = best_subframe(l, bits)
-      let pr = best_subframe(r, bits)
-      let ps = best_subframe(side, bits + 1)
-      let pm = best_subframe(mid, bits)
+      var side: [int] = []
+      var mid: [int] = []
+      for i in 0..n {
+        side.push(l[i] - r[i])
+        mid.push((l[i] + r[i]) >> 1)
+      }
+      let pl = best_subframe(l, bits, win)
+      let pr = best_subframe(r, bits, win)
+      let ps = best_subframe(side, bits + 1, win)
+      let pm = best_subframe(mid, bits, win)
       let opts = [
         (1, pl, pr, l, r),
         (8, pl, ps, l, side),
@@ -1022,7 +1380,7 @@ pub fn encode(a: audio.Audio, bits: int): [int]!audio.AErr {
       data = [o.3, o.4]
     } else {
       data = xs
-      plans = xs.map(x => best_subframe(x, bits))
+      plans = xs.map(x => best_subframe(x, bits, win))
     }
     let fstart = w.out.len()
     let (bcode, bval, bbits) = bs_code(n)
@@ -1074,4 +1432,77 @@ pub fn encode(a: audio.Audio, bits: int): [int]!audio.AErr {
   head.push(0x84)
   head = head + [(vc.len() >> 16) & 0xff, (vc.len() >> 8) & 0xff, vc.len() & 0xff] + vc
   head + w.out
+}
+
+// ---- tests: damaged frames ----
+
+// A stream of `nch` channels at 16 bits whose one frame of `n` samples has channel assignment
+// `ch_code` and the subframes `subs` writes; with `good_crc` false its CRC-16 is wrong.
+fn crafted(nch: int, ch_code: int, n: int, subs: (var W) => (), good_crc: bool): [int] {
+  let silent = audio.new(8000, (0..nch).map(_ => (0..n).map(_ => 0.0)))
+  let s0 = encode(silent, 16)!
+  let s = stream(s0)!
+  var w = W { out: s0.take(s.frames_at), acc: 0, n: 0 }
+  let at = w.out.len()
+  w.put(0xfff8, 16)  // sync, fixed block size
+  w.put(7, 4)        // block size: 16 bits of n - 1 after the frame number
+  w.put(0, 4)        // sample rate and size from STREAMINFO
+  w.put(ch_code, 4)
+  w.put(0, 4)
+  w.put(0, 8)  // frame number 0
+  w.put(n - 1, 16)
+  w.put(crc8(w.out, at, w.out.len()), 8)
+  subs(&w)
+  w.flush()
+  w.put(crc16(w.out, at, w.out.len()) ^ if good_crc { 0 } else { 1 }, 16)
+  w.out
+}
+
+// An escaped residual partition (partition order 0) of `count` 31-bit values `v`.
+fn escaped(w: var W, count: int, v: int) {
+  w.put(0, 2)   // Rice, 4-bit parameters
+  w.put(0, 4)   // partition order 0
+  w.put(15, 4)  // escape: raw values
+  w.put(31, 5)
+  for _ in 0..count { w.put(v, 31) }
+}
+
+// An LPC order 1 subframe at `bits` bits: warm-up sample `warm`, coefficient `coef`, shift 0,
+// and `count` residuals `v`.
+fn lpc1(w: var W, bits: int, warm: int, coef: int, count: int, v: int) {
+  w.put(64, 8)  // padding 0, LPC order 1, no wasted bits (0 100000 0)
+  w.put(warm, bits)
+  w.put(14, 4)  // precision 15
+  w.put(0, 5)   // shift 0
+  w.put(coef, 15)
+  w.escaped(count, v)
+}
+
+// A fixed order 4 subframe of `n` samples: warm-up 0 and residuals `v`.
+fn fixed4(w: var W, n: int, v: int) {
+  w.put(24, 8)                    // padding 0, fixed order 4, no wasted bits (0 001100 0)
+  for _ in 0..4 { w.put(0, 16) }  // warm-up
+  w.escaped(n - 4, v)
+}
+
+let BIG = 0x3fffffff
+
+test "FLAC: damaged frames are errors, not overflows" {
+  // predictions that outgrow 64 bits before the frame's CRC-16 is read: with a bad CRC the
+  // frame is corrupt; with a good one it decodes to nonsense, but doesn't panic
+  let lpc = (w: var W) => lpc1(&w, 16, 32767, 16383, 15, BIG)  // times 16383 per sample
+  assert decode(crafted(1, 0, 16, lpc, false)) is err(Corrupt(_))
+  assert decode(crafted(1, 0, 16, lpc, true)) is ok(_)
+  let fixed = (w: var W) => fixed4(&w, 4096, BIG)  // grows as n^4
+  assert decode(crafted(1, 0, 4096, fixed, false)) is err(Corrupt(_))
+  assert decode(crafted(1, 0, 4096, fixed, true)) is ok(_)
+  // stereo decorrelation of samples near +-2^63 (LPC doubling each sample), after a good CRC
+  for code in [8, 9, 10] {
+    let pair = (w: var W) => {
+      // the side channel (the second, or the first for 9) has 17 bits
+      lpc1(&w, if code == 9 { 17 } else { 16 }, 0, 2, 33, BIG)
+      lpc1(&w, if code == 9 { 16 } else { 17 }, 0, 2, 33, if code == 9 { BIG } else { -BIG })
+    }
+    assert decode(crafted(2, code, 34, pair, true)) is ok(_)
+  }
 }

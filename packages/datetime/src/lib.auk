@@ -41,6 +41,7 @@ let MS_DAY = 86_400_000
 
 let WEEKDAYS = [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
 let DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+let DAY_ABBRS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 let MONTH_NAMES = [
   "January",
@@ -56,6 +57,29 @@ let MONTH_NAMES = [
   "November",
   "December",
 ]
+
+let MONTH_ABBRS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+]
+
+// "00" to "99" and "000" to "999": zero-padded numbers ready-made, for formatting
+imprint PAD2 = (0..100).map(i => "{i:02}")
+imprint PAD3 = (0..1000).map(i => "{i:03}")
+
+// `"{v:02}"` and `"{v:03}"`
+fn pad2(v: int): str = if v >= 0 && v < 100 { PAD2[v] } else { "{v:02}" }
+fn pad3(v: int): str = if v >= 0 && v < 1000 { PAD3[v] } else { "{v:03}" }
 
 // Floor division and modulo (Auk's `/` and `%` truncate toward zero). b > 0.
 fn fdiv(a: int, b: int): int = if a < 0 && a % b != 0 { a / b - 1 } else { a / b }
@@ -122,7 +146,15 @@ pub fn weekday(d: Date): Weekday = WEEKDAYS[fmod(days(d) + 3, 7)]  // 1970-01-01
 pub fn weekday(d: DateTime): Weekday = weekday(date(d))
 
 /// ISO 8601 day number: Mon = 1 .. Sun = 7.
-pub fn number(w: Weekday): int = WEEKDAYS.find_index(x => x == w)! + 1
+pub fn number(w: Weekday): int = match w {
+  Mon => 1
+  Tue => 2
+  Wed => 3
+  Thu => 4
+  Fri => 5
+  Sat => 6
+  Sun => 7
+}
 
 /// 1..366.
 pub fn day_of_year(d: Date): int = days(d) - days(Date { month: 1, day: 1, ..d }) + 1
@@ -226,26 +258,64 @@ pub fn cmp(a: DateTime, b: DateTime): int {
 // ---- formatting ----
 
 /// `2024-02-29`; years outside 0..9999 get a sign (`-0044-03-15`, `+10000-01-01`).
-pub fn show(d: Date): str = "{year_str(d.year)}-{d.month:02}-{d.day:02}"
+pub fn show(d: Date): str {
+  var out = year_str(d.year)
+  add_date(&out, d)
+  out
+}
 /// `13:05:09`, or `13:05:09.120` when the milliseconds aren't zero.
 pub fn show(t: Time): str {
-  let hms = "{t.hour:02}:{t.minute:02}:{t.second:02}"
-  if t.ms == 0 { hms } else { hms + ".{t.ms:03}" }
+  var out = pad2(t.hour)
+  add_time(&out, t)
+  out
 }
 /// RFC 3339: `2024-02-29T13:05:09.120Z`, `1996-12-19T16:39:57-08:00`. Milliseconds are omitted
 /// when zero; offset 0 is written `Z`.
-pub fn show(d: DateTime): str = "{date(d)}T{time(d)}{offset_str(d.offset_min, ":")}"
+pub fn show(d: DateTime): str {
+  let day = date(d)
+  let t = time(d)
+  var out = year_str(day.year)
+  add_date(&out, day)
+  out += "T"
+  out += pad2(t.hour)
+  add_time(&out, t)
+  out += offset_str(d.offset_min, ":")
+  out
+}
+
+// Appends `-MM-DD` (what follows the year).
+fn add_date(out: var str, d: Date) {
+  out += "-"
+  out += pad2(d.month)
+  out += "-"
+  out += pad2(d.day)
+}
+
+// Appends `:mm:ss[.fff]` (what follows the hour).
+fn add_time(out: var str, t: Time) {
+  out += ":"
+  out += pad2(t.minute)
+  out += ":"
+  out += pad2(t.second)
+  if t.ms != 0 {
+    out += "."
+    out += pad3(t.ms)
+  }
+}
 
 fn year_str(y: int): str when y < 0 = "-{-y:04}"
 fn year_str(y: int): str when y > 9999 = "+{y}"
-fn year_str(y: int): str = "{y:04}"
+fn year_str(y: int): str = PAD2[y / 100] + PAD2[y % 100]
 
 // "Z" for 0 with ":" (RFC 3339); "+0000" style with "" (strftime %z).
 fn offset_str(0, ":"): str = "Z"
 fn offset_str(m: int, sep: str): str {
-  let sign = if m < 0 { "-" } else { "+" }
   let a = m.abs()
-  "{sign}{a / 60:02}{sep}{a % 60:02}"
+  var out = if m < 0 { "-" } else { "+" }
+  out += pad2(a / 60)
+  out += sep
+  out += pad2(a % 60)
+  out
 }
 
 /// Formats with strftime-style directives: `%Y` year, `%m` month, `%d` day, `%H` hour, `%M`
@@ -257,34 +327,38 @@ pub fn format(d: DateTime, pattern: str): str {
   let day = date(d)
   let t = time(d)
   let cs = pattern.chars()
-  var out: [str] = []
+  var out = ""
   var i = 0
+  var lit = 0  // where the text not yet copied starts
   while i < cs.len() {
     if cs[i] == '%' && i + 1 < cs.len() {
-      out.push(directive(cs[i + 1], d, day, t))
+      if i > lit { out += str(cs[lit..i]) }
+      out += directive(cs[i + 1], d, day, t)
       i += 2
+      lit = i
     } else {
-      out.push(str(cs[i]))
       i += 1
     }
   }
-  out.join("")
+  if cs.len() > lit { out += str(cs[lit..cs.len()]) }
+  out
 }
 
+// `day` and `t` are `d`'s local date and time.
 fn directive(c: char, d: DateTime, day: Date, t: Time): str = match c {
   'Y' => year_str(day.year)
-  'm' => "{day.month:02}"
-  'd' => "{day.day:02}"
-  'H' => "{t.hour:02}"
-  'M' => "{t.minute:02}"
-  'S' => "{t.second:02}"
-  'L' => "{t.ms:03}"
-  'j' => "{day_of_year(day):03}"
-  'a' => "{weekday(day)}"
-  'A' => DAY_NAMES[number(weekday(day)) - 1]
-  'b' => MONTH_NAMES[day.month - 1][0..3]
+  'm' => pad2(day.month)
+  'd' => pad2(day.day)
+  'H' => pad2(t.hour)
+  'M' => pad2(t.minute)
+  'S' => pad2(t.second)
+  'L' => pad3(t.ms)
+  'j' => pad3(day_of_year(day))
+  'a' => DAY_ABBRS[fmod(days(day) + 3, 7)]
+  'A' => DAY_NAMES[fmod(days(day) + 3, 7)]
+  'b' => MONTH_ABBRS[day.month - 1]
   'B' => MONTH_NAMES[day.month - 1]
-  'u' => "{number(weekday(day))}"
+  'u' => "{fmod(days(day) + 3, 7) + 1}"
   's' => "{fdiv(d.ms, MS_SEC)}"
   'z' => if d.offset_min == 0 { "+0000" } else { offset_str(d.offset_min, "") }
   'Z' => offset_str(d.offset_min, ":")

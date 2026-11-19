@@ -66,8 +66,13 @@ fn here(p: P, why: str): YamlErr = Syntax(why, p.line, col(p) + 1)
 
 // Space, tab, line end or end of input.
 fn sep(c: char): bool = c == ' ' || c == '\t' || c == '\n' || c == '\0'
-fn flow_ind(c: char): bool = r",[]{}".contains(c)
-fn indicator(c: char): bool = r"-?:,[]{}#&*!|>'%@`".contains(c) || c == '"'
+fn flow_ind(c: char): bool = c == ',' || c == '[' || c == ']' || c == '{' || c == '}'
+
+fn indicator(c: char): bool = match c {
+  '-' | '?' | ':' | ',' | '[' | ']' | '{' | '}' | '#' | '&' => true
+  '*' | '!' | '|' | '>' | '\'' | '%' | '@' | '`' | '"' => true
+  _ => false
+}
 
 fn skip_space(p: var P) {
   while ch(p) == ' ' || ch(p) == '\t' { p.i += 1 }
@@ -123,7 +128,7 @@ fn plain_start(p: P, flow: bool): bool {
   if sep(c) { return false }
   if !indicator(c) { return true }
   let next = ch_at(p, 1)
-  "-?:".contains(c) && !sep(next) && !(flow && flow_ind(next))
+  (c == '-' || c == '?' || c == ':') && !sep(next) && !(flow && flow_ind(next))
 }
 
 fn enter(p: var P): ()!YamlErr {
@@ -189,18 +194,25 @@ fn documents(s: str): [(Value, (int, int))]!YamlErr {
 }
 
 fn start(s: str): P!YamlErr {
-  var cs = s.replace("\r\n", "\n").replace("\r", "\n").chars()
+  let lf = if s.contains("\r") { s.replace("\r\n", "\n").replace("\r", "\n") } else { s }
+  var cs = lf.chars()
   if cs.len() > 0 && cs[0] == '\u{FEFF}' { cs = cs.skip(1) }
-  let p = P { cs, i: 0, line: 1, ls: 0, flow: 0, depth: 0, anchors: {} }
   // control chars other than tab and line feed are not allowed anywhere
-  var q = p
-  while !q.eof() {
-    let c = ch(q)
-    if (int(c) < 0x20 && c != '\t' && c != '\n') || int(c) == 0x7f {
-      fail(here(q, "control character U+{hex2(int(c))} (escape it in a \"string\")"))
+  for i, x in cs {
+    let c = int(x)
+    if (c < 0x20 && c != 9 && c != 10) || c == 0x7f {
+      var line = 1
+      var ls = 0
+      for j in 0..i {
+        if cs[j] == '\n' {
+          line += 1
+          ls = j + 1
+        }
+      }
+      fail(Syntax("control character U+{hex2(c)} (escape it in a \"string\")", line, i - ls + 1))
     }
-    q.bump()
   }
+  let p = P { cs, i: 0, line: 1, ls: 0, flow: 0, depth: 0, anchors: {} }
   p.check_indent()?
   p
 }
@@ -258,17 +270,20 @@ fn block_at(p: var P, n: int): Value!YamlErr {
 
 // Does a `key:` start here? Looks ahead without consuming.
 fn is_key(p: P): bool {
-  var q = p
-  let c = ch(q)
+  let c = ch(p)
+  let n = p.cs.len()
+  var j = p.i  // where the key ends
   if c == '"' || c == '\'' {
+    var q = p
     if q.quoted() is err(_) || q.line != p.line { return false }
-  } else if plain_start(q, false) {
-    q.plain_line(false)
+    j = q.i
+  } else if plain_start(p, false) {
+    j = plain_stop(p.cs, p.i, false)
   } else {
     return false
   }
-  q.skip_space()
-  ch(q) == ':' && sep(ch_at(q, 1))
+  while j < n && (p.cs[j] == ' ' || p.cs[j] == '\t') { j += 1 }
+  j < n && p.cs[j] == ':' && (j + 1 >= n || sep(p.cs[j + 1]))
 }
 
 // A block mapping whose keys are at column m.
@@ -356,18 +371,31 @@ fn inline(p: var P, n: int): Value!YamlErr {
 // context); trailing spaces are dropped.
 fn plain_line(p: var P, flow: bool): str {
   let start = p.i
-  var end = p.i
-  loop {
-    let c = ch(p)
-    if c == '\n' || c == '\0' { break }
-    let next = ch_at(p, 1)
-    if c == ':' && (sep(next) || (flow && flow_ind(next))) { break }
-    if c == '#' && p.i > start && (p.cs[p.i - 1] == ' ' || p.cs[p.i - 1] == '\t') { break }
-    if flow && flow_ind(c) { break }
-    p.i += 1
-    if c != ' ' && c != '\t' { end = p.i }
+  let stop = plain_stop(p.cs, start, flow)
+  var end = stop
+  while end > start && (p.cs[end - 1] == ' ' || p.cs[end - 1] == '\t') { end -= 1 }
+  p.i = stop
+  core.str(p.cs[start..end])
+}
+
+// The index where the line of a plain scalar that starts at `from` stops.
+fn plain_stop(cs: [char], from: int, flow: bool): int {
+  let n = cs.len()
+  var i = from
+  while i < n {
+    let c = cs[i]
+    if c == '\n' { break }
+    if c == ':' {
+      let next = if i + 1 < n { cs[i + 1] } else { '\0' }
+      if sep(next) || (flow && flow_ind(next)) { break }
+    } else if c == '#' {
+      if i > from && (cs[i - 1] == ' ' || cs[i - 1] == '\t') { break }
+    } else if flow && flow_ind(c) {
+      break
+    }
+    i += 1
   }
-  p.text(start, end)
+  i
 }
 
 // A plain scalar in block context: continuation lines must be indented deeper than `n`.
@@ -396,7 +424,8 @@ fn plain_block(p: var P, n: int): Value {
     if ch(q) == '#' { break }
     let more = q.plain_line(false)
     if more == "" { break }
-    buf = buf + fold_break(empties) + more
+    buf += fold_break(empties)
+    buf += more
     p = q
   }
   resolve(buf)
@@ -429,7 +458,8 @@ fn plain_flow(p: var P): str {
     }
     let more = q.plain_line(true)
     if more == "" { break }
-    buf = buf + fold_break(empties) + more
+    buf += fold_break(empties)
+    buf += more
     p = q
   }
   buf
@@ -439,23 +469,41 @@ fn plain_flow(p: var P): str {
 /// (also capitalized or upper-case), decimal, `0o` octal and `0x` hex integers, floats
 /// (`1.5`, `-2e3`, `.5`, `.inf`, `-.inf`, `.nan`), and anything else a `Str`.
 pub fn resolve(t: str): Value {
-  if ["", "~", "null", "Null", "NULL"].contains(t) { return Null }
-  if ["true", "True", "TRUE"].contains(t) { return Bool(true) }
-  if ["false", "False", "FALSE"].contains(t) { return Bool(false) }
-  if [".inf", ".Inf", ".INF", "+.inf", "+.Inf", "+.INF"].contains(t) { return Float(INF) }
-  if ["-.inf", "-.Inf", "-.INF"].contains(t) { return Float(-INF) }
-  if [".nan", ".NaN", ".NAN"].contains(t) { return Float(NAN) }
-  let cs = t.chars()
-  let body = if cs[0] == '-' || cs[0] == '+' { cs.skip(1) } else { cs }
-  if body.len() > 0 && body.all(c => c.is_digit()) {
-    let digits = core.str(body)
-    let n = int.parse(digits) else return float_or_str(t)
-    return Int(if cs[0] == '-' { -n } else { n })
+  if t == "" { return Null }
+  let c = t[0]
+  // every null, bool and number starts with one of a few chars; anything else is a string
+  if c == '~' || c == 'n' || c == 'N' {
+    return if t == "~" || t == "null" || t == "Null" || t == "NULL" { Null } else { Str(t) }
   }
-  if t.starts_with("0o") && t.len() > 2 && cs.skip(2).all(c => c >= '0' && c <= '7') {
+  if c == 't' || c == 'T' {
+    return if t == "true" || t == "True" || t == "TRUE" { Bool(true) } else { Str(t) }
+  }
+  if c == 'f' || c == 'F' {
+    return if t == "false" || t == "False" || t == "FALSE" { Bool(false) } else { Str(t) }
+  }
+  let signed = c == '-' || c == '+'
+  if !(signed || c == '.' || c.is_digit()) { return Str(t) }
+  if !c.is_digit() {
+    match t {
+      ".inf" | ".Inf" | ".INF" | "+.inf" | "+.Inf" | "+.INF" => return Float(INF)
+      "-.inf" | "-.Inf" | "-.INF" => return Float(-INF)
+      ".nan" | ".NaN" | ".NAN" => return Float(NAN)
+      _ => {}
+    }
+  }
+  let cs = t.chars()
+  let n = cs.len()
+  let from = if signed { 1 } else { 0 }
+  var i = from
+  while i < n && cs[i].is_digit() { i += 1 }
+  if i == n && n > from {
+    let v = int.parse(if signed { core.str(cs[1..n]) } else { t }) else return float_or_str(t)
+    return Int(if c == '-' { -v } else { v })
+  }
+  if c == '0' && n > 2 && cs[1] == 'o' && cs.skip(2).all(d => d >= '0' && d <= '7') {
     return radix(cs.skip(2), 8, t)
   }
-  if t.starts_with("0x") && t.len() > 2 && cs.skip(2).all(c => hex_val(c) is some(_)) {
+  if c == '0' && n > 2 && cs[1] == 'x' && cs.skip(2).all(d => hex_val(d) is some(_)) {
     return radix(cs.skip(2), 16, t)
   }
   float_or_str(t)
@@ -474,8 +522,10 @@ fn radix(ds: [char], base: int, t: str): Value {
 }
 
 fn hex_val(c: char): int? {
-  let i = "0123456789abcdefABCDEF".chars().find_index(d => d == c)?
-  if i < 16 { i } else { i - 6 }
+  if c >= '0' && c <= '9' { return int(c) - 48 }
+  if c >= 'a' && c <= 'f' { return int(c) - 87 }
+  if c >= 'A' && c <= 'F' { return int(c) - 55 }
+  none
 }
 
 // [-+]? ( \.[0-9]+ | [0-9]+ ( \.[0-9]* )? ) ( [eE] [-+]? [0-9]+ )?
@@ -522,42 +572,45 @@ fn quoted(p: var P): str!YamlErr {
   let q = ch(p)
   let (l0, c0) = (p.line, col(p) + 1)
   p.bump()
-  var out: [char] = []
+  var out = ""
+  var from = p.i  // the chars in [from, p.i) are part of the scalar, not yet added to `out`
   loop {
     let c = ch(p)
     if p.eof() { fail(Eof("a closing {q}", l0, c0)) }
     if c == q {
       if q == '\'' && ch_at(p, 1) == '\'' {
-        out.push('\'')
+        out += p.text(from, p.i + 1)
         p.i += 2
+        from = p.i
         continue
       }
-      p.bump()
       break
     }
     if c == '\\' && q == '"' {
+      out += p.text(from, p.i)
       if ch_at(p, 1) == '\n' {
         // an escaped line break: join the lines with nothing between
         p.bump()
         p.bump()
         p.skip_space()
       } else {
-        out.push(p.escape()?)
+        out += core.str(p.escape()?)
       }
+      from = p.i
       continue
     }
     if c == ' ' || c == '\t' {
       var j = p.i
       while j < p.cs.len() && (p.cs[j] == ' ' || p.cs[j] == '\t') { j += 1 }
       if j < p.cs.len() && p.cs[j] == '\n' {
-        p.i = j  // trailing spaces before a break are dropped
-      } else {
-        for k in p.i..j { out.push(p.cs[k]) }
-        p.i = j
+        out += p.text(from, p.i)  // trailing spaces before a break are dropped
+        from = j
       }
+      p.i = j
       continue
     }
     if c == '\n' {
+      out += p.text(from, p.i)
       p.bump()
       p.skip_space()
       var empties = 0
@@ -567,13 +620,15 @@ fn quoted(p: var P): str!YamlErr {
         p.skip_space()
       }
       if p.flow == 0 && at_marker(p) { fail(Eof("a closing {q}", l0, c0)) }
-      for c2 in fold_break(empties).chars() { out.push(c2) }
+      out += fold_break(empties)
+      from = p.i
       continue
     }
-    out.push(c)
     p.i += 1
   }
-  core.str(out)
+  let tail = p.text(from, p.i)
+  p.i += 1  // the closing quote
+  if out == "" { tail } else { out + tail }
 }
 
 // One escape in a "string" (p is on the backslash).
@@ -907,68 +962,77 @@ fn flow_map(p: var P): Value!YamlErr {
 /// literal blocks (`|`, `|-`, `|+`) when they span lines, and "double-quoted" otherwise.
 /// Floats keep a `.` or exponent; NaN and the infinities are `.nan`, `.inf` and `-.inf`.
 pub fn str(v: Value): str {
-  var out: [str] = []
+  var out = ""
   match v {
-    Map(m) when m.len() > 0 => emit_map(m, 0, &out)
-    List(xs) when xs.len() > 0 => emit_list(xs, 0, &out)
+    Map(m) when m.len() > 0 => emit_map(m, 0, false, &out)
+    List(xs) when xs.len() > 0 => emit_list(xs, 0, false, &out)
     Str(s) when literal_ok(s) => {
-      out.push(literal_header(s))
+      out += literal_header(s)
+      out += "\n"
       push_literal(s, 2, &out)
     }
-    _ => out.push(scalar(v))
+    _ => {
+      out += scalar(v)
+      out += "\n"
+    }
   }
-  out.join("\n") + "\n"
+  out
 }
 
 fn pad(n: int): str = " ".repeat(n)
 
-fn emit_map(m: {str: Value}, ind: int, out: var [str]) {
+// Every line ends with "\n". `lead`: the first line continues a `- ` (a nested collection inside
+// a list starts on the dash's line: `- a: 1` / `- - x`), so its indentation is already written.
+fn emit_map(m: {str: Value}, ind: int, lead: bool, out: var str) {
+  let indent = pad(ind)
+  var first = lead
   for k, v in m {
-    let key = pad(ind) + key_str(k) + ":"
+    if first { first = false } else { out += indent }
+    // a plain `<<` key is a merge key, which `parse` rejects
+    out += if k != "<<" && plain_ok(k) { k } else { quote(k) }
     match v {
       Map(mm) when mm.len() > 0 => {
-        out.push(key)
-        emit_map(mm, ind + 2, &out)
+        out += ":\n"
+        emit_map(mm, ind + 2, false, &out)
       }
       List(xs) when xs.len() > 0 => {
-        out.push(key)
-        emit_list(xs, ind + 2, &out)
+        out += ":\n"
+        emit_list(xs, ind + 2, false, &out)
       }
       Str(s) when literal_ok(s) => {
-        out.push(key + " " + literal_header(s))
+        out += ": "
+        out += literal_header(s)
+        out += "\n"
         push_literal(s, ind + 2, &out)
       }
-      _ => out.push(key + " " + scalar(v))
+      _ => {
+        out += ": "
+        out += scalar(v)
+        out += "\n"
+      }
     }
   }
 }
 
-fn emit_list(xs: [Value], ind: int, out: var [str]) {
+fn emit_list(xs: [Value], ind: int, lead: bool, out: var str) {
+  let indent = pad(ind)
+  var first = lead
   for v in xs {
+    if first { first = false } else { out += indent }
+    out += "- "
     match v {
-      Map(m) when m.len() > 0 => {
-        var sub: [str] = []
-        emit_map(m, ind + 2, &sub)
-        dash_first(sub, ind, &out)
-      }
-      List(ys) when ys.len() > 0 => {
-        var sub: [str] = []
-        emit_list(ys, ind + 2, &sub)
-        dash_first(sub, ind, &out)
-      }
+      Map(m) when m.len() > 0 => emit_map(m, ind + 2, true, &out)
+      List(ys) when ys.len() > 0 => emit_list(ys, ind + 2, true, &out)
       Str(s) when literal_ok(s) => {
-        out.push(pad(ind) + "- " + literal_header(s))
+        out += literal_header(s)
+        out += "\n"
         push_literal(s, ind + 2, &out)
       }
-      _ => out.push(pad(ind) + "- " + scalar(v))
+      _ => {
+        out += scalar(v)
+        out += "\n"
+      }
     }
-  }
-}
-
-// A nested collection inside a list starts on the dash's line: `- a: 1` / `- - x`.
-fn dash_first(sub: [str], ind: int, out: var [str]) {
-  for i, line in sub {
-    if i == 0 { out.push(pad(ind) + "- " + line[ind + 2..line.len()]) } else { out.push(line) }
   }
 }
 
@@ -984,17 +1048,21 @@ fn float_str(f: float): str when f != f = ".nan"
 fn float_str(f: float): str when f - f != 0.0 = if f > 0.0 { ".inf" } else { "-.inf" }
 fn float_str(f: float): str = "{f}"  // shortest exact form, always with `.` or `e`
 
-fn key_str(k: str): str = if plain_ok(k) { k } else { quote(k) }
-
 // Can `s` be written as a plain scalar and read back as the same string?
 fn plain_ok(s: str): bool {
-  if s == "" || resolve(s) != Str(s) { return false }
+  if s == "" { return false }
   let cs = s.chars()
   if indicator(cs[0]) || sep(cs[0]) || sep(cs[cs.len() - 1]) { return false }
+  for c in cs {
+    let n = int(c)
+    if n < 0x20 || n == 0x7f || n == 0x85 || n == 0x2028 || n == 0x2029 || n == 0xfeff {
+      return false
+    }
+  }
   if s.contains(": ") || s.contains(" #") || s.ends_with(":") || s.starts_with("...") {
     return false
   }
-  cs.all(c => int(c) >= 0x20 && int(c) != 0x7f && !"\u{85}\u{2028}\u{2029}\u{feff}".contains(c))
+  resolve(s) is Str(_)
 }
 
 // Multi-line text without other control chars or trailing spaces, whose first line doesn't
@@ -1006,25 +1074,49 @@ fn literal_ok(s: str): bool {
   s.chars().all(c => c == '\n' || c == '\t' || (int(c) >= 0x20 && int(c) != 0x7f))
 }
 
+// By the number of line breaks the text ends with: none `|-`, one `|`, more `|+`.
 fn literal_header(s: str): str {
-  let trailing = s.chars().reverse().take_while(c => c == '\n').len()
-  match trailing {
-    0 => "|-"
-    1 => "|"
-    _ => "|+"
-  }
+  if !s.ends_with("\n") { return "|-" }
+  if s.ends_with("\n\n") { "|+" } else { "|" }
 }
 
-fn push_literal(s: str, ind: int, out: var [str]) {
+fn push_literal(s: str, ind: int, out: var str) {
   var lines = s.split("\n")
   // `a\n` splits as ["a", ""]: the last "" is the final line break, not a line
   if s.ends_with("\n") { lines.pop() }
+  let indent = pad(ind)
   for line in lines {
-    out.push(if line == "" { "" } else { pad(ind) + line })
+    if line != "" {
+      out += indent
+      out += line
+    }
+    out += "\n"
   }
 }
 
-fn quote(s: str): str = "\"" + s.chars().map(c => esc(c)).join("") + "\""
+fn quote(s: str): str {
+  let cs = s.chars()
+  var out = "\""
+  var from = 0  // the chars in [from, i) need no escape and aren't in `out` yet
+  for i, c in cs {
+    let n = int(c)
+    if n < 0x20 ||
+      c == '"' ||
+      c == '\\' ||
+      n == 0x7f ||
+      n == 0x85 ||
+      n == 0x2028 ||
+      n == 0x2029 ||
+      n == 0xfeff {
+      out += core.str(cs[from..i])
+      out += esc(c)
+      from = i + 1
+    }
+  }
+  out += core.str(cs[from..cs.len()])
+  out += "\""
+  out
+}
 
 fn esc('"'): str = "\\\""
 fn esc('\\'): str = "\\\\"
@@ -1384,11 +1476,13 @@ test "str round-trips awkward strings" {
     "%p",
     "line\n\n\nmore\n\n",
     "trailing space \nline",
+    "<<",
   ]
   assert parse(str(strs(tricky)))? == strs(tricky)
   var keyed: {str: Value} = {}
   for s in tricky { keyed[s] = Str(s) }
   assert parse(str(Map(keyed)))? == Map(keyed)
+  assert str(m([("<<", Str("<<"))])) == "\"<<\": <<\n"  // only the key needs quoting
 }
 
 struct Server { host: str, port: int, tls: bool }

@@ -827,6 +827,42 @@ test "unknown and broken input" {
   assert message(Unsupported("MP3")) == "unsupported: MP3"
 }
 
+test "damaged AIFF rates and AU channel counts are errors" {
+  let a = encode(sig(), Aiff, S16)?
+  let comm = (0..a.len() - 4).find(i => audio.pcm.tag(a, i) == "COMM")!
+  // the 80-bit rate: NaN, infinite, beyond any int, and an int past 32 bits
+  for ext in [
+    [0x7f, 0xff, 0xc0, 0, 0, 0, 0, 0, 0, 0],
+    [0xff, 0xff, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0x40, 0xff, 0x80, 0, 0, 0, 0, 0, 0, 0],
+    [0x40, 0x27, 0x80, 0, 0, 0, 0, 0, 0, 0],
+  ] {
+    var d = a
+    for i, b in ext { d[comm + 16 + i] = b }
+    assert decode(d) is err(Corrupt(_))
+    assert probe(d) is err(Corrupt(_))
+  }
+  var nan = a
+  nan[comm + 16] = 0x7f
+  nan[comm + 17] = 0xff
+  assert decode(nan) is err(Corrupt("AIFF sample rate NaN"))
+  // 98 bytes claiming about a billion channels
+  var au = ".snd".bytes()
+  for v in [24, 74, 3, 8000, 1000000000] { audio.pcm.put32be(&au, v) }
+  au = au + (0..74).map(i => i)
+  assert decode(au) is err(Corrupt(_))
+  assert probe(au) is err(Corrupt(_))
+  // up to 65535 channels (what WAV and AIFF can hold) still read
+  au[22] = 0xff
+  au[23] = 0xff
+  au[20] = 0
+  au[21] = 0
+  assert (probe(au)?).channels == 65535
+  assert (decode(au)?).nch() == 65535
+  au[21] = 1
+  assert probe(au) is err(Corrupt(_))
+}
+
 test "names" {
   assert fmt_named("s16") == some(S16) &&
     fmt_named("pcm_s24le") == some(S24) &&

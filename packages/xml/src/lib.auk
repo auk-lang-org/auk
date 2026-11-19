@@ -36,29 +36,74 @@ fn message(TooDeep(l, k)): str = "{l}:{k}: nested deeper than {MAX_DEPTH}"
 pub fn attr(e: Element, k: str): str? = e.attrs.get(k)
 
 /// The child elements, in order (text skipped).
-pub fn elements(e: Element): [Element] = e.children.flat_map(n => match n {
-  Elem(c) => [c]
-  Text(_) => []
-})
+pub fn elements(e: Element): [Element] {
+  var out: [Element] = []
+  for n in e.children {
+    match n {
+      Elem(c) => out.push(c)
+      Text(_) => {}
+    }
+  }
+  out
+}
 
 /// The first child element named `name`.
-pub fn child(e: Element, name: str): Element? = e.elements().find(c => c.name == name)
+pub fn child(e: Element, name: str): Element? {
+  for n in e.children {
+    match n {
+      Elem(c) when c.name == name => return some(c)
+      _ => {}
+    }
+  }
+  none
+}
 
 /// Every child element named `name`, in order.
-pub fn all(e: Element, name: str): [Element] = e.elements().filter(c => c.name == name)
+pub fn all(e: Element, name: str): [Element] {
+  var out: [Element] = []
+  for n in e.children {
+    match n {
+      Elem(c) when c.name == name => out.push(c)
+      _ => {}
+    }
+  }
+  out
+}
 
 /// Every element named `name` below `e` (not `e` itself), in document order.
-pub fn descendants(e: Element, name: str): [Element] = e
-  .elements()
-  .flat_map(c => if c.name == name { [c] } else { [] } + c.descendants(name))
+pub fn descendants(e: Element, name: str): [Element] {
+  var out: [Element] = []
+  collect(e, name, &out)
+  out
+}
+
+fn collect(e: Element, name: str, out: var [Element]) {
+  for n in e.children {
+    match n {
+      Elem(c) => {
+        if c.name == name { out.push(c) }
+        collect(c, name, &out)
+      }
+      Text(_) => {}
+    }
+  }
+}
 
 /// All the text inside `e`, nested elements included, in document order.
-pub fn text(e: Element): str = e.children
-  .map(n => match n {
-    Elem(c) => c.text()
-    Text(s) => s
-  })
-  .join("")
+pub fn text(e: Element): str {
+  var out = ""
+  add_text(e, &out)
+  out
+}
+
+fn add_text(e: Element, out: var str) {
+  for n in e.children {
+    match n {
+      Elem(c) => add_text(c, &out)
+      Text(s) => out += s
+    }
+  }
+}
 
 // ---- parser: a cursor over the chars; loops for anything long, recursion only per nesting level ----
 
@@ -71,7 +116,8 @@ struct P { cs: [char], i: int }
 /// element whose text content is only whitespace (indentation between child elements) has those
 /// whitespace `Text` nodes dropped; in mixed content every text node is kept as written.
 pub fn parse(s: str): Element!XmlErr {
-  var p = P { cs: s.replace("\r\n", "\n").replace("\r", "\n").chars(), i: 0 }
+  let lf = if s.contains('\r') { s.replace("\r\n", "\n").replace("\r", "\n") } else { s }
+  var p = P { cs: lf.chars(), i: 0 }
   if p.at('\u{FEFF}') { p.i += 1 }
   misc(&p, true)?
   if !p.at('<') { fail(p.expected("the root element")) }
@@ -84,18 +130,46 @@ pub fn parse(s: str): Element!XmlErr {
 fn peek(p: P): char? = p.cs.get(p.i)
 fn at(p: P, c: char): bool = p.i < p.cs.len() && p.cs[p.i] == c
 
-fn looking(p: P, w: str): bool {
-  let ws = w.chars()
-  p.i + ws.len() <= p.cs.len() && p.cs[p.i..p.i + ws.len()] == ws
+// Is the char after the current one `c`?
+fn next_is(p: P, c: char): bool = p.i + 1 < p.cs.len() && p.cs[p.i + 1] == c
+
+let COMMENT = "<!--".chars()
+let COMMENT_END = "-->".chars()
+let PI_END = "?>".chars()
+let CDATA = "<![CDATA[".chars()
+let CDATA_END = "]]>".chars()
+let DOCTYPE = "<!DOCTYPE".chars()
+
+fn looking(p: P, w: [char]): bool {
+  let n = w.len()
+  if p.i + n > p.cs.len() { return false }
+  var k = 0
+  while k < n && p.cs[p.i + k] == w[k] { k += 1 }
+  k == n
 }
 
 fn skip_ws(p: var P) {
-  while p.i < p.cs.len() && " \t\n".contains(p.cs[p.i]) { p.i += 1 }
+  let n = p.cs.len()
+  var i = p.i
+  while i < n && (p.cs[i] == ' ' || p.cs[i] == '\n' || p.cs[i] == '\t') { i += 1 }
+  p.i = i
 }
 
 // 1-based position of index i; only computed on the error path.
-fn line(cs: [char], i: int): int = cs.take(i).filter(c => c == '\n').len() + 1
-fn col(cs: [char], i: int): int = cs.take(i).reverse().take_while(c => c != '\n').len() + 1
+fn line(cs: [char], i: int): int {
+  var n = 1
+  for j in 0..min(i, cs.len()) {
+    if cs[j] == '\n' { n += 1 }
+  }
+  n
+}
+
+fn col(cs: [char], i: int): int {
+  let end = min(i, cs.len())
+  var j = end
+  while j > 0 && cs[j - 1] != '\n' { j -= 1 }
+  end - j + 1
+}
 
 fn syntax(p: P, why: str): XmlErr = Syntax(why, line(p.cs, p.i), col(p.cs, p.i))
 
@@ -108,9 +182,11 @@ fn expected(p: P, want: str): XmlErr {
 }
 
 // Advance past the next `end`, or fail at the end of input.
-fn skip_past(p: var P, end: str, want: str): ()!XmlErr {
-  while p.i < p.cs.len() {
-    if p.looking(end) {
+fn skip_past(p: var P, end: [char], want: str): ()!XmlErr {
+  let n = p.cs.len()
+  let first = end[0]
+  while p.i < n {
+    if p.cs[p.i] == first && p.looking(end) {
       p.i += end.len()
       return ()
     }
@@ -123,13 +199,13 @@ fn skip_past(p: var P, end: str, want: str): ()!XmlErr {
 fn misc(p: var P, prolog: bool): ()!XmlErr {
   loop {
     p.skip_ws()
-    if p.looking("<!--") {
+    if p.looking(COMMENT) {
       p.i += 4
-      p.skip_past("-->", "'-->'")?
-    } else if p.looking("<?") {
+      p.skip_past(COMMENT_END, "'-->'")?
+    } else if p.at('<') && p.next_is('?') {
       p.i += 2
-      p.skip_past("?>", "'?>'")?
-    } else if prolog && p.looking("<!DOCTYPE") {
+      p.skip_past(PI_END, "'?>'")?
+    } else if prolog && p.looking(DOCTYPE) {
       doctype(&p)?
     } else {
       break
@@ -142,12 +218,12 @@ fn doctype(p: var P): ()!XmlErr {
   var depth = 0
   var quote = '\0'
   while p.i < p.cs.len() {
-    if quote == '\0' && p.looking("<!--") {
+    let c = p.cs[p.i]
+    if quote == '\0' && c == '<' && p.looking(COMMENT) {
       p.i += 4
-      p.skip_past("-->", "'-->'")?
+      p.skip_past(COMMENT_END, "'-->'")?
       continue
     }
-    let c = p.cs[p.i]
     p.i += 1
     if quote != '\0' {
       if c == quote { quote = '\0' }
@@ -169,10 +245,12 @@ fn name_char(c: char): bool = name_start(c) || c.is_digit() || c == '-' || c == 
 
 fn name(p: var P, what: str): str!XmlErr {
   let from = p.i
-  if !(p.i < p.cs.len() && name_start(p.cs[p.i])) { fail(p.expected(what)) }
-  p.i += 1
-  while p.i < p.cs.len() && name_char(p.cs[p.i]) { p.i += 1 }
-  core.str(p.cs[from..p.i])
+  let n = p.cs.len()
+  if !(from < n && name_start(p.cs[from])) { fail(p.expected(what)) }
+  var i = from + 1
+  while i < n && name_char(p.cs[i]) { i += 1 }
+  p.i = i
+  core.str(p.cs[from..i])
 }
 
 // p is at '<'; depth = how many elements enclose this one
@@ -184,7 +262,7 @@ fn element(p: var P, depth: int): Element!XmlErr {
   loop {
     let before = p.i
     p.skip_ws()
-    if p.looking("/>") {
+    if p.at('/') && p.next_is('>') {
       p.i += 2
       return Element { name, attrs, children: [] }
     }
@@ -193,9 +271,11 @@ fn element(p: var P, depth: int): Element!XmlErr {
       break
     }
     if p.i == before { fail(p.expected("whitespace, '>' or '/>'")) }
-    let (l, k) = (line(p.cs, p.i), col(p.cs, p.i))
+    let key_at = p.i
     let key = p.name("an attribute name, '>' or '/>'")?
-    if attrs.get(key) is some(_) { fail(DuplicateAttr(key, l, k)) }
+    if attrs.get(key) is some(_) {
+      fail(DuplicateAttr(key, line(p.cs, key_at), col(p.cs, key_at)))
+    }
     p.skip_ws()
     if !p.at('=') { fail(p.expected("'=' after attribute '{key}'")) }
     p.i += 1
@@ -208,37 +288,52 @@ fn element(p: var P, depth: int): Element!XmlErr {
     attrs[key] = text_until(&p, q, true)?
   }
   var kids: [Node] = []
-  var pending: [str] = []  // text since the last child element, merged into one Text node
+  var pending = ""   // text since the last child element, merged into one Text node
+  var texts = false  // is any of the kids a Text?
+  let n = p.cs.len()
   loop {
-    if p.i >= p.cs.len() { fail(p.expected("</{name}>")) }
-    if p.looking("</") {
-      let (l, k) = (line(p.cs, p.i), col(p.cs, p.i))
+    if p.i >= n { fail(p.expected("</{name}>")) }
+    if p.cs[p.i] != '<' {
+      pending += text_until(&p, '<', false)?
+      continue
+    }
+    let c = if p.i + 1 < n { p.cs[p.i + 1] } else { '<' }
+    if c == '/' {
+      let close_at = p.i
       p.i += 2
       let close = p.name("the closing tag's name")?
       p.skip_ws()
       if !p.at('>') { fail(p.expected("'>'")) }
-      if close != name { fail(Mismatch(name, close, l, k)) }
+      if close != name {
+        fail(Mismatch(name, close, line(p.cs, close_at), col(p.cs, close_at)))
+      }
       p.i += 1
       break
-    } else if p.looking("<!--") {
+    } else if c == '!' && p.looking(COMMENT) {
       p.i += 4
-      p.skip_past("-->", "'-->'")?
-    } else if p.looking("<![CDATA[") {
+      p.skip_past(COMMENT_END, "'-->'")?
+    } else if c == '!' && p.looking(CDATA) {
       p.i += 9
       let from = p.i
-      p.skip_past("]]>", "']]>'")?
-      pending.push(core.str(p.cs[from..p.i - 3]))
-    } else if p.looking("<?") {
+      p.skip_past(CDATA_END, "']]>'")?
+      pending += core.str(p.cs[from..p.i - 3])
+    } else if c == '?' {
       p.i += 2
-      p.skip_past("?>", "'?>'")?
-    } else if p.at('<') {
-      flush(&kids, &pending)
-      kids.push(Elem(element(&p, depth + 1)?))
+      p.skip_past(PI_END, "'?>'")?
     } else {
-      pending.push(text_until(&p, '<', false)?)
+      if pending != "" {
+        kids.push(Text(pending))
+        pending = ""
+        texts = true
+      }
+      kids.push(Elem(element(&p, depth + 1)?))
     }
   }
-  flush(&kids, &pending)
+  if pending != "" {
+    kids.push(Text(pending))
+    texts = true
+  }
+  if !texts { return Element { name, attrs, children: kids } }
   let mixed = kids.any(n => match n {
     Text(s) => s.trim() != ""
     Elem(_) => false
@@ -247,57 +342,61 @@ fn element(p: var P, depth: int): Element!XmlErr {
   Element { name, attrs, children }
 }
 
-fn flush(kids: var [Node], pending: var [str]) {
-  let s = pending.join("")
-  if s != "" { kids.push(Text(s)) }
-  pending = []
-}
-
 // Text up to `stop` with entities decoded. In an attribute value (`attr`), `stop` is the closing
 // quote (consumed), `<` is an error, and tabs and newlines become spaces (XML's normalization).
 fn text_until(p: var P, stop: char, attr: bool): str!XmlErr {
-  var parts: [str] = []
+  let n = p.cs.len()
+  var out = ""
   var from = p.i
+  var i = from
   loop {
-    if p.i >= p.cs.len() {
+    if i >= n {
+      p.i = i
       if attr { fail(p.expected("the closing {stop}")) }
       break
     }
-    let c = p.cs[p.i]
+    let c = p.cs[i]
     if c == stop { break }
     if c == '&' {
-      parts.push(core.str(p.cs[from..p.i]))
-      parts.push(entity(&p)?)
-      from = p.i
+      out += core.str(p.cs[from..i])
+      p.i = i
+      out += entity(&p)?
+      i = p.i
+      from = i
     } else if attr && c == '<' {
+      p.i = i
       fail(p.syntax("'<' in an attribute value (write &lt;)"))
     } else if attr && (c == '\n' || c == '\t') {
-      parts.push(core.str(p.cs[from..p.i]))
-      parts.push(" ")
-      p.i += 1
-      from = p.i
+      out += core.str(p.cs[from..i])
+      out += " "
+      i += 1
+      from = i
     } else {
-      p.i += 1
+      i += 1
     }
   }
-  parts.push(core.str(p.cs[from..p.i]))
-  if attr { p.i += 1 }
-  parts.join("")
+  p.i = if attr { i + 1 } else { i }
+  let tail = core.str(p.cs[from..i])
+  if out == "" { tail } else { out + tail }
 }
 
 // p is at '&'
 fn entity(p: var P): str!XmlErr {
   let start = p.i
-  var j = p.i + 1
-  while j < p.cs.len() && j - start < 12 && !";&< \n\t".contains(p.cs[j]) { j += 1 }
-  let found = j < p.cs.len() && p.cs[j] == ';'
-  let end = if found { j + 1 } else { j }
-  let bad = BadEntity(core.str(p.cs[start..end]), line(p.cs, start), col(p.cs, start))
-  if !found { fail(bad) }
-  let out = decode_entity(core.str(p.cs[start + 1..j])) else fail(bad)
+  let n = p.cs.len()
+  var j = start + 1
+  while j < n && j - start < 12 && !entity_end(p.cs[j]) { j += 1 }
+  let found = j < n && p.cs[j] == ';'
+  if !found { fail(BadEntity(core.str(p.cs[start..j]), line(p.cs, start), col(p.cs, start))) }
+  let out = decode_entity(core.str(p.cs[start + 1..j])) else {
+    fail(BadEntity(core.str(p.cs[start..j + 1]), line(p.cs, start), col(p.cs, start)))
+  }
   p.i = j + 1
   out
 }
+
+fn entity_end(c: char): bool =
+  c == ';' || c == '&' || c == '<' || c == ' ' || c == '\n' || c == '\t'
 
 fn decode_entity("lt"): str? = "<"
 fn decode_entity("gt"): str? = ">"
@@ -329,58 +428,85 @@ fn code_point(n: int): str? {
 // ---- writers ----
 
 /// Escape text for element content: `& < >` (and CR, which parsing would turn into `\n`).
-pub fn escape(s: str): str =
+pub fn escape(s: str): str {
+  if !(s.contains("&") || s.contains("<") || s.contains(">") || s.contains("\r")) { return s }
   s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\r", "&#13;")
+}
 
-fn escape_attr(s: str): str =
-  escape(s).replace("\"", "&quot;").replace("\n", "&#10;").replace("\t", "&#9;")
+fn escape_attr(s: str): str {
+  let e = escape(s)
+  if !(e.contains("\"") || e.contains("\n") || e.contains("\t")) { return e }
+  e.replace("\"", "&quot;").replace("\n", "&#10;").replace("\t", "&#9;")
+}
 
-fn open_tag(e: Element, empty: bool): str {
-  let attrs = e.attrs.entries().map((k, v) => " {k}=\"{escape_attr(v)}\"").join("")
-  let end = if empty { "/>" } else { ">" }
-  "<{e.name}{attrs}{end}"
+fn open_tag(e: Element, out: var str) {
+  out += "<"
+  out += e.name
+  for k, v in e.attrs {
+    out += " "
+    out += k
+    out += "=\""
+    out += escape_attr(v)
+    out += "\""
+  }
 }
 
 /// Compact XML for `e` (no declaration, no added whitespace); an element with no children is
 /// written `<x/>`. `parse(str(e)) == e` for any tree `parse` can produce.
 pub fn str(e: Element): str {
-  var out: [str] = []
+  var out = ""
   write(e, &out)
-  out.join("")
+  out
 }
 
-fn write(e: Element, out: var [str]) {
+fn write(e: Element, out: var str) {
+  open_tag(e, &out)
   if e.children.len() == 0 {
-    out.push(open_tag(e, true))
+    out += "/>"
     return ()
   }
-  out.push(open_tag(e, false))
+  out += ">"
   for n in e.children {
     match n {
       Elem(c) => write(c, &out)
-      Text(s) => out.push(escape(s))
+      Text(s) => out += escape(s)
     }
   }
-  out.push("</{e.name}>")
+  out += "</"
+  out += e.name
+  out += ">"
 }
 
 /// Indented XML (2 spaces per level, no declaration). Elements with text content are written on
 /// one line, exactly as `str` would, so mixed content keeps its whitespace.
 pub fn pretty(e: Element): str {
-  var out: [str] = []
+  var out = ""
   write_pretty(e, 0, &out)
-  out.join("\n")
+  out
 }
 
-fn write_pretty(e: Element, level: int, out: var [str]) {
+// Each element starts a new line (the first line has no break before it).
+fn write_pretty(e: Element, level: int, out: var str) {
+  if out != "" { out += "\n" }
   let pad = "  ".repeat(level)
+  out += pad
   if e.children.len() == 0 || e.children.any(n => n is Text(_)) {
-    out.push(pad + str(e))
+    write(e, &out)
     return ()
   }
-  out.push(pad + open_tag(e, false))
-  for c in e.elements() { write_pretty(c, level + 1, &out) }
-  out.push(pad + "</{e.name}>")
+  open_tag(e, &out)
+  out += ">"
+  for n in e.children {
+    match n {
+      Elem(c) => write_pretty(c, level + 1, &out)
+      Text(_) => {}
+    }
+  }
+  out += "\n"
+  out += pad
+  out += "</"
+  out += e.name
+  out += ">"
 }
 
 /// An element with no attributes holding just `text` (or nothing, if `text` is empty).

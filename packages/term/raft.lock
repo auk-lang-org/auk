@@ -5,4 +5,4 @@ name = "text"
 version = "0.1.0"
 source = "registry"
 effects = []
-checksum = "sha256:44686e22cd3c993a1acfbedb5906206d15fdbe50e0ead659480ff47b36cce830"
+checksum = "sha256:10d6572ed18db2dccec306bf754514533fb0ba2710c0178bef58d1c5b39adf4e"

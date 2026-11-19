@@ -24,81 +24,133 @@ fn is_space(c: char): bool =
 /// Digits stay with the letters before them (`utf8Decode` -> `utf8`, `Decode`).
 pub fn words(s: str): [str] {
   let cs = s.chars()
+  let bs = word_bounds(cs)
   var out: [str] = []
-  var cur: [char] = []
-  for i, c in cs {
+  var j = 0
+  while j < bs.len() {
+    out.push(str(cs[bs[j]..bs[j + 1]]))
+    j += 2
+  }
+  out
+}
+
+// Where the words of `cs` are: a flat list of start/end index pairs.
+fn word_bounds(cs: [char]): [int] {
+  let n = cs.len()
+  var bs: [int] = []
+  var from = -1  // where the current word starts, or -1 between words
+  for i in 0..n {
+    let c = cs[i]
     if !is_word(c) {
-      if cur.len() > 0 { out.push(str(cur)) }
-      cur = []
+      if from >= 0 {
+        bs.push(from)
+        bs.push(i)
+      }
+      from = -1
       continue
     }
-    if cur.len() > 0 && is_upper(c) {
-      let prev = cur[cur.len() - 1]
-      let next_lower = i + 1 < cs.len() && is_lower(cs[i + 1])
+    if from < 0 {
+      from = i
+    } else if is_upper(c) {
+      let prev = cs[i - 1]
+      let next_lower = i + 1 < n && is_lower(cs[i + 1])
       if is_lower(prev) || is_digit(prev) || int(prev) > 127 || (is_upper(prev) && next_lower) {
-        out.push(str(cur))
-        cur = []
+        bs.push(from)
+        bs.push(i)
+        from = i
       }
     }
-    cur.push(c)
   }
-  if cur.len() > 0 { out.push(str(cur)) }
-  out
+  if from >= 0 {
+    bs.push(from)
+    bs.push(n)
+  }
+  bs
 }
 
 /// `First` letter upper case, the rest lower case (ASCII).
 pub fn capitalize(w: str): str {
-  let cs = w.chars()
-  if cs.len() == 0 { return w }
-  str([cs[0].upper()] + cs.skip(1).map(c => c.lower()))
+  if w == "" { return w }
+  let low = w.lower()
+  let c = low[0]
+  if !is_lower(c) { return low }
+  "{c.upper()}" + (low.strip_prefix("{c}") else "")
+}
+
+// The words of `s` joined by `sep`, in lower case; from word number `caps` on, each word's
+// first letter is in upper case.
+fn cased(s: str, sep: str, caps: int): str {
+  let bs = word_bounds(s.chars())
+  var cs = s.lower().chars()  // case mapping moves no char, so the bounds still hold
+  var j = 2 * caps
+  while j < bs.len() {
+    cs[bs[j]] = cs[bs[j]].upper()
+    j += 2
+  }
+  var out = ""
+  j = 0
+  while j < bs.len() {
+    if j > 0 { out += sep }
+    out += str(cs[bs[j]..bs[j + 1]])
+    j += 2
+  }
+  out
 }
 
 /// `snake_case`: `snake("XMLHttpRequest") == "xml_http_request"`.
-pub fn snake(s: str): str = words(s).map(w => w.lower()).join("_")
+pub fn snake(s: str): str = cased(s, "_", s.byte_len())
 /// `kebab-case`: `kebab("fooBar baz") == "foo-bar-baz"`.
-pub fn kebab(s: str): str = words(s).map(w => w.lower()).join("-")
+pub fn kebab(s: str): str = cased(s, "-", s.byte_len())
 /// `CONSTANT_CASE` (screaming snake): `constant("max size") == "MAX_SIZE"`.
-pub fn constant(s: str): str = words(s).map(w => w.upper()).join("_")
+pub fn constant(s: str): str = cased(s, "_", s.byte_len()).upper()
 /// `PascalCase`: `pascal("http_server") == "HttpServer"`.
-pub fn pascal(s: str): str = words(s).map(capitalize).join("")
+pub fn pascal(s: str): str = cased(s, "", 0)
 /// `Title Case`: `title("the_quick-brown fox") == "The Quick Brown Fox"`.
-pub fn title(s: str): str = words(s).map(capitalize).join(" ")
+pub fn title(s: str): str = cased(s, " ", 0)
 
 /// `camelCase`: `camel("user_id") == "userId"`, `camel("HTTPServer") == "httpServer"`.
-pub fn camel(s: str): str {
-  let ws = words(s)
-  match ws {
-    [] => ""
-    [first, ..rest] => first.lower() + rest.map(capitalize).join("")
-  }
-}
+pub fn camel(s: str): str = cased(s, "", 1)
 
 // ---- edit distance and suggestions ----
 
 /// The Levenshtein distance: the fewest single-char insertions, deletions and substitutions
 /// that turn `a` into `b`. Counts chars (code points), case-sensitive. O(len(a) * len(b)).
 pub fn distance(a: str, b: str): int {
-  let x = a.chars()
-  let y = b.chars()
-  if x.len() == 0 { return y.len() }
-  if y.len() == 0 { return x.len() }
-  var prev: [int] = []
-  for j in 0..=y.len() { prev.push(j) }
-  var cur = prev
-  for i in 1..=x.len() {
-    cur[0] = i
-    for j in 1..=y.len() {
-      let cost = if x[i - 1] == y[j - 1] { 0 } else { 1 }
-      cur[j] = min3(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
-    }
-    prev = cur
-  }
-  prev[y.len()]
+  if a == b { return 0 }
+  lev(a.chars(), b.chars())
 }
 
-fn min3(a: int, b: int, c: int): int {
-  let m = if a < b { a } else { b }
-  if m < c { m } else { c }
+fn lev(x: [char], y: [char]): int {
+  // a shared prefix and suffix cost nothing: only the middles are compared
+  var n = x.len()
+  var m = y.len()
+  while n > 0 && m > 0 && x[n - 1] == y[m - 1] {
+    n -= 1
+    m -= 1
+  }
+  var p = 0
+  while p < n && p < m && x[p] == y[p] { p += 1 }
+  if p == n { return m - p }
+  if p == m { return n - p }
+  // one row of the table at a time: row[j] is the distance to the first j chars of y's middle
+  var row: [int] = []
+  for j in 0..=m - p { row.push(j) }
+  for i in p..n {
+    let c = x[i]
+    var diag = row[0]  // the row above, one to the left
+    var left = i - p + 1
+    row[0] = left
+    for j in p..m {
+      let up = row[j - p + 1]
+      var v = if c == y[j] { diag } else { diag + 1 }
+      if up + 1 < v { v = up + 1 }
+      if left + 1 < v { v = left + 1 }
+      row[j - p + 1] = v
+      diag = up
+      left = v
+    }
+  }
+  row[m - p]
 }
 
 /// How alike two strings are, from 0.0 (nothing in common) to 1.0 (equal):
@@ -115,14 +167,18 @@ fn max_len(a: int, b: int): int = if a > b { a } else { b }
 /// case, and an option qualifies when its distance is at most a third of `s`'s length (at least
 /// 1), as compilers do for "did you mean". Ties keep the options' order.
 pub fn suggest(s: str, options: [str], n: int): [str] {
-  let target = s.lower()
-  let limit = s.len().max_len(3) / 3
-  options
-    .map(o => (distance(target, o.lower()), o))
-    .filter(p => p.0 <= limit)
-    .sort_by(p => p.0)
-    .take(n)
-    .map(p => p.1)
+  let target = s.lower().chars()
+  let len = target.len()
+  let limit = len.max_len(3) / 3
+  var near: [(int, str)] = []
+  for o in options {
+    // the distance is at least the difference in length
+    let diff = o.len() - len
+    if diff > limit || diff < -limit { continue }
+    let d = lev(target, o.lower().chars())
+    if d <= limit { near.push((d, o)) }
+  }
+  near.sort_by(p => p.0).take(n).map(p => p.1)
 }
 
 /// The single best suggestion for `s` among `options`, if any is close enough (see `suggest`):
@@ -196,7 +252,9 @@ pub fn char_width(c: char): int {
   if cp < 0x7f { return if cp < 0x20 { 0 } else { 1 } }
   if cp < 0xa0 { return 0 }  // DEL and C1 controls
   if cp < 0x300 { return 1 }
+  if cp >= 0x4e00 && cp <= 0x9fff { return 2 }  // CJK ideographs: the common wide case
   if in_ranges(ZERO_WIDTH, cp) { return 0 }
+  if cp < 0x1100 { return 1 }  // below the first wide range
   if in_ranges(WIDE, cp) { 2 } else { 1 }
 }
 
@@ -227,15 +285,16 @@ pub fn truncate(s: str, w: int, ellipsis: str): str
 
 // The longest prefix of `s` that fits in `w` columns.
 fn take_cols(s: str, w: int): str {
-  var out: [char] = []
+  let cs = s.chars()
   var used = 0
-  for c in s.chars() {
-    let cw = char_width(c)
+  var k = 0
+  while k < cs.len() {
+    let cw = char_width(cs[k])
     if used + cw > w { break }
     used += cw
-    out.push(c)
+    k += 1
   }
-  str(out)
+  if k == cs.len() { s } else { str(cs[0..k]) }
 }
 
 // ---- shell words (POSIX sh quoting) ----
@@ -261,15 +320,15 @@ pub fn shell_words(s: str): [str]!ShellErr {
   let cs = s.chars()
   let n = cs.len()
   var out: [str] = []
-  var cur: [char] = []
+  var cur = ""  // the word so far
   var in_word = false
   var i = 0
   while i < n {
     let c = cs[i]
     if c == ' ' || c == '\t' || c == '\n' {
       if in_word {
-        out.push(str(cur))
-        cur = []
+        out.push(cur)
+        cur = ""
         in_word = false
       }
       i += 1
@@ -278,44 +337,51 @@ pub fn shell_words(s: str): [str]!ShellErr {
     } else if c == '\\' {
       if i + 1 >= n { fail(TrailingBackslash(i)) }
       if cs[i + 1] != '\n' {
-        cur.push(cs[i + 1])
+        cur += str(cs[i + 1..i + 2])
         in_word = true
       }
       i += 2
     } else if c == '\'' {
       let start = i
       i += 1
-      while i < n && cs[i] != '\'' {
-        cur.push(cs[i])
-        i += 1
-      }
+      while i < n && cs[i] != '\'' { i += 1 }
       if i >= n { fail(UnclosedQuote(start)) }
+      if i > start + 1 { cur += str(cs[start + 1..i]) }
       in_word = true
       i += 1
     } else if c == '"' {
       let start = i
       i += 1
+      var from = i  // start of the chars not copied yet
       while i < n && cs[i] != '"' {
         if cs[i] == '\\' && i + 1 < n && "$`\"\\\n".contains(cs[i + 1]) {
-          if cs[i + 1] != '\n' { cur.push(cs[i + 1]) }
+          if i > from { cur += str(cs[from..i]) }
+          from = if cs[i + 1] == '\n' { i + 2 } else { i + 1 }  // the escaped char is kept
           i += 2
         } else {
-          cur.push(cs[i])
           i += 1
         }
       }
       if i >= n { fail(UnclosedQuote(start)) }
+      if i > from { cur += str(cs[from..i]) }
       in_word = true
       i += 1
     } else {
-      cur.push(c)
-      in_word = true
+      // a run of ordinary chars (a `#` inside a word is one of them)
+      let start = i
       i += 1
+      while i < n && !is_shell_special(cs[i]) { i += 1 }
+      let run = str(cs[start..i])
+      if in_word { cur += run } else { cur = run }
+      in_word = true
     }
   }
-  if in_word { out.push(str(cur)) }
+  if in_word { out.push(cur) }
   out
 }
+
+fn is_shell_special(c: char): bool =
+  c == ' ' || c == '\t' || c == '\n' || c == '\\' || c == '\'' || c == '"'
 
 fn is_shell_safe(c: char): bool =
   is_upper(c) || is_lower(c) || is_digit(c) || "@%+=:,./_-".contains(c)
@@ -329,7 +395,14 @@ pub fn quote(s: str): str {
 }
 
 /// Words quoted and joined by spaces into one command line: the inverse of `shell_words`.
-pub fn join(ws: [str]): str = ws.map(quote).join(" ")
+pub fn join(ws: [str]): str {
+  var out = ""
+  for i, w in ws {
+    if i > 0 { out += " " }
+    out += quote(w)
+  }
+  out
+}
 
 // ---- wrapping, indentation ----
 
@@ -341,78 +414,115 @@ pub fn wrap(s: str, w: int): [str]
 {
   var out: [str] = []
   for line in s.split("\n") {
-    let ws = line.split()
-    if ws.len() == 0 {
-      out.push("")
-      continue
-    }
+    let cs = line.chars()
+    let n = cs.len()
     let first = out.len()
+    // the output line being built is `cur` followed by `cs[from..to]`, `used` columns in all
     var cur = ""
+    var from = 0
+    var to = 0
     var used = 0
-    for word in ws {
-      var rest = word
-      var ww = width(rest)
-      if used > 0 && used + 1 + ww <= w {
-        cur = cur + " " + rest
+    var has = false  // the output line has a word (`used` can be 0 with zero-width words)
+    var i = 0
+    loop {
+      while i < n && is_wrap_space(cs[i]) { i += 1 }
+      if i >= n { break }
+      // the next word: cs[a..i], `ww` columns
+      var a = i
+      var ww = 0
+      while i < n && !is_wrap_space(cs[i]) {
+        ww += char_width(cs[i])
+        i += 1
+      }
+      if has && used + 1 + ww <= w {
+        if a == to + 1 && cs[to] == ' ' {
+          to = i  // one space apart in the input too: the line stays one piece of it
+        } else {
+          cur += str(cs[from..to])
+          cur += " "
+          from = a
+          to = i
+        }
         used += 1 + ww
         continue
       }
-      if used > 0 {
-        out.push(cur)
-        cur = ""
-        used = 0
-      }
+      if has { out.push(cur + str(cs[from..to])) }
+      cur = ""
       while ww > w {
-        let head = take_cols(rest, w)
-        let head = if head.len() == 0 { rest[0..1] } else { head }  // a 2-column char at w = 1
-        out.push(head)
-        rest = rest[head.len()..rest.len()]
-        ww = width(rest)
+        // the longest head that fits; a 2-column char at w = 1 goes alone
+        var k = a
+        var hw = 0
+        while k < i {
+          let cw = char_width(cs[k])
+          if hw + cw > w { break }
+          hw += cw
+          k += 1
+        }
+        if k == a {
+          hw = char_width(cs[a])
+          k = a + 1
+        }
+        out.push(str(cs[a..k]))
+        a = k
+        ww -= hw
       }
-      cur = rest
+      from = a
+      to = i
       used = ww
+      has = a < i  // false if splitting a wide-char word used it all up
     }
-    if used > 0 || out.len() == first { out.push(cur) }
+    if has || out.len() == first {
+      out.push(if cur == "" && to - from == n { line } else { cur + str(cs[from..to]) })
+    }
   }
   out
 }
+
+// What `str.split()` splits words at.
+fn is_wrap_space(c: char): bool = c == ' ' || (c >= '\t' && c <= '\r')
 
 /// `wrap` joined with newlines.
 pub fn fill(s: str, w: int): str = wrap(s, w).join("\n")
 
 /// Every non-blank line of `s` with `prefix` in front (blank lines stay empty).
-pub fn indent(s: str, prefix: str): str =
-  s.split("\n").map(l => if l.trim().len() == 0 { l } else { prefix + l }).join("\n")
+pub fn indent(s: str, prefix: str): str {
+  var out = ""
+  for i, l in s.split("\n") {
+    if i > 0 { out += "\n" }
+    if l.trim() != "" { out += prefix }
+    out += l
+  }
+  out
+}
 
 /// Removes the leading whitespace that all non-blank lines share, and empties whitespace-only
 /// lines: for text in triple-quoted or indented source. Tabs and spaces must match exactly.
 pub fn dedent(s: str): str {
   let lines = s.split("\n")
-  var common: str? = none
+  var blank: [bool] = []
+  var common: [char] = []  // the shared leading whitespace is its first `cut` chars
+  var cut = -1
   for l in lines {
-    if l.trim().len() == 0 { continue }
-    let lead = leading_ws(l)
-    common = match common {
-      none => some(lead)
-      some(c) => some(shared_prefix(c, lead))
+    let b = l.trim() == ""
+    blank.push(b)
+    if b || cut == 0 { continue }
+    let cs = l.chars()
+    var i = 0
+    if cut < 0 {
+      while i < cs.len() && (cs[i] == ' ' || cs[i] == '\t') { i += 1 }
+      common = cs
+    } else {
+      while i < cut && i < cs.len() && cs[i] == common[i] { i += 1 }
     }
+    cut = i
   }
-  let cut = (common else "").len()
-  lines.map(l => if l.trim().len() == 0 { "" } else { l[cut..l.len()] }).join("\n")
-}
-
-fn leading_ws(l: str): str {
-  let cs = l.chars()
-  let n = cs.find_index(c => c != ' ' && c != '\t') else cs.len()
-  str(cs.take(n))
-}
-
-fn shared_prefix(a: str, b: str): str {
-  let x = a.chars()
-  let y = b.chars()
-  var i = 0
-  while i < x.len() && i < y.len() && x[i] == y[i] { i += 1 }
-  str(x.take(i))
+  var out = ""
+  for i, l in lines {
+    if i > 0 { out += "\n" }
+    if blank[i] { continue }
+    out += if cut > 0 { l[cut..l.len()] } else { l }
+  }
+  out
 }
 
 // ---- line diff (Myers) ----
@@ -435,9 +545,11 @@ pub fn diff(old: [str], new: [str]): [Edit] {
   }
   let a = old[pre..old.len() - suf]
   let b = new[pre..new.len() - suf]
-  var out: [Edit] = old.take(pre).map(l => Keep(l))
-  out = out + myers(a, b)
-  out + old.skip(old.len() - suf).map(l => Keep(l))
+  var out: [Edit] = []
+  for i in 0..pre { out.push(Keep(old[i])) }
+  if a.len() > 0 || b.len() > 0 { for e in myers(a, b) { out.push(e) } }
+  for i in old.len() - suf..old.len() { out.push(Keep(old[i])) }
+  out
 }
 
 fn myers(a: [str], b: [str]): [Edit] {
@@ -481,11 +593,10 @@ fn myers(a: [str], b: [str]): [Edit] {
   var y = m
   var d = done
   while d >= 0 {
-    let t = trace[d]
-    let at = (kk: int) => t[kk + d + 1]  // v[kk] in round d
+    let t = trace[d]  // t[kk + d + 1] is v[kk] in round d
     let k = x - y
-    let pk = if k == -d || (k != d && at(k - 1) < at(k + 1)) { k + 1 } else { k - 1 }
-    let px = at(pk)
+    let pk = if k == -d || (k != d && t[k + d] < t[k + d + 2]) { k + 1 } else { k - 1 }
+    let px = t[pk + d + 1]
     let py = px - pk
     while x > px && y > py {
       rev.push(Keep(a[x - 1]))
@@ -509,20 +620,22 @@ fn myers(a: [str], b: [str]): [Edit] {
 
 fn tidy(es: [Edit]): [Edit] {
   var out: [Edit] = []
-  var dels: [Edit] = []
   var ins: [Edit] = []
   for e in es {
     match e {
       Keep(_) => {
-        out = out + dels + ins + [e]
-        dels = []
-        ins = []
+        if ins.len() > 0 {
+          for x in ins { out.push(x) }
+          ins = []
+        }
+        out.push(e)
       }
-      Del(_) => dels.push(e)
+      Del(_) => out.push(e)  // a change's deletions go out as they come, its insertions after them
       Ins(_) => ins.push(e)
     }
   }
-  out + dels + ins
+  for x in ins { out.push(x) }
+  out
 }
 
 // Lines with their "\n" kept, so a missing final newline counts as a difference.
@@ -768,6 +881,11 @@ test "wrap and fill" {
   assert wrap("日本語のテキスト", 6) == ["日本語", "のテキ", "スト"]
   assert wrap("日本", 1) == ["日", "本"]  // a wide char always makes progress
   assert fill("aaa bbb ccc", 7) == "aaa bbb\nccc"
+  // a zero-width word is kept wherever it falls
+  assert wrap("\u{7} abc", 10) == ["\u{7} abc"]
+  assert wrap("abc \u{7} def", 10) == ["abc \u{7} def"]
+  assert wrap("abcdefghij \u{7}", 10) == ["abcdefghij", "\u{7}"]
+  assert fill("\u{7}  abc", 10) == "\u{7} abc"
   for line in wrap("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do", 12) {
     assert width(line) <= 12
   }

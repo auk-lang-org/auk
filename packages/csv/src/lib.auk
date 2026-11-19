@@ -18,97 +18,66 @@ fn message(AfterQuote(c, l, k)): str = "{l}:{k}: unexpected '{c}' after closing 
 fn message(Ragged(r, w, g)): str = "row {r}: expected {w} fields, got {g}"
 fn message(DupHeader(n)): str = "duplicate column '{n}'"
 
-// ---- reader: one self-tail-recursive state machine over the chars ----
-
-// Where the reader is: at the start of a field, inside an unquoted field, inside quotes,
-// or just past a field's closing quote.
-enum Mode { Start, Bare, Quoted, After }
-
-// src/i: the whole input and the index of the next char (for error positions);
-// q: index of the current field's opening quote; f: the field so far.
-struct Acc { src: [char], i: int, q: int, f: [char], row: [str], rows: [[str]] }
-
-fn keep(a: var Acc, c: char, n: int) {
-  a.f.push(c)
-  a.i += n
-}
-
-fn cut(a: var Acc, n: int) {  // end the field
-  a.row.push(str(a.f))
-  a.f = []
-  a.i += n
-}
-
-fn flush(a: var Acc, n: int) {  // end the field and the row
-  a.cut(n)
-  a.rows.push(a.row)
-  a.row = []
-}
+// ---- reader: one pass over the chars, a field at a time ----
 
 /// Parse CSV text (RFC 4180) into rows of fields. Fields are separated by `,`; rows end in CRLF,
 /// LF or a lone CR, and the last row's line break is optional. A field in double quotes may hold
 /// `,`, line breaks and doubled quotes (`"say ""hi"""` reads as `say "hi"`). Spaces are kept.
 /// A blank line is a row with one empty field; rows may differ in length.
 pub fn parse(s: str): [[str]]!CsvErr {
-  var a = Acc { src: s.chars(), i: 0, q: 0, f: [], row: [], rows: [] }
-  go(a.src, Start, &a)
-}
-
-// end of input
-fn go([]: [char], Quoted, a: var Acc): [[str]]!CsvErr {
-  let (l, k) = pos(a.src, a.q)
-  fail(Unclosed(l, k))
-}
-fn go([]: [char], Start, a: var Acc): [[str]]!CsvErr {
-  if a.row.len() > 0 { a.flush(0) }  // `a,` ends with an empty field
-  a.rows
-}
-fn go([]: [char], _: Mode, a: var Acc): [[str]]!CsvErr {
-  a.flush(0)
-  a.rows
-}
-// inside quotes: `""` is a literal quote, a lone `"` closes, anything else (even a newline) is kept
-fn go(['"', '"', ..t]: [char], Quoted, a: var Acc): [[str]]!CsvErr {
-  a.keep('"', 2)
-  go(t, Quoted, &a)
-}
-fn go(['"', ..t]: [char], Quoted, a: var Acc): [[str]]!CsvErr {
-  a.i += 1
-  go(t, After, &a)
-}
-fn go([c, ..t]: [char], Quoted, a: var Acc): [[str]]!CsvErr {
-  a.keep(c, 1)
-  go(t, Quoted, &a)
-}
-// outside quotes: line breaks end the row, commas end the field
-fn go(['\r', '\n', ..t]: [char], _: Mode, a: var Acc): [[str]]!CsvErr {
-  a.flush(2)
-  go(t, Start, &a)
-}
-fn go([c, ..t]: [char], _: Mode, a: var Acc): [[str]]!CsvErr when c == '\n' || c == '\r' {
-  a.flush(1)
-  go(t, Start, &a)
-}
-fn go([',', ..t]: [char], _: Mode, a: var Acc): [[str]]!CsvErr {
-  a.cut(1)
-  go(t, Start, &a)
-}
-fn go(['"', ..t]: [char], Start, a: var Acc): [[str]]!CsvErr {
-  a.q = a.i
-  a.i += 1
-  go(t, Quoted, &a)
-}
-fn go(['"', .._]: [char], Bare, a: var Acc): [[str]]!CsvErr {
-  let (l, k) = pos(a.src, a.i)
-  fail(StrayQuote(l, k))
-}
-fn go([c, .._]: [char], After, a: var Acc): [[str]]!CsvErr {
-  let (l, k) = pos(a.src, a.i)
-  fail(AfterQuote(c, l, k))
-}
-fn go([c, ..t]: [char], _: Mode, a: var Acc): [[str]]!CsvErr {  // Start or Bare
-  a.keep(c, 1)
-  go(t, Bare, &a)
+  let cs = s.chars()
+  let n = cs.len()
+  var rows: [[str]] = []
+  var row: [str] = []
+  var i = 0                       // always at the start of a field here
+  while i < n || row.len() > 0 {  // `a,` ends with an empty field
+    if i < n && cs[i] == '"' {
+      // quoted: `""` is a literal quote, a lone `"` closes, anything else (even a newline) is kept
+      let q = i
+      var doubled = false
+      i += 1
+      loop {
+        if i >= n {
+          let (l, k) = pos(cs, q)
+          fail(Unclosed(l, k))
+        }
+        if cs[i] != '"' {
+          i += 1
+        } else if i + 1 < n && cs[i + 1] == '"' {
+          doubled = true
+          i += 2
+        } else {
+          break
+        }
+      }
+      let f = str(cs[q + 1..i])
+      row.push(if doubled { f.replace("\"\"", "\"") } else { f })
+      i += 1
+      if i < n && cs[i] != ',' && cs[i] != '\n' && cs[i] != '\r' {
+        let (l, k) = pos(cs, i)
+        fail(AfterQuote(cs[i], l, k))
+      }
+    } else {
+      let a = i
+      while i < n && cs[i] != ',' && cs[i] != '\n' && cs[i] != '\r' {
+        if cs[i] == '"' {
+          let (l, k) = pos(cs, i)
+          fail(StrayQuote(l, k))
+        }
+        i += 1
+      }
+      row.push(if i > a { str(cs[a..i]) } else { "" })
+    }
+    // what ended the field: a comma, a line break or the end of the input
+    if i < n && cs[i] == ',' {
+      i += 1
+    } else {
+      i += if i + 1 < n && cs[i] == '\r' && cs[i + 1] == '\n' { 2 } else { 1 }
+      rows.push(row)
+      row = []
+    }
+  }
+  rows
 }
 
 // 1-based (line, col) of index i, counting CRLF, LF and lone CR as one line break each.
@@ -135,13 +104,16 @@ fn pos(cs: [char], i: int): (int, int) {
 /// Empty input gives `[]`.
 pub fn records(s: str): [{str: str}]!CsvErr {
   let [header, ..body] = parse(s)? else return []
-  for i, h in header {
-    if header.take(i).contains(h) { fail(DupHeader(h)) }
+  var seen: Set<str> = set([])
+  for h in header {
+    if seen.contains(h) { fail(DupHeader(h)) }
+    seen.insert(h)
   }
+  let w = header.len()
   var out: [{str: str}] = []
   for n, r in body {
-    if r == [""] { continue }
-    if r.len() != header.len() { fail(Ragged(n + 2, header.len(), r.len())) }
+    if r.len() == 1 && r[0] == "" { continue }
+    if r.len() != w { fail(Ragged(n + 2, w, r.len())) }
     var m: {str: str} = {}
     for j, h in header { m[h] = r[j] }
     out.push(m)
@@ -154,16 +126,37 @@ pub fn records(s: str): [{str: str}]!CsvErr {
 /// Render rows as CSV text: fields joined by `,`, every row ending in CRLF (RFC 4180). A field is
 /// quoted only when it contains `,`, `"`, CR or LF, with inner quotes doubled. `parse(write(rows))`
 /// gives back `rows`, except that an empty row `[]` reads back as `[""]`.
-pub fn write(rows: [[str]]): str = rows.map(r => r.map(f => cell(f)).join(",") + "\r\n").join("")
+pub fn write(rows: [[str]]): str {
+  var out = ""
+  for r in rows {
+    for j, f in r {
+      if j > 0 { out += "," }
+      out += cell(f)
+    }
+    out += "\r\n"
+  }
+  out
+}
 
 /// Render header-keyed rows: the header line, then each row's values in header order.
 /// A key missing from a row writes an empty field; keys not in `header` are left out.
-pub fn write_records(header: [str], recs: [{str: str}]): str =
-  write([header] + recs.map(r => header.map(h => r.get(h) else "")))
+pub fn write_records(header: [str], recs: [{str: str}]): str {
+  var out = write([header])
+  for r in recs {
+    for j, h in header {
+      if j > 0 { out += "," }
+      out += cell(r.get(h) else "")
+    }
+    out += "\r\n"
+  }
+  out
+}
 
-fn cell(f: str): str when f.chars().any(c => ",\"\r\n".contains(c)) =
-  "\"" + f.replace("\"", "\"\"") + "\""
+fn cell(f: str): str when needs_quotes(f) = "\"" + f.replace("\"", "\"\"") + "\""
 fn cell(f: str): str = f
+
+fn needs_quotes(f: str): bool =
+  f.contains(',') || f.contains('"') || f.contains('\r') || f.contains('\n')
 
 // ---- to Value ----
 
@@ -182,9 +175,15 @@ fn cells(r: {str: str}): {str: Value} {
 
 fn scalar("true"): Value = Bool(true)
 fn scalar("false"): Value = Bool(false)
-fn scalar(s: str): Value when canonical_int(s) = Int(int.parse(s)!)
-fn scalar(s: str): Value when looks_float(s) = Float(float.parse(s) else return Str(s))
-fn scalar(s: str): Value = Str(s)
+fn scalar(""): Value = Str("")
+fn scalar(s: str): Value {
+  // every int and float starts with a digit, a sign or a `.`; anything else is text
+  let c = s[0]
+  if !(c.is_digit() || c == '-' || c == '+' || c == '.') { return Str(s) }
+  if c != '+' && c != '.' && canonical_int(s) { return Int(int.parse(s)!) }
+  if looks_float(s) { return Float(float.parse(s) else return Str(s)) }
+  Str(s)
+}
 
 // an int that prints back as the same text (so `007`, `+5`, `-0`, ` 1` stay strings)
 fn canonical_int(s: str): bool {
@@ -192,9 +191,8 @@ fn canonical_int(s: str): bool {
   "{n}" == s
 }
 
-// has a digit and a `.` or exponent (so `inf`, `nan`, `.` stay strings)
-fn looks_float(s: str): bool =
-  s.chars().any(c => ".eE".contains(c)) && s.chars().any(c => "0123456789".contains(c))
+// has a `.` or exponent (so `inf`, `nan` stay strings; `float.parse` then needs a digit)
+fn looks_float(s: str): bool = s.contains('.') || s.contains('e') || s.contains('E')
 
 /// Parse header-keyed CSV straight into typed rows via `to_values` and the derived `from_value`;
 /// the row type comes from the annotation: `let items: [Item] = csv.decode(s)?`.

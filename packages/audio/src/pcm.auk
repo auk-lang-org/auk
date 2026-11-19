@@ -97,6 +97,29 @@ pub fn quant(x: float, bits: int): int {
 
 /// Decodes `n` interleaved frames of `nch` channels starting at byte `at`.
 pub fn decode(d: [int], at: int, n: int, nch: int, f: audio.Fmt, big: bool): [[float]] {
+  // mono and stereo fill local lists (pushing to a list inside a list is slower)
+  if nch == 1 {
+    let w = width(f)
+    var ch: [float] = []
+    var p = at
+    for _ in 0..n {
+      ch.push(sample(d, p, f, big))
+      p += w
+    }
+    return [ch]
+  }
+  if nch == 2 {
+    let w = width(f)
+    var l: [float] = []
+    var r: [float] = []
+    var p = at
+    for _ in 0..n {
+      l.push(sample(d, p, f, big))
+      r.push(sample(d, p + w, f, big))
+      p += 2 * w
+    }
+    return [l, r]
+  }
   var chans: [[float]] = []
   for _ in 0..nch { chans.push([]) }
   let w = width(f)
@@ -126,11 +149,16 @@ fn sample(d: [int], p: int, f: audio.Fmt, big: bool): float = match f {
 /// Interleaves and encodes every frame of `chans`.
 pub fn encode(chans: [[float]], f: audio.Fmt, big: bool): [int] {
   var out: [int] = []
+  encode_into(&out, chans, f, big)
+  out
+}
+
+/// `encode`, appended to `out` (so a file's header and its samples can share one list).
+pub fn encode_into(out: var [int], chans: [[float]], f: audio.Fmt, big: bool) {
   let n = if chans.len() == 0 { 0 } else { chans[0].len() }
   for i in 0..n {
     for ch in chans { put_sample(&out, ch[i], f, big) }
   }
-  out
 }
 
 fn put_sample(out: var [int], x: float, f: audio.Fmt, big: bool) {

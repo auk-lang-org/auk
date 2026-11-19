@@ -9,22 +9,42 @@
 /// `Connection` are ignored because this client owns message framing.
 pub fn encode(method: str, target: str, host: str, headers: {str: str}, body: str): str! {
   if method == "" || method.contains(" ") || has_crlf(method) { fail("bad method: {method}") }
-  let names = headers.keys().sort()
-  let has = (name: str) => names.any(k => k.lower() == name)
-  var lines = ["{method} {target} HTTP/1.1"]
-  if !has("host") { lines.push("Host: {host}") }
-  if !has("user-agent") { lines.push("User-Agent: auk-http/0.1") }
-  for k in names {
+  var has_host = false
+  var has_agent = false
+  var theirs = ""  // the caller's header lines
+  for k in headers.keys().sort() {
     let v = headers[k]
     if k == "" || k.contains(":") || k.contains(" ") || has_crlf(k) || has_crlf(v) {
       fail("bad header: {k}")
     }
-    if !framing(k.lower()) { lines.push("{k}: {v}") }
+    let name = k.lower()
+    if name == "host" {
+      has_host = true
+    } else if name == "user-agent" {
+      has_agent = true
+    }
+    if !framing(name) { theirs.push_line(k, v) }
   }
-  let n = body.bytes().len()
-  if n > 0 || sends_body(method) { lines.push("Content-Length: {n}") }
-  lines.push("Connection: close")
-  lines.join("\r\n") + "\r\n\r\n" + body
+  var out = method
+  out += " "
+  out += target
+  out += " HTTP/1.1\r\n"
+  if !has_host { out.push_line("Host", host) }
+  if !has_agent { out += "User-Agent: auk-http/0.1\r\n" }
+  out += theirs
+  let n = body.byte_len()
+  if n > 0 || sends_body(method) { out.push_line("Content-Length", str(n)) }
+  out += "Connection: close\r\n\r\n"
+  out += body
+  out
+}
+
+// Appends the header line `name: value` and its CRLF.
+fn push_line(out: var str, name: str, value: str) {
+  out += name
+  out += ": "
+  out += value
+  out += "\r\n"
 }
 
 fn has_crlf(s: str): bool = s.contains("\r") || s.contains("\n")
@@ -44,22 +64,30 @@ fn sends_body(_: str): bool = false
 /// with ", ". The body is framed by `Transfer-Encoding: chunked`, else `Content-Length`,
 /// else everything up to close. Interim 1xx responses are skipped; HEAD responses
 /// (`head_req`), 1xx, 204 and 304 have no body.
-pub fn decode(bs: [int], head_req: bool): (int, {str: str}, str)! {
-  let end = index_of(bs, [13, 10, 13, 10], 0) else fail("no end of headers")
-  let head = str.from_utf8(bs[0..end]) else fail("headers are not UTF-8")
+pub fn decode(bs: [int], head_req: bool): (int, {str: str}, str)! = decode_from(bs, 0, head_req)
+
+// The response that starts at bs[from].
+fn decode_from(bs: [int], from: int, head_req: bool): (int, {str: str}, str)! {
+  let end = head_end(bs, from) else fail("no end of headers")
+  let head = str.from_utf8(bs[from..end]) else fail("headers are not UTF-8")
   let [status_line, ..fields] = head.split("\r\n") else fail("empty response")
   let status = parse_status(status_line)?
   let headers = parse_headers(fields)?
-  let rest = bs[end + 4..bs.len()]
-  if status < 200 && status != 101 { return decode(rest, head_req) }
-  let raw = body_bytes(status, headers, rest, head_req)?
+  if status < 200 && status != 101 { return decode_from(bs, end + 4, head_req) }
+  let raw = body_bytes(status, headers, bs, end + 4, head_req)?
   let body = str.from_utf8(raw) else fail("body is not UTF-8")
   (status, headers, body)
 }
 
-fn parse_status(line: str): int! = match line.split(" ") {
-  [v, code, ..] when v.starts_with("HTTP/1.") => status_code(code)?
-  _ => fail("bad status line: {line}")
+// `HTTP/1.x code [reason]`: the code is the second word.
+fn parse_status(line: str): int! {
+  let i = line.find(" ") else fail("bad status line: {line}")
+  if !line.starts_with("HTTP/1.") { fail("bad status line: {line}") }
+  let rest = line[i + 1..line.len()]
+  match rest.find(" ") {
+    some(j) => status_code(rest[0..j])?
+    none => status_code(rest)?
+  }
 }
 
 fn status_code(code: str): int! {
@@ -72,41 +100,44 @@ fn status_code(code: str): int! {
 fn parse_headers(lines: [str]): {str: str}! {
   var hs: {str: str} = {}
   for line in lines {
-    let [name, ..vs] = line.split(":") else fail("bad header line: {line}")
+    let i = line.find(":") else fail("bad header line: {line}")
+    let name = line[0..i]
     // A name with surrounding space also rejects obsolete line folding.
-    if vs.len() == 0 || name == "" || name != name.trim() { fail("bad header line: {line}") }
+    if name == "" || name != name.trim() { fail("bad header line: {line}") }
     let k = name.lower()
-    let v = vs.join(":").trim()
-    hs[k] = match hs.get(k) { some(old) => "{old}, {v}", none => v }
+    let v = line[i + 1..line.len()].trim()
+    hs[k] = match hs.get(k) { some(old) => old + ", " + v, none => v }
   }
   hs
 }
 
-fn body_bytes(_: int, _: {str: str}, _: [int], true): [int]! = []
-fn body_bytes(204, _: {str: str}, _: [int], _: bool): [int]! = []
-fn body_bytes(304, _: {str: str}, _: [int], _: bool): [int]! = []
-fn body_bytes(s: int, _: {str: str}, _: [int], _: bool): [int]! when s < 200 = []
-fn body_bytes(_: int, hs: {str: str}, rest: [int], _: bool): [int]! = framed(hs, rest)
+// The body bytes of a response whose head ends just before bs[at].
+fn body_bytes(_: int, _: {str: str}, _: [int], _: int, true): [int]! = []
+fn body_bytes(204, _: {str: str}, _: [int], _: int, _: bool): [int]! = []
+fn body_bytes(304, _: {str: str}, _: [int], _: int, _: bool): [int]! = []
+fn body_bytes(s: int, _: {str: str}, _: [int], _: int, _: bool): [int]! when s < 200 = []
+fn body_bytes(_: int, hs: {str: str}, bs: [int], at: int, _: bool): [int]! = framed(hs, bs, at)
 
 // Transfer-Encoding beats Content-Length (RFC 9112 §6.3); a non-chunked encoding reads to close.
-fn framed(
-  {"transfer-encoding": te}: {str: str},
-  rest: [int],
-): [int]! when te.lower().ends_with("chunked") = dechunk(rest)
-fn framed({"transfer-encoding": _}: {str: str}, rest: [int]): [int]! = rest
-fn framed({"content-length": n}: {str: str}, rest: [int]): [int]! = fixed(n, rest)
-fn framed(_: {str: str}, rest: [int]): [int]! = rest
-
-fn fixed(len: str, rest: [int]): [int]! {
-  if len == "" || !len.chars().all(c => c.is_digit()) { fail("bad Content-Length: {len}") }
-  let n = int.parse(len) else fail("bad Content-Length: {len}")
-  let got = rest.len()
-  if got < n { fail("body truncated: got {got} of {n} bytes") }
-  rest[0..n]
+fn framed(hs: {str: str}, bs: [int], at: int): [int]! = match hs.get("transfer-encoding") {
+  some(te) => if te.lower().ends_with("chunked") { dechunk(bs, at) } else { bs[at..bs.len()] }
+  none => match hs.get("content-length") {
+    some(n) => fixed(n, bs, at)
+    none => bs[at..bs.len()]
+  }
 }
 
-// Decodes `size-in-hex[;ext]\r\n data \r\n ... 0\r\n [trailers] \r\n`. Trailers are ignored.
-fn dechunk(bs: [int]): [int]! = match chunks(bs, 0, -1)? {
+fn fixed(len: str, bs: [int], at: int): [int]! {
+  if len == "" || !len.chars().all(c => c.is_digit()) { fail("bad Content-Length: {len}") }
+  let n = int.parse(len) else fail("bad Content-Length: {len}")
+  let got = bs.len() - at
+  if got < n { fail("body truncated: got {got} of {n} bytes") }
+  bs[at..at + n]
+}
+
+// Decodes `size-in-hex[;ext]\r\n data \r\n ... 0\r\n [trailers] \r\n`, from bs[at] on. Trailers
+// are ignored.
+fn dechunk(bs: [int], at: int): [int]! = match chunks(bs, at, -1)? {
   Whole(body, _) => body
   _ => fail("chunked body truncated")
 }
@@ -123,15 +154,15 @@ fn chunks(bs: [int], from: int, max: int): Chunks! {
   var out: [int] = []
   var pos = from
   loop {
-    let eol = index_of(bs, [13, 10], pos) else return Partial
+    let eol = crlf(bs, pos) else return Partial
     let size = chunk_size(bs, pos, eol)?
     if size == 0 { break Whole(out, eol + 2) }
     if max >= 0 && out.len() + size > max { return TooBig }
     let start = eol + 2
     let stop = start + size
     if stop + 2 > bs.len() { return Partial }
-    if bs[stop] != 13 || bs[stop + 1] != 10 { fail("chunk not followed by CRLF") }
-    out.push_range(bs, start, stop)
+    if bs[stop] != 13 || bs[stop + 1] != 10 { fail(NOT_CRLF) }
+    out += bs[start..stop]  // in place: linear
     pos = stop + 2
   }
 }
@@ -162,26 +193,26 @@ fn hex(b: int): int when b >= 97 && b <= 102 = b - 87
 fn hex(b: int): int when b >= 65 && b <= 70 = b - 55
 fn hex(_: int): int = -1
 
-// First index >= from where `pat` occurs in `bs`.
-fn index_of(bs: [int], pat: [int], from: int): int? {
+// First index >= from of a CRLF in `bs`.
+fn crlf(bs: [int], from: int): int? {
+  let last = bs.len() - 1
   var i = from
-  while i + pat.len() <= bs.len() {
-    if matches_at(bs, pat, i) { return i }
+  while i < last {
+    if bs[i] == 13 && bs[i + 1] == 10 { return i }
     i += 1
   }
   none
 }
 
-fn matches_at(bs: [int], pat: [int], i: int): bool {
-  for j in 0..pat.len() {
-    if bs[i + j] != pat[j] { return false }
+// First index >= from of the empty line (CRLF CRLF) that ends a head.
+fn head_end(bs: [int], from: int): int? {
+  let last = bs.len() - 3
+  var i = from
+  while i < last {
+    if bs[i] == 13 && bs[i + 1] == 10 && bs[i + 2] == 13 && bs[i + 3] == 10 { return i }
+    i += 1
   }
-  true
-}
-
-// Appends bs[a..b) in place: linear, unlike repeated `+` on growing lists.
-fn push_range(out: var [int], bs: [int], a: int, b: int) {
-  for i in a..b { out.push(bs[i]) }
+  none
 }
 
 // ---- the server side: parse a request, serialize a response ----
@@ -231,9 +262,63 @@ pub enum Got {
 /// the request (there is no pipelining: every response closes the connection). HTTP/1.1
 /// requests must carry `Host`. An absolute-form target (`http://h/p`) is reduced to `/p`.
 pub fn decode_request(bs: [int]): Got!ReqErr {
-  let end = index_of(bs, [13, 10, 13, 10], 0) else {
+  var p = progress()
+  decode_request(bs, &p)
+}
+
+/// How far decoding a request that arrives in pieces got. Start with `progress()` and pass the
+/// same one to `decode_request(bs, &p)` after every read, with `bs` the bytes read so far (which
+/// must only grow): it resumes where it stopped instead of starting over, so reading a request
+/// is linear in its size. Results are those of `decode_request(bs)`.
+pub struct Progress { s: Scan }
+
+/// A fresh `Progress`, for a request not yet read.
+pub fn progress(): Progress = Progress { s: Scan { scan: 0, head: none, chunk: none } }
+
+/// `decode_request(bs)`, resuming from `p` (see `Progress`).
+pub fn decode_request(bs: [int], p: var Progress): Got!ReqErr {
+  let h = match p.s.head {
+    some(h) => h
+    none => {
+      let h = request_head(bs, &p.s)?
+      if h.at < 0 { return More(bs.len() + 1, false) }
+      p.s.head = some(h)
+      h
+    }
+  }
+  match request_body(h.headers, bs, h.at, &p.s)? {
+    Need(n) => More(n, h.cont)
+    Have(raw) => {
+      let body = str.from_utf8(raw) else fail(BadRequest("body is not UTF-8"))
+      Done(h.method, h.target, h.headers, body)
+    }
+  }
+}
+
+// What `decode_request` keeps between calls.
+struct Scan {
+  scan: int,         // no head end (CRLF CRLF) starts before this
+  head: Head?,       // the parsed head, once it is complete and valid
+  chunk: Chunking?,  // a chunked body's progress
+}
+
+// A parsed request head; the body starts at bs[at].
+struct Head { method: str, target: str, headers: {str: str}, cont: bool, at: int }
+
+// How far a chunked body got.
+struct Chunking {
+  pos: int,        // the start of the next chunk-size (or trailer) line
+  eol_from: int,   // no CRLF ends that line before this
+  body: [int],     // the chunk data so far
+  trailers: bool,  // past the last chunk: skipping trailer lines
+}
+
+// Parses the head, if it is complete (else a Head with `at` -1).
+fn request_head(bs: [int], s: var Scan): Head!ReqErr {
+  let end = head_end(bs, s.scan) else {
+    s.scan = max(s.scan, bs.len() - 3)
     if bs.len() > MAX_HEAD { fail(HeadTooLarge) }
-    return More(bs.len() + 1, false)
+    return Head { method: "", target: "", headers: {}, cont: false, at: -1 }
   }
   if end > MAX_HEAD { fail(HeadTooLarge) }
   let head = str.from_utf8(bs[0..end]) else fail(BadRequest("headers are not UTF-8"))
@@ -244,18 +329,12 @@ pub fn decode_request(bs: [int]): Got!ReqErr {
     fail(BadRequest("missing Host header"))
   }
   let cont = (headers.get("expect") else "").lower() == "100-continue"
-  match request_body(headers, bs, end + 4)? {
-    Need(n) => More(n, cont)
-    Have(raw) => {
-      let body = str.from_utf8(raw) else fail(BadRequest("body is not UTF-8"))
-      Done(method, target, headers, body)
-    }
-  }
+  Head { method, target, headers, cont, at: end + 4 }
 }
 
 fn request_line(line: str): (str, str, str)!ReqErr {
   let [method, target, version] = line.split(" ") else fail(BadRequest("bad request line: {line}"))
-  if method == "" || !method.chars().all(c => is_tchar(c)) {
+  if !is_token(method) {
     fail(BadRequest("bad method: {method}"))
   }
   if version != "HTTP/1.1" && version != "HTTP/1.0" {
@@ -265,9 +344,21 @@ fn request_line(line: str): (str, str, str)!ReqErr {
   (method, origin_form(target)?, version)
 }
 
-// RFC 9110 token chars.
-fn is_tchar(c: char): bool =
-  (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c.is_digit() || "!#$%&'*+-.^_`|~".contains(c)
+// A non-empty run of RFC 9110 token chars.
+fn is_token(s: str): bool {
+  for c in s.chars() {
+    if !is_tchar(c) { return false }
+  }
+  s != ""
+}
+
+fn is_tchar(c: char): bool = (c >= 'a' && c <= 'z') ||
+  (c >= 'A' && c <= 'Z') ||
+  c.is_digit() ||
+  match c {
+    '!' | '#' | '$' | '%' | '&' | '\'' | '*' | '+' | '-' | '.' | '^' | '_' | '`' | '|' | '~' => true
+    _ => false
+  }
 
 // Checks the target with `url.parse` (strict RFC 3986) and returns it as `/path?query`.
 fn origin_form("*"): str!ReqErr = "*"
@@ -287,14 +378,18 @@ fn origin_form(t: str): str!ReqErr {
 enum Body { Need(n: int), Have(bs: [int]) }
 
 // Transfer-Encoding beats Content-Length (RFC 9112 §6.3); a request without either has no body.
-fn request_body(hs: {str: str}, bs: [int], at: int): Body!ReqErr {
+fn request_body(hs: {str: str}, bs: [int], at: int, s: var Scan): Body!ReqErr {
   match hs.get("transfer-encoding") {
     some(te) => {
       let codings = te.lower().split(",").map(c => c.trim())
       if codings.last() != some("chunked") {
         fail(NotImplemented("Transfer-Encoding: {te}"))
       }
-      chunked_request(bs, at)?
+      var c = s.chunk else Chunking { pos: at, eol_from: at, body: [], trailers: false }
+      s.chunk = none  // so `c.body` is not shared and grows in place
+      let r = chunked_request(bs, &c)
+      s.chunk = some(c)
+      r?
     }
     none => match hs.get("content-length") {
       some(len) => {
@@ -310,22 +405,42 @@ fn request_body(hs: {str: str}, bs: [int], at: int): Body!ReqErr {
   }
 }
 
-fn chunked_request(bs: [int], at: int): Body!ReqErr {
-  let c = chunks(bs, at, MAX_BODY) else e => fail(BadRequest("{e}"))
-  match c {
-    Partial => Need(bs.len() + 1)
-    TooBig => fail(TooLarge)
-    Whole(body, from) => {
-      // skip trailer lines up to the empty line that ends the message
-      var pos = from
-      loop {
-        let eol = index_of(bs, [13, 10], pos) else return Need(bs.len() + 1)
-        if eol == pos { break Have(body) }
-        pos = eol + 2
-      }
+// Decodes a chunked body (`chunks` with a MAX_BODY bound, then the trailer lines), resuming
+// from `c`: each byte is looked at about once however many reads the body takes.
+fn chunked_request(bs: [int], c: var Chunking): Body!ReqErr {
+  loop {
+    let eol = crlf(bs, c.eol_from) else {
+      c.eol_from = max(c.eol_from, bs.len() - 1)
+      return Need(bs.len() + 1)
     }
+    if c.trailers {
+      if eol == c.pos { return Have(c.body) }
+      c.pos = eol + 2
+      c.eol_from = c.pos
+      continue
+    }
+    let size = chunk_size(bs, c.pos, eol) else e => fail(BadRequest("{e}"))
+    if size == 0 {
+      c.trailers = true
+      c.pos = eol + 2
+      c.eol_from = c.pos
+      continue
+    }
+    if c.body.len() + size > MAX_BODY { fail(TooLarge) }
+    let start = eol + 2
+    let stop = start + size
+    if stop + 2 > bs.len() {
+      c.eol_from = eol  // the size line is done; wait for its data
+      return Need(bs.len() + 1)
+    }
+    if bs[stop] != 13 || bs[stop + 1] != 10 { fail(BadRequest(NOT_CRLF)) }
+    c.body += bs[start..stop]  // in place: linear
+    c.pos = stop + 2
+    c.eol_from = c.pos
   }
 }
+
+let NOT_CRLF = "chunk not followed by CRLF"
 
 /// Serializes a response: status line, the caller's headers (in map order), `Content-Length`
 /// and `Connection: close`. 1xx, 204 and 304 responses have no body and no `Content-Length`;
@@ -333,28 +448,34 @@ fn chunked_request(bs: [int], at: int): Body!ReqErr {
 /// `Content-Length`, `Transfer-Encoding` and `Connection` are ignored (the server owns framing).
 pub fn encode_response(status: int, headers: {str: str}, body: str, head_req: bool): str! {
   if status < 100 || status > 999 { fail("bad status: {status}") }
-  var lines = ["HTTP/1.1 {status} {reason(status)}"]
-  for k, v in headers {
-    if k == "" || !k.chars().all(c => is_tchar(c)) || has_crlf(v) { fail("bad header: {k}") }
-    if !framing(k.lower()) { lines.push("{k}: {v}") }
-  }
+  var out = head_start(status, headers)?
   let bodiless = status < 200 || status == 204 || status == 304
-  if !bodiless { lines.push("Content-Length: {body.bytes().len()}") }
-  lines.push("Connection: close")
-  let out = lines.join("\r\n") + "\r\n\r\n"
-  if bodiless || head_req { out } else { out + body }
+  if !bodiless { out.push_line("Content-Length", str(body.byte_len())) }
+  out += "Connection: close\r\n\r\n"
+  if !(bodiless || head_req) { out += body }
+  out
+}
+
+// The status line and the caller's header lines (without the framing ones).
+fn head_start(status: int, headers: {str: str}): str! {
+  var out = "HTTP/1.1 "
+  out += str(status)
+  out += " "
+  out += reason(status)
+  out += "\r\n"
+  for k, v in headers {
+    if !is_token(k) || has_crlf(v) { fail("bad header: {k}") }
+    if !framing(k.lower()) { out.push_line(k, v) }
+  }
+  out
 }
 
 /// The head of a streamed response: no length, so the body runs until the connection closes.
 pub fn encode_stream_head(status: int, headers: {str: str}): str! {
   if status < 200 || status > 999 { fail("bad status: {status}") }
-  var lines = ["HTTP/1.1 {status} {reason(status)}"]
-  for k, v in headers {
-    if k == "" || !k.chars().all(c => is_tchar(c)) || has_crlf(v) { fail("bad header: {k}") }
-    if !framing(k.lower()) { lines.push("{k}: {v}") }
-  }
-  lines.push("Connection: close")
-  lines.join("\r\n") + "\r\n\r\n"
+  var out = head_start(status, headers)?
+  out += "Connection: close\r\n\r\n"
+  out
 }
 
 /// The standard reason phrase for a status code ("" for an unknown one).
@@ -502,4 +623,71 @@ test "decode: malformed responses" {
   assert dec("HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\n") is err(_)
   assert dec("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nshort") is err(_)
   assert decode("HTTP/1.1 200 OK\r\n\r\n".bytes() + [255, 254], false) is err(_)
+}
+
+test "decode_request with progress: same results at every read boundary" {
+  let reqs = [
+    "POST /up HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\nExpect: 100-continue\r\n\r\n" +
+      "4\r\nWiki\r\n6;x=y\r\npedia \r\nA \r\n in chunks\r\n0\r\nX-T: 1\r\n\r\nEXTRA",
+    "PUT /x HTTP/1.1\r\nHost: a\r\nContent-Length: 5\r\n\r\nhello",
+    "GET / HTTP/1.0\r\n\r\n",
+    "POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabcd\r\n0\r\n\r\n",
+    "POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\nzz\r\n",
+    "POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n1000001\r\n",
+    "GET / HTTP/1.1\r\nNoColon\r\n\r\n",
+  ]
+  for s in reqs {
+    let bs = s.bytes()
+    // one byte per read, and every other split into two reads
+    var p = progress()
+    for n in 0..bs.len() + 1 {
+      let got = decode_request(bs[0..n], &p)
+      assert got == decode_request(bs[0..n])
+      if !(got is ok(More(_, _))) { break }
+    }
+    for cut in 0..bs.len() + 1 {
+      var q = progress()
+      let _ = decode_request(bs[0..cut], &q)
+      assert decode_request(bs, &q) == decode_request(bs)
+    }
+  }
+}
+
+test "decode_request with progress: resumes instead of re-reading what it has decoded" {
+  let head = "POST /up HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n"
+  let first = "5\r\nhello\r\n"
+  var p = progress()
+  assert decode_request((head + first + "6\r\n wo").bytes(), &p) is ok(More(_, false))
+  // Bytes already decoded are not looked at again: blanking them changes nothing.
+  var bs = (head + first + "6\r\n world\r\n0\r\n\r\n").bytes()
+  for i in head.len()..head.len() + first.len() { bs[i] = 0 }
+  let Done(_, _, _, body) = decode_request(bs, &p)? else fail("incomplete")
+  assert body == "hello world"
+  assert decode_request(bs) is err(BadRequest(_))
+}
+
+test "decode_request with progress: a large chunked upload in small reads" {
+  let head = "POST /up HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n".bytes()
+  var chunk = "3e8\r\n".bytes()
+  for i in 0..1000 { chunk.push(97 + i % 26) }
+  chunk += [13, 10]
+  var bs = head
+  for _ in 0..1024 { bs += chunk }  // about 1 MB of body
+  bs += "0\r\n\r\n".bytes()
+  var buf: [int] = []
+  var p = progress()
+  var at = 0
+  var decodes = 0
+  let body = loop {
+    let stop = min(at + 1000, bs.len())
+    buf += bs[at..stop]
+    at = stop
+    decodes += 1
+    match decode_request(buf, &p)? {
+      Done(_, _, _, b) => break b
+      More(n, _) => assert n == buf.len() + 1
+    }
+  }
+  assert body.len() == 1024000
+  assert decodes == bs.len() / 1000 + 1
 }

@@ -85,36 +85,71 @@ pub struct Sha256 { h: [int], buf: [int], len: int }
 /// A fresh SHA-256 state.
 pub fn new_sha256(): Sha256 = Sha256 { h: H0, buf: [], len: 0 }
 
+// 64 zeros: the message schedule's storage, and padding.
+imprint ZEROS = (0..64).map(_ => 0)
+
 /// Feed more bytes into the hash: `s.update(chunk)`.
 pub fn update(s: var Sha256, data: [int])
   requires is_bytes(data)
 {
-  s.len += data.len()
-  let all = if s.buf.len() == 0 { data } else { s.buf + data }
+  let n = data.len()
+  s.len += n
+  let held = s.buf.len()
+  if held >= 64 {
+    // not a state this package leaves behind: the general way
+    let all = s.buf + data
+    var w = ZEROS
+    var off = 0
+    while off + 64 <= all.len() {
+      compress(&s.h, &w, all, off)
+      off += 64
+    }
+    s.buf = all.skip(off)
+    return
+  }
+  if held + n < 64 {
+    if n > 0 { s.buf = if held == 0 { data } else { s.buf + data } }
+    return
+  }
+  var w = ZEROS
   var off = 0
-  while off + 64 <= all.len() {
-    compress(&s.h, all, off)
+  if held > 0 {
+    // complete the block that was waiting
+    off = 64 - held
+    let block = s.buf + data.take(off)
+    compress(&s.h, &w, block, 0)
+  }
+  // whole blocks straight from `data`; what's left waits for the next call
+  while off + 64 <= n {
+    compress(&s.h, &w, data, off)
     off += 64
   }
-  s.buf = all.skip(off)
+  s.buf = data.skip(off)
 }
 
 /// The 32-byte digest of everything fed in. `s` itself is unchanged, so you can keep updating it.
 pub fn finish(s: Sha256): [int] {
-  var tail = s.buf
-  tail.push(0x80)
-  while tail.len() % 64 != 56 { tail.push(0) }
+  // the padding: 0x80, zeros up to 56 mod 64, then the length in bits as 8 big-endian bytes
+  let held = s.buf.len()
+  let total = (held + 9 + 63) / 64 * 64
+  let pad = total - held  // 9..72
+  var tail = s.buf + if pad <= 64 { ZEROS.take(pad) } else { ZEROS + ZEROS.take(pad - 64) }
+  tail[held] = 0x80
   let bits = s.len * 8
-  for i in 0..8 { tail.push((bits >> (56 - 8 * i)) & 0xff) }
+  for i in 0..8 { tail[total - 8 + i] = (bits >> (56 - 8 * i)) & 0xff }
   var h = s.h
+  var w = ZEROS
   var off = 0
-  while off < tail.len() {
-    compress(&h, tail, off)
+  while off < total {
+    compress(&h, &w, tail, off)
     off += 64
   }
-  var out: [int] = []
-  for w in h {
-    for shift in [24, 16, 8, 0] { out.push((w >> shift) & 0xff) }
+  var out = ZEROS.take(4 * h.len())
+  for i, x in h {
+    out[4 * i] = (x >> 24) & 0xff
+    out[4 * i + 1] = (x >> 16) & 0xff
+    out[4 * i + 2] = (x >> 8) & 0xff
+    out[4 * i + 3] = x & 0xff
   }
   out
 }
@@ -131,19 +166,22 @@ pub fn sha256_hex(s: str): str = hex(sha256(s.bytes()))
 /// The SHA-256 of bytes, as 64 lower-case hex digits.
 pub fn sha256_hex(data: [int]): str = hex(sha256(data))
 
-fn rotr(x: int, n: int): int = ((x >> n) | (x << (32 - n))) & MASK
-
-// One 64-byte block of `data` at `off` into the state `h`.
-fn compress(h: var [int], data: [int], off: int) {
-  var w: [int] = []
+// One 64-byte block of `data` at `off` into the state `h`; `w` is 64 ints of scratch space.
+// Only the low 32 bits of the working variables mean anything (sums wrap and are masked when
+// stored), and a word doubled into both halves of an int turns each rotation into a shift.
+fn compress(h: var [int], w: var [int], data: [int], off: int) {
   for i in 0..16 {
     let j = off + 4 * i
-    w.push((data[j] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | data[j + 3])
+    w[i] = (data[j] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | data[j + 3]
   }
   for i in 16..64 {
-    let s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3)
-    let s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10)
-    w.push((w[i - 16] + s0 + w[i - 7] + s1) & MASK)
+    let x = w[i - 15]
+    let xx = x | (x << 32)
+    let y = w[i - 2]
+    let yy = y | (y << 32)
+    let s0 = (xx >> 7) ^ (xx >> 18) ^ (x >> 3)
+    let s1 = (yy >> 17) ^ (yy >> 19) ^ (y >> 10)
+    w[i] = (w[i - 16] +% s0 +% w[i - 7] +% s1) & MASK
   }
   var a = h[0]
   var b = h[1]
@@ -154,22 +192,30 @@ fn compress(h: var [int], data: [int], off: int) {
   var g = h[6]
   var hh = h[7]
   for i in 0..64 {
-    let s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)
-    let ch = (e & f) ^ (~e & g)
-    let t1 = (hh + s1 + ch + K[i] + w[i]) & MASK
-    let s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)
-    let maj = (a & b) ^ (a & c) ^ (b & c)
+    let ee = (e & MASK) | (e << 32)
+    let s1 = (ee >> 6) ^ (ee >> 11) ^ (ee >> 25)
+    let ch = g ^ (e & (f ^ g))
+    let t1 = hh +% s1 +% ch +% K[i] +% w[i]
+    let aa = (a & MASK) | (a << 32)
+    let s0 = (aa >> 2) ^ (aa >> 13) ^ (aa >> 22)
+    let maj = (a & b) | (c & (a | b))
     hh = g
     g = f
     f = e
-    e = (d + t1) & MASK
+    e = d +% t1
     d = c
     c = b
     b = a
-    a = (t1 + s0 + maj) & MASK
+    a = t1 +% s0 +% maj
   }
-  let add = [a, b, c, d, e, f, g, hh]
-  for i in 0..8 { h[i] = (h[i] + add[i]) & MASK }
+  h[0] = (h[0] +% a) & MASK
+  h[1] = (h[1] +% b) & MASK
+  h[2] = (h[2] +% c) & MASK
+  h[3] = (h[3] +% d) & MASK
+  h[4] = (h[4] +% e) & MASK
+  h[5] = (h[5] +% f) & MASK
+  h[6] = (h[6] +% g) & MASK
+  h[7] = (h[7] +% hh) & MASK
 }
 
 // ---- HMAC (RFC 2104) ----
@@ -178,13 +224,20 @@ fn compress(h: var [int], data: [int], off: int) {
 pub fn hmac_sha256(key: [int], msg: [int]): [int]
   requires is_bytes(key)
 {
-  var k = if key.len() > 64 { sha256(key) } else { key }
-  while k.len() < 64 { k.push(0) }
+  let k = if key.len() > 64 { sha256(key) } else { key }
+  // the key, zero-padded to one block, XORed with the inner and outer pad bytes
+  var ipad = ZEROS
+  var opad = ZEROS
+  for i in 0..64 {
+    let b = if i < k.len() { k[i] } else { 0 }
+    ipad[i] = b ^ 0x36
+    opad[i] = b ^ 0x5c
+  }
   var inner = new_sha256()
-  inner.update(k.map(b => b ^ 0x36))
+  inner.update(ipad)
   inner.update(msg)
   var outer = new_sha256()
-  outer.update(k.map(b => b ^ 0x5c))
+  outer.update(opad)
   outer.update(inner.finish())
   outer.finish()
 }
@@ -203,7 +256,16 @@ fn crc_table(): [int] {
   t
 }
 
+// Four tables in one list, for taking four bytes per step ("slicing by 4"): entry `256 * k + n`
+// is the CRC of byte `n` followed by `k` zero bytes.
+fn crc_tables(): [int] {
+  var t = crc_table()
+  for i in 256..1024 { t.push(t[t[i - 256] & 0xff] ^ (t[i - 256] >> 8)) }
+  t
+}
+
 imprint CRC_TABLE = crc_table()
+imprint CRC_TABLES = crc_tables()
 
 /// The CRC-32 checksum of `data`, in 0..2^32: `crc32("123456789".bytes()) == 0xcbf43926`.
 pub fn crc32(data: [int]): int = crc32_update(0, data)
@@ -212,8 +274,24 @@ pub fn crc32(data: [int]): int = crc32_update(0, data)
 pub fn crc32_update(crc: int, data: [int]): int
   requires is_bytes(data)
 {
+  let n = data.len()
   var c = crc ^ MASK
-  for b in data { c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >> 8) }
+  var i = 0
+  // four bytes per step, as long as `c` is a real CRC (32 bits)
+  if c >= 0 && c <= MASK {
+    while i + 4 <= n {
+      let x = c ^ (data[i] | (data[i + 1] << 8) | (data[i + 2] << 16) | (data[i + 3] << 24))
+      c = CRC_TABLES[768 + (x & 0xff)] ^
+        CRC_TABLES[512 + ((x >> 8) & 0xff)] ^
+        CRC_TABLES[256 + ((x >> 16) & 0xff)] ^
+        CRC_TABLES[x >> 24]
+      i += 4
+    }
+  }
+  while i < n {
+    c = CRC_TABLE[(c ^ data[i]) & 0xff] ^ (c >> 8)
+    i += 1
+  }
   c ^ MASK
 }
 
@@ -241,15 +319,19 @@ pub fn equal(a: [int], b: [int]): bool {
 }
 
 let DIGITS = "0123456789abcdef".chars()
+let BLANKS = "0".repeat(64).chars()
 
 // Lower-case hex of bytes (`encoding.hex` does the same; kept here so `hash` has no deps).
 fn hex(bs: [int]): str {
-  var out: [char] = []
-  for b in bs {
-    out.push(DIGITS[(b >> 4) & 15])
-    out.push(DIGITS[b & 15])
+  let n = bs.len()
+  var out = BLANKS
+  while out.len() < 2 * n { out = out + out }
+  for i in 0..n {
+    let b = bs[i]
+    out[2 * i] = DIGITS[(b >> 4) & 15]
+    out[2 * i + 1] = DIGITS[b & 15]
   }
-  str(out)
+  if out.len() == 2 * n { str(out) } else { str(out[0..2 * n]) }
 }
 
 // ---- tests ----

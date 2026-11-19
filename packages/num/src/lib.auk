@@ -69,12 +69,28 @@ fn mag_cmp(a: [int], b: [int]): int {
 }
 
 fn mag_add(a: [int], b: [int]): [int] {
+  if a.len() < b.len() { return mag_add(b, a) }
   var out: [int] = []
   var carry = 0
-  for i in 0..imax(a.len(), b.len()) {
-    let s = (a.get(i) else 0) + (b.get(i) else 0) + carry
-    out.push(s % BASE)
-    carry = s / BASE
+  for i in 0..b.len() {
+    let s = a[i] + b[i] + carry  // < 2 * BASE
+    if s >= BASE {
+      out.push(s - BASE)
+      carry = 1
+    } else {
+      out.push(s)
+      carry = 0
+    }
+  }
+  for i in b.len()..a.len() {
+    let s = a[i] + carry
+    if s >= BASE {
+      out.push(s - BASE)
+      carry = 1
+    } else {
+      out.push(s)
+      carry = 0
+    }
   }
   if carry > 0 { out.push(carry) }
   out
@@ -84,14 +100,26 @@ fn mag_add(a: [int], b: [int]): [int] {
 fn mag_sub(a: [int], b: [int]): [int] {
   var out: [int] = []
   var borrow = 0
-  for i in 0..a.len() {
-    var s = a[i] - (b.get(i) else 0) - borrow
-    borrow = 0
+  let nb = if b.len() < a.len() { b.len() } else { a.len() }
+  for i in 0..nb {
+    let s = a[i] - b[i] - borrow
     if s < 0 {
-      s += BASE
+      out.push(s + BASE)
       borrow = 1
+    } else {
+      out.push(s)
+      borrow = 0
     }
-    out.push(s)
+  }
+  for i in nb..a.len() {
+    let s = a[i] - borrow
+    if s < 0 {
+      out.push(s + BASE)
+      borrow = 1
+    } else {
+      out.push(s)
+      borrow = 0
+    }
   }
   trim(out)
 }
@@ -139,33 +167,65 @@ fn mag_mul(a: [int], b: [int]): [int] {
 // a * 10^k, k >= 0
 fn mag_shift(a: [int], k: int): [int] {
   if a.len() == 0 || k == 0 { return a }
+  if k < 9 { return mag_mul_small(a, POW10[k]) }
   var out: [int] = []
   for _ in 0..k / 9 { out.push(0) }
-  out + mag_mul_small(a, POW10[k % 9])
+  let m = POW10[k % 9]
+  if m == 1 {
+    for x in a { out.push(x) }
+  } else {
+    var carry = 0
+    for x in a {
+      let p = x * m + carry
+      out.push(p % BASE)
+      carry = p / BASE
+    }
+    if carry > 0 { out.push(carry) }
+  }
+  out
 }
 
 fn pow10(k: int): [int] = mag_shift([1], k)
 
-// (a / b, a % b) for b != 0: schoolbook long division, one limb of quotient at a time, each
-// found by binary search (b * q <= remainder).
+// (a / b, a % b) for b != 0: schoolbook long division, one limb of quotient at a time. Each is
+// estimated from the leading limbs (as floats: within one of the true limb) and then corrected
+// exactly.
 fn mag_divmod(a: [int], b: [int]): ([int], [int]) {
   if mag_cmp(a, b) < 0 { return ([], a) }
   if b.len() == 1 { return mag_divmod_small(a, b[0]) }
+  let nb = b.len()
+  // b's leading limbs, in units of limb nb - 2
+  var bf = float(b[nb - 1]) * 1.0e9 + float(b[nb - 2])
+  if nb >= 3 { bf += float(b[nb - 3]) / 1.0e9 }
   var q: [int] = []
   for _ in 0..a.len() { q.push(0) }
   var r: [int] = []
   var i = a.len() - 1
   while i >= 0 {
-    r = trim([a[i]] + r)  // r = r * BASE + a[i]
+    // r = r * BASE + a[i]
+    if r.len() > 0 || a[i] != 0 {
+      var shifted = [a[i]]
+      for x in r { shifted.push(x) }
+      r = shifted
+    }
     if mag_cmp(r, b) >= 0 {
-      var lo = 1
-      var hi = BASE - 1
-      while lo < hi {
-        let mid = (lo + hi + 1) / 2
-        if mag_cmp(mag_mul_small(b, mid), r) <= 0 { lo = mid } else { hi = mid - 1 }
+      // r < b * BASE, so it has nb or nb + 1 limbs and the quotient limb is in 1..BASE-1
+      var rf = float(r[nb - 1]) * 1.0e9 + float(r[nb - 2])
+      if r.len() > nb { rf += float(r[nb]) * 1.0e18 }
+      if nb >= 3 { rf += float(r[nb - 3]) / 1.0e9 }
+      var g = int(rf / bf)
+      if g < 1 { g = 1 } else if g > BASE - 1 { g = BASE - 1 }
+      var p = mag_mul_small(b, g)
+      while mag_cmp(p, r) > 0 {
+        g -= 1
+        p = mag_sub(p, b)
       }
-      q[i] = lo
-      r = mag_sub(r, mag_mul_small(b, lo))
+      r = mag_sub(r, p)
+      while mag_cmp(r, b) >= 0 {
+        g += 1
+        r = mag_sub(r, b)
+      }
+      q[i] = g
     }
     i -= 1
   }
@@ -186,6 +246,67 @@ fn mag_divmod_small(a: [int], k: int): ([int], [int]) {
   (trim(q), trim([rem]))
 }
 
+// (a / 10^k, a % 10^k) for k >= 0: whole limbs split off, then one small division.
+fn mag_divmod_pow10(a: [int], k: int): ([int], [int]) {
+  let limbs = k / 9
+  if a.len() <= limbs { return ([], a) }
+  let m = POW10[k % 9]
+  if limbs == 0 { return mag_divmod_small(a, m) }
+  let n = a.len() - limbs
+  var q: [int] = []
+  for _ in 0..n { q.push(0) }
+  var rem = 0
+  var i = n - 1
+  while i >= 0 {
+    let cur = rem * BASE + a[limbs + i]
+    q[i] = cur / m
+    rem = cur % m
+    i -= 1
+  }
+  var r = a[0..limbs]
+  r.push(rem)
+  (trim(q), trim(r))
+}
+
+// (m / 10^z, z) for the largest z <= max such that 10^z divides m.
+fn strip_zeros(m0: [int], max: int): ([int], int) {
+  if max <= 0 || m0.len() == 0 || m0[0] % 10 != 0 { return (m0, 0) }
+  var m = m0
+  var z = 0
+  // whole zero limbs (the top limb is never zero)
+  var skip = 0
+  while max - z >= 9 && m[skip] == 0 {
+    skip += 1
+    z += 9
+  }
+  if skip > 0 { m = m[skip..m.len()] }
+  // then digits of the lowest limb
+  let cap = max - z
+  var t = 0
+  if m[0] == 0 {
+    t = cap  // fewer than 9 are wanted
+  } else {
+    var low = m[0]
+    while t < cap && low % 10 == 0 {
+      low /= 10
+      t += 1
+    }
+  }
+  if t > 0 { m = mag_divmod_small(m, POW10[t]).0 }
+  (m, z + t)
+}
+
+// The number of decimal digits of a nonzero magnitude.
+fn mag_digits(a: [int]): int {
+  var n = (a.len() - 1) * 9
+  var top = a[a.len() - 1]
+  while top > 0 {
+    n += 1
+    top /= 10
+  }
+  n
+}
+
 fn imax(a: int, b: int): int = if a > b { a } else { b }
 
 fn mag_is_odd(a: [int]): bool = a.len() > 0 && a[0] % 2 == 1
@@ -193,25 +314,33 @@ fn mag_is_odd(a: [int]): bool = a.len() > 0 && a[0] % 2 == 1
 // The decimal digits of a magnitude ("0" for zero).
 fn mag_str(a: [int]): str {
   if a.len() == 0 { return "0" }
-  var parts = ["{a[a.len() - 1]}"]
+  var out = "{a[a.len() - 1]}"
   var i = a.len() - 2
   while i >= 0 {
-    parts.push("{a[i]:09}")
+    out += "{a[i]:09}"
     i -= 1
   }
-  parts.join("")
+  out
 }
 
-// A magnitude from ASCII digits (already validated).
-fn mag_of_digits(ds: [char]): [int] {
+// A magnitude from the ASCII digits (already validated) in cs[start..end], skipping the decimal
+// point at index `dot`: nine digits per limb, from the end.
+fn mag_of_digits(cs: [char], start: int, end: int, dot: int): [int] {
   var out: [int] = []
-  var end = ds.len()
-  while end > 0 {
-    let start = imax(end - 9, 0)
+  var e = end
+  while e > start {
     var v = 0
-    for i in start..end { v = v * 10 + int(ds[i]) - int('0') }
-    out.push(v)
-    end = start
+    var unit = 1
+    var cnt = 0
+    while e > start && cnt < 9 {
+      e -= 1
+      if e != dot {
+        v += (int(cs[e]) - int('0')) * unit
+        unit *= 10
+        cnt += 1
+      }
+    }
+    if cnt > 0 { out.push(v) }
   }
   trim(out)
 }
@@ -253,19 +382,16 @@ pub fn dec(s: str): Dec!NumErr {
     neg = cs[i] == '-'
     i += 1
   }
-  var digits: [char] = []
-  var frac = 0
-  var seen_dot = false
-  while i < cs.len() && (cs[i].is_digit() || (cs[i] == '.' && !seen_dot)) {
-    if cs[i] == '.' {
-      seen_dot = true
-    } else {
-      digits.push(cs[i])
-      if seen_dot { frac += 1 }
-    }
+  // the digits are cs[start..end], less the point at `dot` (if any)
+  let start = i
+  var dot = -1
+  while i < cs.len() && (cs[i].is_digit() || (cs[i] == '.' && dot < 0)) {
+    if cs[i] == '.' { dot = i }
     i += 1
   }
-  if digits.len() == 0 {
+  let end = i
+  let frac = if dot < 0 { 0 } else { end - dot - 1 }
+  if end - start == if dot < 0 { 0 } else { 1 } {
     if i < cs.len() { fail(BadChar(i, cs[i])) }
     fail(NoDigits)
   }
@@ -287,7 +413,7 @@ pub fn dec(s: str): Dec!NumErr {
     if eneg { exp = -exp }
   }
   if i < cs.len() { fail(BadChar(i, cs[i])) }
-  let mag = mag_of_digits(digits)
+  let mag = mag_of_digits(cs, start, end, dot)
   let scale = frac - exp
   if scale < 0 { make(neg, mag_shift(mag, -scale), 0) } else { make(neg, mag, scale) }
 }
@@ -325,7 +451,7 @@ pub fn to_int(d: Dec): int!NumErr {
 }
 
 // a / 10^k, truncated
-fn mag_shift_down(a: [int], k: int): [int] = if k == 0 { a } else { mag_divmod(a, pow10(k)).0 }
+fn mag_shift_down(a: [int], k: int): [int] = if k == 0 { a } else { mag_divmod_pow10(a, k).0 }
 
 /// -1, 0 or 1.
 pub fn sign(d: Dec): int = if d.mag.len() == 0 { 0 } else if d.neg { -1 } else { 1 }
@@ -339,13 +465,8 @@ pub fn abs(d: Dec): Dec = Dec { neg: false, ..d }
 
 /// The same value with trailing fraction zeros removed: `1.500` -> `1.5`, `2.00` -> `2`.
 pub fn normalize(d: Dec): Dec {
-  var m = d.mag
-  var s = d.scale
-  while s > 0 && m.len() > 0 && m[0] % 10 == 0 {
-    m = mag_divmod_small(m, 10).0
-    s -= 1
-  }
-  make(d.neg, m, if m.len() == 0 { 0 } else { s })
+  let (m, z) = strip_zeros(d.mag, d.scale)
+  make(d.neg, m, if m.len() == 0 { 0 } else { d.scale - z })
 }
 
 // ---- arithmetic ----
@@ -378,13 +499,8 @@ pub fn mul(a: Dec, b: Dec): Dec = make(a.neg != b.neg, mag_mul(a.mag, b.mag), a.
 pub fn div(a: Dec, b: Dec): Dec {
   let keep = imax(a.scale, b.scale)
   let q = div(a, b, imax(keep, DIV_PLACES), HalfEven)
-  var m = q.mag
-  var s = q.scale
-  while s > keep && m.len() > 0 && m[0] % 10 == 0 {
-    m = mag_divmod_small(m, 10).0
-    s -= 1
-  }
-  make(q.neg, m, if m.len() == 0 { keep } else { s })
+  let (m, z) = strip_zeros(q.mag, q.scale - keep)
+  make(q.neg, m, if m.len() == 0 { keep } else { q.scale - z })
 }
 
 /// `a / b` rounded to exactly `places` fraction digits with `mode`:
@@ -434,25 +550,36 @@ pub fn round(d: Dec, places: int, mode: Round): Dec
   requires places >= 0
 {
   if places >= d.scale { return make(d.neg, mag_shift(d.mag, places - d.scale), places) }
-  make(d.neg, round_quot(d.mag, pow10(d.scale - places), d.neg, mode), places)
+  let k = d.scale - places
+  let (q, r) = mag_divmod_pow10(d.mag, k)
+  make(d.neg, if r.len() == 0 { q } else { round_up(q, r, pow10(k), d.neg, mode) }, places)
 }
 
 // n / d rounded to an integer magnitude; `neg` is the sign of the true quotient.
 fn round_quot(n: [int], d: [int], neg: bool, mode: Round): [int] {
   let (q, r) = mag_divmod(n, d)
-  if r.len() == 0 { return q }
-  let half = mag_cmp(mag_add(r, r), d)  // compare the remainder with d / 2
+  if r.len() == 0 { q } else { round_up(q, r, d, neg, mode) }
+}
+
+// The quotient `q` of a division by `d` that left the remainder `r` (not zero), rounded.
+fn round_up(q: [int], r: [int], d: [int], neg: bool, mode: Round): [int] {
   let bump = match mode {
     Down => false
     Up => true
     Floor => neg
     Ceiling => !neg
-    HalfUp => half >= 0
-    HalfDown => half > 0
-    HalfEven => half > 0 || (half == 0 && mag_is_odd(q))
+    HalfUp => half(r, d) >= 0
+    HalfDown => half(r, d) > 0
+    HalfEven => {
+      let h = half(r, d)
+      h > 0 || (h == 0 && mag_is_odd(q))
+    }
   }
   if bump { mag_add(q, [1]) } else { q }
 }
+
+// Compares the remainder `r` with d / 2.
+fn half(r: [int], d: [int]): int = mag_cmp(mag_add(r, r), d)
 
 /// Numeric order (negative, 0 or positive), ignoring scale, so `<`, `sort`, `min` and `max`
 /// work: `dec("1.50")? == dec("1.5")?`.
@@ -460,8 +587,21 @@ pub fn cmp(a: Dec, b: Dec): int {
   let sa = sign(a)
   let sb = sign(b)
   if sa != sb { return sa - sb }
-  let (x, y, _) = align(a, b)
-  let c = mag_cmp(x, y)
+  if sa == 0 { return 0 }
+  var c = 0
+  if a.scale == b.scale {
+    c = mag_cmp(a.mag, b.mag)
+  } else {
+    // different numbers of digits before the point settle it without aligning the scales
+    let da = mag_digits(a.mag) - a.scale
+    let db = mag_digits(b.mag) - b.scale
+    if da != db {
+      c = da - db
+    } else {
+      let (x, y, _) = align(a, b)
+      c = mag_cmp(x, y)
+    }
+  }
   let unit = if c < 0 { -1 } else if c > 0 { 1 } else { 0 }
   if sa < 0 { -unit } else { unit }
 }

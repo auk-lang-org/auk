@@ -138,7 +138,7 @@ fn renamed(e: Event, n: str): Event = match e {
 
 /// `html` as part `id` of the page: events from inside it are named `"id/name"`. (Any element
 /// can be a part: give it `splash-part="id"` yourself, say on an `<li>`.) Ids can't hold `/`.
-pub fn part(id: str, html: str): str = "<div splash-part=\"{escape(id)}\">{html}</div>"
+pub fn part(id: str, html: str): str = "<div splash-part=\"" + escape(id) + "\">" + html + "</div>"
 
 /// Part `id` showing state `s` with `view`. If `view` panics, the part shows the error and the
 /// rest of the page is unharmed.
@@ -228,29 +228,29 @@ pub fn answer(req: http.server.Req, p: Page, view: str): http.Resp {
   let h = fingerprint(p, view)
   let had = req.headers.get("x-splash-hash") else ""
   let kind = req.headers.get(HEADER) else ""
-  let what = match ev {
-    some(e) => "event {e}"
-    none => match kind {
-      "poll" => "refresh"
-      "nav" => "move"
-      _ => "visit"
-    }
-  }
   if kind == "poll" && had == h {
-    say(p.log, Debug, "{seq(req)} {req.method} {req.path} {what} -> 204 unchanged ({h})")
+    if says(p.log, Debug) {
+      say(
+        p.log,
+        Debug,
+        "{seq(req)} {req.method} {req.path} {what(ev, kind)} -> 204 unchanged ({h})",
+      )
+    }
     return http.Resp { status: 204, headers: {"x-splash-hash": h}, body: "" }
   }
-  let changed = if had == "" {
-    ""
-  } else if had == h {
-    ", same as the page has"
-  } else {
-    ", page had {had}"
+  if says(p.log, Info) {
+    let changed = if had == "" {
+      ""
+    } else if had == h {
+      ", same as the page has"
+    } else {
+      ", page had {had}"
+    }
+    say(p.log, Info, "{seq(req)} {req.method} {req.path} {what(ev, kind)} -> 200 view {h}{changed}")
   }
-  say(p.log, Info, "{seq(req)} {req.method} {req.path} {what} -> 200 view {h}{changed}")
   var headers = {"content-type": "text/html; charset=utf-8", "x-splash-hash": h}
   let body = if kind == "" {
-    render(p, view)
+    page(p, view, h)
   } else {
     let head = head_of(had) != head_of(h)
     if !head { headers["x-splash-head"] = "same" }
@@ -259,28 +259,57 @@ pub fn answer(req: http.server.Req, p: Page, view: str): http.Resp {
   http.Resp { status: 200, headers, body }
 }
 
+/// What a request is, for logs.
+fn what(ev: Event?, kind: str): str = match ev {
+  some(e) => "event {e}"
+  none => match kind {
+    "poll" => "refresh"
+    "nav" => "move"
+    _ => "visit"
+  }
+}
+
 /// The whole HTML of page `p` showing `view`.
-pub fn render(p: Page, view: str): str {
-  let scripts = p.scripts.map(s => "<script src=\"{escape(s)}\" defer></script>").join("")
-  """
-  <!doctype html>
-  <html>
-  <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>{escape(p.title)}</title>
-  {links(p)}<style id="splash-css">{p.css}</style>{scripts}
-  </head>
-  <body>
-  <main id="splash">{view}</main>
-  {boot(p.every, fingerprint(p, view), p.hub is some(_), p.log)}
-  </body>
-  </html>
-  """
+pub fn render(p: Page, view: str): str = page(p, view, fingerprint(p, view))
+
+/// The whole HTML of page `p` showing `view`, whose fingerprint is `h`. (Built by appending:
+/// the view and the client are long.)
+fn page(p: Page, view: str, h: str): str {
+  var out = "<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>"
+  out += escape(p.title)
+  out += "</title>\n"
+  out += links(p)
+  out += "<style id=\"splash-css\">"
+  out += p.css
+  out += "</style>"
+  for s in p.scripts {
+    out += "<script src=\""
+    out += escape(s)
+    out += "\" defer></script>"
+  }
+  out += "\n</head>\n<body>\n<main id=\"splash\">"
+  out += view
+  out += "</main>\n"
+  out += boot(p.every, h, p.hub is some(_), p.log)
+  out += "\n</body>\n</html>\n"
+  out
 }
 
 /// What one of splash's own requests gets: the title, the stylesheets (when `head`) and the view.
 fn fragment(p: Page, view: str, head: bool): str {
-  let styles = if head { "{links(p)}<style id=\"splash-css\">{p.css}</style>" } else { "" }
-  "<title>{escape(p.title)}</title>{styles}<main id=\"splash\">{view}</main>"
+  var out = "<title>"
+  out += escape(p.title)
+  out += "</title>"
+  if head {
+    out += links(p)
+    out += "<style id=\"splash-css\">"
+    out += p.css
+    out += "</style>"
+  }
+  out += "<main id=\"splash\">"
+  out += view
+  out += "</main>"
+  out
 }
 
 fn links(p: Page): str =
@@ -358,7 +387,7 @@ pub fn attach(fields: {str: str}, field: str, files: [Upload]): {str: str} {
   var out = fields
   out[field] = files.map(f => f.name).join(", ")
   for i, f in files {
-    out["{FILE}{field}:{i}"] = "{f.name}\n{f.mime}\n{encoding.base64(f.bytes)}"
+    out["{FILE}{field}:{i}"] = f.name + "\n" + f.mime + "\n" + encoding.base64(f.bytes)
   }
   out
 }
@@ -397,10 +426,13 @@ fn name(Debug): str = "debug"
 
 /// Write `msg` (on stderr) if `level` is at least `min`.
 fn say(level: Log, min: Log, msg: str) {
-  if rank(level) >= rank(min) {
+  if says(level, min) {
     eprint("splash {msg}")
   }
 }
+
+/// Would `say(level, min, ...)` write? Asked first where building the message costs something.
+fn says(level: Log, min: Log): bool = rank(level) >= rank(min)
 
 /// Which browser and which of its requests ("b20fe175#13", as in that browser's console), for logs.
 fn seq(req: http.server.Req): str =
@@ -528,8 +560,8 @@ pub fn ask(s: Sessions, req: http.server.Req): str {
   let sid = session_id(req) else ""
   let ev = event(req)
   match ev {
-    some(e) => say(s.log, Info, "{seq(req)} session: event {e}")
-    none => say(s.log, Debug, "{seq(req)} session: view")
+    some(e) => if says(s.log, Info) { say(s.log, Info, "{seq(req)} session: event {e}") }
+    none => if says(s.log, Debug) { say(s.log, Debug, "{seq(req)} session: view") }
   }
   s.ch.send(Route { sid, event: ev, reply })
   reply.recv_for(ASK_WAIT) else {
@@ -805,12 +837,16 @@ pub fn play<S>(init: () => S, update: (S, Event) => S, view: (S) => str, events:
 pub fn script(every: int): str = boot(every, "", false, Quiet)
 
 /// `s` as HTML text: `&`, `<`, `>`, `"` and `'` escaped. Put anything a user typed through this.
-pub fn escape(s: str): str = s
-  .replace("&", "&amp;")
-  .replace("<", "&lt;")
-  .replace(">", "&gt;")
-  .replace("\"", "&quot;")
-  .replace("'", "&#39;")
+pub fn escape(s: str): str {
+  // most text has none of these, and looking is far cheaper than replacing
+  var out = s
+  if out.contains("&") { out = out.replace("&", "&amp;") }
+  if out.contains("<") { out = out.replace("<", "&lt;") }
+  if out.contains(">") { out = out.replace(">", "&gt;") }
+  if out.contains("\"") { out = out.replace("\"", "&quot;") }
+  if out.contains("'") { out = out.replace("'", "&#39;") }
+  out
+}
 
 /// What a page reports to say what it shows: its head (title, stylesheet, links), then its view.
 fn fingerprint(p: Page, view: str): str =

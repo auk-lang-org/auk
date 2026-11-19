@@ -63,10 +63,10 @@ pub fn render<T: Data>(t: Template, data: T, partials: {str: Template}): str!Tpl
     Null => {}
     v => fail(Type("render needs a struct or map, got {kind(v)}", 1, 1))
   }
-  var c = Ctx { scopes: [root], partials, escape: t.escape, depth: 0 }
-  var out: [str] = []
+  var c = Ctx { scopes: [root], at: [], of: [], partials, escape: t.escape, depth: 0 }
+  var out = ""
   run(t.nodes, &c, &out)?
-  out.join("")
+  out
 }
 
 /// Parses and renders in one step, as an HTML template.
@@ -77,205 +77,168 @@ pub fn render_text<T: Data>(src: str, data: T): str!TplErr = render(text(src)?, 
 
 /// `s` with `& < > " '` replaced by HTML entities.
 pub fn escape(s: str): str {
-  if !(s.contains("&") ||
-    s.contains("<") ||
-    s.contains(">") ||
-    s.contains("\"") ||
-    s.contains("'")) {
-    return s
-  }
-  s
-    .replace("&", "&amp;")
-    .replace("<", "&lt;")
-    .replace(">", "&gt;")
-    .replace("\"", "&quot;")
-    .replace("'", "&#39;")
+  var out = s
+  if s.contains("&") { out = out.replace("&", "&amp;") }
+  if s.contains("<") { out = out.replace("<", "&lt;") }
+  if s.contains(">") { out = out.replace(">", "&gt;") }
+  if s.contains("\"") { out = out.replace("\"", "&quot;") }
+  if s.contains("'") { out = out.replace("'", "&#39;") }
+  out
 }
 
 // ---- lexing: text, {{ out }}, {% tag %}, {# comment #} ----
 
 enum Kind { KText, KOut, KTag, KCmt }
 
-struct Seg { kind: Kind, s: str, line: int, col: int, lt: bool, rt: bool }
+// A piece of the template. Text is the chars `a..b` of the source until `trim_segs` has settled
+// its edges and fills in `s`; for the others `s` is the trimmed inside of the tag.
+struct Seg { kind: Kind, s: str, line: int, col: int, lt: bool, rt: bool, a: int, b: int }
 
-struct Lx { cs: [char], i: int, line: int, col: int }
+fn text_seg(a: int, b: int, line: int, col: int): Seg =
+  Seg { kind: KText, s: "", line, col, lt: false, rt: false, a, b }
 
-fn adv(l: var Lx) {
-  if l.cs[l.i] == '\n' {
-    l.line += 1
-    l.col = 1
-  } else {
-    l.col += 1
+fn tag_seg(kind: Kind, s: str, line: int, col: int, lt: bool, rt: bool): Seg =
+  Seg { kind, s, line, col, lt, rt, a: 0, b: 0 }
+
+let ENDRAW = "endraw".chars()
+
+// Whether `cs` has the chars `lit` at `i`.
+fn has_at(cs: [char], i: int, lit: [char]): bool {
+  if i + lit.len() > cs.len() { return false }
+  for k, c in lit {
+    if cs[i + k] != c { return false }
   }
-  l.i += 1
+  true
 }
 
-fn at(l: Lx, k: int): char = l.cs.get(l.i + k) else '\0'
-
-fn lex(src: str): [Seg]!TplErr {
-  var l = Lx { cs: src.chars(), i: 0, line: 1, col: 1 }
+fn lex(cs: [char]): [Seg]!TplErr {
+  let n = cs.len()
   var segs: [Seg] = []
-  var buf: [char] = []
-  var bl = 1
-  var bc = 1
-  while l.i < l.cs.len() {
-    let c = at(l, 0)
-    let o = at(l, 1)
-    if c != '{' || !(o == '{' || o == '%' || o == '#') {
-      if buf.len() == 0 {
-        bl = l.line
-        bc = l.col
+  var i = 0
+  var line = 1
+  var ls = 0  // index of the first char of `line`; the column of index k is k - ls + 1
+  while i < n {
+    // text up to the next `{{`, `{%` or `{#`
+    let a = i
+    let (bl, bc) = (line, i - ls + 1)
+    var o = '\0'
+    while i < n {
+      let c = cs[i]
+      if c == '{' && i + 1 < n {
+        o = cs[i + 1]
+        if o == '{' || o == '%' || o == '#' { break }
+      } else if c == '\n' {
+        line += 1
+        ls = i + 1
       }
-      buf.push(c)
-      l.adv()
-      continue
+      i += 1
     }
-    if buf.len() > 0 {
-      segs.push(Seg { kind: KText, s: str(buf), line: bl, col: bc, lt: false, rt: false })
-    }
-    buf = []
-    let (line, col) = (l.line, l.col)
+    if i > a { segs.push(text_seg(a, i, bl, bc)) }
+    if i >= n { break }
+    let (tl, tc) = (line, i - ls + 1)
     let close = if o == '{' { '}' } else { o }
     let kind = if o == '{' { KOut } else if o == '%' { KTag } else { KCmt }
-    l.adv()
-    l.adv()
-    let lt = at(l, 0) == '-'
-    if lt { l.adv() }
-    var inner: [char] = []
+    i += 2
+    let lt = i < n && cs[i] == '-'
+    if lt { i += 1 }
+    let st = i
+    var end = -1  // where the closing marker starts
     var rt = false
-    var done = false
-    while l.i < l.cs.len() {
-      let d = at(l, 0)
-      if d == '-' && at(l, 1) == close && at(l, 2) == '}' {
+    while i < n {
+      let d = cs[i]
+      if d == '-' && i + 2 < n && cs[i + 1] == close && cs[i + 2] == '}' {
         rt = true
-        l.adv()
-        l.adv()
-        l.adv()
-        done = true
+        end = i
+        i += 3
         break
       }
-      if d == close && at(l, 1) == '}' {
-        l.adv()
-        l.adv()
-        done = true
+      if d == close && i + 1 < n && cs[i + 1] == '}' {
+        end = i
+        i += 2
         break
       }
       if kind != KCmt && (d == '"' || d == '\'') {
         // a quoted string may contain `}}` or `%}`
-        inner.push(d)
-        l.adv()
-        while l.i < l.cs.len() && at(l, 0) != d {
-          if at(l, 0) == '\\' && l.i + 1 < l.cs.len() {
-            inner.push('\\')
-            l.adv()
-          }
-          inner.push(at(l, 0))
-          l.adv()
-        }
-        if l.i < l.cs.len() {
-          inner.push(d)
-          l.adv()
-        }
+        i += 1
+        while i < n && cs[i] != d { i += if cs[i] == '\\' && i + 1 < n { 2 } else { 1 } }
+        if i < n { i += 1 }
         continue
       }
-      inner.push(d)
-      l.adv()
+      i += 1
     }
-    if !done {
+    if end < 0 {
       let what = match kind { KOut => "{{{{", KTag => "{{%", _ => "{{#" }
-      fail(Syntax("`{what}` is never closed", line, col))
+      fail(Syntax("`{what}` is never closed", tl, tc))
     }
-    let s = str(inner).trim()
-    if kind == KTag && s == "raw" {
-      segs.push(Seg { kind: KCmt, s: "", line, col, lt, rt })
-      segs = segs + raw_body(&l, line, col)?
+    for k in st..i {
+      if cs[k] == '\n' {
+        line += 1
+        ls = k + 1
+      }
+    }
+    let s = str(cs[st..end]).trim()
+    if kind != KTag || s != "raw" {
+      segs.push(tag_seg(kind, s, tl, tc, lt, rt))
       continue
     }
-    segs.push(Seg { kind, s, line, col, lt, rt })
-  }
-  if buf.len() > 0 {
-    segs.push(Seg { kind: KText, s: str(buf), line: bl, col: bc, lt: false, rt: false })
+    // after `{% raw %}`: everything up to `{% endraw %}` as literal text, then the end tag
+    segs.push(tag_seg(KCmt, "", tl, tc, lt, rt))
+    let ra = i
+    let (rl, rc) = (line, i - ls + 1)
+    var closed = false
+    while i < n {
+      if cs[i] == '{' && i + 1 < n && cs[i + 1] == '%' {
+        var k = i + 2
+        let elt = k < n && cs[k] == '-'
+        if elt { k += 1 }
+        while k < n && is_blank(cs[k]) { k += 1 }
+        if has_at(cs, k, ENDRAW) {
+          k += 6
+          while k < n && is_blank(cs[k]) { k += 1 }
+          let ert = k < n && cs[k] == '-'
+          if ert { k += 1 }
+          if k + 1 < n && cs[k] == '%' && cs[k + 1] == '}' {
+            segs.push(text_seg(ra, i, rl, rc))
+            segs.push(tag_seg(KCmt, "", line, i - ls + 1, elt, ert))
+            i = k + 2
+            closed = true
+            break
+          }
+        }
+      }
+      if cs[i] == '\n' {
+        line += 1
+        ls = i + 1
+      }
+      i += 1
+    }
+    if !closed { fail(Syntax("`{{% raw %}}` without `{{% endraw %}}`", tl, tc)) }
   }
   segs
 }
 
-// After `{% raw %}`: everything up to `{% endraw %}` as literal text, then the end tag.
-fn raw_body(l: var Lx, line: int, col: int): [Seg]!TplErr {
-  var buf: [char] = []
-  let (bl, bc) = (l.line, l.col)
-  while l.i < l.cs.len() {
-    if at(l, 0) == '{' && at(l, 1) == '%' {
-      var k = 2
-      let lt = at(l, k) == '-'
-      if lt { k += 1 }
-      while at(l, k) == ' ' || at(l, k) == '\t' { k += 1 }
-      let word = str(l.cs.skip(l.i + k).take(6))
-      if word == "endraw" {
-        k += 6
-        while at(l, k) == ' ' || at(l, k) == '\t' { k += 1 }
-        let rt = at(l, k) == '-'
-        if rt { k += 1 }
-        if at(l, k) == '%' && at(l, k + 1) == '}' {
-          let (el, ec) = (l.line, l.col)
-          for _ in 0..k + 2 { l.adv() }
-          return [
-            Seg { kind: KText, s: str(buf), line: bl, col: bc, lt: false, rt: false },
-            Seg { kind: KCmt, s: "", line: el, col: ec, lt, rt },
-          ]
-        }
-      }
-    }
-    buf.push(at(l, 0))
-    l.adv()
-  }
-  fail(Syntax("`{{% raw %}}` without `{{% endraw %}}`", line, col))
-}
-
 fn is_blank(c: char): bool = c == ' ' || c == '\t'
-
-fn all_blank(s: str): bool = s.chars().all(is_blank)
-
-// Text after the last newline, and whether there was one.
-fn last_line(s: str): (str, bool) = match s.chars().reverse().find_index(c => c == '\n') {
-  some(k) => (s[s.len() - k..s.len()], true)
-  none => (s, false)
-}
-
-// Text before the first newline, and whether there was one.
-fn first_line(s: str): (str, bool) = match s.find("\n") {
-  some(k) => (s[0..k], true)
-  none => (s, false)
-}
-
-fn trim_end_blank(s: str): str {
-  var n = s.len()
-  while n > 0 && is_blank(s[n - 1]) { n -= 1 }
-  s[0..n]
-}
-
-fn drop_first_line(s: str): str = match s.find("\n") {
-  some(k) => s[k + 1..s.len()]
-  none => ""
-}
-
-fn trim_left_ws(s: str): str {
-  var i = 0
-  while i < s.len() && s[i].is_space() { i += 1 }
-  s[i..s.len()]
-}
-
-fn trim_right_ws(s: str): str {
-  var n = s.len()
-  while n > 0 && s[n - 1].is_space() { n -= 1 }
-  s[0..n]
-}
 
 fn is_text(s: Seg): bool = s.kind == KText
 
+// Whether the text `cs[a..b]` ends in a line of only blanks (`whole`: or is only blanks).
+fn blank_tail(cs: [char], a: int, b: int, whole: bool): bool {
+  var k = b
+  while k > a && is_blank(cs[k - 1]) { k -= 1 }
+  if k > a { cs[k - 1] == '\n' } else { whole }
+}
+
+// Whether the text `cs[a..b]` starts with a line of only blanks (`whole`: or is only blanks).
+fn blank_head(cs: [char], a: int, b: int, whole: bool): bool {
+  var k = a
+  while k < b && (is_blank(cs[k]) || cs[k] == '\r') { k += 1 }
+  if k < b { cs[k] == '\n' } else { whole }
+}
+
 // A `{% %}` or `{# #}` that is the only thing on its line removes the line (judged on the
 // original text, so standalone tags on consecutive lines all count); then `-` markers trim all
-// whitespace on their side.
-fn trim_segs(input: [Seg]): [Seg] {
+// whitespace on their side. Text segments get their final string here.
+fn trim_segs(cs: [char], input: [Seg]): [Seg] {
   var segs = input
   let n = segs.len()
   for j in 0..n {
@@ -287,29 +250,45 @@ fn trim_segs(input: [Seg]): [Seg] {
     } else if !is_text(input[j - 1]) {
       false
     } else {
-      let (ll, nl) = last_line(input[j - 1].s)
-      all_blank(ll) && (nl || j - 1 == 0)
+      blank_tail(cs, input[j - 1].a, input[j - 1].b, j - 1 == 0)
     }
+    if !prev_ok { continue }
     let next_ok = if j == n - 1 {
       true
     } else if !is_text(input[j + 1]) {
       false
     } else {
-      let (fl, nl) = first_line(input[j + 1].s)
-      all_blank(fl.replace("\r", "")) && (nl || j + 1 == n - 1)
+      blank_head(cs, input[j + 1].a, input[j + 1].b, j + 1 == n - 1)
     }
-    if prev_ok && next_ok {
-      if j > 0 { segs[j - 1] = Seg { s: trim_end_blank(segs[j - 1].s), ..segs[j - 1] } }
-      if j < n - 1 { segs[j + 1] = Seg { s: drop_first_line(segs[j + 1].s), ..segs[j + 1] } }
+    if !next_ok { continue }
+    if j > 0 {
+      // drop the blanks before the tag
+      var b = segs[j - 1].b
+      while b > segs[j - 1].a && is_blank(cs[b - 1]) { b -= 1 }
+      segs[j - 1].b = b
+    }
+    if j < n - 1 {
+      // drop the rest of the tag's line
+      var a = segs[j + 1].a
+      let b = segs[j + 1].b
+      while a < b && cs[a] != '\n' { a += 1 }
+      segs[j + 1].a = if a < b { a + 1 } else { b }
     }
   }
   for j in 0..n {
     if segs[j].lt && j > 0 && is_text(segs[j - 1]) {
-      segs[j - 1] = Seg { s: trim_right_ws(segs[j - 1].s), ..segs[j - 1] }
+      var b = segs[j - 1].b
+      while b > segs[j - 1].a && cs[b - 1].is_space() { b -= 1 }
+      segs[j - 1].b = b
     }
     if segs[j].rt && j < n - 1 && is_text(segs[j + 1]) {
-      segs[j + 1] = Seg { s: trim_left_ws(segs[j + 1].s), ..segs[j + 1] }
+      var a = segs[j + 1].a
+      while a < segs[j + 1].b && cs[a].is_space() { a += 1 }
+      segs[j + 1].a = a
     }
+  }
+  for j in 0..n {
+    if is_text(segs[j]) && segs[j].b > segs[j].a { segs[j].s = str(cs[segs[j].a..segs[j].b]) }
   }
   segs
 }
@@ -323,9 +302,10 @@ fn is_name_char(c: char): bool = c.is_alpha() || c.is_digit() || c == '_'
 
 fn tokens(s: str, line: int, col: int): [Tok]!TplErr {
   let cs = s.chars()
+  let n = cs.len()
   var ts: [Tok] = []
   var i = 0
-  while i < cs.len() {
+  while i < n {
     let c = cs[i]
     if c.is_space() {
       i += 1
@@ -368,15 +348,30 @@ fn tokens(s: str, line: int, col: int): [Tok]!TplErr {
       if !closed { fail(Syntax("unclosed string literal", line, col)) }
       ts.push(TStr(str(b)))
     } else {
-      let two = if i + 1 < cs.len() { str([c, cs[i + 1]]) } else { "" }
-      if two == "==" || two == "!=" || two == "<=" || two == ">=" {
-        ts.push(TSym(two))
+      if i + 1 < n && cs[i + 1] == '=' && (c == '=' || c == '!' || c == '<' || c == '>') {
+        ts.push(TSym(match c { '=' => "==", '!' => "!=", '<' => "<=", _ => ">=" }))
         i += 2
-      } else if "()[],.|+-*/%<>=".contains(str([c])) {
-        ts.push(TSym(str([c])))
-        i += 1
       } else {
-        fail(Syntax("unexpected `{c}`", line, col))
+        let sym = match c {
+          '(' => "("
+          ')' => ")"
+          '[' => "["
+          ']' => "]"
+          ',' => ","
+          '.' => "."
+          '|' => "|"
+          '+' => "+"
+          '-' => "-"
+          '*' => "*"
+          '/' => "/"
+          '%' => "%"
+          '<' => "<"
+          '>' => ">"
+          '=' => "="
+          _ => fail(Syntax("unexpected `{c}`", line, col))
+        }
+        ts.push(TSym(sym))
+        i += 1
       }
     }
   }
@@ -395,8 +390,26 @@ fn next(p: var P): Tok {
   t
 }
 
-fn is_sym(p: P, s: str): bool = peek(p) == TSym(s)
-fn is_word(p: P, s: str): bool = peek(p) == TName(s)
+// The symbol or the name at the cursor, "" when it is something else.
+fn sym(p: P): str = match p.ts.get(p.i) {
+  some(TSym(s)) => s
+  _ => ""
+}
+
+fn word(p: P): str = match p.ts.get(p.i) {
+  some(TName(s)) => s
+  _ => ""
+}
+
+fn is_sym(p: P, s: str): bool = match p.ts.get(p.i) {
+  some(TSym(x)) => x == s
+  _ => false
+}
+
+fn is_word(p: P, s: str): bool = match p.ts.get(p.i) {
+  some(TName(x)) => x == s
+  _ => false
+}
 
 fn show_tok(t: Tok): str = match t {
   TName(s) => "`{s}`"
@@ -472,8 +485,10 @@ fn cmp(p: var P): Expr!TplErr {
 
 fn add(p: var P): Expr!TplErr {
   var a = mul(&p)?
-  while p.is_sym("+") || p.is_sym("-") {
-    let TSym(op) = next(&p) else { return a }
+  loop {
+    let op = sym(p)
+    if op != "+" && op != "-" { break }
+    p.i += 1
     a = Bin(op, a, mul(&p)?)
   }
   a
@@ -481,8 +496,10 @@ fn add(p: var P): Expr!TplErr {
 
 fn mul(p: var P): Expr!TplErr {
   var a = unary(&p)?
-  while p.is_sym("*") || p.is_sym("/") || p.is_sym("%") {
-    let TSym(op) = next(&p) else { return a }
+  loop {
+    let op = sym(p)
+    if op != "*" && op != "/" && op != "%" { break }
+    p.i += 1
     a = Bin(op, a, unary(&p)?)
   }
   a
@@ -499,7 +516,8 @@ fn unary(p: var P): Expr!TplErr {
 fn postfix(p: var P): Expr!TplErr {
   var e = primary(&p)?
   loop {
-    if p.is_sym(".") {
+    let op = sym(p)
+    if op == "." {
       p.i += 1
       e = match peek(p) {
         TInt(i) => {
@@ -508,12 +526,12 @@ fn postfix(p: var P): Expr!TplErr {
         }
         _ => Attr(e, name(&p)?)
       }
-    } else if p.is_sym("[") {
+    } else if op == "[" {
       p.i += 1
       let k = expr(&p)?
       expect_sym(&p, "]")?
       e = Index(e, k)
-    } else if p.is_sym("|") {
+    } else if op == "|" {
       p.i += 1
       let f = name(&p)?
       var args: [Expr] = []
@@ -575,7 +593,8 @@ fn parse_expr(s: str, line: int, col: int): Expr!TplErr {
 struct NP { segs: [Seg], i: int }
 
 fn parse_nodes(src: str): [Node]!TplErr {
-  var np = NP { segs: trim_segs(lex(src)?), i: 0 }
+  let cs = src.chars()
+  var np = NP { segs: trim_segs(cs, lex(cs)?), i: 0 }
   let (nodes, end, _) = block(&np)?
   if end != "" {
     let s = np.segs[np.i - 1]
@@ -704,18 +723,27 @@ fn for_node(np: var NP, p: var P, s: Seg): Node!TplErr {
 
 // ---- rendering ----
 
-struct Ctx { scopes: [{str: Value}], partials: {str: Template}, escape: bool, depth: int }
+// `scopes[0]` holds the data; each running `for` adds one scope above it, and `at`/`of` hold
+// that loop's current index and length (for `loop`, which is only built when asked for).
+struct Ctx {
+  scopes: [{str: Value}],
+  at: [int],
+  of: [int],
+  partials: {str: Template},
+  escape: bool,
+  depth: int,
+}
 
 let MAX_INCLUDE_DEPTH = 32
 
-fn run(nodes: [Node], c: var Ctx, out: var [str]): ()!TplErr {
+fn run(nodes: [Node], c: var Ctx, out: var str): ()!TplErr {
   for n in nodes {
     match n {
-      Text(s) => out.push(s)
+      Text(s) => out += s
       Out(e, line, col) => {
         let v = eval(e, c, line, col)?
         let s = show_value(v)
-        out.push(if c.escape && !is_raw(e) { escape(s) } else { s })
+        out += if c.escape && !is_raw(e) { escape(s) } else { s }
       }
       If(branches, other, line, col) => {
         var taken = false
@@ -729,31 +757,37 @@ fn run(nodes: [Node], c: var Ctx, out: var [str]): ()!TplErr {
         if !taken { run(other, &c, &out)? }
       }
       For(key, name, iter, body, other, line, col) => {
-        let items = pairs(eval(iter, c, line, col)?, key != none, line, col)?
-        if items.len() == 0 {
+        let seq = eval(iter, c, line, col)?
+        // a list is walked in place; the rest goes through `pairs`
+        let xs = match seq {
+          List(xs) => xs
+          _ => []
+        }
+        let items = if seq is List(_) { [] } else { pairs(seq, key != none, line, col)? }
+        let count = xs.len() + items.len()
+        if count == 0 {
           run(other, &c, &out)?
           continue
         }
         c.scopes.push({})
+        c.at.push(0)
+        c.of.push(count)
         let top = c.scopes.len() - 1
-        for i, (k, v) in items {
+        for i in 0..count {
+          // the loop's variables; a variable named `loop` is hidden by the loop's own `loop`
           var sc: {str: Value} = {}
           match key {
-            some(kn) => sc[kn] = k
+            some(kn) => if kn != "loop" { sc[kn] = if i < xs.len() { Int(i) } else { items[i].0 } }
             none => {}
           }
-          sc[name] = v
-          sc["loop"] = Map({
-            "index": Int(i + 1),
-            "index0": Int(i),
-            "first": Bool(i == 0),
-            "last": Bool(i == items.len() - 1),
-            "length": Int(items.len()),
-          })
+          if name != "loop" { sc[name] = if i < xs.len() { xs[i] } else { items[i].1 } }
           c.scopes[top] = sc
+          c.at[top - 1] = i
           run(body, &c, &out)?
         }
         c.scopes.pop()
+        c.at.pop()
+        c.of.pop()
       }
       Set(name, e, line, col) => {
         let v = eval(e, c, line, col)?
@@ -779,6 +813,15 @@ fn run(nodes: [Node], c: var Ctx, out: var [str]): ()!TplErr {
   }
 }
 
+// The `loop` variable of a `for` at index `i` of `count`.
+fn loop_info(i: int, count: int): Value = Map({
+  "index": Int(i + 1),
+  "index0": Int(i),
+  "first": Bool(i == 0),
+  "last": Bool(i == count - 1),
+  "length": Int(count),
+})
+
 fn is_raw(e: Expr): bool = match e {
   Filter(_, "raw", _) => true
   Filter(_, "safe", _) => true
@@ -788,7 +831,7 @@ fn is_raw(e: Expr): bool = match e {
 // What a `for` iterates: list items (key = index) or map entries (key = the key; one loop
 // variable gets the key, two get key and value).
 fn pairs(v: Value, two: bool, line: int, col: int): [(Value, Value)]!TplErr = match v {
-  List(xs) => xs.enum().map((i, x) => (Int(i), x))
+  List(xs) => xs.enum().map((i, x) => (Int(i), x))  // (`run` walks lists itself)
   Map(m) => {
     var ps: [(Value, Value)] = []
     for k, x in m { ps.push(if two { (Str(k), x) } else { (Null, Str(k)) }) }
@@ -835,9 +878,16 @@ fn lookup(c: Ctx, n: str): Value? {
       some(v) => return some(v)
       none => {}
     }
+    if i > 0 && n == "loop" { return some(loop_info(c.at[i - 1], c.of[i - 1])) }
     i -= 1
   }
   none
+}
+
+// A field of a value: `e` is the whole `b.n` expression.
+fn field(v: Value, b: Expr, n: str, e: Expr, line: int, col: int): Value!TplErr = match v {
+  Map(m) => m.get(n) else fail(Undefined(path(e), line, col))
+  _ => fail(Type("`{path(b)}` is {kind(v)}, so it has no field `{n}`", line, col))
 }
 
 // A readable name for an expression, for errors: `user.name`, `xs[0]`.
@@ -854,10 +904,25 @@ fn path(e: Expr): str = match e {
 fn eval(e: Expr, c: Ctx, line: int, col: int): Value!TplErr = match e {
   Lit(v) => v
   Var(n) => lookup(c, n) else fail(Undefined(n, line, col))
-  Attr(b, n) => match eval(b, c, line, col)? {
-    Map(m) => m.get(n) else fail(Undefined(path(e), line, col))
-    v => fail(Type("`{path(b)}` is {kind(v)}, so it has no field `{n}`", line, col))
+  Attr(Var("loop"), n) => {
+    // `loop.index` and the like, straight from the innermost loop's counters
+    let top = c.scopes.len() - 1
+    if top > 0 && c.scopes[top].get("loop") == none {
+      let i = c.at[top - 1]
+      match n {
+        "index" => Int(i + 1)
+        "index0" => Int(i)
+        "first" => Bool(i == 0)
+        "last" => Bool(i == c.of[top - 1] - 1)
+        "length" => Int(c.of[top - 1])
+        _ => fail(Undefined(path(e), line, col))
+      }
+    } else {
+      let v = lookup(c, "loop") else fail(Undefined("loop", line, col))
+      field(v, Var("loop"), n, e, line, col)?
+    }
   }
+  Attr(b, n) => field(eval(b, c, line, col)?, b, n, e, line, col)?
   Index(b, k) => index(eval(b, c, line, col)?, eval(k, c, line, col)?, e, line, col)?
   Neg(x) => match eval(x, c, line, col)? {
     Int(i) => Int(-i)

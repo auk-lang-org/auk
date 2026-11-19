@@ -264,6 +264,7 @@ pub fn encode(a: audio.Audio, f: audio.Fmt): [int]!audio.AErr {
   }
   var fmt: [int] = []
   var data: [int] = []
+  var direct = false  // the samples are encoded straight into the file, below
   if tag == 0x11 {
     let block = 256 * nch * if a.rate > 11025 { a.rate / 11025 } else { 1 }
     let per = audio.pcm.ima_frames(block, nch)
@@ -277,6 +278,7 @@ pub fn encode(a: audio.Audio, f: audio.Fmt): [int]!audio.AErr {
     audio.pcm.put16le(&fmt, per)
     data = audio.pcm.ima_encode(a.chans, block)
   } else {
+    direct = true
     let w = audio.pcm.width(f)
     let ext = (nch > 2 || w > 2) && (tag == 1 || tag == 3)
     audio.pcm.put16le(&fmt, if ext { 0xfffe } else { tag })
@@ -295,7 +297,6 @@ pub fn encode(a: audio.Audio, f: audio.Fmt): [int]!audio.AErr {
     } else if tag != 1 {
       audio.pcm.put16le(&fmt, 0)
     }
-    data = audio.pcm.encode(a.chans, f, false)
   }
   var body = "WAVE".bytes()
   chunk(&body, "fmt ", fmt)
@@ -310,8 +311,13 @@ pub fn encode(a: audio.Audio, f: audio.Fmt): [int]!audio.AErr {
     if v != "" { chunk(&info, id, v.bytes() + [0]) }
   }
   if info.len() > 4 { chunk(&body, "LIST", info) }
-  chunk(&body, "data", data)
-  var out: [int] = []
-  chunk(&out, "RIFF", body)
+  // the data chunk comes last, so the file is the RIFF header, `body`, then that chunk
+  let dlen = if direct { n * audio.pcm.width(f) * nch } else { data.len() }
+  var out = "RIFF".bytes()
+  audio.pcm.put32le(&out, body.len() + 8 + dlen + (dlen & 1))
+  out = out + body + "data".bytes()
+  audio.pcm.put32le(&out, dlen)
+  if direct { audio.pcm.encode_into(&out, a.chans, f, false) } else { out = out + data }
+  if (dlen & 1) == 1 { out.push(0) }
   out
 }

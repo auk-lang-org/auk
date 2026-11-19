@@ -37,13 +37,18 @@ pub fn parse(s: str): Value!JsonErr {
   v
 }
 
-fn peek(p: P): char? = p.cs.get(p.i)
 fn at(p: P, c: char): bool = p.i < p.cs.len() && p.cs[p.i] == c
-fn at_digit(p: P): bool = p.i < p.cs.len() && digit(p.cs[p.i])
-fn digit(c: char): bool = "0123456789".contains(c)
+fn digit(c: char): bool = c >= '0' && c <= '9'
 
 fn skip_ws(p: var P) {
-  while p.i < p.cs.len() && " \t\n\r".contains(p.cs[p.i]) { p.i += 1 }
+  let n = p.cs.len()
+  var i = p.i
+  while i < n {
+    let c = p.cs[i]
+    if c != ' ' && c != '\n' && c != '\t' && c != '\r' { break }
+    i += 1
+  }
+  p.i = i
 }
 
 // 1-based position of index i; only computed on the error path.
@@ -59,7 +64,7 @@ fn too_deep(p: P): JsonErr = TooDeep(line(p.cs, p.i), col(p.cs, p.i))
 
 fn unexpected(p: P): JsonErr {
   let (l, k) = (line(p.cs, p.i), col(p.cs, p.i))
-  match p.peek() {
+  match p.cs.get(p.i) {
     some(c) => Unexpected(c, l, k)
     none => Eof(l, k)
   }
@@ -68,22 +73,25 @@ fn unexpected(p: P): JsonErr {
 // depth = how many arrays/objects enclose this value
 fn value(p: var P, depth: int): Value!JsonErr {
   p.skip_ws()
-  match p.peek() {
-    some(c) when (c == '[' || c == '{') && depth >= MAX_DEPTH => fail(p.too_deep())
-    some('{') => object(&p, depth + 1)
-    some('[') => array(&p, depth + 1)
-    some('"') => Str(string(&p)?)
-    some('t') => word(&p, "true", Bool(true))
-    some('f') => word(&p, "false", Bool(false))
-    some('n') => word(&p, "null", Null)
-    some(c) when c == '-' || digit(c) => number(&p)
+  if p.i >= p.cs.len() { fail(p.unexpected()) }
+  let c = p.cs[p.i]
+  if c == '"' { return Str(string(&p)?) }
+  if c == '{' || c == '[' {
+    if depth >= MAX_DEPTH { fail(p.too_deep()) }
+    return if c == '{' { object(&p, depth + 1) } else { array(&p, depth + 1) }
+  }
+  if c == '-' || digit(c) { return number(&p) }
+  match c {
+    't' => word(&p, "true", Bool(true))
+    'f' => word(&p, "false", Bool(false))
+    'n' => word(&p, "null", Null)
     _ => fail(p.unexpected())
   }
 }
 
 fn word(p: var P, w: str, v: Value): Value!JsonErr {
-  for c in w.chars() {
-    if !p.at(c) { fail(p.unexpected()) }
+  for k in 0..w.len() {
+    if !p.at(w[k]) { fail(p.unexpected()) }
     p.i += 1
   }
   v
@@ -139,23 +147,34 @@ fn object(p: var P, depth: int): Value!JsonErr {
   }
 }
 
-// p is on the opening quote; leaves p just past the closing quote.
+// p is on the opening quote; leaves p just past the closing quote. Runs of plain chars are
+// copied a slice at a time; a string with no escapes is one slice.
 fn string(p: var P): str!JsonErr {
-  p.i += 1
-  var out: [str] = []
+  let n = p.cs.len()
+  var i = p.i + 1
+  var from = i
+  var out = ""
   loop {
-    let c = p.peek() else fail(p.unexpected())
-    match c {
-      '"' => {
-        p.i += 1
-        break out.join("")
-      }
-      '\\' => out.push(escape(&p)?)
-      _ when control(c) => fail(ControlChar(line(p.cs, p.i), col(p.cs, p.i)))
-      _ => {
-        out.push("{c}")
-        p.i += 1
-      }
+    if i >= n {
+      p.i = i
+      fail(p.unexpected())
+    }
+    let c = p.cs[i]
+    if c == '"' {
+      p.i = i + 1
+      if i > from { out += core.str(p.cs[from..i]) }
+      break out
+    }
+    if c == '\\' {
+      if i > from { out += core.str(p.cs[from..i]) }
+      p.i = i
+      out += escape(&p)?
+      i = p.i
+      from = i
+    } else if control(c) {
+      fail(ControlChar(line(p.cs, i), col(p.cs, i)))
+    } else {
+      i += 1
     }
   }
 }
@@ -164,7 +183,8 @@ fn string(p: var P): str!JsonErr {
 fn escape(p: var P): str!JsonErr {
   let start = p.i
   p.i += 1
-  let c = p.peek() else fail(p.unexpected())
+  if p.i >= p.cs.len() { fail(p.unexpected()) }
+  let c = p.cs[p.i]
   p.i += 1
   match c {
     '"' => "\""
@@ -184,23 +204,26 @@ fn escape(p: var P): str!JsonErr {
 fn unicode(p: var P, start: int): str!JsonErr {
   let hi = hex4(&p)?
   if hi < 0xD800 || hi > 0xDFFF { return "{char(hi)!}" }  // not a surrogate, so a valid char
-  let lone = BadEscape(p.cs.text(start, p.i), line(p.cs, start), col(p.cs, start))
-  if hi > 0xDBFF || !p.at('\\') { fail(lone) }  // a low surrogate first, or nothing after the high one
+  // a low surrogate first, or nothing after the high one
+  if hi > 0xDBFF || !p.at('\\') { fail(p.bad_escape(start, p.i)) }
+  let end = p.i
   p.i += 1
-  if !p.at('u') { fail(lone) }
+  if !p.at('u') { fail(p.bad_escape(start, end)) }
   p.i += 1
   let lo = hex4(&p)?
-  if lo < 0xDC00 || lo > 0xDFFF {
-    fail(BadEscape(p.cs.text(start, p.i), line(p.cs, start), col(p.cs, start)))
-  }
+  if lo < 0xDC00 || lo > 0xDFFF { fail(p.bad_escape(start, p.i)) }
   "{char(0x10000 + (hi - 0xD800) * 0x400 + (lo - 0xDC00))!}"  // always <= U+10FFFF
 }
+
+// the escape text cs[start..end], positioned at its backslash
+fn bad_escape(p: P, start: int, end: int): JsonErr =
+  BadEscape(p.cs.text(start, end), line(p.cs, start), col(p.cs, start))
 
 fn hex4(p: var P): int!JsonErr {
   var n = 0
   for _ in 0..4 {
-    let c = p.peek() else fail(p.unexpected())
-    let d = hex_val(c) else fail(p.unexpected())
+    if p.i >= p.cs.len() { fail(p.unexpected()) }
+    let d = hex_val(p.cs[p.i]) else fail(p.unexpected())
     n = n * 16 + d
     p.i += 1
   }
@@ -208,8 +231,10 @@ fn hex4(p: var P): int!JsonErr {
 }
 
 fn hex_val(c: char): int? {
-  let i = "0123456789abcdefABCDEF".chars().find_index(d => d == c)?
-  if i < 16 { i } else { i - 6 }
+  if digit(c) { return int(c) - int('0') }
+  if c >= 'a' && c <= 'f' { return int(c) - int('a') + 10 }
+  if c >= 'A' && c <= 'F' { return int(c) - int('A') + 10 }
+  none
 }
 
 // U+0000..U+001F
@@ -217,37 +242,63 @@ fn control(c: char): bool = int(c) < 0x20
 
 // p is on `-` or a digit. Grammar: -? (0 | [1-9][0-9]*) (. [0-9]+)? ([eE] [+-]? [0-9]+)?
 fn number(p: var P): Value!JsonErr {
+  let n = p.cs.len()
   let start = p.i
-  if p.at('-') { p.i += 1 }
-  if p.at('0') {
-    p.i += 1
-    if p.at_digit() { fail(p.bad_number(start)) }  // leading zero
+  var i = start
+  let neg = p.cs[i] == '-'
+  if neg { i += 1 }
+  let from = i
+  var acc = 0  // the int part's value, while it has at most 18 digits (so it can't overflow)
+  if i < n && p.cs[i] == '0' {
+    i += 1
+    if i < n && digit(p.cs[i]) {  // leading zero
+      p.i = i
+      fail(p.bad_number(start))
+    }
   } else {
-    p.digits(start)?
+    while i < n && digit(p.cs[i]) {
+      if i - from < 18 { acc = acc * 10 + int(p.cs[i]) - int('0') }
+      i += 1
+    }
+    if i == from {
+      p.i = i
+      fail(p.bad_number(start))
+    }
   }
+  let int_digits = i - from
   var frac = false
-  if p.at('.') {
-    p.i += 1
+  if i < n && p.cs[i] == '.' {
+    p.i = i + 1
     p.digits(start)?
+    i = p.i
     frac = true
   }
-  if p.at('e') || p.at('E') {
-    p.i += 1
-    if p.at('+') || p.at('-') { p.i += 1 }
+  if i < n && (p.cs[i] == 'e' || p.cs[i] == 'E') {
+    i += 1
+    if i < n && (p.cs[i] == '+' || p.cs[i] == '-') { i += 1 }
+    p.i = i
     p.digits(start)?
+    i = p.i
     frac = true
   }
-  let t = p.cs.text(start, p.i)
-  let f = float.parse(t) else fail(p.bad_number(start))
-  if frac { return Float(f) }
-  Int(int.parse(t) else return Float(f))  // wider than 64 bits: keep it as a Float
+  p.i = i
+  if !frac && int_digits <= 18 { return Int(if neg { -acc } else { acc }) }
+  let t = core.str(p.cs[start..i])
+  if !frac {
+    let v = int.parse(t) else return Float(float.parse(t) else fail(p.bad_number(start)))
+    return Int(v)  // else wider than 64 bits: kept as a Float
+  }
+  Float(float.parse(t) else fail(p.bad_number(start)))
 }
 
 // one or more digits
 fn digits(p: var P, start: int): ()!JsonErr {
+  let n = p.cs.len()
   let from = p.i
-  while p.at_digit() { p.i += 1 }
-  if p.i == from { fail(p.bad_number(start)) }
+  var i = from
+  while i < n && digit(p.cs[i]) { i += 1 }
+  p.i = i
+  if i == from { fail(p.bad_number(start)) }
 }
 
 // the number so far plus the offending char, positioned at the number's start
@@ -258,55 +309,108 @@ fn bad_number(p: P, start: int): JsonErr =
 
 /// Compact JSON text: no whitespace, object keys in sorted order. A `Float` always keeps a `.` or
 /// exponent so it reads back as a `Float`; NaN and infinities (which JSON can't express) become `null`.
-pub fn str(v: Value): str = render(v, "")
+pub fn str(v: Value): str {
+  var out = ""
+  emit(v, &out, "", "")
+  out
+}
 
 /// Indented JSON text: 2 spaces per level, `"key": value`, object keys in sorted order.
 /// Empty arrays and objects stay on one line (`[]`, `{}`).
-pub fn pretty(v: Value): str = render(v, "  ")
-
-fn render(v: Value, step: str): str {
-  var out: [str] = []
-  emit(v, &out, "", step)
-  out.join("")
+pub fn pretty(v: Value): str {
+  var out = ""
+  emit(v, &out, "\n", "  ")
+  out
 }
 
-// ind = the current indent; step = "" for compact output, "  " for pretty
-fn emit(Null, out: var [str], _: str, _: str) { out.push("null") }
-fn emit(Bool(b), out: var [str], _: str, _: str) { out.push(if b { "true" } else { "false" }) }
-fn emit(Int(n), out: var [str], _: str, _: str) { out.push("{n}") }
-fn emit(Float(f), out: var [str], _: str, _: str) { out.push(num(f)) }
-fn emit(Str(s), out: var [str], _: str, _: str) { out.push(quote(s)) }
-fn emit(List(xs), out: var [str], ind: str, step: str) {
-  out.push("[")
+// nl = what starts a line at the current indent ("" for compact output, else "\n" + the indent);
+// step = "" for compact output, "  " for pretty
+fn emit(Null, out: var str, _: str, _: str) { out += "null" }
+fn emit(Bool(b), out: var str, _: str, _: str) { out += if b { "true" } else { "false" } }
+fn emit(Int(n), out: var str, _: str, _: str) { out += "{n}" }
+fn emit(Float(f), out: var str, _: str, _: str) { out += num(f) }
+fn emit(Str(s), out: var str, _: str, _: str) { quote(s, &out) }
+fn emit(List(xs), out: var str, nl: str, step: str) {
+  if xs.len() == 0 {
+    out += "[]"
+    return
+  }
+  let inner = nl + step
+  out += "["
   for i, x in xs {
-    if i > 0 { out.push(",") }
-    out.newline(ind + step, step)
-    emit(x, &out, ind + step, step)
+    if i > 0 { out += "," }
+    out += inner
+    emit(x, &out, inner, step)
   }
-  if xs.len() > 0 { out.newline(ind, step) }
-  out.push("]")
+  out += nl
+  out += "]"
 }
-fn emit(Map(m), out: var [str], ind: str, step: str) {
-  out.push(r"{")
+fn emit(Map(m), out: var str, nl: str, step: str) {
+  if m.len() == 0 {
+    out += r"{}"
+    return
+  }
+  let inner = nl + step
+  let colon = if step == "" { ":" } else { ": " }
+  out += r"{"
   for i, k in m.keys().sort() {
-    if i > 0 { out.push(",") }
-    out.newline(ind + step, step)
-    out.push(quote(k))
-    out.push(if step == "" { ":" } else { ": " })
-    emit(m[k], &out, ind + step, step)
+    if i > 0 { out += "," }
+    out += inner
+    quote(k, &out)
+    out += colon
+    emit(m[k], &out, inner, step)
   }
-  if m.len() > 0 { out.newline(ind, step) }
-  out.push(r"}")
-}
-
-fn newline(out: var [str], ind: str, step: str) {
-  if step != "" { out.push("\n" + ind) }
+  out += nl
+  out += r"}"
 }
 
 fn num(f: float): str when f - f != 0.0 = "null"  // NaN or ±inf
-fn num(f: float): str = "{f}"                     // shortest exact form, e.g. "1.0", "0.1"
+fn num(f: float): str = short(f) else "{f}"       // shortest exact form, e.g. "1.0", "0.1"
 
-fn quote(s: str): str = "\"" + s.chars().map(c => esc(c)).join("") + "\""
+// What "{f}" gives, found cheaply, when f is a decimal of at most 15 digits with at most 6 of
+// them after the point (`12.0`, `0.25`, `-1234.5678`); none for anything else. Such a decimal is
+// the only one that short that reads back as f, so it is the shortest exact form.
+fn short(f: float): str? {
+  let a = if f < 0.0 { -f } else { f }
+  if !(a >= 0.001 && a < 1e15) { return none }
+  var scale = 1.0
+  for d in 0..7 {
+    let x = a * scale
+    if x >= 1e15 { return none }
+    let k = int(x + 0.5)
+    if float(k) / scale == a {  // k / 10^d, rounded to the nearest float, is f
+      let ds = "{k}"
+      let sign = if f < 0.0 { "-" } else { "" }
+      if d == 0 { return "{sign}{ds}.0" }
+      let n = ds.len()
+      if n <= d { return "{sign}0.{"0".repeat(d - n)}{ds}" }
+      return "{sign}{ds[0..n - d]}.{ds[n - d..n]}"
+    }
+    scale *= 10.0
+  }
+  none
+}
+
+// Appends s in quotes; runs of chars that need no escape are copied a slice at a time.
+fn quote(s: str, out: var str) {
+  let cs = s.chars()
+  let n = cs.len()
+  var from = 0
+  out += "\""
+  for i, c in cs {
+    if c == '"' || c == '\\' || control(c) {
+      if i > from { out += core.str(cs[from..i]) }
+      out += esc(c)
+      from = i + 1
+    }
+  }
+  if from == 0 {
+    out += s
+  } else if n > from {
+    out += core.str(cs[from..n])
+  }
+  out += "\""
+}
 
 fn esc('"'): str = "\\\""
 fn esc('\\'): str = "\\\\"

@@ -87,7 +87,7 @@ async fn exchange(c: var net.Conn, data: [int]): [int]! uses net {
   loop {
     let got = c.read(65536)?
     if got.len() == 0 { break buf }
-    for b in got { buf.push(b) }
+    buf += got
   }
 }
 

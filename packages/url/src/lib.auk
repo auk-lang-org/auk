@@ -42,73 +42,99 @@ pub fn parse(s: str): Url!UrlErr {
   let cs = s.chars()
   let n = cs.len()
   // fragment and query split first: '#' then '?'
-  let hash = cs.find_index(c => c == '#') else n
-  let qmark = cs.take(hash).find_index(c => c == '?') else hash
+  var hash = 0
+  var qmark = -1
+  while hash < n && cs[hash] != '#' {
+    if qmark < 0 && cs[hash] == '?' { qmark = hash }
+    hash += 1
+  }
+  if qmark < 0 { qmark = hash }
   // a scheme is the text before a ':' that comes before any '/', '?' or '#'
-  let stop = cs.take(qmark).find_index(c => c == '/') else qmark
+  var colon = 0
+  while colon < qmark && cs[colon] != ':' && cs[colon] != '/' { colon += 1 }
   var i = 0
   var scheme = ""
-  match cs.take(stop).find_index(c => c == ':') {
-    some(colon) => {
-      if !is_scheme(cs.take(colon)) { fail(BadScheme(0)) }
-      scheme = str(cs.take(colon)).lower()
-      i = colon + 1
-    }
-    none => {}
+  if colon < qmark && cs[colon] == ':' {
+    if !is_scheme(cs, colon) { fail(BadScheme(0)) }
+    scheme = text(cs, 0, colon).lower()
+    i = colon + 1
   }
   var user: str? = none
   var host: str? = none
   var port: int? = none
   if i + 1 < qmark && cs[i] == '/' && cs[i + 1] == '/' {
     let start = i + 2
-    let end =
-      start + (cs.skip(start).take(qmark - start).find_index(c => c == '/') else qmark - start)
+    var end = start
+    while end < qmark && cs[end] != '/' { end += 1 }
     let auth = authority(cs, start, end)?
     user = auth.0
     host = some(auth.1)
     port = auth.2
     i = end
   }
-  check(cs, i, qmark, "/:@")?
+  check(cs, i, qmark, PATH)?
   let path = text(cs, i, qmark)
   var query: str? = none
   if qmark < hash {
-    check(cs, qmark + 1, hash, "/?:@")?
+    check(cs, qmark + 1, hash, QUERY)?
     query = some(text(cs, qmark + 1, hash))
   }
   var fragment: str? = none
   if hash < n {
-    check(cs, hash + 1, n, "/?:@")?
+    check(cs, hash + 1, n, QUERY)?
     fragment = some(text(cs, hash + 1, n))
   }
   Url { scheme, user, host, port, path, query, fragment }
 }
 
-fn text(cs: [char], from: int, to: int): str = str(cs.skip(from).take(to - from))
+fn text(cs: [char], from: int, to: int): str = str(cs[from..to])
 
-// ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
-fn is_scheme(cs: [char]): bool =
-  cs.len() > 0 && is_alpha(cs[0]) && cs.all(c => is_alpha(c) || is_num(c) || "+-.".contains(c))
+// ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ), in cs[0..to]
+fn is_scheme(cs: [char], to: int): bool {
+  if to == 0 || !is_alpha(cs[0]) { return false }
+  for i in 1..to {
+    let c = cs[i]
+    if !(is_alpha(c) || is_num(c) || c == '+' || c == '-' || c == '.') { return false }
+  }
+  true
+}
 
 fn is_alpha(c: char): bool = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 fn is_num(c: char): bool = c >= '0' && c <= '9'
-fn is_sub_delim(c: char): bool = "!$&'()*+,;=".contains(c)
+fn is_hex(c: char): bool = is_num(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 
-// Every char in cs[from..to] is unreserved, a sub-delim, in `extra`, or a valid `%XX`.
-fn check(cs: [char], from: int, to: int, extra: str): ()!UrlErr {
+// RFC 3986 unreserved chars (as `encoding.is_unreserved`).
+fn is_unreserved(c: char): bool =
+  is_alpha(c) || is_num(c) || c == '-' || c == '.' || c == '_' || c == '~'
+
+// An unreserved char or a sub-delim: allowed (unencoded) in every part.
+fn is_plain(c: char): bool = is_unreserved(c) ||
+  match c {
+    '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '=' => true
+    _ => false
+  }
+
+// The parts of a URL, by what else they allow: a host nothing, userinfo ':', a path "/:@",
+// a query or fragment "/?:@".
+let HOST = 0
+let USER = 1
+let PATH = 2
+let QUERY = 3
+
+// Every char in cs[from..to] is unreserved, a sub-delim, allowed in `part`, or a valid `%XX`.
+fn check(cs: [char], from: int, to: int, part: int): ()!UrlErr {
   var i = from
   while i < to {
     let c = cs[i]
     if c == '%' {
-      if i + 2 >= to { fail(BadEscape(i)) }
-      if encoding.hex_val(cs[i + 1]) is none || encoding.hex_val(cs[i + 2]) is none {
-        fail(BadEscape(i))
-      }
+      if i + 2 >= to || !is_hex(cs[i + 1]) || !is_hex(cs[i + 2]) { fail(BadEscape(i)) }
       i += 3
     } else {
-      if !(encoding.is_unreserved(c) || is_sub_delim(c) || extra.contains(c)) || int(c) > 127 {
-        fail(BadChar(i, c))
-      }
+      let ok = is_plain(c) ||
+        (c == ':' && part >= USER) ||
+        (c == '/' || c == '@') && part >= PATH ||
+        (c == '?' && part == QUERY)
+      if !ok { fail(BadChar(i, c)) }
       i += 1
     }
   }
@@ -116,46 +142,45 @@ fn check(cs: [char], from: int, to: int, extra: str): ()!UrlErr {
 
 // authority = [ userinfo "@" ] host [ ":" port ], in cs[from..to]
 fn authority(cs: [char], from: int, to: int): (str?, str, int?)!UrlErr {
-  let seg = cs.skip(from).take(to - from)
   var hs = from
   var user: str? = none
-  match seg.reverse().find_index(c => c == '@') {
-    some(back) => {
-      let at = to - 1 - back
-      check(cs, from, at, ":")?
-      user = some(text(cs, from, at))
-      hs = at + 1
-    }
-    none => {}
+  var at = to - 1  // the last '@'
+  while at >= from && cs[at] != '@' { at -= 1 }
+  if at >= from {
+    check(cs, from, at, USER)?
+    user = some(text(cs, from, at))
+    hs = at + 1
   }
-  var he = to  // host end
+  var he = hs  // host end
   var host = ""
   if hs < to && cs[hs] == '[' {
-    let close = cs.skip(hs).take(to - hs).find_index(c => c == ']') else fail(BadHost(hs))
-    he = hs + close + 1
-    let inner = cs.skip(hs + 1).take(close - 1)
-    if inner.len() == 0 ||
-      !inner.all(c => encoding.hex_val(c) is some(_) || c == ':' || c == '.') ||
-      !inner.contains(':') {
-      fail(BadHost(hs))
+    var close = hs + 1
+    while close < to && cs[close] != ']' { close += 1 }
+    if close == to { fail(BadHost(hs)) }
+    var colons = false
+    for k in hs + 1..close {
+      let c = cs[k]
+      if c == ':' { colons = true } else if !(is_hex(c) || c == '.') { fail(BadHost(hs)) }
     }
-    host = str(inner).lower()
+    if !colons { fail(BadHost(hs)) }
+    host = text(cs, hs + 1, close).lower()
+    he = close + 1
     if he < to && cs[he] != ':' { fail(BadHost(he)) }
   } else {
-    he = hs + (cs.skip(hs).take(to - hs).find_index(c => c == ':') else to - hs)
-    check(cs, hs, he, "")?
+    while he < to && cs[he] != ':' { he += 1 }
+    check(cs, hs, he, HOST)?
     host = text(cs, hs, he).lower()
   }
   var port: int? = none
   if he < to {
     // cs[he] is ':'
-    let digits = cs.skip(he + 1).take(to - he - 1)
-    if !digits.all(c => is_num(c)) { fail(BadPort(he + 1)) }
-    if digits.len() > 0 {
-      let p = int.parse(str(digits)) else fail(BadPort(he + 1))
-      if p > 65535 { fail(BadPort(he + 1)) }
-      port = some(p)
+    var p = 0
+    for k in he + 1..to {
+      if !is_num(cs[k]) { fail(BadPort(he + 1)) }
+      if p <= 65535 { p = p * 10 + (int(cs[k]) - int('0')) }
     }
+    if p > 65535 { fail(BadPort(he + 1)) }
+    if he + 1 < to { port = some(p) }
   }
   (user, host, port)
 }
@@ -165,28 +190,42 @@ fn authority(cs: [char], from: int, to: int): (str?, str, int?)!UrlErr {
 /// The URL as text, so `"{u}"` and `str(u)` print it. If there is a host and the path doesn't
 /// start with '/', one is added.
 pub fn show(u: Url): str {
-  let scheme = if u.scheme == "" { "" } else { u.scheme + ":" }
-  let auth = match u.host {
+  var out = if u.scheme == "" { "" } else { u.scheme + ":" }
+  match u.host {
     some(h) => {
-      let user = match u.user {
-        some(ui) => ui + "@"
-        none => ""
+      out += "//"
+      match u.user {
+        some(ui) => {
+          out += ui
+          out += "@"
+        }
+        none => {}
       }
-      let port = match u.port {
-        some(p) => ":{p}"
-        none => ""
+      out += bracket(h)
+      match u.port {
+        some(p) => out += ":{p}"
+        none => {}
       }
-      let slash = if u.path != "" && !u.path.starts_with("/") { "/" } else { "" }
-      "//" + user + bracket(h) + port + slash
+      if u.path != "" && !u.path.starts_with("/") { out += "/" }
     }
-    none => ""
+    none => {}
   }
-  scheme + auth + u.path + part("?", u.query) + part("#", u.fragment)
-}
-
-fn part(sep: str, x: str?): str = match x {
-  some(v) => sep + v
-  none => ""
+  out += u.path
+  match u.query {
+    some(q) => {
+      out += "?"
+      out += q
+    }
+    none => {}
+  }
+  match u.fragment {
+    some(f) => {
+      out += "#"
+      out += f
+    }
+    none => {}
+  }
+  out
 }
 
 // IPv6 hosts are written in brackets.
@@ -253,74 +292,141 @@ pub fn resolve(base: Url, rel: str): Url!UrlErr {
 // §5.2.3
 fn merge(base: Url, rel: str): str {
   if base.host is some(_) && base.path == "" { return "/" + rel }
-  let segs = base.path.split("/")
-  segs.take(segs.len() - 1).map(s => s + "/").join("") + rel
+  // the base path up to and including its last '/'
+  let cs = base.path.chars()
+  var k = cs.len()
+  while k > 0 && cs[k - 1] != '/' { k -= 1 }
+  if k == 0 { rel } else { str(cs[0..k]) + rel }
 }
 
 /// Remove `.` and `..` segments from a path (RFC 3986 §5.2.4): `/a/b/../c/./d` is `/a/c/d`.
 pub fn remove_dots(path: str): str {
-  var input = path
-  var out: [str] = []  // output segments, each with its leading '/' (or none at the start)
-  while input != "" {
-    if input.starts_with("../") {
-      input = drop(input, 3)
-    } else if input.starts_with("./") {
-      input = drop(input, 2)
-    } else if input.starts_with("/./") {
-      input = drop(input, 2)
-    } else if input == "/." {
-      input = "/"
-    } else if input.starts_with("/../") {
-      input = drop(input, 3)
-      out.pop()
-    } else if input == "/.." {
-      input = "/"
-      out.pop()
-    } else if input == "." || input == ".." {
-      input = ""
+  // a dot segment starts the path or follows a '/'
+  if !path.starts_with(".") && !path.contains("/.") { return path }
+  let cs = path.chars()
+  let n = cs.len()
+  // output segments, each cs[from[k]..to[k]] with its leading '/' (or none at the start)
+  var from: [int] = []
+  var to: [int] = []
+  var i = 0  // the input is cs[i..n]
+  while i < n {
+    let dots = if cs[i] == '/' { dot_run(cs, i + 1) } else { dot_run(cs, i) }
+    if cs[i] != '/' && dots > 0 {
+      // "./" or "../" is dropped, and so is a lone "." or ".."
+      i += dots + 1
+    } else if dots == 1 {
+      // "/./" becomes "/"; so does a final "/.", which is then the last segment
+      if i + 2 == n {
+        from.push(i)
+        to.push(i + 1)
+      }
+      i += 2
+    } else if dots == 2 {
+      // "/../" becomes "/", taking the last segment with it; so does a final "/.."
+      from.pop()
+      to.pop()
+      if i + 3 == n {
+        from.push(i)
+        to.push(i + 1)
+      }
+      i += 3
     } else {
       // move the first segment (with its leading '/', if any) to the output
-      let start = if input.starts_with("/") { 1 } else { 0 }
-      let rest = drop(input, start)
-      let len = start + (rest.find("/") else rest.len())
-      out.push(input[0..len])
-      input = drop(input, len)
+      var j = i + 1
+      while j < n && cs[j] != '/' { j += 1 }
+      from.push(i)
+      to.push(j)
+      i = j
     }
   }
-  out.join("")
+  var out = ""
+  for k, a in from { out += str(cs[a..to[k]]) }
+  out
 }
 
-fn drop(s: str, n: int): str = s[n..s.len()]
+// 1 or 2 if cs[i..] is "." or ".." followed by a '/' or the end; else 0.
+fn dot_run(cs: [char], i: int): int {
+  let n = cs.len()
+  if i >= n || cs[i] != '.' { return 0 }
+  if i + 1 == n || cs[i + 1] == '/' { return 1 }
+  if cs[i + 1] == '.' && (i + 2 == n || cs[i + 2] == '/') { return 2 }
+  0
+}
 
 // ---- queries and paths ----
 
-/// Decode one form-encoded component: `+` is a space, then `%XX`. A malformed escape is kept
-/// as written rather than failing (as browsers do).
-fn form_decode(s: str): str {
-  let t = s.replace("+", " ")
-  encoding.percent_decode(t) else t
+/// Decode one form-encoded component, cs[from..to]: `+` is a space, then `%XX`. A malformed
+/// escape is kept as written rather than failing (as browsers do). `plus` and `pct` say whether
+/// it holds a '+' or a '%' (most don't, and are just copied).
+fn form_decode(cs: [char], from: int, to: int, plus: bool, pct: bool): str {
+  if from == to { return "" }
+  let s = str(cs[from..to])
+  let t = if plus { s.replace("+", " ") } else { s }
+  if pct { encoding.percent_decode(t) else t } else { t }
 }
 
 /// Parse a query string (`a=1&b=x%20y&flag`) into decoded pairs, in order. `+` is a space, a key
 /// without `=` gets "", and empty pieces (`a=1&&b=2`) are skipped.
 pub fn parse_query(q: str): [(str, str)] {
+  let cs = q.chars()
+  let n = cs.len()
   var out: [(str, str)] = []
-  for piece in q.split("&") {
-    if piece == "" { continue }
-    match piece.find("=") {
-      some(i) => out.push((form_decode(piece[0..i]), form_decode(piece[i + 1..piece.len()])))
-      none => out.push((form_decode(piece), ""))
+  var i = 0
+  while i < n {
+    // one piece: cs[i..end], with its first '=' at `eq` (or `eq == end`)
+    var eq = -1
+    var kplus = false
+    var kpct = false
+    var plus = false
+    var pct = false
+    var end = i
+    while end < n && cs[end] != '&' {
+      let c = cs[end]
+      if c == '+' {
+        plus = true
+      } else if c == '%' {
+        pct = true
+      } else if c == '=' && eq < 0 {
+        eq = end
+        kplus = plus
+        kpct = pct
+        plus = false
+        pct = false
+      }
+      end += 1
     }
+    if end > i {
+      if eq < 0 {
+        out.push((form_decode(cs, i, end, plus, pct), ""))
+      } else {
+        out.push((form_decode(cs, i, eq, kplus, kpct), form_decode(cs, eq + 1, end, plus, pct)))
+      }
+    }
+    i = end + 1
   }
   out
 }
 
 /// Build a query string (`application/x-www-form-urlencoded`): each key and value
 /// percent-encoded, spaces as `+`, joined with `&`.
-pub fn build_query(pairs: [(str, str)]): str =
-  pairs.map((k, v) => form_encode(k) + "=" + form_encode(v)).join("&")
+pub fn build_query(pairs: [(str, str)]): str {
+  var out = ""
+  for i, (k, v) in pairs {
+    if i > 0 { out += "&" }
+    out += form_encode(k)
+    out += "="
+    out += form_encode(v)
+  }
+  out
+}
 
-fn form_encode(s: str): str = encoding.percent_encode(s).replace("%20", "+")
+fn form_encode(s: str): str {
+  // most keys and values need no encoding at all
+  for c in s.chars() {
+    if !is_unreserved(c) { return encoding.percent_encode(s).replace("%20", "+") }
+  }
+  s
+}
 
 /// The decoded query pairs of `u` (none if it has no query).
 pub fn params(u: Url): [(str, str)] = parse_query(u.query else "")
@@ -334,9 +440,10 @@ pub fn with_params(u: Url, pairs: [(str, str)]): Url =
 
 /// The decoded path segments: `/a/b%20c/` is `["a", "b c", ""]`; an empty path or `/` is `[]`.
 pub fn segments(u: Url): [str] {
-  let p = if u.path.starts_with("/") { drop(u.path, 1) } else { u.path }
+  let p = u.path.strip_prefix("/") else u.path
   if p == "" { return [] }
-  p.split("/").map(s => encoding.percent_decode(s) else s)
+  if !p.contains("%") { return p.split("/") }
+  p.split("/").map(s => if s.contains("%") { encoding.percent_decode(s) else s } else { s })
 }
 
 // ---- tests ----

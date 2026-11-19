@@ -166,8 +166,7 @@ fn tok("-" + body): Tok = Shorts(body.chars())
 fn tok(a: str): Tok = Word(a)
 
 fn long_tok(body: str): Tok {
-  let cs = body.chars()
-  let i = cs.find_index(c => c == '=') else return Long(body, none)
+  let i = body.find("=") else return Long(body, none)
   Long(body[0..i], body[i + 1..body.len()])
 }
 
@@ -247,9 +246,12 @@ fn apply(o: Opt, val: str?, next: str?, m: var Matches): bool!CliErr = match (o.
 fn value_like(s: str): bool = s == "-" || !s.starts_with("-")
 
 fn store(m: var Matches, o: Opt, v: str): ()!CliErr {
-  let old = m.values.get(o.long) else []
-  if o.kind == Single && old.len() > 0 { fail(Duplicate(o.long)) }
-  m.values[o.long] = old + [v]
+  if !m.values.contains(o.long) {
+    m.values[o.long] = [v]
+    return
+  }
+  if o.kind == Single && m.values[o.long].len() > 0 { fail(Duplicate(o.long)) }
+  m.values[o.long].push(v)  // in place: a much-repeated option stays linear
 }
 
 // Assign free words to positionals in order.

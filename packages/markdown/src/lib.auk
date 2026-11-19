@@ -55,7 +55,8 @@ struct Ref { url: str, title: str }
 
 /// Parses a document into blocks.
 pub fn parse(src: str): [Block] {
-  let lines = src.replace("\r\n", "\n").replace("\r", "\n").split("\n").map(expand_tabs)
+  let unix = if src.contains("\r") { src.replace("\r\n", "\n").replace("\r", "\n") } else { src }
+  let lines = unix.split("\n").map(expand_tabs)
   var refs: {str: Ref} = {}
   let raw = blocks(lines, &refs)
   raw.map(b => resolve(b, refs))
@@ -78,7 +79,12 @@ fn expand_tabs(l: str): str {
   str(out)
 }
 
-fn blank(l: str): bool = l.trim() == ""
+fn blank(l: str): bool {
+  let n = l.len()
+  var i = 0
+  while i < n && l[i].is_space() { i += 1 }
+  i == n
+}
 
 fn indent(l: str): int {
   var i = 0
@@ -89,24 +95,19 @@ fn indent(l: str): int {
 fn strip_indent(l: str, n: int): str {
   var i = 0
   while i < n && i < l.len() && l[i] == ' ' { i += 1 }
-  l[i..l.len()]
+  if i == 0 { l } else { l[i..l.len()] }
 }
 
-fn rtrim(s: str): str {
-  var n = s.len()
-  while n > 0 && s[n - 1].is_space() { n -= 1 }
-  s[0..n]
-}
+fn rtrim(s: str): str = s.trim_end()
 
 struct Fence { ch: char, len: int, ind: int, info: str }
 
 fn fence_start(l: str): Fence? {
   let ind = indent(l)
-  if ind > 3 { return none }
-  let s = l[ind..l.len()]
-  if s == "" { return none }
-  let ch = s[0]
+  if ind > 3 || ind >= l.len() { return none }
+  let ch = l[ind]
   if ch != '`' && ch != '~' { return none }
+  let s = l[ind..l.len()]
   var k = 0
   while k < s.len() && s[k] == ch { k += 1 }
   if k < 3 { return none }
@@ -124,7 +125,7 @@ fn closes_fence(l: str, f: Fence): bool {
 
 fn atx(l: str): (int, str)? {
   let ind = indent(l)
-  if ind > 3 { return none }
+  if ind > 3 || ind >= l.len() || l[ind] != '#' { return none }
   let s = l[ind..l.len()]
   var k = 0
   while k < s.len() && s[k] == '#' { k += 1 }
@@ -143,7 +144,10 @@ fn atx(l: str): (int, str)? {
 }
 
 fn is_rule(l: str): bool {
-  if indent(l) > 3 { return false }
+  let ind = indent(l)
+  if ind > 3 || ind >= l.len() { return false }
+  let c0 = l[ind]
+  if c0 != '*' && c0 != '-' && c0 != '_' && !c0.is_space() { return false }
   let s = l.trim()
   if s == "" { return false }
   let c = s[0]
@@ -160,15 +164,23 @@ fn is_rule(l: str): bool {
 }
 
 fn setext(l: str): int? {
-  if indent(l) > 3 { return none }
+  let ind = indent(l)
+  if ind > 3 || ind >= l.len() { return none }
+  let c0 = l[ind]
+  if c0 != '=' && c0 != '-' && !c0.is_space() { return none }
   let s = l.trim()
   if s == "" { return none }
-  if s.chars().all(c => c == '=') { return some(1) }
-  if s.chars().all(c => c == '-') { return some(2) }
-  none
+  let c = s[0]
+  if c != '=' && c != '-' { return none }
+  if s.chars().all(d => d == c) { some(if c == '=' { 1 } else { 2 }) } else { none }
 }
 
-fn quote_start(l: str): bool = indent(l) <= 3 && l.trim().starts_with(">")
+fn quote_start(l: str): bool {
+  let ind = indent(l)
+  if ind > 3 || ind >= l.len() { return false }
+  let c0 = l[ind]
+  c0 == '>' || (c0.is_space() && l.trim().starts_with(">"))
+}
 
 fn strip_quote(l: str): str {
   let s = l[indent(l) + 1..l.len()]
@@ -179,9 +191,10 @@ struct Marker { ordered: bool, ch: char, start: int, offset: int, rest: str }
 
 fn list_marker(l: str): Marker? {
   let ind = indent(l)
-  if ind > 3 { return none }
+  if ind > 3 || ind >= l.len() { return none }
+  let c0 = l[ind]
+  if c0 != '-' && c0 != '+' && c0 != '*' && !c0.is_digit() { return none }
   let s = l[ind..l.len()]
-  if s == "" { return none }
   var ordered = false
   var ch = s[0]
   var start = 1
@@ -216,9 +229,9 @@ let BLOCK_TAGS = """
 
 // Which of CommonMark's seven kinds of HTML block line `l` starts (0: none).
 fn html_kind(l: str): int {
-  if indent(l) > 3 { return 0 }
-  let s = l.trim_left()
-  if !s.starts_with("<") { return 0 }
+  let ind = indent(l)
+  if ind > 3 || ind >= l.len() || l[ind] != '<' { return 0 }
+  let s = l[ind..l.len()]
   let low = s.lower()
   for t in ["script", "pre", "style", "textarea"] {
     if low.starts_with("<" + t) {
@@ -245,7 +258,7 @@ fn html_kind(l: str): int {
       return 6
     }
   }
-  match tag_end(s, 0) {
+  match tag_end(s.chars(), 0) {
     some(e) => if blank(s[e..s.len()]) { 7 } else { 0 }
     none => 0
   }
@@ -270,6 +283,23 @@ fn html_start(l: str): bool = html_kind(l) != 0
 
 // Lines that end a paragraph without a blank line between.
 fn interrupts(l: str): bool {
+  // every case below needs one of these first, after at most three spaces
+  let ind = indent(l)
+  if ind > 3 || ind >= l.len() { return false }
+  let c = l[ind]
+  if !(c == '`' ||
+    c == '~' ||
+    c == '#' ||
+    c == '*' ||
+    c == '-' ||
+    c == '_' ||
+    c == '+' ||
+    c == '>' ||
+    c == '<' ||
+    c.is_digit() ||
+    c.is_space()) {
+    return false
+  }
   let hk = html_kind(l)
   if fence_start(l) != none ||
     atx(l) != none ||
@@ -286,28 +316,31 @@ fn interrupts(l: str): bool {
 
 // Table cells: split on unescaped `|`, ignoring one leading and trailing pipe.
 fn cells(l: str): [str] {
-  var s = l.trim()
-  if s.starts_with("|") { s = s[1..s.len()] }
-  if s.ends_with("|") && !s.ends_with("\\|") { s = s[0..s.len() - 1] }
+  let cs = l.trim().chars()
+  var hi = cs.len()
+  var i = if hi > 0 && cs[0] == '|' { 1 } else { 0 }
+  if hi > i && cs[hi - 1] == '|' && !(hi - i >= 2 && cs[hi - 2] == '\\') { hi -= 1 }
   var out: [str] = []
-  var cur: [char] = []
-  var i = 0
-  while i < s.len() {
-    let c = s[i]
-    if c == '\\' && i + 1 < s.len() && s[i + 1] == '|' {
-      cur.push('|')
+  var cur = ""  // the cell so far, up to the run starting at `a`
+  var a = i
+  while i < hi {
+    let c = cs[i]
+    if c == '\\' && i + 1 < hi && cs[i + 1] == '|' {
+      if i > a { cur += str(cs[a..i]) }
+      a = i + 1  // the `|` is kept, the backslash isn't
       i += 2
       continue
     }
     if c == '|' {
-      out.push(str(cur).trim())
-      cur = []
-    } else {
-      cur.push(c)
+      if i > a { cur += str(cs[a..i]) }
+      out.push(cur.trim())
+      cur = ""
+      a = i + 1
     }
     i += 1
   }
-  out.push(str(cur).trim())
+  if hi > a { cur += str(cs[a..hi]) }
+  out.push(cur.trim())
   out
 }
 
@@ -356,7 +389,12 @@ fn blocks(lines: [str], refs: var {str: Ref}, gaps: var [bool]): [Block] {
         code.pop()
         i -= 1
       }
-      out.push(CodeBlock("", code.map(c => c + "\n").join("")))
+      var text = ""
+      for c in code {
+        text += c
+        text += "\n"
+      }
+      out.push(CodeBlock("", text))
       continue
     }
     match fence_start(l) {
@@ -372,7 +410,12 @@ fn blocks(lines: [str], refs: var {str: Ref}, gaps: var [bool]): [Block] {
           i += 1
         }
         let lang = decode_entities(unescape(f.info.split().first() else ""))
-        out.push(CodeBlock(lang, code.map(c => c + "\n").join("")))
+        var text = ""
+        for c in code {
+          text += c
+          text += "\n"
+        }
+        out.push(CodeBlock(lang, text))
         continue
       }
       none => {}
@@ -584,22 +627,27 @@ fn list(lines: [str], i0: int, first: Marker, refs: var {str: Ref}): (Block, int
 // Link reference definitions at the start of a paragraph: `[label]: url "title"`. Records them
 // and returns what's left.
 fn take_refs(text: str, refs: var {str: Ref}): str {
-  var s = text
+  if !text.starts_with("[") { return text }
+  let cs = text.chars()
+  let n = cs.len()
+  var at = 0
   loop {
-    let (label, url, title, rest) = ref_def(s) else { return s }
+    let (label, url, title, next) = ref_def(cs, at) else { break }
     let key = norm_label(label)
     if refs.get(key) == none { refs[key] = Ref { url, title } }
-    s = rest
-    if s == "" { return s }
+    at = next
+    if at >= n { return "" }
   }
+  if at == 0 { text } else { str(cs[at..n]) }
 }
 
 fn norm_label(s: str): str = s.split().join(" ").lower()
 
-fn skip_ws(s: str, i0: int, newline: bool): int {
+fn skip_ws(s: [char], i0: int, newline: bool): int {
+  let n = s.len()
   var i = i0
   var nl = 0
-  while i < s.len() && (s[i] == ' ' || (s[i] == '\n' && newline)) {
+  while i < n && (s[i] == ' ' || (s[i] == '\n' && newline)) {
     if s[i] == '\n' {
       nl += 1
       if nl > 1 { return i }
@@ -609,20 +657,19 @@ fn skip_ws(s: str, i0: int, newline: bool): int {
   i
 }
 
-fn ref_def(s: str): (str, str, str, str)? {
-  if !s.starts_with("[") { return none }
-  var i = 1
-  var label: [char] = []
-  while i < s.len() && s[i] != ']' {
+// A definition starting at `st`: its label, url and title, and the index after its line.
+fn ref_def(s: [char], st: int): (str, str, str, int)? {
+  let n = s.len()
+  if st >= n || s[st] != '[' { return none }
+  var i = st + 1
+  while i < n && s[i] != ']' {
     if s[i] == '[' { return none }
-    if s[i] == '\\' && i + 1 < s.len() {
-      label.push(s[i])
-      i += 1
-    }
-    label.push(s[i])
+    if s[i] == '\\' && i + 1 < n { i += 1 }
     i += 1
   }
-  if i + 1 >= s.len() || s[i + 1] != ':' || str(label).trim() == "" { return none }
+  if i + 1 >= n || s[i + 1] != ':' { return none }
+  let label = str(s[st + 1..i])
+  if label.trim() == "" { return none }
   i = skip_ws(s, i + 2, true)
   let (url, after) = dest(s, i)?
   if url == "" && (after <= i || s[i] != '<') { return none }
@@ -638,39 +685,34 @@ fn ref_def(s: str): (str, str, str, str)? {
   }
   if !line_end(s, end) { return none }
   let e = skip_ws(s, end, false)
-  let rest = if e < s.len() { s[e + 1..s.len()] } else { "" }
-  some((str(label), decode_entities(unescape(url)), decode_entities(unescape(title)), rest))
+  some((label, decode_entities(unescape(url)), decode_entities(unescape(title)), min(e + 1, n)))
 }
 
-fn line_end(s: str, i: int): bool =
-  skip_ws(s, i, false) >= s.len() || s[skip_ws(s, i, false)] == '\n'
+fn line_end(s: [char], i: int): bool {
+  let e = skip_ws(s, i, false)
+  e >= s.len() || s[e] == '\n'
+}
 
-// A link destination at `i`: `<...>` or a run without spaces and with balanced parens.
-fn dest(s: str, i: int): (str, int)? {
-  if i < s.len() && s[i] == '<' {
+// A link destination at `i`: `<...>` or a run without spaces and with balanced parens. The
+// text is returned as written (escapes included).
+fn dest(s: [char], i: int): (str, int)? {
+  let n = s.len()
+  if i < n && s[i] == '<' {
     var j = i + 1
-    var d: [char] = []
-    while j < s.len() && s[j] != '>' {
+    while j < n && s[j] != '>' {
       if s[j] == '\n' || s[j] == '<' { return none }
-      if s[j] == '\\' && j + 1 < s.len() {
-        d.push(s[j])
-        j += 1
-      }
-      d.push(s[j])
+      if s[j] == '\\' && j + 1 < n { j += 1 }
       j += 1
     }
-    if j >= s.len() { return none }
-    return some((str(d), j + 1))
+    if j >= n { return none }
+    return some((str(s[i + 1..j]), j + 1))
   }
   var j = i
   var depth = 0
-  var d: [char] = []
-  while j < s.len() {
+  while j < n {
     let c = s[j]
     if c == ' ' || c == '\n' || int(c) < 32 { break }
-    if c == '\\' && j + 1 < s.len() {
-      d.push(c)
-      d.push(s[j + 1])
+    if c == '\\' && j + 1 < n {
       j += 2
       continue
     }
@@ -679,15 +721,15 @@ fn dest(s: str, i: int): (str, int)? {
       if depth == 0 { break }
       depth -= 1
     }
-    d.push(c)
     j += 1
   }
   if depth != 0 { return none }
-  some((str(d), j))
+  some((if j > i { str(s[i..j]) } else { "" }, j))
 }
 
-fn title_at(s: str, i: int): (str, int)? {
-  if i >= s.len() { return none }
+fn title_at(s: [char], i: int): (str, int)? {
+  let n = s.len()
+  if i >= n { return none }
   let open = s[i]
   let close = match open {
     '"' => '"'
@@ -696,36 +738,39 @@ fn title_at(s: str, i: int): (str, int)? {
     _ => return none
   }
   var j = i + 1
-  var t: [char] = []
-  while j < s.len() && s[j] != close {
-    if s[j] == '\\' && j + 1 < s.len() {
-      t.push(s[j])
-      j += 1
-    }
-    t.push(s[j])
+  while j < n && s[j] != close {
+    if s[j] == '\\' && j + 1 < n { j += 1 }
     j += 1
   }
-  if j >= s.len() { return none }
-  some((str(t), j + 1))
+  if j >= n { return none }
+  some((str(s[i + 1..j]), j + 1))
 }
 
-fn is_punct(c: char): bool = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{{|}}~".contains(str([c]))
+// ASCII punctuation: `!` to `/`, `:` to `@`, `[` to `` ` ``, `{{` to `~`.
+fn is_punct(c: char): bool {
+  let k = int(c)
+  k >= 33 && k <= 47 || (k >= 58 && k <= 64) || (k >= 91 && k <= 96) || (k >= 123 && k <= 126)
+}
 
 // Backslash escapes of ASCII punctuation.
 fn unescape(s: str): str {
   if !s.contains("\\") { return s }
-  var out: [char] = []
+  let cs = s.chars()
+  let n = cs.len()
+  var out = ""
+  var a = 0  // start of the run not yet copied
   var i = 0
-  while i < s.len() {
-    if s[i] == '\\' && i + 1 < s.len() && is_punct(s[i + 1]) {
-      out.push(s[i + 1])
+  while i < n {
+    if cs[i] == '\\' && i + 1 < n && is_punct(cs[i + 1]) {
+      if i > a { out += str(cs[a..i]) }
+      a = i + 1
       i += 2
     } else {
-      out.push(s[i])
       i += 1
     }
   }
-  str(out)
+  if n > a { out += str(cs[a..n]) }
+  out
 }
 
 // ---- inlines ----
@@ -763,89 +808,118 @@ fn is_ws(c: char): bool = c == ' ' ||
   int(c) == 0x205f
 
 // ASCII punctuation, plus common Unicode punctuation and symbols (for emphasis flanking).
-fn is_punct_u(c: char): bool =
-  is_punct(c) || "¡§«¶·»¿–—‘’‚“”„†‡•…‰′″‹›€£¥¢©®°±×÷".contains(str([c]))
-
-struct In { s: str, refs: {str: Ref}, links: bool }
+fn is_punct_u(c: char): bool = if int(c) < 128 {
+  is_punct(c)
+} else {
+  "¡§«¶·»¿–—‘’‚“”„†‡•…‰′″‹›€£¥¢©®°±×÷".contains(c)
+}
 
 /// Parses inline markdown (`*em*`, `` `code` ``, links, ...) with the given reference definitions.
-fn inlines(s: str, refs: {str: Ref}): [Inline] = parse_inl(In { s, refs, links: true })
+fn inlines(s: str, refs: {str: Ref}): [Inline] = parse_inl(s.chars(), refs, true)
 
-fn parse_inl(cx: In): [Inline] {
-  let s = cx.s
+// The pending text: `txt` (already copied) then the literal run `cs[a..b]`.
+fn flush(tks: var [Tk], txt: str, cs: [char], a: int, b: int) {
+  if b > a {
+    tks.push(N(Text(if txt == "" { str(cs[a..b]) } else { txt + str(cs[a..b]) })))
+  } else if txt != "" {
+    tks.push(N(Text(txt)))
+  }
+}
+
+// One pass over the chars. Text is not copied char by char: `a` marks where the literal run in
+// progress starts, and `txt` holds what came before it in the same text node (only escapes and
+// entities end a run without ending the node). `links` is false inside a link's text.
+fn parse_inl(cs: [char], refs: {str: Ref}, links: bool): [Inline] {
+  let n = cs.len()
   var tks: [Tk] = []
-  var buf: [char] = []
+  var txt = ""
+  var a = 0
   var i = 0
-  while i < s.len() {
-    let c = s[i]
-    if c == '\\' && i + 1 < s.len() {
-      let d = s[i + 1]
+  while i < n {
+    let c = cs[i]
+    let u = int(c)
+    // nothing below applies to these: letters but `h`/`w`, digits, space, `+ , - . / : ; = > ? @`,
+    // `{{ | }}` and everything past ASCII
+    if u > 126 ||
+      (u >= 97 && u <= 125 && u != 104 && u != 119) ||
+      (u >= 43 && u <= 90 && u != 60) ||
+      u == 32 {
+      i += 1
+      continue
+    }
+    if c == '\\' && i + 1 < n {
+      let d = cs[i + 1]
       if d == '\n' {
-        flush(&tks, &buf)
+        flush(&tks, txt, cs, a, i)
+        txt = ""
         tks.push(N(HardBreak))
-        i = skip_spaces(s, i + 2)
+        i = skip_spaces(cs, i + 2)
+        a = i
         continue
       }
       if is_punct(d) {
-        buf.push(d)
+        if i > a { txt += str(cs[a..i]) }
+        a = i + 1  // the escaped char starts the next run
         i += 2
         continue
       }
     }
     if c == '`' {
       var k = i
-      while k < s.len() && s[k] == '`' { k += 1 }
+      while k < n && cs[k] == '`' { k += 1 }
       let run = k - i
-      match find_run(s, k, run) {
+      match find_run(cs, k, run) {
         some(e) => {
-          flush(&tks, &buf)
-          var code = s[k..e].replace("\n", " ")
+          flush(&tks, txt, cs, a, i)
+          txt = ""
+          var code = str(cs[k..e]).replace("\n", " ")
           if code.len() >= 2 && code.starts_with(" ") && code.ends_with(" ") && code.trim() != "" {
             code = code[1..code.len() - 1]
           }
           tks.push(N(Code(code)))
           i = e + run
+          a = i
         }
-        none => {
-          for _ in 0..run { buf.push('`') }
-          i = k
-        }
+        none => i = k  // literal backticks
       }
       continue
     }
     if c == '*' || c == '_' || c == '~' {
       var k = i
-      while k < s.len() && s[k] == c { k += 1 }
+      while k < n && cs[k] == c { k += 1 }
       let run = k - i
-      let before = if i == 0 { '\0' } else { s[i - 1] }
-      let after = if k >= s.len() { '\0' } else { s[k] }
-      let left = !is_ws(after) && (!is_punct_u(after) || is_ws(before) || is_punct_u(before))
-      let right = !is_ws(before) && (!is_punct_u(before) || is_ws(after) || is_punct_u(after))
-      let (open, close) = if c == '_' {
-        (left && (!right || is_punct_u(before)), right && (!left || is_punct_u(after)))
-      } else {
-        (left, right)
-      }
-      if c == '~' && run > 2 {
-        for _ in 0..run { buf.push(c) }
-      } else {
-        flush(&tks, &buf)
+      if c != '~' || run <= 2 {
+        let before = if i == 0 { '\0' } else { cs[i - 1] }
+        let after = if k >= n { '\0' } else { cs[k] }
+        let left = !is_ws(after) && (!is_punct_u(after) || is_ws(before) || is_punct_u(before))
+        let right = !is_ws(before) && (!is_punct_u(before) || is_ws(after) || is_punct_u(after))
+        let (open, close) = if c == '_' {
+          (left && (!right || is_punct_u(before)), right && (!left || is_punct_u(after)))
+        } else {
+          (left, right)
+        }
+        flush(&tks, txt, cs, a, i)
+        txt = ""
         tks.push(D(c, run, open, close))
+        a = k
       }
       i = k
       continue
     }
-    let img = c == '!' && i + 1 < s.len() && s[i + 1] == '['
-    if (c == '[' && cx.links) || img {
-      match link_at(cx, if img { i + 1 } else { i }) {
-        some((label, url, title, end)) => {
-          // a link can't contain another link: then only the inner one is a link
-          let body = parse_inl(In { s: label, refs: cx.refs, links: true })
+    let img = c == '!' && i + 1 < n && cs[i + 1] == '['
+    if (c == '[' && links) || img {
+      let lb = if img { i + 1 } else { i }
+      match link_at(cs, refs, lb) {
+        some((j, url, title, end)) => {
+          // a link can't contain another link: then only the inner one is a link. (When the
+          // text has no link, parsing it again with `links` off would give the same nodes.)
+          let body = parse_inl(cs[lb + 1..j], refs, true)
           if img || !has_link(body) {
-            flush(&tks, &buf)
-            let b = if img { body } else { parse_inl(In { s: label, refs: cx.refs, links: false }) }
-            tks.push(N(if img { Image(url, title, b) } else { Link(url, title, b) }))
+            flush(&tks, txt, cs, a, i)
+            txt = ""
+            tks.push(N(if img { Image(url, title, body) } else { Link(url, title, body) }))
             i = end
+            a = i
             continue
           }
         }
@@ -853,22 +927,26 @@ fn parse_inl(cx: In): [Inline] {
       }
     }
     if c == '<' {
-      match angle(s, i) {
+      match angle(cs, i) {
         some((node, end)) => {
-          flush(&tks, &buf)
+          flush(&tks, txt, cs, a, i)
+          txt = ""
           tks.push(N(node))
           i = end
+          a = i
           continue
         }
         none => {}
       }
     }
     if c == '&' {
-      match entity_len(s, i) {
-        some(n) => match decode_one(s[i..i + n]) {
+      match entity_len(cs, i) {
+        some(m) => match decode_one(str(cs[i..i + m])) {
           some(r) => {
-            for ch in r.chars() { buf.push(ch) }
-            i += n
+            if i > a { txt += str(cs[a..i]) }
+            txt += r
+            i += m
+            a = i
             continue
           }
           none => {}
@@ -877,32 +955,43 @@ fn parse_inl(cx: In): [Inline] {
       }
     }
     if c == '\n' {
+      // spaces before the line break go; two or more make it a hard break
+      var e = i
       var sp = 0
-      while buf.len() > 0 && buf[buf.len() - 1] == ' ' {
-        buf.pop()
+      while e > a && cs[e - 1] == ' ' {
+        e -= 1
         sp += 1
       }
-      flush(&tks, &buf)
+      if e == a {
+        while txt.ends_with(" ") {
+          txt = txt[0..txt.len() - 1]
+          sp += 1
+        }
+      }
+      flush(&tks, txt, cs, a, e)
+      txt = ""
       tks.push(N(if sp >= 2 { HardBreak } else { SoftBreak }))
-      i = skip_spaces(s, i + 1)
+      i = skip_spaces(cs, i + 1)
+      a = i
       continue
     }
-    if cx.links && (c == 'h' || c == 'w') && (i == 0 || is_ws(s[i - 1]) || s[i - 1] == '(') {
-      match bare_url(s, i) {
-        some((u, end)) => {
-          flush(&tks, &buf)
-          let href = if u.starts_with("www.") { "http://" + u } else { u }
-          tks.push(N(Link(href, "", [Text(u)])))
+    if links && (c == 'h' || c == 'w') && (i == 0 || is_ws(cs[i - 1]) || cs[i - 1] == '(') {
+      match bare_url(cs, i) {
+        some((url, end)) => {
+          flush(&tks, txt, cs, a, i)
+          txt = ""
+          let href = if url.starts_with("www.") { "http://" + url } else { url }
+          tks.push(N(Link(href, "", [Text(url)])))
           i = end
+          a = i
           continue
         }
         none => {}
       }
     }
-    buf.push(c)
     i += 1
   }
-  flush(&tks, &buf)
+  flush(&tks, txt, cs, a, n)
   merge(finish(emphasis(tks)))
 }
 
@@ -914,26 +1003,20 @@ fn has_link(xs: [Inline]): bool = xs.any(x => match x {
   _ => false
 })
 
-fn flush(tks: var [Tk], buf: var [char]) {
-  if buf.len() > 0 {
-    tks.push(N(Text(str(buf))))
-    buf = []
-  }
-}
-
-fn skip_spaces(s: str, i0: int): int {
+fn skip_spaces(cs: [char], i0: int): int {
   var i = i0
-  while i < s.len() && s[i] == ' ' { i += 1 }
+  while i < cs.len() && cs[i] == ' ' { i += 1 }
   i
 }
 
 // The start of the next run of exactly `n` backticks at or after `i`.
-fn find_run(s: str, i0: int, n: int): int? {
+fn find_run(cs: [char], i0: int, n: int): int? {
+  let len = cs.len()
   var i = i0
-  while i < s.len() {
-    if s[i] == '`' {
+  while i < len {
+    if cs[i] == '`' {
       var k = i
-      while k < s.len() && s[k] == '`' { k += 1 }
+      while k < len && cs[k] == '`' { k += 1 }
       if k - i == n { return some(i) }
       i = k
     } else {
@@ -944,26 +1027,27 @@ fn find_run(s: str, i0: int, n: int): int? {
 }
 
 // The matching `]` for the `[` at `i`, skipping escapes, code spans and nested brackets.
-fn close_bracket(s: str, i: int): int? {
+fn close_bracket(cs: [char], i: int): int? {
+  let n = cs.len()
   var depth = 0
   var j = i
-  while j < s.len() {
-    let c = s[j]
+  while j < n {
+    let c = cs[j]
     if c == '\\' {
       j += 2
       continue
     }
     if c == '`' {
       var k = j
-      while k < s.len() && s[k] == '`' { k += 1 }
-      match find_run(s, k, k - j) {
+      while k < n && cs[k] == '`' { k += 1 }
+      match find_run(cs, k, k - j) {
         some(e) => j = e + (k - j)
         none => j = k
       }
       continue
     }
     if c == '<' {
-      match angle(s, j) {
+      match angle(cs, j) {
         some((_, e)) => {
           j = e
           continue
@@ -982,58 +1066,80 @@ fn close_bracket(s: str, i: int): int? {
 }
 
 // A link at the `[` at `i`: inline `[t](url "title")`, full `[t][ref]`, collapsed `[t][]` or
-// shortcut `[t]`. Returns the label text, url, title and the index after it.
-fn link_at(cx: In, i: int): (str, str, str, int)? {
-  let s = cx.s
-  let j = close_bracket(s, i)?
-  let label = s[i + 1..j]
-  if j + 1 < s.len() && s[j + 1] == '(' {
-    let k = skip_ws(s, j + 2, true)
-    match dest(s, k) {
+// shortcut `[t]`. Returns the index of the `]` that ends the text, the url, the title and the
+// index after the link.
+fn link_at(cs: [char], refs: {str: Ref}, i: int): (int, str, str, int)? {
+  let n = cs.len()
+  let j = close_bracket(cs, i)?
+  if j + 1 < n && cs[j + 1] == '(' {
+    let k = skip_ws(cs, j + 2, true)
+    match dest(cs, k) {
       some((url, e)) => {
-        var k2 = skip_ws(s, e, true)
+        var k2 = skip_ws(cs, e, true)
         var title = ""
         if k2 > e {
-          match title_at(s, k2) {
+          match title_at(cs, k2) {
             some((t, e2)) => {
               title = t
-              k2 = skip_ws(s, e2, true)
+              k2 = skip_ws(cs, e2, true)
             }
             none => {}
           }
         }
-        if k2 < s.len() && s[k2] == ')' {
-          return some(
-            (label, decode_entities(unescape(url)), decode_entities(unescape(title)), k2 + 1),
-          )
+        if k2 < n && cs[k2] == ')' {
+          return some((j, decode_entities(unescape(url)), decode_entities(unescape(title)), k2 + 1))
         }
       }
       none => {}
     }
   }
-  var key = label
+  if refs.len() == 0 { return none }
+  var key = str(cs[i + 1..j])
   var end = j + 1
-  if j + 1 < s.len() && s[j + 1] == '[' {
-    match close_bracket(s, j + 1) {
+  if j + 1 < n && cs[j + 1] == '[' {
+    match close_bracket(cs, j + 1) {
       some(e) => {
-        let r = s[j + 2..e]
+        let r = str(cs[j + 2..e])
         if r.trim() != "" { key = r }
         end = e + 1
       }
       none => {}
     }
   }
-  let r = cx.refs.get(norm_label(key))?
-  some((label, r.url, r.title, end))
+  let r = refs.get(norm_label(key))?
+  some((j, r.url, r.title, end))
 }
+
+// Whether `cs` has the chars `lit` at `i`.
+fn has_at(cs: [char], i: int, lit: [char]): bool {
+  if i + lit.len() > cs.len() { return false }
+  for k, c in lit {
+    if cs[i + k] != c { return false }
+  }
+  true
+}
+
+let SCHEME_HTTPS = "https://".chars()
+let SCHEME_HTTP = "http://".chars()
+let WWW = "www.".chars()
 
 // `<scheme:...>` and `<a@b.c>` autolinks, and inline raw HTML: tags, comments, `<?...?>`,
 // `<!...>` and CDATA.
-fn angle(s: str, i: int): (Inline, int)? {
+fn angle(cs: [char], i: int): (Inline, int)? {
+  let n = cs.len()
   var j = i + 1
-  while j < s.len() && s[j] != '>' && s[j] != '<' && int(s[j]) > 32 { j += 1 }
-  if j < s.len() && s[j] == '>' && j > i + 1 {
-    let inner = s[i + 1..j]
+  var colon = false
+  var at = false
+  while j < n && cs[j] != '>' && cs[j] != '<' && int(cs[j]) > 32 {
+    if cs[j] == ':' {
+      colon = true
+    } else if cs[j] == '@' {
+      at = true
+    }
+    j += 1
+  }
+  if j < n && cs[j] == '>' && j > i + 1 && (colon || at) {
+    let inner = str(cs[i + 1..j])
     match inner.find(":") {
       some(k) => if k >= 2 &&
         k <= 32 &&
@@ -1045,26 +1151,29 @@ fn angle(s: str, i: int): (Inline, int)? {
       }
       none => {}
     }
-    if is_email(inner) { return some((Link("mailto:" + inner, "", [Text(inner)]), j + 1)) }
+    if at && is_email(inner) { return some((Link("mailto:" + inner, "", [Text(inner)]), j + 1)) }
   }
-  let rest = s[i..s.len()]
-  for (open, close) in [("<!--", "-->"), ("<?", "?>"), ("<![CDATA[", "]]>")] {
-    if rest.starts_with(open) {
-      let e = rest[open.len()..rest.len()].find(close)?
-      let n = open.len() + e + close.len()
-      if open == "<!--" && (rest.starts_with("<!-->") || rest.starts_with("<!--->")) {
-        let m = if rest.starts_with("<!-->") { 5 } else { 6 }
+  if i + 1 < n && (cs[i + 1] == '!' || cs[i + 1] == '?') {
+    let rest = str(cs[i..n])
+    for (open, close) in [("<!--", "-->"), ("<?", "?>"), ("<![CDATA[", "]]>")] {
+      if rest.starts_with(open) {
+        // `<!-->` and `<!--->` are whole comments, whatever follows
+        if open == "<!--" && (rest.starts_with("<!-->") || rest.starts_with("<!--->")) {
+          let short = if rest.starts_with("<!-->") { 5 } else { 6 }
+          return some((Html(rest[0..short]), i + short))
+        }
+        let e = rest[open.len()..rest.len()].find(close)?
+        let m = open.len() + e + close.len()
         return some((Html(rest[0..m]), i + m))
       }
-      return some((Html(rest[0..n]), i + n))
+    }
+    if rest.starts_with("<!") && rest.len() > 2 && rest[2].is_alpha() {
+      let e = rest.find(">")?
+      return some((Html(rest[0..e + 1]), i + e + 1))
     }
   }
-  if rest.starts_with("<!") && rest.len() > 2 && rest[2].is_alpha() {
-    let e = rest.find(">")?
-    return some((Html(rest[0..e + 1]), i + e + 1))
-  }
-  let e = tag_end(s, i)?
-  some((Html(s[i..e]), e))
+  let e = tag_end(cs, i)?
+  some((Html(str(cs[i..e])), e))
 }
 
 fn is_tag_char(c: char): bool = c.is_alpha() || c.is_digit() || c == '-'
@@ -1075,41 +1184,46 @@ fn is_attr_char(c: char): bool =
 
 fn is_space_nl(c: char): bool = c == ' ' || c == '\t' || c == '\n'
 
+// What can't be in an unquoted attribute value (besides whitespace).
+fn ends_bare_value(c: char): bool =
+  c == '"' || c == '\'' || c == '=' || c == '<' || c == '>' || c == '`'
+
 // The index after an open tag `<name attr="v" ...>` / `<name/>` or a closing tag `</name >`
 // starting at `i`, or none.
-fn tag_end(s: str, i: int): int? {
+fn tag_end(s: [char], i: int): int? {
+  let n = s.len()
   var k = i + 1
-  let closing = k < s.len() && s[k] == '/'
+  let closing = k < n && s[k] == '/'
   if closing { k += 1 }
-  if k >= s.len() || !s[k].is_alpha() { return none }
-  while k < s.len() && is_tag_char(s[k]) { k += 1 }
+  if k >= n || !s[k].is_alpha() { return none }
+  while k < n && is_tag_char(s[k]) { k += 1 }
   if closing {
-    while k < s.len() && is_space_nl(s[k]) { k += 1 }
-    return if k < s.len() && s[k] == '>' { some(k + 1) } else { none }
+    while k < n && is_space_nl(s[k]) { k += 1 }
+    return if k < n && s[k] == '>' { some(k + 1) } else { none }
   }
   loop {
     let ws = k
-    while k < s.len() && is_space_nl(s[k]) { k += 1 }
-    if k >= s.len() { return none }
+    while k < n && is_space_nl(s[k]) { k += 1 }
+    if k >= n { return none }
     if s[k] == '>' { return some(k + 1) }
-    if s[k] == '/' { return if k + 1 < s.len() && s[k + 1] == '>' { some(k + 2) } else { none } }
+    if s[k] == '/' { return if k + 1 < n && s[k + 1] == '>' { some(k + 2) } else { none } }
     if k == ws || !is_attr_start(s[k]) { return none }
-    while k < s.len() && is_attr_char(s[k]) { k += 1 }
+    while k < n && is_attr_char(s[k]) { k += 1 }
     var v = k
-    while v < s.len() && is_space_nl(s[v]) { v += 1 }
-    if v < s.len() && s[v] == '=' {
+    while v < n && is_space_nl(s[v]) { v += 1 }
+    if v < n && s[v] == '=' {
       v += 1
-      while v < s.len() && is_space_nl(s[v]) { v += 1 }
-      if v >= s.len() { return none }
+      while v < n && is_space_nl(s[v]) { v += 1 }
+      if v >= n { return none }
       let q = s[v]
       if q == '"' || q == '\'' {
         v += 1
-        while v < s.len() && s[v] != q { v += 1 }
-        if v >= s.len() { return none }
+        while v < n && s[v] != q { v += 1 }
+        if v >= n { return none }
         k = v + 1
       } else {
         let st = v
-        while v < s.len() && !is_space_nl(s[v]) && !"\"'=<>`".contains(str([s[v]])) { v += 1 }
+        while v < n && !is_space_nl(s[v]) && !ends_bare_value(s[v]) { v += 1 }
         if v == st { return none }
         k = v
       }
@@ -1127,26 +1241,39 @@ fn is_email(s: str): bool = match s.split("@") {
 }
 
 // GitHub's bare autolinks: `https://...`, `http://...`, `www....`.
-fn bare_url(s: str, i: int): (str, int)? {
-  let rest = s[i..s.len()]
-  if !(rest.starts_with("https://") || rest.starts_with("http://") || rest.starts_with("www.")) {
+fn bare_url(cs: [char], i: int): (str, int)? {
+  let n = cs.len()
+  // `ht` or `ww` first, so most words are turned away at once
+  if i + 1 >= n || (cs[i + 1] != 't' && cs[i + 1] != 'w') { return none }
+  if !(has_at(cs, i, SCHEME_HTTPS) || has_at(cs, i, SCHEME_HTTP) || has_at(cs, i, WWW)) {
     return none
   }
   var j = i
-  while j < s.len() && !is_ws(s[j]) && s[j] != '<' { j += 1 }
+  var opens = 0
+  var closes = 0
+  while j < n && !is_ws(cs[j]) && cs[j] != '<' {
+    if cs[j] == '(' {
+      opens += 1
+    } else if cs[j] == ')' {
+      closes += 1
+    }
+    j += 1
+  }
   // trailing punctuation, and a `)` with no `(` to match, aren't part of the URL
   loop {
     if j <= i { break }
-    let c = s[j - 1]
-    if "?!.,:*_~'\"".contains(str([c])) {
+    let c = cs[j - 1]
+    if "?!.,:*_~'\"".contains(c) {
       j -= 1
-    } else if c == ')' && s[i..j].split("(").len() < s[i..j].split(")").len() {
+    } else if c == ')' && opens < closes {
+      closes -= 1
       j -= 1
     } else {
       break
     }
   }
-  let u = s[i..j]
+  if j <= i { return none }
+  let u = str(cs[i..j])
   if u == "www." || u.ends_with("://") || !u.contains(".") { return none }
   some((u, j))
 }
@@ -1207,6 +1334,10 @@ fn finish(xs: [Tk]): [Inline] = xs.map(t => match t {
 })
 
 fn merge(xs: [Inline]): [Inline] {
+  // usually there is nothing to merge
+  var k = 1
+  while k < xs.len() && !(xs[k] is Text(_) && xs[k - 1] is Text(_)) { k += 1 }
+  if k >= xs.len() { return xs }
   var out: [Inline] = []
   for x in xs {
     match (out.last(), x) {
@@ -1221,48 +1352,64 @@ fn merge(xs: [Inline]): [Inline] {
 
 /// Renders blocks as HTML (CommonMark's reference output format).
 pub fn to_html(bs: [Block], opts: Opts): str {
-  var out: [str] = []
+  var out = ""
   for b in bs { block_html(b, opts, false, &out) }
-  out.join("")
+  out
 }
 
-fn block_html(b: Block, o: Opts, tight: bool, out: var [str]) {
+fn block_html(b: Block, o: Opts, tight: bool, out: var str) {
   match b {
-    Heading(lv, body) => out.push("<h{lv}>" + inl_html(body, o) + "</h{lv}>\n")
-    Para(body) =>
-      out.push(if tight { inl_html(body, o) } else { "<p>" + inl_html(body, o) + "</p>\n" })
+    Heading(lv, body) => {
+      out += "<h{lv}>"
+      inl_html(body, o, &out)
+      out += "</h{lv}>\n"
+    }
+    Para(body) => if tight {
+      inl_html(body, o, &out)
+    } else {
+      out += "<p>"
+      inl_html(body, o, &out)
+      out += "</p>\n"
+    }
     CodeBlock(lang, code) => {
-      let cls = if lang == "" { "" } else { " class=\"language-{esc(lang)}\"" }
-      out.push("<pre><code{cls}>" + esc(code) + "</code></pre>\n")
+      if lang == "" {
+        out += "<pre><code>"
+      } else {
+        out += "<pre><code class=\"language-"
+        out += esc(lang)
+        out += "\">"
+      }
+      out += esc(code)
+      out += "</code></pre>\n"
     }
     Quote(bs) => {
-      out.push("<blockquote>\n")
+      out += "<blockquote>\n"
       for x in bs { block_html(x, o, false, &out) }
-      out.push("</blockquote>\n")
+      out += "</blockquote>\n"
     }
     List(ordered, start, t, items) => {
       let tag = if ordered { "ol" } else { "ul" }
-      out.push(if ordered && start != 1 { "<ol start=\"{start}\">\n" } else { "<{tag}>\n" })
+      out += if ordered && start != 1 { "<ol start=\"{start}\">\n" } else { "<{tag}>\n" }
       for it in items {
-        out.push("<li>")
+        out += "<li>"
         match it.checked {
-          some(true) => out.push("<input checked=\"\" disabled=\"\" type=\"checkbox\" /> ")
-          some(false) => out.push("<input disabled=\"\" type=\"checkbox\" /> ")
+          some(true) => out += "<input checked=\"\" disabled=\"\" type=\"checkbox\" /> "
+          some(false) => out += "<input disabled=\"\" type=\"checkbox\" /> "
           none => {}
         }
         for k, x in it.blocks {
           let inline_para = t && x is Para(_)
           if !inline_para && (k == 0 || !t) && !(k == 0 && it.checked != none && x is Para(_)) {
-            if k == 0 { out.push("\n") }
+            if k == 0 { out += "\n" }
           }
           block_html(x, o, t, &out)
-          if inline_para && k + 1 < it.blocks.len() { out.push("\n") }
+          if inline_para && k + 1 < it.blocks.len() { out += "\n" }
         }
-        out.push("</li>\n")
+        out += "</li>\n"
       }
-      out.push("</{tag}>\n")
+      out += "</{tag}>\n"
     }
-    Rule => out.push("<hr />\n")
+    Rule => out += "<hr />\n"
     Table(aligns, head, rows) => {
       let attr = (k: int) => match (aligns.get(k) else NoAlign) {
         Left => " align=\"left\""
@@ -1270,66 +1417,121 @@ fn block_html(b: Block, o: Opts, tight: bool, out: var [str]) {
         Right => " align=\"right\""
         NoAlign => ""
       }
-      out.push("<table>\n<thead>\n<tr>\n")
-      for k, c in head { out.push("<th{attr(k)}>" + inl_html(c, o) + "</th>\n") }
-      out.push("</tr>\n</thead>\n")
-      if rows.len() > 0 {
-        out.push("<tbody>\n")
-        for r in rows {
-          out.push("<tr>\n")
-          for k, c in r { out.push("<td{attr(k)}>" + inl_html(c, o) + "</td>\n") }
-          out.push("</tr>\n")
-        }
-        out.push("</tbody>\n")
+      out += "<table>\n<thead>\n<tr>\n"
+      for k, c in head {
+        out += "<th"
+        out += attr(k)
+        out += ">"
+        inl_html(c, o, &out)
+        out += "</th>\n"
       }
-      out.push("</table>\n")
+      out += "</tr>\n</thead>\n"
+      if rows.len() > 0 {
+        out += "<tbody>\n"
+        for r in rows {
+          out += "<tr>\n"
+          for k, c in r {
+            out += "<td"
+            out += attr(k)
+            out += ">"
+            inl_html(c, o, &out)
+            out += "</td>\n"
+          }
+          out += "</tr>\n"
+        }
+        out += "</tbody>\n"
+      }
+      out += "</table>\n"
     }
-    HtmlBlock(h) => out.push(if o.unsafe_html { h } else { "<p>" + esc(rtrim(h)) + "</p>\n" })
+    HtmlBlock(h) => if o.unsafe_html {
+      out += h
+    } else {
+      out += "<p>"
+      out += esc(rtrim(h))
+      out += "</p>\n"
+    }
   }
 }
 
-fn inl_html(xs: [Inline], o: Opts): str = xs.map(x => match x {
-  Text(s) => esc(s)
-  Code(s) => "<code>" + esc(s) + "</code>"
-  Em(b) => "<em>" + inl_html(b, o) + "</em>"
-  Strong(b) => "<strong>" + inl_html(b, o) + "</strong>"
-  Del(b) => "<del>" + inl_html(b, o) + "</del>"
-  Link(u, t, b) => {
-    let title = if t == "" { "" } else { " title=\"{esc(t)}\"" }
-    "<a href=\"{href(u, o, false)}\"{title}>" + inl_html(b, o) + "</a>"
+fn inl_html(xs: [Inline], o: Opts, out: var str) {
+  for x in xs {
+    match x {
+      Text(s) => out += esc(s)
+      Code(s) => {
+        out += "<code>"
+        out += esc(s)
+        out += "</code>"
+      }
+      Em(b) => {
+        out += "<em>"
+        inl_html(b, o, &out)
+        out += "</em>"
+      }
+      Strong(b) => {
+        out += "<strong>"
+        inl_html(b, o, &out)
+        out += "</strong>"
+      }
+      Del(b) => {
+        out += "<del>"
+        inl_html(b, o, &out)
+        out += "</del>"
+      }
+      Link(u, t, b) => {
+        out += "<a href=\""
+        out += href(u, o, false)
+        if t != "" {
+          out += "\" title=\""
+          out += esc(t)
+        }
+        out += "\">"
+        inl_html(b, o, &out)
+        out += "</a>"
+      }
+      Image(u, t, alt) => {
+        out += "<img src=\""
+        out += href(u, o, true)
+        out += "\" alt=\""
+        out += esc(plain_inl(alt))
+        if t != "" {
+          out += "\" title=\""
+          out += esc(t)
+        }
+        out += "\" />"
+      }
+      SoftBreak => out += "\n"
+      HardBreak => out += "<br />\n"
+      Html(s) => out += if o.unsafe_html { s } else { esc(s) }
+    }
   }
-  Image(u, t, alt) => {
-    let title = if t == "" { "" } else { " title=\"{esc(t)}\"" }
-    "<img src=\"{href(u, o, true)}\" alt=\"{esc(plain_inl(alt))}\"{title} />"
-  }
-  SoftBreak => "\n"
-  HardBreak => "<br />\n"
-  Html(s) => if o.unsafe_html { s } else { esc(s) }
-}).join("")
+}
 
 /// `& < > "` as HTML entities.
 pub fn esc(s: str): str {
-  if !(s.contains("&") || s.contains("<") || s.contains(">") || s.contains("\"")) { return s }
-  s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+  var out = s
+  if s.contains("&") { out = out.replace("&", "&amp;") }
+  if s.contains("<") { out = out.replace("<", "&lt;") }
+  if s.contains(">") { out = out.replace(">", "&gt;") }
+  if s.contains("\"") { out = out.replace("\"", "&quot;") }
+  out
 }
 
-fn entity_len(s: str, i: int): int? {
+fn entity_len(s: [char], i: int): int? {
+  let n = s.len()
   var j = i + 1
-  if j < s.len() && s[j] == '#' {
+  if j < n && s[j] == '#' {
     j += 1
-    let hex = j < s.len() && (s[j] == 'x' || s[j] == 'X')
+    let hex = j < n && (s[j] == 'x' || s[j] == 'X')
     if hex { j += 1 }
     let st = j
-    while j < s.len() && (s[j].is_digit() || (hex && "abcdefABCDEF".contains(str([s[j]])))) {
-      j += 1
-    }
+    while j < n && (s[j].is_digit() || (hex && is_hex(s[j]))) { j += 1 }
     if j == st || j - st > 7 { return none }
   } else {
     let st = j
-    while j < s.len() && (s[j].is_alpha() || s[j].is_digit()) { j += 1 }
+    while j < n && (s[j].is_alpha() || s[j].is_digit()) { j += 1 }
     if j == st || j - st > 31 { return none }
   }
-  if j < s.len() && s[j] == ';' { some(j + 1 - i) } else { none }
+  if j < n && s[j] == ';' { some(j + 1 - i) } else { none }
 }
 
 fn hex2(n: int): str {
@@ -1337,35 +1539,64 @@ fn hex2(n: int): str {
   str([d[n / 16], d[n % 16]])
 }
 
-fn is_hex(c: char): bool = c.is_digit() || "abcdefABCDEF".contains(str([c]))
+fn is_hex(c: char): bool = c.is_digit() || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+
+// The one-char strings of ASCII, by code.
+let ASCII: [str] = ascii_strs()
+
+fn ascii_strs(): [str] {
+  var xs: [str] = []
+  for b in 0..128 { xs.push(str([char(b) else ' '])) }
+  xs
+}
+
+// URL bytes that are written as they are: letters, digits and `;/?:@=+$,-_.!~*()#` (`&` and
+// `'` are also kept, but as entities).
+fn url_plain(b: int): bool = (b >= 97 && b <= 122) ||
+  (b >= 44 && b <= 59) ||
+  (b >= 63 && b <= 90) ||
+  b == 95 ||
+  b == 126 ||
+  b == 33 ||
+  (b >= 35 && b <= 36) ||
+  (b >= 40 && b <= 43) ||
+  b == 61
 
 // A URL for an href/src attribute: unsafe schemes dropped (unless `unsafe_html`), characters
 // outside URL syntax percent-encoded, then HTML-escaped.
 fn href(u: str, o: Opts, image: bool): str {
   if !o.unsafe_html && !safe_url(u, image) { return "" }
-  var out: [str] = []
   let bs = u.bytes()
+  let n = bs.len()
   var i = 0
-  while i < bs.len() {
+  while i < n && url_plain(bs[i]) { i += 1 }
+  if i == n { return u }  // the usual case: nothing to encode
+  var out = ""
+  i = 0
+  while i < n {
     let b = bs[i]
-    let c = char(b) else ' '
-    if b == 37 &&
-      i + 2 < bs.len() &&
+    if url_plain(b) {
+      out += ASCII[b]
+    } else if b == 37 &&
+      i + 2 < n &&
       is_hex(char(bs[i + 1]) else ' ') &&
       is_hex(char(bs[i + 2]) else ' ') {
-      out.push("%")
-    } else if b < 128 &&
-      (c.is_alpha() || c.is_digit() || ";/?:@&=+$,-_.!~*'()#".contains(str([c]))) {
-      out.push(if c == '&' { "&amp;" } else if c == '\'' { "&#39;" } else { str([c]) })
+      out += "%"
+    } else if b == 38 {
+      out += "&amp;"
+    } else if b == 39 {
+      out += "&#39;"
     } else {
-      out.push("%" + hex2(b))
+      out += "%"
+      out += hex2(b)
     }
     i += 1
   }
-  out.join("")
+  out
 }
 
 fn safe_url(u: str, image: bool): bool {
+  if !u.contains(":") { return true }
   let l = u.trim().lower()
   let colon = l.find(":") else { return true }
   let slash = l.find("/") else l.len()
@@ -1412,6 +1643,17 @@ fn plain_inl(xs: [Inline]): str = xs.map(x => match x {
 
 // Named character references: the Latin-1 set (U+00A0..U+00FF in order) and other common ones.
 let LATIN1 = "nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn sup2 sup3 acute micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest Agrave Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute THORN szlig agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml yacute thorn yuml".split()
+
+// Each LATIN1 name's position.
+let LATIN1_AT: {str: int} = latin1_at()
+
+fn latin1_at(): {str: int} {
+  var m: {str: int} = {}
+  for k, n in LATIN1 {
+    if m.get(n) == none { m[n] = k }
+  }
+  m
+}
 
 let ENTITIES = {
   "amp": "&",
@@ -1478,7 +1720,7 @@ fn decode_one(e: str): str? {
     let cp = if v == 0 || v > 0x10ffff || (v >= 0xd800 && v <= 0xdfff) { 0xfffd } else { v }
     return some(str([char(cp) else '\u{fffd}']))
   }
-  match LATIN1.find_index(n => n == name) {
+  match LATIN1_AT.get(name) {
     some(k) => some(str([char(0xa0 + k)!]))
     none => ENTITIES.get(name)
   }
@@ -1486,15 +1728,20 @@ fn decode_one(e: str): str? {
 
 fn decode_entities(s: str): str {
   if !s.contains("&") { return s }
-  var out: [str] = []
+  let cs = s.chars()
+  let n = cs.len()
+  var out = ""
+  var a = 0  // start of the run not yet copied
   var i = 0
-  while i < s.len() {
-    if s[i] == '&' {
-      match entity_len(s, i) {
-        some(n) => match decode_one(s[i..i + n]) {
+  while i < n {
+    if cs[i] == '&' {
+      match entity_len(cs, i) {
+        some(m) => match decode_one(str(cs[i..i + m])) {
           some(r) => {
-            out.push(r)
-            i += n
+            if i > a { out += str(cs[a..i]) }
+            out += r
+            i += m
+            a = i
             continue
           }
           none => {}
@@ -1502,10 +1749,10 @@ fn decode_entities(s: str): str {
         none => {}
       }
     }
-    out.push(str([s[i]]))
     i += 1
   }
-  out.join("")
+  if n > a { out += str(cs[a..n]) }
+  out
 }
 
 fn hex_val(h: str): int? {
@@ -1626,6 +1873,13 @@ test "safety" {
   assert md_unsafe("<div>\n*raw*\n</div>\n\nand <b>bold</b>") ==
     "<div>\n*raw*\n</div>\n<p>and <b>bold</b></p>\n"
   assert md_unsafe("[x](javascript:go())") == "<p><a href=\"javascript:go()\">x</a></p>\n"
+  // `<!-->` and `<!--->` are complete comments (CommonMark 0.31), inline and as blocks
+  assert md_unsafe("a <!--> b") == "<p>a <!--> b</p>\n"
+  assert md_unsafe("a <!---> b") == "<p>a <!---> b</p>\n"
+  assert md_unsafe("a <!--> b -->") == "<p>a <!--> b --&gt;</p>\n"
+  assert md("a <!--> *b*") == "<p>a &lt;!--&gt; <em>b</em></p>\n"
+  assert md_unsafe("<!-->\npara") == "<!-->\n<p>para</p>\n"
+  assert md_unsafe("<!--->\npara") == "<!--->\n<p>para</p>\n"
 }
 
 test "tree and plain text" {

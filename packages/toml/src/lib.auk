@@ -51,7 +51,10 @@ fn bare(c: char): bool =
 fn bad_control(c: char): bool = (int(c) < 0x20 && c != '\t') || int(c) == 0x7f
 
 fn skip_ws(p: var P) {
-  while p.at(' ') || p.at('\t') { p.i += 1 }
+  let n = p.cs.len()
+  var i = p.i
+  while i < n && (p.cs[i] == ' ' || p.cs[i] == '\t') { i += 1 }
+  p.i = i
 }
 
 // 1-based position of index i; only computed on the error path.
@@ -89,12 +92,18 @@ fn newline(p: var P): bool {
 // Skips a `#` comment, if any, up to (not including) the line break.
 fn comment(p: var P): ()!TomlErr {
   if !p.at('#') { return }
-  p.i += 1
-  while p.i < p.cs.len() && p.cs[p.i] != '\n' {
-    if p.at('\r') && p.at_off(1, '\n') { break }
-    if bad_control(p.cs[p.i]) { fail(p.control()) }
-    p.i += 1
+  let n = p.cs.len()
+  var i = p.i + 1
+  while i < n && p.cs[i] != '\n' {
+    let c = p.cs[i]
+    if c == '\r' && i + 1 < n && p.cs[i + 1] == '\n' { break }
+    if bad_control(c) {
+      p.i = i
+      fail(p.control())
+    }
+    i += 1
   }
+  p.i = i
 }
 
 // The rest of a line: spaces, an optional comment, then a newline or the end of input.
@@ -115,140 +124,132 @@ fn blank(p: var P): ()!TomlErr {
 
 // ---- the document being built ----
 
-// One step of a concrete path: a key, or an index into an array of tables.
-enum Seg { K(k: str), I(i: int) }
-
-// What a path holds so far, which decides how it may be extended.
+// What a table node is, which decides how it may be extended.
 enum Kind {
-  Implicit,     // a table created by a header's prefix (`[a.b]` creates `a`)
-  Header,       // a table defined by its own `[header]`
-  Dotted,       // a table created by a dotted key (`a.b = 1` creates `a`)
-  Leaf,         // a value, static array or inline table: closed
-  Aot(n: int),  // an array of tables with n elements
+  Implicit,                    // a table created by a header's prefix (`[a.b]` creates `a`)
+  Header,                      // a table defined by its own `[header]`, or an element of an array of tables
+  Dotted,                      // a table created by a dotted key (`a.b = 1` creates `a`)
+  Aot(first: int, last: int),  // an array of tables: its first and last element nodes
 }
 
-// A value (or, with none, an empty table) at a concrete path. The tree is built at the end.
-struct Entry { path: [Seg], v: Value? }
-
-struct Doc { kinds: {str: Kind}, entries: [Entry] }
+// The tables seen so far, as nodes numbered in the order they appear (0 is the root). `tabs[n]`
+// maps each key of table n, in first-seen order, to a node number, or to `-(i + 1)` for the plain
+// value `vals[i]` (a value, static array or inline table: closed). The elements of an array of
+// tables are chained through `next` (-1 ends the chain). The tree is built at the end.
+struct Doc { tabs: [{str: int}], kind: [Kind], next: [int], vals: [Value] }
 
 struct Key { name: str, at: int }
 
-// An unambiguous map key for a path: each key is length-prefixed.
-fn pkey(path: [Seg]): str = path.map(s => seg_key(s)).join("")
-fn seg_key(K(k)): str = "{k.len()}:{k}"
-fn seg_key(I(i)): str = "#{i}"
+fn new_doc(): Doc = Doc { tabs: [{}], kind: [Header], next: [-1], vals: [] }
 
-// `a.b.c`, for messages (array indices left out).
-fn dotted(path: [Seg]): str {
-  var ks: [str] = []
-  for s in path {
-    match s {
-      K(k) => ks.push(key_str(k))
-      I(_) => {}
+// A new node of kind k.
+fn node(d: var Doc, k: Kind): int {
+  d.tabs.push({})
+  d.kind.push(k)
+  d.next.push(-1)
+  d.kind.len() - 1
+}
+
+// A new table of kind k as key `name` of table `parent`.
+fn child(d: var Doc, parent: int, name: str, k: Kind): int {
+  let id = d.node(k)
+  d.tabs[parent][name] = id
+  id
+}
+
+// `a.b.c` for messages: the header's keys, then the first n of `keys`.
+fn dotted(base: [Key], keys: [Key], n: int): str =
+  (base + keys.take(n)).map(k => key_str(k.name)).join(".")
+
+fn dup(p: P, path: str, at: int): TomlErr = DuplicateKey(path, line(p.cs, at), col(p.cs, at))
+
+fn not_table(p: P, path: str, at: int): TomlErr = NotATable(path, line(p.cs, at), col(p.cs, at))
+
+// A header's prefix (all its keys but the last): creates implicit tables and steps into the last
+// element of arrays of tables. Returns the table the last key belongs in.
+fn walk(d: var Doc, p: P, keys: [Key]): int!TomlErr {
+  var cur = 0
+  for j in 0..keys.len() - 1 {
+    let name = keys[j].name
+    let r = d.tabs[cur].get(name) else {
+      cur = d.child(cur, name, Implicit)
+      continue
     }
-  }
-  ks.join(".")
-}
-
-fn kind(d: Doc, path: [Seg]): Kind? = d.kinds.get(pkey(path))
-
-fn add(d: var Doc, path: [Seg], k: Kind, v: Value?) {
-  d.kinds[pkey(path)] = k
-  d.entries.push(Entry { path, v })
-}
-
-fn dup(p: P, path: [Seg], at: int): TomlErr =
-  DuplicateKey(dotted(path), line(p.cs, at), col(p.cs, at))
-
-fn not_table(p: P, path: [Seg], at: int): TomlErr =
-  NotATable(dotted(path), line(p.cs, at), col(p.cs, at))
-
-// A header's prefix: creates implicit tables and steps into the last element of arrays of tables.
-fn walk(d: var Doc, p: P, keys: [Key]): [Seg]!TomlErr {
-  var cur: [Seg] = []
-  for k in keys {
-    cur.push(K(k.name))
-    match d.kind(cur) {
-      none => d.add(cur, Implicit, none)
-      some(Aot(n)) => cur.push(I(n - 1))
-      some(Leaf) => fail(p.not_table(cur, k.at))
-      some(_) => {}
+    if r < 0 { fail(p.not_table(dotted([], keys, j + 1), keys[j].at)) }
+    cur = match d.kind[r] {
+      Aot(_, last) => last
+      _ => r
     }
   }
   cur
 }
 
-// `[a.b]`: returns the table's path.
-fn table(d: var Doc, p: P, keys: [Key]): [Seg]!TomlErr {
-  var cur = d.walk(p, keys.take(keys.len() - 1))?
-  cur.push(K(keys[keys.len() - 1].name))
-  match d.kind(cur) {
-    none => d.add(cur, Header, none)
-    some(Implicit) => {
-      d.kinds[pkey(cur)] = Header
-    }
-    some(_) => fail(p.dup(cur, keys[0].at))
-  }
-  cur
+// `[a.b]`: returns the table's node.
+fn table(d: var Doc, p: P, keys: [Key]): int!TomlErr {
+  let cur = d.walk(p, keys)?
+  let name = keys[keys.len() - 1].name
+  let r = d.tabs[cur].get(name) else return d.child(cur, name, Header)
+  if r < 0 || !(d.kind[r] is Implicit) { fail(p.dup(dotted([], keys, keys.len()), keys[0].at)) }
+  d.kind[r] = Header
+  r
 }
 
-// `[[a.b]]`: appends a table and returns its path.
-fn array_table(d: var Doc, p: P, keys: [Key]): [Seg]!TomlErr {
-  var cur = d.walk(p, keys.take(keys.len() - 1))?
-  cur.push(K(keys[keys.len() - 1].name))
-  let n = match d.kind(cur) {
-    none => 0
-    some(Aot(n)) => n
-    some(_) => fail(p.dup(cur, keys[0].at))
+// `[[a.b]]`: appends a table and returns its node.
+fn array_table(d: var Doc, p: P, keys: [Key]): int!TomlErr {
+  let cur = d.walk(p, keys)?
+  let name = keys[keys.len() - 1].name
+  let el = d.node(Header)
+  let r = d.tabs[cur].get(name) else {
+    let _ = d.child(cur, name, Aot(el, el))
+    return el
   }
-  d.kinds[pkey(cur)] = Aot(n + 1)
-  cur.push(I(n))
-  d.entries.push(Entry { path: cur, v: none })
-  cur
+  let Aot(first, last) = if r < 0 { Header } else { d.kind[r] } else {
+    fail(p.dup(dotted([], keys, keys.len()), keys[0].at))
+  }
+  d.next[last] = el
+  d.kind[r] = Aot(first, el)
+  el
 }
 
-// `a.b.c = v` inside the table at `base`: dotted keys may only extend tables they created.
-fn set(d: var Doc, p: P, base: [Seg], keys: [Key], v: Value): ()!TomlErr {
-  var cur = base
-  for k in keys.take(keys.len() - 1) {
-    cur.push(K(k.name))
-    match d.kind(cur) {
-      none => d.add(cur, Dotted, none)
-      some(Dotted) => {}
-      some(_) => fail(p.not_table(cur, k.at))
+// `a.b.c = v` inside table `tab` (whose header was `base`): dotted keys may only extend tables
+// they created.
+fn set(d: var Doc, p: P, tab: int, base: [Key], keys: [Key], v: Value): ()!TomlErr {
+  var cur = tab
+  let last = keys.len() - 1
+  for j in 0..last {
+    let name = keys[j].name
+    let r = d.tabs[cur].get(name) else {
+      cur = d.child(cur, name, Dotted)
+      continue
     }
+    if r < 0 || !(d.kind[r] is Dotted) { fail(p.not_table(dotted(base, keys, j + 1), keys[j].at)) }
+    cur = r
   }
-  cur.push(K(keys[keys.len() - 1].name))
-  if d.kind(cur) is some(_) { fail(p.dup(cur, keys[0].at)) }
-  d.add(cur, Leaf, some(v))
+  let name = keys[last].name
+  if d.tabs[cur].get(name) is some(_) { fail(p.dup(dotted(base, keys, last + 1), keys[0].at)) }
+  d.vals.push(v)
+  d.tabs[cur][name] = -d.vals.len()
 }
 
-// The tree from the entries (all relative to one node). Keys keep their first-seen order.
-fn build(es: [Entry]): Value {
-  for e in es {
-    match e {
-      Entry { path: [], v: some(v) } => return v
-      _ => {}
-    }
+// The tree below node n. Keys keep their first-seen order.
+fn build(d: Doc, n: int): Value {
+  let Aot(first, _) = d.kind[n] else return d.build_table(n)
+  var xs: [Value] = []
+  var el = first
+  while el >= 0 {
+    xs.push(d.build_table(el))
+    el = d.next[el]
   }
-  let kids = es.filter(e => e.path.len() > 0)
-  if kids.len() == 0 { return Map({}) }
-  let groups = kids.group_by(e => e.path[0])
-  if kids[0].path[0] is I(_) { return List(groups.values().map(g => build(strip(g)))) }
+  List(xs)
+}
+
+fn build_table(d: Doc, n: int): Value {
   var m: {str: Value} = {}
-  for seg, g in groups {
-    match seg {
-      K(k) => {
-        m[k] = build(strip(g))
-      }
-      I(_) => {}
-    }
+  for k, r in d.tabs[n] {
+    m[k] = if r < 0 { d.vals[-r - 1] } else { d.build(r) }
   }
   Map(m)
 }
-
-fn strip(es: [Entry]): [Entry] = es.map(e => Entry { path: e.path.skip(1), v: e.v })
 
 // ---- parser ----
 
@@ -259,23 +260,24 @@ fn strip(es: [Entry]): [Entry] = es.map(e => Entry { path: e.path.skip(1), v: e.
 pub fn parse(s: str): Value!TomlErr {
   var p = P { cs: s.chars(), i: 0 }
   if p.at('\u{feff}') { p.i += 1 }  // byte order mark
-  var d = Doc { kinds: {}, entries: [] }
-  var cur: [Seg] = []
+  var d = new_doc()
+  var cur = 0           // the table that key/value pairs go into
+  var base: [Key] = []  // its header's keys
   loop {
     p.skip_ws()
     if p.eof() { break }
     if p.at('[') {
-      cur = header(&p, &d)?
+      (cur, base) = header(&p, &d)?
     } else if !p.at('#') && !p.at('\n') && !p.at('\r') {
-      keyval(&p, &d, cur)?
+      keyval(&p, &d, cur, base)?
     }
     p.end_line()?
   }
-  build(d.entries)
+  d.build(0)
 }
 
-// `[a.b]` or `[[a.b]]`; returns the path that following key/value pairs go into.
-fn header(p: var P, d: var Doc): [Seg]!TomlErr {
+// `[a.b]` or `[[a.b]]`; returns the table that following key/value pairs go into, and its keys.
+fn header(p: var P, d: var Doc): (int, [Key])!TomlErr {
   p.i += 1
   let arr = p.at('[')
   if arr { p.i += 1 }
@@ -285,18 +287,18 @@ fn header(p: var P, d: var Doc): [Seg]!TomlErr {
   p.expect(']', if arr { "']]'" } else { "']'" })?
   if arr {
     p.expect(']', "']]'")?
-    return d.array_table(p, keys)
+    return (d.array_table(p, keys)?, keys)
   }
-  d.table(p, keys)
+  (d.table(p, keys)?, keys)
 }
 
-fn keyval(p: var P, d: var Doc, base: [Seg]): ()!TomlErr {
+fn keyval(p: var P, d: var Doc, tab: int, base: [Key]): ()!TomlErr {
   let keys = p.key()?
   p.skip_ws()
   p.expect('=', "'='")?
   p.skip_ws()
   let v = p.value(0)?
-  d.set(p, base, keys, v)
+  d.set(p, tab, base, keys, v)
 }
 
 // A dotted key: simple keys separated by `.` (spaces allowed around the dots).
@@ -319,33 +321,36 @@ fn simple_key(p: var P): Key!TomlErr {
   let at = p.i
   if p.at('"') { return Key { name: p.basic()?, at } }
   if p.at('\'') { return Key { name: p.literal()?, at } }
-  while p.i < p.cs.len() && bare(p.cs[p.i]) { p.i += 1 }
-  if p.i == at { fail(p.want("a key")) }
-  Key { name: core.str(p.cs[at..p.i]), at }
+  let n = p.cs.len()
+  var i = at
+  while i < n && bare(p.cs[i]) { i += 1 }
+  p.i = i
+  if i == at { fail(p.want("a key")) }
+  Key { name: core.str(p.cs[at..i]), at }
 }
 
 // depth = how many arrays/inline tables enclose this value
 fn value(p: var P, depth: int): Value!TomlErr {
-  match p.peek() {
-    some(c) when (c == '[' || c == '{') && depth >= MAX_DEPTH => {
-      fail(TooDeep(line(p.cs, p.i), col(p.cs, p.i)))
-    }
-    some('"') when p.at_off(1, '"') && p.at_off(2, '"') => Str(p.multi('"')?)
-    some('"') => Str(p.basic()?)
-    some('\'') when p.at_off(1, '\'') && p.at_off(2, '\'') => Str(p.multi('\'')?)
-    some('\'') => Str(p.literal()?)
-    some('[') => array(&p, depth + 1)
-    some('{') => inline_table(&p, depth + 1)
-    some('t') => p.word("true", Bool(true))
-    some('f') => p.word("false", Bool(false))
-    some(c) when c == '+' || c == '-' || c == 'i' || c == 'n' || digit(c) => p.scalar()
+  if p.i >= p.cs.len() { fail(p.want("a value")) }
+  let c = p.cs[p.i]
+  if c == '"' {
+    return Str(if p.at_off(1, '"') && p.at_off(2, '"') { p.multi('"')? } else { p.basic()? })
+  }
+  if digit(c) || c == '+' || c == '-' || c == 'i' || c == 'n' { return p.scalar() }
+  match c {
+    '[' | '{' when depth >= MAX_DEPTH => fail(TooDeep(line(p.cs, p.i), col(p.cs, p.i)))
+    '[' => array(&p, depth + 1)
+    '{' => inline_table(&p, depth + 1)
+    '\'' => Str(if p.at_off(1, '\'') && p.at_off(2, '\'') { p.multi('\'')? } else { p.literal()? })
+    't' => p.word("true", Bool(true))
+    'f' => p.word("false", Bool(false))
     _ => fail(p.want("a value"))
   }
 }
 
 fn word(p: var P, w: str, v: Value): Value!TomlErr {
-  for c in w.chars() {
-    if !p.at(c) { fail(p.want("a value")) }
+  for k in 0..w.len() {
+    if !p.at(w[k]) { fail(p.want("a value")) }
     p.i += 1
   }
   v
@@ -376,12 +381,12 @@ fn array(p: var P, depth: int): Value!TomlErr {
 // `{ a = 1, b.c = 2 }`: one line, no trailing comma, closed once written.
 fn inline_table(p: var P, depth: int): Value!TomlErr {
   p.i += 1  // {
-  var d = Doc { kinds: {}, entries: [] }
   p.skip_ws()
   if p.at('}') {
     p.i += 1
     return Map({})
   }
+  var d = new_doc()
   loop {
     p.skip_ws()
     let keys = p.key()?
@@ -389,13 +394,13 @@ fn inline_table(p: var P, depth: int): Value!TomlErr {
     p.expect('=', "'='")?
     p.skip_ws()
     let v = p.value(depth)?
-    d.set(p, [], keys, v)?
+    d.set(p, 0, [], keys, v)?
     p.skip_ws()
     if p.at(',') {
       p.i += 1
     } else if p.at('}') {
       p.i += 1
-      break build(d.entries)
+      break d.build(0)
     } else {
       fail(p.want("',' or '}}'"))
     }
@@ -404,39 +409,58 @@ fn inline_table(p: var P, depth: int): Value!TomlErr {
 
 // ---- strings ----
 
-// "basic": p is on the opening quote.
+// "basic": p is on the opening quote. Runs of plain chars are copied a slice at a time.
 fn basic(p: var P): str!TomlErr {
-  p.i += 1
-  var out: [char] = []
+  let n = p.cs.len()
+  var i = p.i + 1
+  var from = i
+  var out = ""
   loop {
-    let c = p.peek() else fail(p.want("'\"'"))
+    if i >= n {
+      p.i = i
+      fail(p.want("'\"'"))
+    }
+    let c = p.cs[i]
     if c == '"' {
-      p.i += 1
-      break core.str(out)
+      if i > from { out += core.str(p.cs[from..i]) }
+      p.i = i + 1
+      break out
     }
     if c == '\\' {
-      out.push(p.escape()?)
+      if i > from { out += core.str(p.cs[from..i]) }
+      p.i = i
+      out += p.escape()?
+      i = p.i
+      from = i
     } else if bad_control(c) {
+      p.i = i
       fail(p.control())
     } else {
-      out.push(c)
-      p.i += 1
+      i += 1
     }
   }
 }
 
 // 'literal': p is on the opening quote.
 fn literal(p: var P): str!TomlErr {
-  p.i += 1
-  let from = p.i
+  let n = p.cs.len()
+  let from = p.i + 1
+  var i = from
   loop {
-    let c = p.peek() else fail(p.want("\"'\""))
-    if c == '\'' {
-      p.i += 1
-      break core.str(p.cs[from..p.i - 1])
+    if i >= n {
+      p.i = i
+      fail(p.want("\"'\""))
     }
-    if bad_control(c) { fail(p.control()) }
-    p.i += 1
+    let c = p.cs[i]
+    if c == '\'' {
+      p.i = i + 1
+      break core.str(p.cs[from..i])
+    }
+    if bad_control(c) {
+      p.i = i
+      fail(p.control())
+    }
+    i += 1
   }
 }
 
@@ -446,19 +470,35 @@ fn literal(p: var P): str!TomlErr {
 fn multi(p: var P, q: char): str!TomlErr {
   p.i += 3
   p.newline()
-  var out: [char] = []
+  let n = p.cs.len()
+  var i = p.i
+  var from = i  // out + cs[from..i] is the text so far
+  var out = ""
   loop {
-    let c = p.peek() else fail(p.want("{q}{q}{q}"))
-    if c == q && p.at_off(1, q) && p.at_off(2, q) {
-      var n = 3
-      while n < 5 && p.at_off(n, q) { n += 1 }
-      for _ in 3..n { out.push(q) }
-      p.i += n
-      break
+    if i >= n {
+      p.i = i
+      fail(p.want("{q}{q}{q}"))
     }
-    if p.newline() {
-      out.push('\n')
+    let c = p.cs[i]
+    if c == q {
+      if i + 2 < n && p.cs[i + 1] == q && p.cs[i + 2] == q {
+        var k = 3
+        while k < 5 && i + k < n && p.cs[i + k] == q { k += 1 }
+        if i + k - 3 > from { out += core.str(p.cs[from..i + k - 3]) }
+        p.i = i + k
+        break out
+      }
+      i += 1
+    } else if c == '\n' {
+      i += 1
+    } else if c == '\r' && i + 1 < n && p.cs[i + 1] == '\n' {
+      if i > from { out += core.str(p.cs[from..i]) }
+      out += "\n"
+      i += 2
+      from = i
     } else if c == '\\' && q == '"' {
+      if i > from { out += core.str(p.cs[from..i]) }
+      p.i = i
       if p.line_end_backslash() {
         p.i += 1
         loop {
@@ -469,16 +509,17 @@ fn multi(p: var P, q: char): str!TomlErr {
           }
         }
       } else {
-        out.push(p.escape()?)
+        out += p.escape()?
       }
+      i = p.i
+      from = i
     } else if bad_control(c) {
+      p.i = i
       fail(p.control())
     } else {
-      out.push(c)
-      p.i += 1
+      i += 1
     }
   }
-  core.str(out)
 }
 
 // p is on a `\` followed only by blanks up to the end of the line.
@@ -490,21 +531,21 @@ fn line_end_backslash(p: P): bool {
 }
 
 // p is on the backslash.
-fn escape(p: var P): char!TomlErr {
+fn escape(p: var P): str!TomlErr {
   let start = p.i
   p.i += 1
   let c = p.peek() else fail(p.want("an escape"))
   p.i += 1
   match c {
-    'b' => '\u{8}'
-    't' => '\t'
-    'n' => '\n'
-    'f' => '\u{c}'
-    'r' => '\r'
-    '"' => '"'
-    '\\' => '\\'
-    'u' => p.hex_escape(start, 4)?
-    'U' => p.hex_escape(start, 8)?
+    'b' => "\u{8}"
+    't' => "\t"
+    'n' => "\n"
+    'f' => "\u{c}"
+    'r' => "\r"
+    '"' => "\""
+    '\\' => "\\"
+    'u' => "{p.hex_escape(start, 4)?}"
+    'U' => "{p.hex_escape(start, 8)?}"
     _ => fail(BadEscape("\\{c}", line(p.cs, start), col(p.cs, start)))
   }
 }
@@ -522,8 +563,10 @@ fn hex_escape(p: var P, start: int, n: int): char!TomlErr {
 }
 
 fn hex_val(c: char): int? {
-  let i = "0123456789abcdefABCDEF".chars().find_index(d => d == c)?
-  if i < 16 { i } else { i - 6 }
+  if digit(c) { return int(c) - int('0') }
+  if c >= 'a' && c <= 'f' { return int(c) - int('a') + 10 }
+  if c >= 'A' && c <= 'F' { return int(c) - int('A') + 10 }
+  none
 }
 
 // ---- numbers, dates and times ----
@@ -540,6 +583,10 @@ fn token(p: var P) {
 // A number, date or time; p is on its first char.
 fn scalar(p: var P): Value!TomlErr {
   let start = p.i
+  match p.plain_number() {
+    some(v) => return v
+    none => {}
+  }
   p.token()
   // a date, a space, and a time: `1979-05-27 07:32:00Z`
   let spaced = p.at(' ') && p.i + 1 < p.cs.len() && digit(p.cs[p.i + 1])
@@ -553,6 +600,38 @@ fn scalar(p: var P): Value!TomlErr {
     return v
   }
   number(cs) else fail(BadNumber(core.str(cs), line(p.cs, start), col(p.cs, start)))
+}
+
+// The usual numbers, read in one pass: when the whole token is `[+-] digits` (at most 18 of them)
+// or `[+-] digits . digits`, with no leading zero, takes it and gives its value; otherwise leaves
+// p alone and gives none (`number` then decides).
+fn plain_number(p: var P): Value? {
+  let n = p.cs.len()
+  let start = p.i
+  var i = start
+  let neg = p.cs[i] == '-'
+  if neg || p.cs[i] == '+' { i += 1 }
+  let from = i
+  var acc = 0  // the value of the digits, while there are at most 18 (so it can't overflow)
+  while i < n && digit(p.cs[i]) {
+    if i - from < 18 { acc = acc * 10 + int(p.cs[i]) - int('0') }
+    i += 1
+  }
+  let digits = i - from
+  if digits == 0 || (digits > 1 && p.cs[from] == '0') { return none }
+  if i == n || !token_char(p.cs[i]) {
+    if digits > 18 { return none }
+    p.i = i
+    return Int(if neg { -acc } else { acc })
+  }
+  if p.cs[i] != '.' { return none }
+  i += 1
+  let frac = i
+  while i < n && digit(p.cs[i]) { i += 1 }
+  if i == frac || (i < n && token_char(p.cs[i])) { return none }
+  let f = float.parse(core.str(p.cs[start..i])) else return none
+  p.i = i
+  Float(f)
 }
 
 fn number(cs: [char]): Value? {
@@ -690,30 +769,41 @@ fn time_ok(cs: [char]): bool {
 /// written `nan`, `inf` and `-inf`.
 pub fn str(v: Value): str! {
   let Map(m) = v else fail("toml: the root must be a Map, not {v}")
-  var out: [str] = []
-  body(m, [], &out)?
-  out.join("")
+  var out = ""
+  body(m, "", &out)?
+  out
 }
 
-fn body(m: {str: Value}, path: [str], out: var [str]): ()! {
-  let ks = m.keys().filter(k => m[k] != Null)
-  for k in ks.filter(k => plain(m[k])) {
-    out.push(key_str(k) + " = " + lit(m[k])? + "\n")
+// path = the table's dotted header keys ("" for the root)
+fn body(m: {str: Value}, path: str, out: var str): ()! {
+  var subs = false  // any tables or arrays of tables?
+  for k, v in m {
+    if v is Null { continue }
+    if plain(v) {
+      out += key_str(k)
+      out += " = "
+      lit(v, &out)?
+      out += "\n"
+    } else {
+      subs = true
+    }
   }
-  for k in ks {
-    match m[k] {
-      Map(sub) => table_out(sub, path + [k], &out)?
+  if !subs { return }
+  for k, v in m {
+    match v {
+      Map(sub) => table_out(sub, sub_path(path, k), &out)?
       _ => {}
     }
   }
-  for k in ks {
-    match m[k] {
+  for k, v in m {
+    match v {
       List(xs) when aot(xs) => {
+        let header = "[[" + sub_path(path, k) + "]]\n"
         for x in xs {
           let Map(sub) = x else continue
           out.blank_line()
-          out.push("[[" + dotted_keys(path + [k]) + "]]\n")
-          body(sub, path + [k], &out)?
+          out += header
+          body(sub, sub_path(path, k), &out)?
         }
       }
       _ => {}
@@ -721,18 +811,31 @@ fn body(m: {str: Value}, path: [str], out: var [str]): ()! {
   }
 }
 
+fn sub_path(path: str, k: str): str = if path == "" { key_str(k) } else { path + "." + key_str(k) }
+
 // A sub-table: its header can be left out when it holds only other tables.
-fn table_out(m: {str: Value}, path: [str], out: var [str]): ()! {
-  let vals = m.values().filter(v => v != Null)
-  if vals.any(v => plain(v)) || vals.len() == 0 {
+fn table_out(m: {str: Value}, path: str, out: var str): ()! {
+  var plains = false
+  var empty = true
+  for _, v in m {
+    if v is Null { continue }
+    empty = false
+    if plain(v) {
+      plains = true
+      break
+    }
+  }
+  if plains || empty {
     out.blank_line()
-    out.push("[" + dotted_keys(path) + "]\n")
+    out += "["
+    out += path
+    out += "]\n"
   }
   body(m, path, &out)
 }
 
-fn blank_line(out: var [str]) {
-  if out.len() > 0 { out.push("\n") }
+fn blank_line(out: var str) {
+  if out != "" { out += "\n" }
 }
 
 fn aot(xs: [Value]): bool = xs.len() > 0 && xs.all(x => x is Map(_))
@@ -742,30 +845,100 @@ fn plain(Map(_)): bool = false
 fn plain(List(xs)): bool = !aot(xs)
 fn plain(_: Value): bool = true
 
-fn dotted_keys(path: [str]): str = path.map(k => key_str(k)).join(".")
+fn key_str(k: str): str = if bare_key(k) { k } else { quoted(k) }
 
-fn key_str(k: str): str = if k.len() > 0 && k.chars().all(c => bare(c)) { k } else { quote(k) }
+// Non-empty and all bare chars. (Only an all-ASCII string has as many bytes as chars, and
+// indexing one is cheap.)
+fn bare_key(k: str): bool {
+  let n = k.len()
+  if n == 0 || k.byte_len() != n { return false }
+  for i in 0..n {
+    if !bare(k[i]) { return false }
+  }
+  true
+}
 
-// An inline value.
-fn lit(Null): str! = fail("toml: null can't be written inside an array")
-fn lit(Bool(b)): str! = if b { "true" } else { "false" }
-fn lit(Int(n)): str! = "{n}"
-fn lit(Float(f)): str! = float_str(f)
-fn lit(Str(s)): str! = quote(s)
-fn lit(List(xs)): str! = "[" + (xs.map(x => lit(x))?).join(", ") + "]"
-fn lit(Map(m)): str! {
-  let ks = m.keys().filter(k => m[k] != Null)
-  if ks.len() == 0 { return r"{}" }
-  var parts: [str] = []
-  for k in ks { parts.push(key_str(k) + " = " + lit(m[k])?) }
-  r"{ " + parts.join(", ") + r" }"
+// Appends an inline value.
+fn lit(Null, _: var str): ()! = fail("toml: null can't be written inside an array")
+fn lit(Bool(b), out: var str): ()! { out += if b { "true" } else { "false" } }
+fn lit(Int(n), out: var str): ()! { out += "{n}" }
+fn lit(Float(f), out: var str): ()! { out += float_str(f) }
+fn lit(Str(s), out: var str): ()! { quote(s, &out) }
+fn lit(List(xs), out: var str): ()! {
+  out += "["
+  for i, x in xs {
+    if i > 0 { out += ", " }
+    lit(x, &out)?
+  }
+  out += "]"
+}
+fn lit(Map(m), out: var str): ()! {
+  var first = true
+  for k, v in m {
+    if v is Null { continue }
+    out += if first { r"{ " } else { ", " }
+    first = false
+    out += key_str(k)
+    out += " = "
+    lit(v, &out)?
+  }
+  out += if first { r"{}" } else { r" }" }
 }
 
 fn float_str(f: float): str when f != f = "nan"
 fn float_str(f: float): str when f - f != 0.0 = if f > 0.0 { "inf" } else { "-inf" }
-fn float_str(f: float): str = "{f}"  // shortest exact form, always with `.` or `e`
+fn float_str(f: float): str = short(f) else "{f}"  // shortest exact form, always with `.` or `e`
 
-fn quote(s: str): str = "\"" + s.chars().map(c => esc(c)).join("") + "\""
+// What "{f}" gives, found cheaply, when f is a decimal of at most 15 digits with at most 6 of
+// them after the point (`12.0`, `0.25`, `-1234.5678`); none for anything else. Such a decimal is
+// the only one that short that reads back as f, so it is the shortest exact form.
+fn short(f: float): str? {
+  let a = if f < 0.0 { -f } else { f }
+  if !(a >= 0.001 && a < 1e15) { return none }
+  var scale = 1.0
+  for d in 0..7 {
+    let x = a * scale
+    if x >= 1e15 { return none }
+    let k = int(x + 0.5)
+    if float(k) / scale == a {  // k / 10^d, rounded to the nearest float, is f
+      let ds = "{k}"
+      let sign = if f < 0.0 { "-" } else { "" }
+      if d == 0 { return "{sign}{ds}.0" }
+      let n = ds.len()
+      if n <= d { return "{sign}0.{"0".repeat(d - n)}{ds}" }
+      return "{sign}{ds[0..n - d]}.{ds[n - d..n]}"
+    }
+    scale *= 10.0
+  }
+  none
+}
+
+fn quoted(s: str): str {
+  var out = ""
+  quote(s, &out)
+  out
+}
+
+// Appends s in quotes; runs of chars that need no escape are copied a slice at a time.
+fn quote(s: str, out: var str) {
+  let cs = s.chars()
+  let n = cs.len()
+  var from = 0
+  out += "\""
+  for i, c in cs {
+    if c == '"' || c == '\\' || c == '\t' || bad_control(c) {
+      if i > from { out += core.str(cs[from..i]) }
+      out += esc(c)
+      from = i + 1
+    }
+  }
+  if from == 0 {
+    out += s
+  } else if n > from {
+    out += core.str(cs[from..n])
+  }
+  out += "\""
+}
 
 fn esc('"'): str = "\\\""
 fn esc('\\'): str = "\\\\"

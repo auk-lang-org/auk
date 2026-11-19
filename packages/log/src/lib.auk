@@ -68,42 +68,80 @@ pub fn log(l: Logger, lv: Level, msg: str, fields: {str: Value}) {
 /// Order: `level`, `msg`, the logger's fields, then this line's fields.
 pub fn line(l: Logger, lv: Level, msg: str, fields: {str: Value}): str? {
   if !l.enabled(lv) { return none }
-  var all: [(str, Value)] = [("level", Str(name(lv))), ("msg", Str(msg))]
-  for k, v in l.fields { all.push((k, v)) }
-  for k, v in fields { all.push((k, v)) }
   if l.json {
-    let parts = all.map((k, v) => json.str(Str(k)) + ":" + json.str(v))
-    some("{{" + parts.join(",") + "}}")
+    // a level's name needs no escaping
+    var out = "{{\"level\":\""
+    out += name(lv)
+    out += "\",\"msg\":"
+    out += json.str(Str(msg))
+    out.json_fields(l.fields)
+    out.json_fields(fields)
+    out += "}}"
+    some(out)
   } else {
-    some(all.map((k, v) => "{fmt_key(k)}={logfmt(v)}").join(" "))
+    var out = "level="
+    out += name(lv)
+    out += " msg="
+    out += quote_if_needed(msg)
+    out.logfmt_fields(l.fields)
+    out.logfmt_fields(fields)
+    some(out)
+  }
+}
+
+// Appends `,"key":value` for each field.
+fn json_fields(out: var str, fields: {str: Value}) {
+  for k, v in fields {
+    out += ","
+    out += json.str(Str(k))
+    out += ":"
+    out += json.str(v)
   }
 }
 
 // ---- logfmt ----
 
+// Appends ` key=value` for each field.
+fn logfmt_fields(out: var str, fields: {str: Value}) {
+  for k, v in fields {
+    out += " "
+    out += fmt_key(k)
+    out += "="
+    out += logfmt(v)
+  }
+}
+
 // A logfmt value: bare when it's safe, quoted (JSON-style escapes) otherwise; lists and maps
 // are written as compact JSON.
 fn logfmt(Str(s)): str = quote_if_needed(s)
 fn logfmt(Null): str = "null"
-fn logfmt(Bool(b)): str = "{b}"
-fn logfmt(Int(n)): str = "{n}"
+fn logfmt(Bool(b)): str = if b { "true" } else { "false" }
+fn logfmt(Int(n)): str = str(n)
 fn logfmt(Float(f)): str = json.str(Float(f))
 fn logfmt(v: Value): str = quote_if_needed(json.str(v))
 
-fn quote_if_needed(s: str): str = if s == "" ||
-  s.chars().any(c => c == ' ' || c == '=' || c == '"' || c == '\\' || int(c) < 0x20) {
-  json.str(Str(s))
-} else {
+fn quote_if_needed(s: str): str {
+  if s == "" { return json.str(Str(s)) }
+  for c in s.chars() {
+    if c == ' ' || c == '=' || c == '"' || c == '\\' || int(c) < 0x20 { return json.str(Str(s)) }
+  }
   s
 }
 
 // Keys can't be quoted in logfmt, so unsafe chars become `_`.
 fn fmt_key(k: str): str {
-  let cs = k.chars().map(
-    c => if c == ' ' || c == '=' || c == '"' || int(c) < 0x20 { '_' } else { c },
-  )
-  if cs.len() == 0 { "_" } else { str(cs) }
+  if k == "" { return "_" }
+  let cs = k.chars()
+  for c in cs {
+    if unsafe_in_key(c) {
+      // rare: rewrite it
+      return str(cs.map(c => if unsafe_in_key(c) { '_' } else { c }))
+    }
+  }
+  k
 }
+
+fn unsafe_in_key(c: char): bool = c == ' ' || c == '=' || c == '"' || int(c) < 0x20
 
 // ---- tests ----
 

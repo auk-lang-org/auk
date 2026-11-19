@@ -21,7 +21,8 @@ pub struct Glob { rooted: bool, alts: [[Seg]] }
 /// Compiles a pattern once: `{a,b}` alternatives are expanded and each `/`-separated part is
 /// tokenized.
 pub fn compile(pattern: str): Glob {
-  let alts = expand(pattern).map(p => segments(p).map(seg))
+  let cs = pattern.chars()
+  let alts = if pattern.contains('{') { expand_chars(cs).map(segs_of) } else { [segs_of(cs)] }
   Glob { rooted: pattern.starts_with("/"), alts }
 }
 
@@ -40,21 +41,30 @@ pub fn matches(pattern: str, path: str): bool = matches(compile(pattern), path)
 /// `matches` with a compiled pattern.
 pub fn matches(g: Glob, path: str): bool {
   if path.starts_with("/") != g.rooted { return false }
-  let segs = segments(path)
-  g.alts.any(a => match_segs(a, 0, segs, 0))
+  let cs = path.chars()
+  let bs = bounds(cs)
+  for a in g.alts { if match_segs(a, 0, cs, bs, 0) { return true } }
+  false
 }
 
 /// Does `s` use any glob syntax (`* ? [ { \`)? A string without it only matches itself.
-pub fn is_pattern(s: str): bool = s.chars().any(c => "*?[{{\\".contains(c))
+pub fn is_pattern(s: str): bool =
+  s.contains('*') || s.contains('?') || s.contains('[') || s.contains('{') || s.contains('\\')
 
 /// `s` with every glob special char escaped, so it matches only itself: `escape("a*b") == "a\\*b"`.
 pub fn escape(s: str): str {
-  var out: [char] = []
-  for c in s.chars() {
-    if "*?[]{{}}\\,".contains(c) { out.push('\\') }
-    out.push(c)
+  if !(is_pattern(s) || s.contains(']') || s.contains('}') || s.contains(',')) { return s }
+  let cs = s.chars()
+  var out = ""
+  var from = 0  // start of the chars not copied yet
+  for i, c in cs {
+    if "*?[]{{}}\\,".contains(c) {
+      out += str(cs[from..i])
+      out += "\\"
+      from = i
+    }
   }
-  str(out)
+  out + str(cs[from..cs.len()])
 }
 
 // ---- walking the file system ----
@@ -71,7 +81,7 @@ pub let MAX_DEPTH = 64
 pub fn walk(dir: str, pattern: str): [str]! uses fs {
   let g = compile(pattern)
   var out: [str] = []
-  visit(dir.trim_end_slash(), "", [], g, &out)?
+  visit(dir.trim_end_slash(), "", [], [], g, &out)?
   out
 }
 
@@ -91,15 +101,17 @@ pub fn find(pattern: str): [str]! uses fs {
   (walk(root, rest)?).map(p => prefix + p)
 }
 
-fn visit(dir: str, rel: str, segs: [str], g: Glob, out: var [str]): ()! uses fs {
-  if segs.len() >= MAX_DEPTH { return }
+// `cs` and `bs` are the segments of `rel`: the names' chars and their bounds (see `bounds`).
+fn visit(dir: str, rel: str, cs: [char], bs: [int], g: Glob, out: var [str]): ()! uses fs {
+  if bs.len() / 2 >= MAX_DEPTH { return }
   let here = if rel == "" { dir } else { dir + "/" + rel }
   for name in fs.list(here)? {
     let r = if rel == "" { name } else { rel + "/" + name }
-    let s = segs + [name]
-    if g.alts.any(a => match_segs(a, 0, s, 0)) { out.push(r) }
-    if g.alts.any(a => can_extend(a, 0, s, 0)) && fs.is_dir(here + "/" + name) {
-      visit(dir, r, s, g, &out)?
+    let s = cs + name.chars()
+    let b = bs + [cs.len(), s.len()]
+    if g.alts.any(a => match_segs(a, 0, s, b, 0)) { out.push(r) }
+    if g.alts.any(a => can_extend(a, 0, s, b, 0)) && fs.is_dir(here + "/" + name) {
+      visit(dir, r, s, b, g, &out)?
     }
   }
 }
@@ -112,54 +124,78 @@ fn trim_end_slash(s: str): str {
 
 // ---- matching ----
 
-// Path segments, without empty ones and a leading `.`.
-fn segments(p: str): [str] {
-  let parts = p.split("/").filter(s => s != "")
-  if parts.len() > 0 && parts[0] == "." { parts.skip(1) } else { parts }
+// The path segments of `cs`, without empty ones and a leading `.`, as a flat list of
+// start/end index pairs.
+fn bounds(cs: [char]): [int] {
+  let n = cs.len()
+  var bs: [int] = []
+  var a = 0
+  var dot = false  // a leading `.` segment has been dropped
+  for i in 0..=n {
+    if i < n && cs[i] != '/' { continue }
+    if i > a {
+      if !dot && bs.len() == 0 && i == a + 1 && cs[a] == '.' {
+        dot = true
+      } else {
+        bs.push(a)
+        bs.push(i)
+      }
+    }
+    a = i + 1
+  }
+  bs
 }
 
-fn match_segs(ps: [Seg], pi: int, segs: [str], si: int): bool {
-  if pi == ps.len() { return si == segs.len() }
+// Segment `si` of a path is `cs[bs[2 * si]..bs[2 * si + 1]]`.
+fn match_segs(ps: [Seg], pi: int, cs: [char], bs: [int], si: int): bool {
+  let n = bs.len() / 2
+  if pi == ps.len() { return si == n }
   match ps[pi] {
     Deep => {
       var k = si
       loop {
-        if match_segs(ps, pi + 1, segs, k) { return true }
-        if k == segs.len() || segs[k].starts_with(".") { return false }
+        if match_segs(ps, pi + 1, cs, bs, k) { return true }
+        if k == n || hidden(cs, bs, k) { return false }
         k += 1
       }
     }
-    Part(toks) =>
-      si < segs.len() && match_part(toks, segs[si]) && match_segs(ps, pi + 1, segs, si + 1)
+    Part(toks) => si < n &&
+      match_part(toks, cs, bs[2 * si], bs[2 * si + 1]) &&
+      match_segs(ps, pi + 1, cs, bs, si + 1)
   }
 }
 
-// Could some path that starts with `segs` (and goes deeper) match? Decides which directories
-// `walk` opens.
-fn can_extend(ps: [Seg], pi: int, segs: [str], si: int): bool {
+fn hidden(cs: [char], bs: [int], si: int): bool =
+  bs[2 * si + 1] > bs[2 * si] && cs[bs[2 * si]] == '.'
+
+// Could some path that starts with these segments (and goes deeper) match? Decides which
+// directories `walk` opens.
+fn can_extend(ps: [Seg], pi: int, cs: [char], bs: [int], si: int): bool {
   if pi == ps.len() { return false }
-  if si == segs.len() { return true }
+  if 2 * si == bs.len() { return true }
   match ps[pi] {
-    Deep => can_extend(ps, pi + 1, segs, si) ||
-      (!segs[si].starts_with(".") && can_extend(ps, pi, segs, si + 1))
-    Part(toks) => match_part(toks, segs[si]) && can_extend(ps, pi + 1, segs, si + 1)
+    Deep => can_extend(ps, pi + 1, cs, bs, si) ||
+      (!hidden(cs, bs, si) && can_extend(ps, pi, cs, bs, si + 1))
+    Part(toks) =>
+      match_part(toks, cs, bs[2 * si], bs[2 * si + 1]) && can_extend(ps, pi + 1, cs, bs, si + 1)
   }
 }
 
-// One segment against its tokens: linear-time star backtracking (only the last `*` is retried).
-fn match_part(toks: [Tok], seg: str): bool {
-  let cs = seg.chars()
-  if cs.len() > 0 && cs[0] == '.' && !(toks.first() is some(Lit('.'))) { return false }
+// One segment, `cs[from..to]`, against its tokens: linear-time star backtracking (only the
+// last `*` is retried).
+fn match_part(toks: [Tok], cs: [char], from: int, to: int): bool {
+  let nt = toks.len()
+  if to > from && cs[from] == '.' && !(nt > 0 && toks[0] is Lit('.')) { return false }
   var t = 0
-  var c = 0
+  var c = from
   var star_t = -1
   var star_c = 0
-  while c < cs.len() {
-    if t < toks.len() && toks[t] is Star {
+  while c < to {
+    if t < nt && toks[t] is Star {
       star_t = t
       star_c = c
       t += 1
-    } else if t < toks.len() && one(toks[t], cs[c]) {
+    } else if t < nt && one(toks[t], cs[c]) {
       t += 1
       c += 1
     } else if star_t >= 0 {
@@ -170,8 +206,8 @@ fn match_part(toks: [Tok], seg: str): bool {
       return false
     }
   }
-  while t < toks.len() && toks[t] is Star { t += 1 }
-  t == toks.len()
+  while t < nt && toks[t] is Star { t += 1 }
+  t == nt
 }
 
 fn one(t: Tok, c: char): bool = match t {
@@ -192,24 +228,42 @@ fn in_class(rs: [int], cp: int): bool {
 
 // ---- parsing ----
 
-fn seg(s: str): Seg {
-  if s == "**" { return Deep }
-  let cs = s.chars()
+// The segments of a pattern without braces: its `/`-separated parts, without empty ones and
+// a leading `.`.
+fn segs_of(cs: [char]): [Seg] {
+  let bs = bounds(cs)
+  var out: [Seg] = []
+  var j = 0
+  while j < bs.len() {
+    out.push(seg(cs, bs[j], bs[j + 1]))
+    j += 2
+  }
+  out
+}
+
+// The pattern segment `cs[from..to]`.
+fn seg(cs: [char], from: int, to: int): Seg {
+  if to == from + 2 && cs[from] == '*' && cs[from + 1] == '*' { return Deep }
   var toks: [Tok] = []
-  var i = 0
-  while i < cs.len() {
+  var star = false  // the last token is a Star
+  var i = from
+  while i < to {
     let c = cs[i]
-    if c == '\\' && i + 1 < cs.len() {
+    if c == '*' {
+      if !star { toks.push(Star) }
+      star = true
+      i += 1
+      continue
+    }
+    star = false
+    if c == '\\' && i + 1 < to {
       toks.push(Lit(cs[i + 1]))
       i += 2
-    } else if c == '*' {
-      if !(toks.last() is some(Star)) { toks.push(Star) }
-      i += 1
     } else if c == '?' {
       toks.push(One)
       i += 1
     } else if c == '[' {
-      match class(cs, i) {
+      match class(cs, i, to) {
         some((t, next)) => {
           toks.push(t)
           i = next
@@ -227,36 +281,38 @@ fn seg(s: str): Seg {
   Part(toks)
 }
 
-// A `[...]` set starting at cs[at] == '[': the token and the index after `]`, or none if the
-// set is never closed.
-fn class(cs: [char], at: int): (Tok, int)? {
+// A `[...]` set starting at cs[at] == '[' in a segment that ends at `to`: the token and the
+// index after `]`, or none if the set is never closed.
+fn class(cs: [char], at: int, to: int): (Tok, int)? {
   var i = at + 1
   var neg = false
-  if i < cs.len() && (cs[i] == '!' || cs[i] == '^') {
+  if i < to && (cs[i] == '!' || cs[i] == '^') {
     neg = true
     i += 1
   }
   var rs: [int] = []
   var first = true
-  while i < cs.len() {
+  while i < to {
     var c = cs[i]
     if c == ']' && !first { return some((Class(neg, rs), i + 1)) }
     first = false
-    if c == '\\' && i + 1 < cs.len() {
+    if c == '\\' && i + 1 < to {
       i += 1
       c = cs[i]
     }
-    if i + 2 < cs.len() && cs[i + 1] == '-' && cs[i + 2] != ']' {
+    if i + 2 < to && cs[i + 1] == '-' && cs[i + 2] != ']' {
       var hi = cs[i + 2]
       var skip = 3
-      if hi == '\\' && i + 3 < cs.len() {
+      if hi == '\\' && i + 3 < to {
         hi = cs[i + 3]
         skip = 4
       }
-      rs = rs + [int(c), int(hi)]
+      rs.push(int(c))
+      rs.push(int(hi))
       i += skip
     } else {
-      rs = rs + [int(c), int(c)]
+      rs.push(int(c))
+      rs.push(int(c))
       i += 1
     }
   }
@@ -266,9 +322,14 @@ fn class(cs: [char], at: int): (Tok, int)? {
 // Brace expansion: every alternative spelled out, left to right (`a{b,c}d` -> abd, acd).
 // A `{` without a matching `}` and a top-level `,` stays literal, as in bash.
 fn expand(p: str): [str] {
-  let cs = p.chars()
+  if !p.contains('{') { return [p] }
+  expand_chars(p.chars()).map(x => str(x))
+}
+
+fn expand_chars(cs: [char]): [[char]] {
+  let n = cs.len()
   var i = 0
-  while i < cs.len() {
+  while i < n {
     let c = cs[i]
     if c == '\\' {
       i += 2
@@ -277,30 +338,30 @@ fn expand(p: str): [str] {
     if c == '{' {
       match brace_body(cs, i) {
         some((alts, close)) => {
-          let pre = str(cs.take(i))
-          let post = str(cs.skip(close + 1))
+          let pre = cs[0..i]
+          let post = cs[close + 1..n]
           // `pre` holds no expandable braces; `post` and the alternatives are expanded next
-          return alts.flat_map(a => expand(a + post).map(rest => pre + rest))
+          var out: [[char]] = []
+          for a in alts { for rest in expand_chars(a + post) { out.push(pre + rest) } }
+          return out
         }
         none => {}
       }
     }
     i += 1
   }
-  [p]
+  [cs]
 }
 
 // The top-level alternatives of the `{...}` opening at cs[at], and the index of its `}`.
-fn brace_body(cs: [char], at: int): ([str], int)? {
+fn brace_body(cs: [char], at: int): ([[char]], int)? {
   var depth = 0
-  var alts: [str] = []
-  var cur: [char] = []
+  var alts: [[char]] = []
+  var from = at + 1  // start of the current alternative
   var i = at + 1
   while i < cs.len() {
     let c = cs[i]
     if c == '\\' && i + 1 < cs.len() {
-      cur.push(c)
-      cur.push(cs[i + 1])
       i += 2
       continue
     }
@@ -308,16 +369,14 @@ fn brace_body(cs: [char], at: int): ([str], int)? {
     if c == '}' {
       if depth == 0 {
         if alts.len() == 0 { return none }  // `{a}`: no comma, literal
-        alts.push(str(cur))
+        alts.push(cs[from..i])
         return some((alts, i))
       }
       depth -= 1
     }
     if c == ',' && depth == 0 {
-      alts.push(str(cur))
-      cur = []
-    } else {
-      cur.push(c)
+      alts.push(cs[from..i])
+      from = i + 1
     }
     i += 1
   }

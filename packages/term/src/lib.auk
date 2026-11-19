@@ -89,25 +89,29 @@ fn base(c: Color): int? = match c {
 
 fn byte(n: int): int = if n < 0 { 0 } else if n > 255 { 255 } else { n }
 
-// The SGR parameters for color `c`, where `at` is 30 (foreground) or 40 (background).
-fn color_params(c: Color, at: int): [str] = match c {
-  Default => []
-  Idx(n) => ["{at + 8}", "5", "{byte(n)}"]
-  Rgb(r, g, b) => ["{at + 8}", "2", "{byte(r)}", "{byte(g)}", "{byte(b)}"]
-  _ => ["{at + base(c)!}"]
+// Appends the SGR parameters for color `c` to `ps`, each followed by `;`, where `at` is 30
+// (foreground) or 40 (background).
+fn color_params(ps: var str, c: Color, at: int) {
+  match c {
+    Default => {}
+    Idx(n) => ps += "{at + 8};5;{byte(n)};"
+    Rgb(r, g, b) => ps += "{at + 8};2;{byte(r)};{byte(g)};{byte(b)};"
+    _ => ps += "{at + base(c)!};"
+  }
 }
 
 /// The escape sequence that turns `st` on ("" for `style()`).
 pub fn codes(st: Style): str {
-  var ps: [str] = []
-  if st.bold { ps.push("1") }
-  if st.dim { ps.push("2") }
-  if st.italic { ps.push("3") }
-  if st.underline { ps.push("4") }
-  if st.inverse { ps.push("7") }
-  if st.strike { ps.push("9") }
-  ps = ps + color_params(st.fg, 30) + color_params(st.bg, 40)
-  if ps.len() == 0 { "" } else { CSI + ps.join(";") + "m" }
+  var ps = ""  // the parameters, each followed by `;`
+  if st.bold { ps += "1;" }
+  if st.dim { ps += "2;" }
+  if st.italic { ps += "3;" }
+  if st.underline { ps += "4;" }
+  if st.inverse { ps += "7;" }
+  if st.strike { ps += "9;" }
+  color_params(&ps, st.fg, 30)
+  color_params(&ps, st.bg, 40)
+  if ps == "" { "" } else { CSI + (ps.strip_suffix(";") else ps) + "m" }
 }
 
 /// Resets every attribute.
@@ -118,8 +122,9 @@ pub let RESET = "\u{1b}[0m"
 pub fn paint(s: str, st: Style): str {
   let on = codes(st)
   if on == "" || s == "" { return s }
+  if !s.contains(ESC) { return on + s + RESET }
   // a reset already at the end needs no re-enable before ours
-  let inner = if s.ends_with(RESET) { s[0..s.len() - RESET.len()] } else { s }
+  let inner = s.strip_suffix(RESET) else s
   on + inner.replace(RESET, RESET + on) + RESET
 }
 
@@ -208,30 +213,33 @@ fn from_hex(h: str): Color? {
 pub fn strip(s: str): str {
   if !s.contains(ESC) { return s }
   let cs = s.chars()
-  var out: [char] = []
+  let n = cs.len()
+  var out = ""
   var i = 0
-  while i < cs.len() {
-    let c = cs[i]
-    if c != '\u{1b}' {
-      out.push(c)
+  while i < n {
+    if cs[i] != '\u{1b}' {
+      // a run of plain text
+      let from = i
       i += 1
+      while i < n && cs[i] != '\u{1b}' { i += 1 }
+      out += str(cs[from..i])
       continue
     }
     i += 1
-    if i >= cs.len() { break }
+    if i >= n { break }
     let k = cs[i]
     i += 1
     if k == '[' {
       // parameter and intermediate bytes, then one final byte in @..~
-      while i < cs.len() && !(cs[i] >= '@' && cs[i] <= '~') { i += 1 }
+      while i < n && !(cs[i] >= '@' && cs[i] <= '~') { i += 1 }
       i += 1
     } else if k == ']' {
-      while i < cs.len() {
+      while i < n {
         if cs[i] == '\u{7}' {
           i += 1
           break
         }
-        if cs[i] == '\u{1b}' && i + 1 < cs.len() && cs[i + 1] == '\\' {
+        if cs[i] == '\u{1b}' && i + 1 < n && cs[i + 1] == '\\' {
           i += 2
           break
         }
@@ -239,7 +247,7 @@ pub fn strip(s: str): str {
       }
     }
   }
-  str(out)
+  out
 }
 
 /// Terminal columns `s` takes once escapes are removed (CJK and emoji count 2).
@@ -434,25 +442,49 @@ fn box_of(b: Border): Box = match b {
 
 fn align_at(t: Table, i: int): Align = t.align.get(i) else Left
 
-fn fit(s: str, w: int, a: Align): str = match a {
-  Left => pad_right(s, w)
-  Right => pad_left(s, w)
-  Center => center(s, w)
+// Appends `s`, which is `sw` columns wide, padded to `w` columns.
+fn fit(out: var str, s: str, sw: int, w: int, a: Align) {
+  let extra = w - sw
+  match a {
+    Left => {
+      out += s
+      out += spaces(extra)
+    }
+    Right => {
+      out += spaces(extra)
+      out += s
+    }
+    Center => {
+      out += spaces(extra / 2)
+      out += s
+      out += spaces(extra - extra / 2)
+    }
+  }
 }
 
-// Each logical row as physical lines: a list of lines, each a list of cells.
-fn row_lines(cells: [str], n: int): [[str]] {
-  var parts: [[str]] = []
+// Appends each logical row's physical lines to `out`: a list of lines, each a list of `n` cells.
+fn row_lines(out: var [[str]], cells: [str], n: int) {
   var h = 1
+  for c in cells { if c.contains('\n') { h = 2 } }
+  if h == 1 {
+    // no cell spans lines: the row is one line, padded with empty cells
+    if cells.len() == n {
+      out.push(cells)
+    } else {
+      var line: [str] = []
+      for i in 0..n { line.push(cells.get(i) else "") }
+      out.push(line)
+    }
+    return
+  }
+  var parts: [[str]] = []
   for i in 0..n {
     let c = cells.get(i) else ""
     let ls = if c == "" { [""] } else { c.split("\n") }
     if ls.len() > h { h = ls.len() }
     parts.push(ls)
   }
-  var out: [[str]] = []
   for j in 0..h { out.push(parts.map(ls => ls.get(j) else "")) }
-  out
 }
 
 /// Draws the table as lines joined by `\n` (no trailing newline).
@@ -460,40 +492,91 @@ pub fn render(t: Table): str {
   var n = t.header.len()
   for r in t.rows { if r.len() > n { n = r.len() } }
   if n == 0 { return "" }
-  let head = if t.header.len() == 0 { [] } else { row_lines(t.header, n) }
-  let body = t.rows.map(r => row_lines(r, n))
+  // every physical line, the header's first
+  var lines: [[str]] = []
+  if t.header.len() > 0 { row_lines(&lines, t.header, n) }
+  let head = lines.len()
+  for r in t.rows { row_lines(&lines, r, n) }
+  // each cell's width, measured once, and each column's
   var ws: [int] = []
   for i in 0..n { ws.push(if t.border == Markdown { 3 } else { 1 }) }
-  for line in head + body.flat_map(x => x) {
-    for i, c in line { if width(c) > ws[i] { ws[i] = width(c) } }
-  }
-  let fmt = (line: [str]) => line.enum().map((i, c) => fit(c, ws[i], align_at(t, i)))
-  var out: [str] = []
-  match t.border {
-    Plain => {
-      for line in head { out.push(fmt(line).join("  ") |> rtrim) }
-      for r in body { for line in r { out.push(fmt(line).join("  ") |> rtrim) } }
+  var cw: [int] = []
+  for line in lines {
+    for i, c in line {
+      let w = width(c)
+      cw.push(w)
+      if w > ws[i] { ws[i] = w }
     }
+  }
+  var al: [Align] = []
+  for i in 0..n { al.push(align_at(t, i)) }
+  let md = t.border == Markdown
+  var left = ""
+  var mid = "  "
+  var right = ""
+  let b = box_of(t.border)
+  match t.border {
+    Plain => {}
     Markdown => {
-      let hd = if head.len() == 0 { [ws.map(w => "")] } else { head }
-      for line in hd { out.push("| " + fmt(line).join(" | ") + " |") }
-      out.push("|" + ws.enum().map((i, w) => md_rule(w, align_at(t, i))).join("|") + "|")
-      for r in body {
-        for line in r { out.push("| " + fmt(line).map(md_escape).join(" | ") + " |") }
-      }
+      left = "| "
+      mid = " | "
+      right = " |"
     }
     _ => {
-      let b = box_of(t.border)
-      let rule = (l: str, m: str, r: str) => l + ws.map(w => b.h.repeat(w + 2)).join(m) + r
-      let row = (line: [str]) => b.v + " " + fmt(line).join(" " + b.v + " ") + " " + b.v
-      out.push(rule(b.tl, b.tm, b.tr))
-      for line in head { out.push(row(line)) }
-      if head.len() > 0 && body.len() > 0 { out.push(rule(b.ml, b.mm, b.mr)) }
-      for r in body { for line in r { out.push(row(line)) } }
-      out.push(rule(b.bl, b.bm, b.br))
+      left = b.v + " "
+      mid = " " + b.v + " "
+      right = " " + b.v
     }
   }
-  out.join("\n")
+  var out = ""
+  let rule = (l: str, m: str, r: str) => l + ws.map(w => b.h.repeat(w + 2)).join(m) + r
+  if md {
+    if head == 0 { out += "| " + ws.map(w => spaces(w)).join(" | ") + " |\n" }
+  } else if t.border != Plain {
+    out += rule(b.tl, b.tm, b.tr)
+    out += "\n"
+  }
+  for j, line in lines {
+    if j == head {
+      if md {
+        out += "|" + ws.enum().map((i, w) => md_rule(w, al[i])).join("|") + "|\n"
+      } else if t.border != Plain && head > 0 {
+        out += rule(b.ml, b.mm, b.mr)
+        out += "\n"
+      }
+    }
+    if t.border == Plain {
+      var row = ""
+      for i, c in line {
+        if i > 0 { row += mid }
+        fit(&row, c, cw[j * n + i], ws[i], al[i])
+      }
+      out += rtrim(row)
+    } else {
+      out += left
+      for i, c in line {
+        if i > 0 { out += mid }
+        if md && j >= head && c.contains('|') {
+          var cell = ""
+          fit(&cell, c, cw[j * n + i], ws[i], al[i])
+          out += md_escape(cell)
+        } else {
+          fit(&out, c, cw[j * n + i], ws[i], al[i])
+        }
+      }
+      out += right
+    }
+    out += "\n"
+  }
+  if md {
+    if lines.len() == head {
+      out += "|" + ws.enum().map((i, w) => md_rule(w, al[i])).join("|") + "|\n"
+    }
+  } else if t.border != Plain {
+    out += rule(b.bl, b.bm, b.br)
+    out += "\n"
+  }
+  out.strip_suffix("\n") else out
 }
 
 fn md_rule(w: int, a: Align): str = match a {
@@ -503,9 +586,11 @@ fn md_rule(w: int, a: Align): str = match a {
 }
 
 fn rtrim(s: str): str {
-  var cs = s.chars()
-  while cs.len() > 0 && cs[cs.len() - 1] == ' ' { cs.pop() }
-  str(cs)
+  if !s.ends_with(" ") { return s }
+  let cs = s.chars()
+  var k = cs.len()
+  while k > 0 && cs[k - 1] == ' ' { k -= 1 }
+  str(cs[0..k])
 }
 
 fn md_escape(s: str): str = s.replace("|", "\\|")

@@ -22,6 +22,35 @@ fn message(BadUtf8): str = "decoded bytes are not valid UTF-8"
 
 fn is_bytes(bs: [int]): bool = bs.all(b => b >= 0 && b <= 255)
 
+// ---- buffers ----
+
+imprint ZEROS = (0..64).map(_ => 0)
+let BLANKS = "0".repeat(64).chars()
+
+// `n` zeros to fill in by index, which is much cheaper than `n` pushes (unless `n` is tiny).
+fn zeros(n: int): [int] {
+  if n <= 4 {
+    var few: [int] = []
+    for _ in 0..n { few.push(0) }
+    return few
+  }
+  var z = ZEROS
+  while z.len() < n { z = z + z }
+  if z.len() == n { z } else { z.take(n) }
+}
+
+// `n` chars to fill in by index.
+fn blanks(n: int): [char] {
+  if n <= 4 {
+    var few: [char] = []
+    for _ in 0..n { few.push('0') }
+    return few
+  }
+  var z = BLANKS
+  while z.len() < n { z = z + z }
+  if z.len() == n { z } else { z.take(n) }
+}
+
 // ---- base64 ----
 
 let STD = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".chars()
@@ -39,31 +68,34 @@ pub fn encode64(bs: [int], url: bool, pad: bool): str
   requires is_bytes(bs)
 {
   let abc = if url { URL } else { STD }
-  var out: [char] = []
+  let len = bs.len()
+  let rest = len % 3
+  var out = blanks(len / 3 * 4 + if rest == 0 { 0 } else if pad { 4 } else { rest + 1 })
   var i = 0
-  while i + 2 < bs.len() {
+  var j = 0
+  while i + 2 < len {
     let n = (bs[i] << 16) | (bs[i + 1] << 8) | bs[i + 2]
-    out.push(abc[n >> 18])
-    out.push(abc[(n >> 12) & 63])
-    out.push(abc[(n >> 6) & 63])
-    out.push(abc[n & 63])
+    out[j] = abc[n >> 18]
+    out[j + 1] = abc[(n >> 12) & 63]
+    out[j + 2] = abc[(n >> 6) & 63]
+    out[j + 3] = abc[n & 63]
     i += 3
+    j += 4
   }
-  let rest = bs.len() - i
   if rest == 1 {
     let n = bs[i] << 16
-    out.push(abc[n >> 18])
-    out.push(abc[(n >> 12) & 63])
+    out[j] = abc[n >> 18]
+    out[j + 1] = abc[(n >> 12) & 63]
     if pad {
-      out.push('=')
-      out.push('=')
+      out[j + 2] = '='
+      out[j + 3] = '='
     }
   } else if rest == 2 {
     let n = (bs[i] << 16) | (bs[i + 1] << 8)
-    out.push(abc[n >> 18])
-    out.push(abc[(n >> 12) & 63])
-    out.push(abc[(n >> 6) & 63])
-    if pad { out.push('=') }
+    out[j] = abc[n >> 18]
+    out[j + 1] = abc[(n >> 12) & 63]
+    out[j + 2] = abc[(n >> 6) & 63]
+    if pad { out[j + 3] = '=' }
   }
   str(out)
 }
@@ -89,15 +121,40 @@ fn val64(c: char, url: bool): int {
   }
 }
 
+// `val64` of every ASCII code point, for each alphabet.
+fn vals64(url: bool): [int] = (0..128).map(i => val64(char(i) else '=', url))
+
+imprint VAL_STD = vals64(false)
+imprint VAL_URL = vals64(true)
+
 fn decode64(s: str, url: bool): [int]!EncErr {
   let cs = s.chars()
   // Split off the padding: at most two '=' at the very end.
   var n = cs.len()
   while n > 0 && cs[n - 1] == '=' { n -= 1 }
-  var out: [int] = []
+  let tab = if url { VAL_URL } else { VAL_STD }
+  var out = zeros(n * 6 / 8)
+  var i = 0
+  var j = 0
+  // Four chars at a time give three bytes; a char outside the alphabet ends this loop and
+  // is reported by the next one.
+  while i + 4 <= n {
+    let a = int(cs[i])
+    let b = int(cs[i + 1])
+    let c = int(cs[i + 2])
+    let d = int(cs[i + 3])
+    if (a | b | c | d) >= 128 { break }
+    let v = (tab[a] << 18) | (tab[b] << 12) | (tab[c] << 6) | tab[d]
+    if v < 0 { break }
+    out[j] = v >> 16
+    out[j + 1] = (v >> 8) & 0xff
+    out[j + 2] = v & 0xff
+    i += 4
+    j += 3
+  }
   var acc = 0
   var bits = 0
-  for i in 0..n {
+  while i < n {
     let c = cs[i]
     let v = val64(c, url)
     if v < 0 {
@@ -108,9 +165,11 @@ fn decode64(s: str, url: bool): [int]!EncErr {
     bits += 6
     if bits >= 8 {
       bits -= 8
-      out.push((acc >> bits) & 0xff)
+      out[j] = (acc >> bits) & 0xff
+      j += 1
       acc = acc & (1 << bits) - 1
     }
+    i += 1
   }
   let pads = cs.len() - n
   if pads > 2 || (pads > 0 && cs.len() % 4 != 0) { fail(BadPadding(n)) }
@@ -122,32 +181,53 @@ fn decode64(s: str, url: bool): [int]!EncErr {
 // ---- hex ----
 
 let HEX = "0123456789abcdef".chars()
+let HEX_UPPER = "0123456789ABCDEF".chars()
 
 /// Lower-case hex, two digits per byte: `hex([0, 171]) == "00ab"`.
 pub fn hex(bs: [int]): str
   requires is_bytes(bs)
 {
-  var out: [char] = []
-  for b in bs {
-    out.push(HEX[b >> 4])
-    out.push(HEX[b & 15])
+  hex_with(bs, HEX)
+}
+
+/// Upper-case hex: `hex_upper([0, 171]) == "00AB"`.
+pub fn hex_upper(bs: [int]): str = if is_bytes(bs) {
+  hex_with(bs, HEX_UPPER)
+} else {
+  hex(bs).upper()
+}
+
+fn hex_with(bs: [int], digits: [char]): str {
+  let n = bs.len()
+  var out = blanks(2 * n)
+  var i = 0
+  while i < n {
+    let b = bs[i]
+    out[2 * i] = digits[b >> 4]
+    out[2 * i + 1] = digits[b & 15]
+    i += 1
   }
   str(out)
 }
 
-/// Upper-case hex: `hex_upper([0, 171]) == "00AB"`.
-pub fn hex_upper(bs: [int]): str = hex(bs).upper()
+// The value of every ASCII hex digit, -1 for the other ASCII code points.
+imprint HEX_VALS = (0..128).map(i => hex_val(char(i) else 'g') else -1)
 
 /// Decode hex (either case). An odd length is `BadLength`; a non-hex char is `BadChar`.
 pub fn from_hex(s: str): [int]!EncErr {
   let cs = s.chars()
-  if cs.len() % 2 != 0 { fail(BadLength(cs.len())) }
-  var out: [int] = []
+  let n = cs.len()
+  if n % 2 != 0 { fail(BadLength(n)) }
+  var out = zeros(n / 2)
   var i = 0
-  while i < cs.len() {
-    let hi = hex_val(cs[i]) else fail(BadChar(i, cs[i]))
-    let lo = hex_val(cs[i + 1]) else fail(BadChar(i + 1, cs[i + 1]))
-    out.push((hi << 4) | lo)
+  while i < n {
+    let a = int(cs[i])
+    let b = int(cs[i + 1])
+    let hi = if a < 128 { HEX_VALS[a] } else { -1 }
+    if hi < 0 { fail(BadChar(i, cs[i])) }
+    let lo = if b < 128 { HEX_VALS[b] } else { -1 }
+    if lo < 0 { fail(BadChar(i + 1, cs[i + 1])) }
+    out[i >> 1] = (hi << 4) | lo
     i += 2
   }
   out
@@ -167,6 +247,9 @@ pub fn hex_val(c: char): int? {
 pub fn is_unreserved(c: char): bool =
   (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || "-._~".contains(c)
 
+// `is_unreserved` of every ASCII code point.
+imprint UNRESERVED = (0..128).map(i => is_unreserved(char(i) else ' '))
+
 /// Percent-encode one URI component: every UTF-8 byte except the unreserved chars becomes `%XX`
 /// (upper-case hex). `percent_encode("a b/ü") == "a%20b%2F%C3%BC"`.
 pub fn percent_encode(s: str): str = percent_encode(s, "")
@@ -174,45 +257,106 @@ pub fn percent_encode(s: str): str = percent_encode(s, "")
 /// Like `percent_encode`, but also keeps the ASCII chars in `safe` as they are, e.g. `"/"` for a
 /// path or `"!$&'()*+,;=:@/"` for RFC 3986 `pchar`s.
 pub fn percent_encode(s: str, safe: str): str {
-  var out: [char] = []
-  for c in s.chars() {
-    if is_unreserved(c) || (int(c) < 128 && safe.contains(c)) {
-      out.push(c)
-    } else {
-      for b in str(c).bytes() {
-        out.push('%')
-        out.push(HEX[b >> 4].upper())
-        out.push(HEX[b & 15].upper())
-      }
+  let cs = s.chars()
+  let n = cs.len()
+  let any_safe = safe.byte_len() > 0
+  // How many chars the escapes add; none means `s` is already its own encoding.
+  var extra = 0
+  var i = 0
+  while i < n {
+    let k = int(cs[i])
+    if k >= 128 {
+      extra += if k < 0x800 { 5 } else if k < 0x10000 { 8 } else { 11 }
+    } else if !UNRESERVED[k] && !(any_safe && safe.contains(cs[i])) {
+      extra += 2
     }
+    i += 1
+  }
+  if extra == 0 { return s }
+  var out = blanks(n + extra)
+  var j = 0
+  i = 0
+  while i < n {
+    let c = cs[i]
+    let k = int(c)
+    if k >= 128 {
+      // the char's UTF-8 bytes, each escaped
+      if k < 0x800 {
+        out.escape(j, 0xc0 | (k >> 6))
+        j += 3
+      } else if k < 0x10000 {
+        out.escape(j, 0xe0 | (k >> 12))
+        out.escape(j + 3, 0x80 | (k >> 6) & 63)
+        j += 6
+      } else {
+        out.escape(j, 0xf0 | (k >> 18))
+        out.escape(j + 3, 0x80 | (k >> 12) & 63)
+        out.escape(j + 6, 0x80 | (k >> 6) & 63)
+        j += 9
+      }
+      out.escape(j, 0x80 | (k & 63))
+      j += 3
+    } else if UNRESERVED[k] || (any_safe && safe.contains(c)) {
+      out[j] = c
+      j += 1
+    } else {
+      out.escape(j, k)
+      j += 3
+    }
+    i += 1
   }
   str(out)
 }
 
+// Writes `%XX` for the byte `b` at out[j..j + 3].
+fn escape(out: var [char], j: int, b: int) {
+  out[j] = '%'
+  out[j + 1] = HEX_UPPER[b >> 4]
+  out[j + 2] = HEX_UPPER[b & 15]
+}
+
+// The value of the hex digit with ASCII code `b` (any byte), or -1.
+fn hex_byte(b: int): int = if b < 128 { HEX_VALS[b] } else { -1 }
+
 /// Decode `%XX` escapes (either case) to bytes; every other char contributes its UTF-8 bytes.
 /// `+` stays `+` (form decoding, where `+` is a space, is `url.parse_query`).
 pub fn percent_decode_bytes(s: str): [int]!EncErr {
-  let cs = s.chars()
-  var out: [int] = []
+  // '%' is ASCII, so the escapes can be found in the UTF-8 bytes; the rest is kept as it is.
+  var out = s.bytes()
+  if !s.contains('%') { return out }
+  let n = out.len()
   var i = 0
-  while i < cs.len() {
-    let c = cs[i]
-    if c == '%' {
-      if i + 2 >= cs.len() { fail(BadEscape(i)) }
-      let hi = hex_val(cs[i + 1]) else fail(BadEscape(i))
-      let lo = hex_val(cs[i + 2]) else fail(BadEscape(i))
-      out.push((hi << 4) | lo)
+  while out[i] != 37 { i += 1 }
+  var j = i
+  while i < n {
+    let b = out[i]
+    if b == 37 {
+      let hi = if i + 2 < n { hex_byte(out[i + 1]) } else { -1 }
+      let lo = if hi >= 0 { hex_byte(out[i + 2]) } else { -1 }
+      if lo < 0 { fail(BadEscape(char_index(s.bytes(), i))) }
+      out[j] = (hi << 4) | lo
       i += 3
     } else {
-      for b in str(c).bytes() { out.push(b) }
+      out[j] = b
       i += 1
     }
+    j += 1
   }
-  out
+  out.take(j)
+}
+
+// The index of the char that starts at byte `at` of the UTF-8 bytes `bs`.
+fn char_index(bs: [int], at: int): int {
+  var k = 0
+  for i in 0..at {
+    if (bs[i] & 0xc0) != 0x80 { k += 1 }
+  }
+  k
 }
 
 /// Decode `%XX` escapes and read the result as UTF-8 text.
 pub fn percent_decode(s: str): str!EncErr {
+  if !s.contains('%') { return s }
   let bs = percent_decode_bytes(s)?
   str.from_utf8(bs) else fail(BadUtf8)
 }

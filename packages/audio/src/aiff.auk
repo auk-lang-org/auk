@@ -24,6 +24,9 @@ fn ext80(d: [int], i: int): float {
   if (d[i] & 0x80) != 0 { -v } else { v }
 }
 
+// The highest sample rate read from a file: WAV and AU store the rate in 32 bits.
+let MAX_RATE = 0xffffffff
+
 fn put_ext80(out: var [int], rate: int) {
   var e = 0
   while (rate >> (e + 1)) > 0 { e += 1 }
@@ -60,7 +63,10 @@ fn header(d: [int]): Hdr!audio.AErr {
       h.nch = audio.pcm.u16be(d, body)
       h.frames = audio.pcm.u32be(d, body + 2)
       h.bits = audio.pcm.u16be(d, body + 6)
-      h.rate = int(round(ext80(d, body + 8)))
+      // a damaged rate can be NaN, infinite or too big for an int
+      let rate = ext80(d, body + 8)
+      if !(rate > -1.0e18 && rate < 1.0e18) { fail(audio.Corrupt("AIFF sample rate {rate}")) }
+      h.rate = int(round(rate))
       if form == "AIFC" && size >= 22 { h.comp = audio.pcm.tag(d, body + 18) }
       comm = true
     } else if id == "SSND" && size >= 8 {
@@ -79,7 +85,7 @@ fn header(d: [int]): Hdr!audio.AErr {
     p = body + size + (size & 1)
   }
   if !comm { fail(audio.Corrupt("AIFF file has no COMM chunk")) }
-  if h.nch < 1 || h.rate < 1 {
+  if h.nch < 1 || h.rate < 1 || h.rate > MAX_RATE {
     fail(audio.Corrupt("AIFF file has {h.nch} channels at {h.rate} Hz"))
   }
   if h.data_at < 0 {
@@ -185,9 +191,15 @@ pub fn encode(a: audio.Audio, f: audio.Fmt): [int]!audio.AErr {
     let v = a.tags.get(name) else ""
     if v != "" { chunk(&body, id, v.bytes()) }
   }
-  chunk(&body, "SSND", [0, 0, 0, 0, 0, 0, 0, 0] + audio.pcm.encode(a.chans, f, true))
-  var out: [int] = []
-  chunk(&out, "FORM", body)
+  // the SSND chunk comes last, so the file is the FORM header, `body`, then that chunk
+  let dlen = 8 + a.chans[0].len() * audio.pcm.width(f) * nch
+  var out = "FORM".bytes()
+  audio.pcm.put32be(&out, body.len() + 8 + dlen + (dlen & 1))
+  out = out + body + "SSND".bytes()
+  audio.pcm.put32be(&out, dlen)
+  out = out + [0, 0, 0, 0, 0, 0, 0, 0]
+  audio.pcm.encode_into(&out, a.chans, f, true)
+  if (dlen & 1) == 1 { out.push(0) }
   out
 }
 
@@ -205,6 +217,10 @@ fn au_fmt(enc: int): audio.Fmt!audio.AErr = match enc {
   e => fail(audio.Unsupported("AU encoding {e}"))
 }
 
+// The most channels an AU file may have: what WAV and AIFF can hold (their channel counts are
+// 16-bit). The header's count is 32-bit, and each channel becomes a list when decoding.
+let MAX_AU_CHANNELS = 65535
+
 fn au_header(d: [int]): (int, int, audio.Fmt, int, int, str)!audio.AErr {
   if d.len() < 24 { fail(audio.Truncated("AU header")) }
   if audio.pcm.tag(d, 0) != ".snd" { fail(audio.Corrupt("not an AU file")) }
@@ -214,7 +230,9 @@ fn au_header(d: [int]): (int, int, audio.Fmt, int, int, str)!audio.AErr {
   let rate = audio.pcm.u32be(d, 16)
   let nch = audio.pcm.u32be(d, 20)
   if at < 24 || at > d.len() { fail(audio.Corrupt("AU data offset {at}")) }
-  if nch < 1 || rate < 1 { fail(audio.Corrupt("AU file has {nch} channels at {rate} Hz")) }
+  if nch < 1 || rate < 1 || nch > MAX_AU_CHANNELS {
+    fail(audio.Corrupt("AU file has {nch} channels at {rate} Hz"))
+  }
   if size == 0xffffffff || at + size > d.len() { size = d.len() - at }
   let note = audio.pcm.text(d[24..at])
   (at, size, f, rate, nch, note)
@@ -260,12 +278,15 @@ pub fn au_encode(a: audio.Audio, f: audio.Fmt): [int]!audio.AErr {
   // the annotation is NUL-terminated and padded to a multiple of 8 bytes
   var pad = note + [0]
   while pad.len() % 8 != 0 || pad.len() < 8 { pad.push(0) }
-  let data = audio.pcm.encode(a.chans, f, true)
+  let nch = a.chans.len()
+  let dlen = if nch == 0 { 0 } else { a.chans[0].len() * audio.pcm.width(f) * nch }
   var out = ".snd".bytes()
   audio.pcm.put32be(&out, 24 + pad.len())
-  audio.pcm.put32be(&out, data.len())
+  audio.pcm.put32be(&out, dlen)
   audio.pcm.put32be(&out, enc)
   audio.pcm.put32be(&out, a.rate)
-  audio.pcm.put32be(&out, a.chans.len())
-  out + pad + data
+  audio.pcm.put32be(&out, nch)
+  out = out + pad
+  audio.pcm.encode_into(&out, a.chans, f, true)
+  out
 }

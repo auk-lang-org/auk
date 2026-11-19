@@ -37,15 +37,44 @@ fn crc_table(): [int] {
   t
 }
 
+// Four tables in one list, for taking four bytes per step ("slicing by 4"): entry `256 * k + n`
+// is the CRC of byte `n` followed by `k` zero bytes.
+fn crc_tables(): [int] {
+  var t = crc_table()
+  for i in 256..1024 { t.push(t[t[i - 256] & 0xff] ^ (t[i - 256] >> 8)) }
+  t
+}
+
 imprint CRC_TABLE = crc_table()
+imprint CRC_TABLES = crc_tables()
 
 /// The CRC-32 (IEEE, as in gzip and zip) of `data`: `crc32("123456789".bytes()) == 0xcbf43926`.
 pub fn crc32(data: [int]): int = crc32_update(0, data)
 
 /// Continues a CRC-32: `crc32_update(crc32(a), b) == crc32(a + b)`.
 pub fn crc32_update(crc: int, data: [int]): int {
+  let n = data.len()
   var c = crc ^ MASK
-  for b in data { c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >> 8) }
+  var i = 0
+  // four bytes per step, as long as `c` is a real CRC (32 bits)
+  if c >= 0 && c <= MASK {
+    while i + 4 <= n {
+      let x = c ^
+        ((data[i] & 0xff) |
+          (data[i + 1] & 0xff) << 8 |
+          (data[i + 2] & 0xff) << 16 |
+          (data[i + 3] & 0xff) << 24)
+      c = CRC_TABLES[768 + (x & 0xff)] ^
+        CRC_TABLES[512 + ((x >> 8) & 0xff)] ^
+        CRC_TABLES[256 + ((x >> 16) & 0xff)] ^
+        CRC_TABLES[x >> 24]
+      i += 4
+    }
+  }
+  while i < n {
+    c = CRC_TABLE[(c ^ data[i]) & 0xff] ^ (c >> 8)
+    i += 1
+  }
   c ^ MASK
 }
 
@@ -93,13 +122,14 @@ imprint DBASE = bases(1, dext())
 // The order code-length code lengths are sent in.
 let ORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
 
-// The input as a bit stream, read LSB first.
-struct In { src: [int], pos: int, buf: int, cnt: int }
+// The input as a bit stream, read LSB first: `src[..end]`, with the next byte at `pos` and `cnt`
+// not yet used bits of the byte before it in `buf`.
+struct In { src: [int], end: int, pos: int, buf: int, cnt: int }
 
 fn bits(s: var In, need: int): int!ZErr {
   var val = s.buf
   while s.cnt < need {
-    if s.pos >= s.src.len() { fail(Truncated) }
+    if s.pos >= s.end { fail(Truncated) }
     val = val | (s.src[s.pos] << s.cnt)
     s.pos += 1
     s.cnt += 8
@@ -110,8 +140,14 @@ fn bits(s: var In, need: int): int!ZErr {
 }
 
 // A canonical Huffman code: how many codes have each length 0..15, and the symbols in code
-// order.
-struct Huff { count: [int], symbol: [int] }
+// order. `fast` maps the next FAST bits of input to `(symbol << 4) | length` for every code
+// of at most FAST bits, and to 0 for longer ones.
+struct Huff { count: [int], symbol: [int], fast: [int] }
+
+let FAST = 9
+
+imprint ZEROS = (0..1024).map(_ => 0)
+imprint NO_FAST = (0..512).map(_ => 0)
 
 fn filled(n: int, v: int): [int] {
   var xs: [int] = []
@@ -119,19 +155,27 @@ fn filled(n: int, v: int): [int] {
   xs
 }
 
-// Builds the code for `lengths` (one per symbol, 0 = unused). The int is 0 for a complete code,
-// negative for an over-subscribed one and positive for an incomplete one.
-fn huff(lengths: [int]): (Huff, int) {
-  var count = filled(16, 0)
+// `n` zeros to fill in by index, which is much cheaper than `n` pushes.
+fn zeros(n: int): [int] {
+  var z = ZEROS
+  while z.len() < n { z = z + z }
+  if z.len() == n { z } else { z.take(n) }
+}
+
+// Builds the code for `lengths` (one per symbol, 0 = unused), with the `fast` table only if
+// `lookup`. The int is 0 for a complete code, negative for an over-subscribed one and positive
+// for an incomplete one.
+fn huff(lengths: [int], lookup: bool): (Huff, int) {
+  var count = ZEROS.take(16)
   for l in lengths { count[l] += 1 }
-  var symbol = filled(lengths.len(), 0)
-  if count[0] == lengths.len() { return (Huff { count, symbol }, 0) }
+  var symbol = zeros(lengths.len())
+  if count[0] == lengths.len() { return (Huff { count, symbol, fast: NO_FAST }, 0) }
   var left = 1
   for len in 1..16 {
     left = (left << 1) - count[len]
-    if left < 0 { return (Huff { count, symbol }, left) }
+    if left < 0 { return (Huff { count, symbol, fast: NO_FAST }, left) }
   }
-  var offs = filled(16, 0)
+  var offs = ZEROS.take(16)
   for len in 1..15 { offs[len + 1] = offs[len] + count[len] }
   for sym in 0..lengths.len() {
     let l = lengths[sym]
@@ -140,58 +184,151 @@ fn huff(lengths: [int]): (Huff, int) {
       offs[l] += 1
     }
   }
-  (Huff { count, symbol }, left)
+  let fast = if lookup { fast_table(count, symbol) } else { NO_FAST }
+  (Huff { count, symbol, fast }, left)
 }
 
-// Reads one symbol, a bit at a time (codes are stored MSB first).
-fn decode(s: var In, h: Huff): int!ZErr {
+// Codes are stored MSB first, so a code of `len` bits is found at every index whose low `len`
+// bits are the code reversed.
+fn fast_table(count: [int], symbol: [int]): [int] {
+  var t = NO_FAST
+  var code = 0
+  var k = 0
+  for len in 1..=FAST {
+    for _ in 0..count[len] {
+      let e = (symbol[k] << 4) | len
+      var j = rev(code, len)
+      while j < 512 {
+        t[j] = e
+        j += 1 << len
+      }
+      code += 1
+      k += 1
+    }
+    code = code << 1
+  }
+  t
+}
+
+// Reads one symbol from bits already in hand (the next one is bit 0 of `buf`), a bit at a time
+// (codes are stored MSB first): `(symbol << 4) | length`, or -1 if no code matches the next
+// 15 bits.
+fn walk(h: Huff, buf: int): int {
   var code = 0
   var first = 0
   var index = 0
+  var b = buf
   for len in 1..16 {
-    code = code | s.bits(1)?
+    code = code | (b & 1)
+    b = b >> 1
     let count = h.count[len]
-    if code - count < first { return h.symbol[index + (code - first)] }
+    if code - count < first { return (h.symbol[index + (code - first)] << 4) | len }
     index += count
     first = (first + count) << 1
     code = code << 1
   }
-  fail(BadData(s.pos, "invalid Huffman code"))
+  -1
 }
 
-fn stored(s: var In, out: var [int]): ()!ZErr {
+// The output is a buffer that is longer than what has been written so far (`n` ints, passed
+// in and returned), so bytes go in by index; it doubles when it runs short.
+
+fn stored(s: var In, out: var [int], n: int): int!ZErr {
   // drop the bits left in the current byte
   s.buf = 0
   s.cnt = 0
   let p = s.pos
-  if p + 4 > s.src.len() { fail(Truncated) }
-  let len = s.src[p] | (s.src[p + 1] << 8)
-  let nlen = s.src[p + 2] | (s.src[p + 3] << 8)
+  let src = s.src
+  if p + 4 > s.end { fail(Truncated) }
+  let len = src[p] | (src[p + 1] << 8)
+  let nlen = src[p + 2] | (src[p + 3] << 8)
   if len != (~nlen & 0xffff) { fail(BadData(p, "stored block length check failed")) }
-  if p + 4 + len > s.src.len() { fail(Truncated) }
-  for i in p + 4..p + 4 + len { out.push(s.src[i]) }
+  if p + 4 + len > s.end { fail(Truncated) }
+  while out.len() < n + len { out = out + out }
+  for k in 0..len { out[n + k] = src[p + 4 + k] }
   s.pos = p + 4 + len
+  n + len
 }
 
-fn codes(s: var In, out: var [int], lens: Huff, dists: Huff): ()!ZErr {
+// The Huffman-coded data of one block. Whole bytes are read ahead into `buf` (up to 56 bits),
+// which is enough for one length/distance pair (at most 48 bits), and handed back at the end,
+// so `s` is left as reading a bit at a time would leave it (`pos - (cnt >> 3)` is where that
+// would be). A code that seems to end past the last bit read is the input running out.
+fn codes(s: var In, out: var [int], n0: int, lens: Huff, dists: Huff): int!ZErr {
+  let src = s.src
+  let end = s.end
+  let lfast = lens.fast
+  let dfast = dists.fast
+  var pos = s.pos
+  var buf = s.buf
+  var cnt = s.cnt
+  var n = n0
   loop {
-    let sym = s.decode(lens)?
+    while cnt <= 48 && pos < end {
+      buf = buf | (src[pos] << cnt)
+      pos += 1
+      cnt += 8
+    }
+    if n + 258 > out.len() { out = out + out }
+    var e = lfast[buf & 511]
+    if e == 0 {
+      e = walk(lens, buf)
+      if e < 0 {
+        if cnt < 15 { fail(Truncated) }
+        fail(BadData(pos - ((cnt - 15) >> 3), "invalid Huffman code"))
+      }
+    }
+    if (e & 15) > cnt { fail(Truncated) }
+    buf = buf >> (e & 15)
+    cnt -= e & 15
+    let sym = e >> 4
     if sym < 256 {
-      out.push(sym)
+      out[n] = sym
+      n += 1
     } else if sym == 256 {
       break
     } else {
       let i = sym - 257
-      if i >= 29 { fail(BadData(s.pos, "invalid length symbol {sym}")) }
-      let len = LBASE[i] + s.bits(LEXT[i])?
-      let d = s.decode(dists)?
-      if d >= 30 { fail(BadData(s.pos, "invalid distance symbol {d}")) }
-      let dist = DBASE[d] + s.bits(DEXT[d])?
-      if dist > out.len() { fail(BadData(s.pos, "distance too far back")) }
-      let start = out.len() - dist
-      for k in 0..len { out.push(out[start + k]) }
+      if i >= 29 { fail(BadData(pos - (cnt >> 3), "invalid length symbol {sym}")) }
+      let lx = LEXT[i]
+      if lx > cnt { fail(Truncated) }
+      let len = LBASE[i] + (buf & (1 << lx) - 1)
+      buf = buf >> lx
+      cnt -= lx
+      var de = dfast[buf & 511]
+      if de == 0 {
+        de = walk(dists, buf)
+        if de < 0 {
+          if cnt < 15 { fail(Truncated) }
+          fail(BadData(pos - ((cnt - 15) >> 3), "invalid Huffman code"))
+        }
+      }
+      if (de & 15) > cnt { fail(Truncated) }
+      buf = buf >> (de & 15)
+      cnt -= de & 15
+      let d = de >> 4
+      if d >= 30 { fail(BadData(pos - (cnt >> 3), "invalid distance symbol {d}")) }
+      let dx = DEXT[d]
+      if dx > cnt { fail(Truncated) }
+      let dist = DBASE[d] + (buf & (1 << dx) - 1)
+      buf = buf >> dx
+      cnt -= dx
+      if dist > n { fail(BadData(pos - (cnt >> 3), "distance too far back")) }
+      let start = n - dist
+      for k in 0..len { out[n + k] = out[start + k] }
+      n += len
     }
   }
+  s.unread(pos, buf, cnt)
+  n
+}
+
+// Ends reading ahead: hands back the whole bytes among the `cnt` unused bits of `buf`, where
+// `pos` is the next byte to read.
+fn unread(s: var In, pos: int, buf: int, cnt: int) {
+  s.pos = pos - (cnt >> 3)
+  s.cnt = cnt & 7
+  s.buf = buf & (1 << (cnt & 7)) - 1
 }
 
 fn fixed_lengths(): [int] {
@@ -202,74 +339,100 @@ fn fixed_lengths(): [int] {
   ls
 }
 
-let FIXED_LENS = huff(fixed_lengths()).0
-let FIXED_DISTS = huff(filled(30, 5)).0
+let FIXED_LENS = huff(fixed_lengths(), true).0
+let FIXED_DISTS = huff(filled(30, 5), true).0
 
-fn dynamic(s: var In, out: var [int]): ()!ZErr {
+fn dynamic(s: var In, out: var [int], n0: int): int!ZErr {
   let at = s.pos
   let nlen = s.bits(5)? + 257
   let ndist = s.bits(5)? + 1
   let ncode = s.bits(4)? + 4
   if nlen > 286 || ndist > 30 { fail(BadData(at, "too many length or distance symbols")) }
-  var cl = filled(19, 0)
+  var cl = ZEROS.take(19)
   for i in 0..ncode { cl[ORDER[i]] = s.bits(3)? }
-  let (clcode, cl_left) = huff(cl)
+  let (clcode, cl_left) = huff(cl, false)
   if cl_left != 0 { fail(BadData(at, "incomplete code length code")) }
   let total = nlen + ndist
-  var lengths: [int] = []
-  while lengths.len() < total {
-    let sym = s.decode(clcode)?
+  // the code lengths, reading ahead as `codes` does (a symbol and its repeat count: 22 bits)
+  let src = s.src
+  var pos = s.pos
+  var buf = s.buf
+  var cnt = s.cnt
+  var lengths = ZEROS.take(total)
+  var k = 0
+  while k < total {
+    while cnt <= 48 && pos < s.end {
+      buf = buf | (src[pos] << cnt)
+      pos += 1
+      cnt += 8
+    }
+    let e = walk(clcode, buf)
+    if e < 0 {
+      if cnt < 15 { fail(Truncated) }
+      fail(BadData(pos - ((cnt - 15) >> 3), "invalid Huffman code"))
+    }
+    if (e & 15) > cnt { fail(Truncated) }
+    buf = buf >> (e & 15)
+    cnt -= e & 15
+    let sym = e >> 4
     if sym < 16 {
-      lengths.push(sym)
+      lengths[k] = sym
+      k += 1
     } else {
-      let (len, n) = if sym == 16 {
-        let prev = lengths.last() else fail(BadData(s.pos, "repeat with no first length"))
-        (prev, 3 + s.bits(2)?)
-      } else if sym == 17 {
-        (0, 3 + s.bits(3)?)
-      } else {
-        (0, 11 + s.bits(7)?)
+      if sym == 16 && k == 0 { fail(BadData(pos - (cnt >> 3), "repeat with no first length")) }
+      let len = if sym == 16 { lengths[k - 1] } else { 0 }
+      let width = if sym == 16 { 2 } else if sym == 17 { 3 } else { 7 }
+      if width > cnt { fail(Truncated) }
+      let n = if sym == 18 { 11 } else { 3 } + (buf & (1 << width) - 1)
+      buf = buf >> width
+      cnt -= width
+      if k + n > total { fail(BadData(pos - (cnt >> 3), "too many code lengths")) }
+      for _ in 0..n {
+        lengths[k] = len
+        k += 1
       }
-      if lengths.len() + n > total { fail(BadData(s.pos, "too many code lengths")) }
-      for _ in 0..n { lengths.push(len) }
     }
   }
+  s.unread(pos, buf, cnt)
   if lengths[256] == 0 { fail(BadData(at, "no end-of-block code")) }
-  let (lens, l_left) = huff(lengths.take(nlen))
+  let (lens, l_left) = huff(lengths.take(nlen), true)
   if l_left < 0 || (l_left > 0 && nlen - lens.count[0] != 1) {
     fail(BadData(at, "bad literal/length code lengths"))
   }
-  let (dists, d_left) = huff(lengths.skip(nlen))
+  let (dists, d_left) = huff(lengths.skip(nlen), true)
   if d_left < 0 || (d_left > 0 && ndist - dists.count[0] != 1) {
     fail(BadData(at, "bad distance code lengths"))
   }
-  s.codes(&out, lens, dists)?
+  s.codes(&out, n0, lens, dists)
 }
 
-// Inflates the DEFLATE stream starting at byte `from`; also returns the offset just past it.
-fn inflate_at(bs: [int], from: int): ([int], int)!ZErr {
-  var s = In { src: bs, pos: from, buf: 0, cnt: 0 }
-  var out: [int] = []
+// Inflates the DEFLATE stream in bs[from..end]; also returns the offset just past it.
+fn inflate_at(bs: [int], from: int, end: int): ([int], int)!ZErr {
+  var s = In { src: bs, end, pos: from, buf: 0, cnt: 0 }
+  var out = ZEROS
+  var n = 0
   loop {
     let last = s.bits(1)?
     let at = s.pos
-    match s.bits(2)? {
-      0 => s.stored(&out)?
-      1 => s.codes(&out, FIXED_LENS, FIXED_DISTS)?
-      2 => s.dynamic(&out)?
+    n = match s.bits(2)? {
+      0 => s.stored(&out, n)?
+      1 => s.codes(&out, n, FIXED_LENS, FIXED_DISTS)?
+      2 => s.dynamic(&out, n)?
       _ => fail(BadData(at, "invalid block type 3"))
     }
-    if last == 1 { break (out, s.pos) }
+    if last == 1 { break (if n == out.len() { out } else { out.take(n) }, s.pos) }
   }
 }
 
 /// Decompresses raw DEFLATE data (no header or checksum). Bytes after the final block are
 /// ignored.
-pub fn inflate(data: [int]): [int]!ZErr = (inflate_at(data, 0)?).0
+pub fn inflate(data: [int]): [int]!ZErr = (inflate_at(data, 0, data.len())?).0
 
 // ---- DEFLATE encoding: LZ77 with hash chains, then stored or fixed-Huffman blocks ----
 
-// The output as a bit stream, written LSB first.
+// A plain bit stream writer, LSB first. It spells out the format (the tables below are built
+// with it in mind, and the tests write hand-made streams with it); `deflate` itself packs bits
+// straight into its output buffer.
 struct Out { bytes: [int], acc: int, n: int }
 
 fn put(o: var Out, v: int, nbits: int) {
@@ -327,154 +490,233 @@ fn dist_index(dist: int): int {
   i
 }
 
+// What `deflate` writes for each symbol, worked out once: the bits (LSB first, as they enter
+// the stream) shifted left by 4, plus how many there are.
+
+// A literal/length symbol 0..287 in the fixed code.
+fn sym_bits(sym: int): int {
+  let (code, len) = fixed_code(sym)
+  rev(code, len) << 4 | len
+}
+
+// A match length 3..258: its length symbol, then the extra bits.
+fn len_bits(len: int): int {
+  if len < 3 { return 0 }
+  let li = len_index(len)
+  let (code, n) = fixed_code(257 + li)
+  (rev(code, n) | (len - LBASE[li]) << n) << 4 | (n + LEXT[li])
+}
+
+// `dist_index` as a table, zlib's way: by distance - 1 up to 256, and from there by
+// (distance - 1) >> 7, since every symbol from 16 on covers a multiple of 128 distances.
+fn dist_codes(): [int] {
+  var t: [int] = []
+  for d in 1..=256 { t.push(dist_index(d)) }
+  for k in 0..256 { t.push(dist_index((k << 7) + 1)) }
+  t
+}
+
+imprint SYM_BITS = (0..288).map(sym => sym_bits(sym))
+imprint LEN_BITS = (0..259).map(len => len_bits(len))
+imprint DIST_CODE = dist_codes()
+imprint DIST_REV = (0..30).map(d => rev(d, 5))
+
 let WINDOW = 32768
 let HASH_SIZE = 32768
 let MAX_CHAIN = 64
 let MAX_MATCH = 258
 let BLOCK = 65535
 
+// "No position yet" for every hash.
+imprint NO_HEADS = (0..32768).map(_ => -1)
+
 // A token is a literal byte (0..255) or a match `(len << 16) | dist`.
 fn is_match(t: int): bool = t > 255
 
-struct Lz { head: [int], prev: [int] }
-
 fn hash3(bs: [int], i: int): int = ((bs[i] << 10) ^ (bs[i + 1] << 5) ^ bs[i + 2]) & (HASH_SIZE - 1)
 
-fn insert(z: var Lz, bs: [int], i: int) {
-  if i + 2 < bs.len() {
-    let h = hash3(bs, i)
-    z.prev[i & (WINDOW - 1)] = z.head[h]
-    z.head[h] = i
-  }
-}
-
-// The longest earlier match for position i (not reaching past `end`): (length, distance).
-fn longest(z: Lz, bs: [int], i: int, end: int): (int, int) {
-  if i + 2 >= end { return (0, 0) }
-  let max = if end - i < MAX_MATCH { end - i } else { MAX_MATCH }
-  var best = 0
-  var dist = 0
-  var cand = z.head[hash3(bs, i)]
-  var chain = 0
-  while cand >= 0 && i - cand <= WINDOW && chain < MAX_CHAIN {
-    if bs[cand + best] == bs[i + best] {
-      var l = 0
-      while l < max && bs[cand + l] == bs[i + l] { l += 1 }
-      if l > best {
-        best = l
-        dist = i - cand
-        if l == max { break }
+// LZ77 tokens for bs[start..end], written to `toks`; returns how many. Matches may reach back
+// before `start`. `head` is the latest position with each hash and `prev` the position before
+// each position (by position mod WINDOW) with the same hash: every position that has three
+// bytes to hash is entered as it is passed.
+fn tokens(head: var [int], prev: var [int], toks: var [int], bs: [int], start: int, end: int): int {
+  let n = bs.len()
+  var nt = 0
+  var i = start
+  // the hash of the three bytes at i, as long as there are three; each position's hash
+  // follows from the one before
+  var h = if i + 2 < n { hash3(bs, i) } else { 0 }
+  while i < end {
+    // the longest earlier match for position i, not reaching past `end`
+    var best = 0
+    var dist = 0
+    if i + 2 < end {
+      let max = if end - i < MAX_MATCH { end - i } else { MAX_MATCH }
+      var cand = head[h]
+      var chain = 0
+      var want = bs[i]  // bs[i + best]: what a longer match must have there
+      while cand >= 0 && i - cand <= WINDOW && chain < MAX_CHAIN {
+        if bs[cand + best] == want {
+          var l = 0
+          while l < max && bs[cand + l] == bs[i + l] { l += 1 }
+          if l > best {
+            best = l
+            dist = i - cand
+            if l == max { break }
+            want = bs[i + best]
+          }
+        }
+        let next = prev[cand & (WINDOW - 1)]
+        if next >= cand { break }  // a slot reused by a newer position: the chain ends here
+        cand = next
+        chain += 1
       }
     }
-    let next = z.prev[cand & (WINDOW - 1)]
-    if next >= cand { break }  // a slot reused by a newer position: the chain ends here
-    cand = next
-    chain += 1
-  }
-  (best, dist)
-}
-
-// LZ77 tokens for bs[start..end]; matches may reach back before `start`.
-fn tokens(z: var Lz, bs: [int], start: int, end: int): [int] {
-  var out: [int] = []
-  var i = start
-  while i < end {
-    let (len, dist) = longest(z, bs, i, end)
-    if len >= 3 {
-      out.push((len << 16) | dist)
-      for k in i..i + len { z.insert(bs, k) }
-      i += len
-    } else {
-      out.push(bs[i])
-      z.insert(bs, i)
+    let stop = if best >= 3 { i + best } else { i + 1 }
+    toks[nt] = if best >= 3 { (best << 16) | dist } else { bs[i] }
+    nt += 1
+    while i < stop {
+      if i + 2 < n {
+        prev[i & (WINDOW - 1)] = head[h]
+        head[h] = i
+      }
       i += 1
+      if i + 2 < n { h = ((h << 5) ^ bs[i + 2]) & (HASH_SIZE - 1) }
     }
   }
-  out
+  nt
 }
 
-// The size in bits of `toks` as a fixed-Huffman block (with header and end-of-block code).
-fn fixed_cost(toks: [int]): int {
+fn dist_code(dist: int): int = if dist <= 256 {
+  DIST_CODE[dist - 1]
+} else {
+  DIST_CODE[256 + ((dist - 1) >> 7)]
+}
+
+// The size in bits of `toks[..nt]` as a fixed-Huffman block (with header and end-of-block code).
+fn fixed_cost(toks: [int], nt: int): int {
   var bits = 3 + 7
-  for t in toks {
+  for k in 0..nt {
+    let t = toks[k]
     if is_match(t) {
-      let li = len_index(t >> 16)
-      let di = dist_index(t & 0xffff)
-      bits += fixed_code(257 + li).1 + LEXT[li] + 5 + DEXT[di]
+      bits += (LEN_BITS[t >> 16] & 15) + 5 + DEXT[dist_code(t & 0xffff)]
     } else {
-      bits += fixed_code(t).1
+      bits += SYM_BITS[t] & 15
     }
   }
   bits
 }
 
-fn fixed_block(o: var Out, toks: [int], last: bool) {
-  o.put(if last { 1 } else { 0 }, 1)
-  o.put(1, 2)
-  for t in toks {
-    if is_match(t) {
-      let len = t >> 16
-      let dist = t & 0xffff
-      let li = len_index(len)
-      o.put_sym(257 + li)
-      o.put(len - LBASE[li], LEXT[li])
-      let di = dist_index(dist)
-      o.put(rev(di, 5), 5)
-      o.put(dist - DBASE[di], DEXT[di])
-    } else {
-      o.put_sym(t)
-    }
-  }
-  o.put_sym(256)
+// The block writers put their bits into `bytes` from bit offset `at` on and return the offset
+// they reach; `bytes` must be long enough (see `room`). The bits of a last, partly used byte
+// are in `bytes` too, with the rest of that byte zero.
+
+// Makes sure `bytes` can take `extra` more bytes from bit offset `at`.
+fn room(bytes: var [int], at: int, extra: int) {
+  while bytes.len() < (at >> 3) + extra + 2 { bytes = bytes + bytes }
 }
 
-fn stored_block(o: var Out, bs: [int], start: int, end: int, last: bool) {
-  o.put(if last { 1 } else { 0 }, 1)
-  o.put(0, 2)
-  o.align()
+fn fixed_block(bytes: var [int], at: int, toks: [int], nt: int, last: bool): int {
+  var p = at >> 3
+  var n = at & 7
+  // the block header: the last-block bit, then type 1 in two bits
+  var acc = (bytes[p] & (1 << n) - 1) | if last { 3 } else { 2 } << n
+  n += 3
+  for k in 0..nt {
+    let t = toks[k]
+    if is_match(t) {
+      let l = LEN_BITS[t >> 16]
+      acc = acc | (l >> 4) << n
+      n += l & 15
+      let dist = t & 0xffff
+      let d = dist_code(dist)
+      acc = acc | (DIST_REV[d] | (dist - DBASE[d]) << 5) << n
+      n += 5 + DEXT[d]
+    } else {
+      let l = SYM_BITS[t]
+      acc = acc | (l >> 4) << n
+      n += l & 15
+    }
+    while n >= 8 {
+      bytes[p] = acc & 0xff
+      p += 1
+      acc = acc >> 8
+      n -= 8
+    }
+  }
+  // the end-of-block symbol 256: seven zero bits
+  n += 7
+  while n >= 8 {
+    bytes[p] = acc & 0xff
+    p += 1
+    acc = acc >> 8
+    n -= 8
+  }
+  bytes[p] = acc
+  p * 8 + n
+}
+
+fn stored_block(bytes: var [int], at: int, bs: [int], start: int, end: int, last: bool): int {
+  // the header (the last-block bit, type 0 in two bits), then zero bits up to a byte boundary
+  var p = at >> 3
+  let used = at & 7
+  bytes[p] = (bytes[p] & (1 << used) - 1) | if last { 1 } else { 0 } << used
+  if used > 5 { bytes[p + 1] = 0 }
+  p = (at + 10) >> 3
   let n = end - start
-  o.put(n, 16)
-  o.put(~n & 0xffff, 16)
-  for i in start..end { o.bytes.push(bs[i]) }
+  bytes[p] = n & 0xff
+  bytes[p + 1] = n >> 8
+  bytes[p + 2] = ~n & 0xff
+  bytes[p + 3] = (~n >> 8) & 0xff
+  p += 4
+  for i in 0..n { bytes[p + i] = bs[start + i] }
+  (p + n) * 8
 }
 
 /// Compresses `data` as raw DEFLATE: LZ77 matching (hash chains over a 32 KiB window) coded
 /// with the fixed Huffman code, with a stored block for any 64 KiB chunk that wouldn't shrink.
 pub fn deflate(data: [int]): [int] {
-  var o = Out { bytes: [], acc: 0, n: 0 }
-  if data.len() == 0 {
-    o.fixed_block([], true)
-    o.align()
-    return o.bytes
+  let n = data.len()
+  var bytes = ZEROS
+  var at = 0
+  if n == 0 {
+    at = fixed_block(&bytes, at, [], 0, true)
+    return bytes.take((at + 7) >> 3)
   }
-  var z = Lz { head: filled(HASH_SIZE, -1), prev: filled(WINDOW, -1) }
+  var head = NO_HEADS
+  var prev = if n < WINDOW { NO_HEADS.take(n) } else { NO_HEADS }
+  var toks = zeros(if n < BLOCK { n } else { BLOCK })
   var start = 0
-  while start < data.len() {
-    let end = if data.len() - start > BLOCK { start + BLOCK } else { data.len() }
-    let last = end == data.len()
-    let toks = z.tokens(data, start, end)
-    if fixed_cost(toks) > (end - start) * 8 + 40 {
-      o.stored_block(data, start, end, last)
+  while start < n {
+    let end = if n - start > BLOCK { start + BLOCK } else { n }
+    let last = end == n
+    let nt = tokens(&head, &prev, &toks, data, start, end)
+    let cost = fixed_cost(toks, nt)
+    if cost > (end - start) * 8 + 40 {
+      room(&bytes, at, end - start + 5)
+      at = stored_block(&bytes, at, data, start, end, last)
     } else {
-      o.fixed_block(toks, last)
+      room(&bytes, at, cost >> 3)
+      at = fixed_block(&bytes, at, toks, nt, last)
     }
     start = end
   }
-  o.align()
-  o.bytes
+  bytes.take((at + 7) >> 3)
 }
 
 /// Wraps `data` in stored (uncompressed) DEFLATE blocks: no compression, but valid DEFLATE.
 pub fn store(data: [int]): [int] {
-  var o = Out { bytes: [], acc: 0, n: 0 }
+  let n = data.len()
+  var bytes = zeros(n + 5 * (n / BLOCK + 1))
+  var at = 0
   var start = 0
   loop {
-    let end = if data.len() - start > BLOCK { start + BLOCK } else { data.len() }
-    o.stored_block(data, start, end, end == data.len())
+    let end = if n - start > BLOCK { start + BLOCK } else { n }
+    at = stored_block(&bytes, at, data, start, end, end == n)
     start = end
-    if start == data.len() { break }
+    if start == n { break }
   }
-  o.bytes
+  bytes.take(at >> 3)
 }
 
 // ---- gzip (RFC 1952) ----
@@ -489,10 +731,13 @@ fn read_be32(bs: [int], i: int): int =
   (bs[i] << 24) | (bs[i + 1] << 16) | (bs[i + 2] << 8) | bs[i + 3]
 
 /// Compresses `data` as a gzip member (no file name, modification time 0, OS "unknown").
-pub fn gzip(data: [int]): [int] = [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255] +
-  deflate(data) +
-  le32(crc32(data)) +
-  le32(data.len() & MASK)
+pub fn gzip(data: [int]): [int] {
+  var out = [0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 255]
+  out += deflate(data)
+  out += le32(crc32(data))
+  out += le32(data.len() & MASK)
+  out
+}
 
 /// Decompresses gzip data: every member, concatenated (as `gzip -d` does). Each member's CRC-32
 /// and length are checked; the optional header fields (extra, name, comment, header CRC) are
@@ -503,11 +748,11 @@ pub fn gunzip(data: [int]): [int]!ZErr {
   var pos = 0
   while pos < data.len() {
     let start = gzip_header(data, pos)?
-    let (got, end) = inflate_at(data, start)?
+    let (got, end) = inflate_at(data, start, data.len())?
     if end + 8 > data.len() { fail(Truncated) }
     if read_le32(data, end) != crc32(got) { fail(BadChecksum("CRC-32")) }
     if read_le32(data, end + 4) != (got.len() & MASK) { fail(BadChecksum("length")) }
-    out = out + got
+    if out.len() == 0 { out = got } else { out += got }
     pos = end + 8
   }
   out
@@ -551,7 +796,12 @@ fn past_zero(bs: [int], from: int): int!ZErr {
 // ---- zlib (RFC 1950) ----
 
 /// Compresses `data` as a zlib stream (header `78 01`, Adler-32 trailer).
-pub fn zlib(data: [int]): [int] = [0x78, 0x01] + deflate(data) + be32(adler32(data))
+pub fn zlib(data: [int]): [int] {
+  var out = [0x78, 0x01]
+  out += deflate(data)
+  out += be32(adler32(data))
+  out
+}
 
 /// Decompresses a zlib stream and checks its Adler-32. Preset dictionaries aren't supported,
 /// and nothing may follow the stream.
@@ -563,7 +813,7 @@ pub fn unzlib(data: [int]): [int]!ZErr {
   if (cmf >> 4) > 7 { fail(BadHeader(0, "window size too large")) }
   if ((cmf << 8) | flg) % 31 != 0 { fail(BadHeader(1, "header check failed")) }
   if (flg & 0x20) != 0 { fail(BadHeader(1, "preset dictionaries aren't supported")) }
-  let (got, end) = inflate_at(data, 2)?
+  let (got, end) = inflate_at(data, 2, data.len())?
   if end + 4 > data.len() { fail(Truncated) }
   if read_be32(data, end) != adler32(got) { fail(BadChecksum("Adler-32")) }
   if end + 4 != data.len() { fail(BadHeader(end + 4, "data after the end of the stream")) }
@@ -618,17 +868,21 @@ pub fn zip(entries: [Entry]): [int]
     common.put32(e.data.len())
     common.put16(name.len())
     central.put32(CENTRAL_SIG)
-    central.put16(0x314)                          // made by Unix, so unzip applies the mode below
-    central = central + common + filled(8, 0)     // extra, comment, disk, internal attributes
+    central.put16(0x314)  // made by Unix, so unzip applies the mode below
+    central += common
+    central += [0, 0, 0, 0, 0, 0, 0, 0]           // extra, comment, disk, internal attributes
     let mode = if dir { 0x41ed } else { 0x81a4 }  // 0o40755, 0o100644
     central.put32((mode << 16) | if dir { 0x10 } else { 0 })
     central.put32(out.len())
-    central = central + name
+    central += name
     out.put32(LOCAL_SIG)
-    out = out + common + [0, 0] + name + body
+    out += common
+    out += [0, 0]
+    out += name
+    out += body
   }
   let at = out.len()
-  out = out + central
+  out += central
   out.put32(END_SIG)
   out.put32(0)  // disk numbers
   out.put16(entries.len())
@@ -697,7 +951,7 @@ fn entry_data(bs: [int], at: int, method: int, csize: int): [int]!ZErr {
   if start + csize > bs.len() { fail(Truncated) }
   match method {
     0 => bs[start..start + csize]
-    8 => (inflate_at(bs.take(start + csize), start)?).0
+    8 => (inflate_at(bs, start, start + csize)?).0
     m => fail(BadHeader(at + 8, "compression method {m} isn't supported"))
   }
 }
@@ -942,4 +1196,23 @@ test "corrupt zip archives" {
   assert unzip(moved) is err(BadHeader(1, "bad local file header"))
   // the central directory (0x98 bytes at 0x81) is missing
   assert unzip(ZIP_CLI.take(0x81) + ZIP_CLI.skip(0x81 + 0x98)) is err(Truncated)
+}
+
+test "encoder tables agree with the definitions" {
+  for dist in 1..=32768 { assert dist_code(dist) == dist_index(dist) }
+  for len in 3..=258 {
+    let li = len_index(len)
+    let (code, n) = fixed_code(257 + li)
+    assert (LEN_BITS[len] & 15) == n + LEXT[li]
+    assert ((LEN_BITS[len] >> 4) & (1 << n) - 1) == rev(code, n)
+    assert (LEN_BITS[len] >> (4 + n)) == len - LBASE[li]
+  }
+  // the fast decoding table finds the same symbols as reading a bit at a time
+  for h in [FIXED_LENS, FIXED_DISTS] {
+    for bits in 0..512 {
+      let e = h.fast[bits]
+      assert e == 0 || e == walk(h, bits)
+      assert e != 0 || walk(h, bits) < 0 || (walk(h, bits) & 15) > FAST
+    }
+  }
 }

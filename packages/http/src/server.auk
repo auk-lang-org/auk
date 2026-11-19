@@ -139,9 +139,10 @@ async fn read_request(c: var net.Conn): Req?! uses net {
   var buf: [int] = []
   var need = 1
   var continued = false
+  var progress = http.wire.progress()  // each decode resumes where the last one stopped
   loop {
     if buf.len() >= need {
-      match http.wire.decode_request(buf) {
+      match http.wire.decode_request(buf, &progress) {
         ok(Done(method, target, headers, body)) =>
           return some(request(method, target, headers, body))
         ok(More(n, cont)) => {
@@ -159,7 +160,7 @@ async fn read_request(c: var net.Conn): Req?! uses net {
     }
     let got = c.read(65536)?
     if got.len() == 0 { return none }
-    for b in got { buf.push(b) }
+    buf += got
   }
 }
 
@@ -186,9 +187,10 @@ async fn answer(c: var net.Conn, handler: (Req) => http.Resp): ()! uses net {
   var buf: [int] = []
   var need = 1
   var continued = false
+  var progress = http.wire.progress()  // each decode resumes where the last one stopped
   let out = loop {
     if buf.len() >= need {
-      match http.wire.decode_request(buf) {
+      match http.wire.decode_request(buf, &progress) {
         ok(Done(method, target, headers, body)) =>
           break respond(request(method, target, headers, body), handler)
         ok(More(n, cont)) => {
@@ -203,7 +205,7 @@ async fn answer(c: var net.Conn, handler: (Req) => http.Resp): ()! uses net {
     }
     let got = c.read(65536)?
     if got.len() == 0 { return }  // the client closed before sending a whole request
-    for b in got { buf.push(b) }
+    buf += got
   }
   c.write(out.bytes())?
 }
@@ -464,7 +466,7 @@ async fn raw(port: int, req: str): str! uses net {
   loop {
     let got = c.read(65536)?
     if got.len() == 0 { break }
-    for b in got { buf.push(b) }
+    buf += got
   }
   c.close()
   str.from_utf8(buf)?
@@ -531,5 +533,38 @@ test "integration: serve_n answers http.get and http.post on 127.0.0.1" {
   let (served4, d) = await (serve_n(s, 1, _ => text(200, "never")), raw(p, "BAD\r\n\r\n"))
   served4?
   assert (d?).starts_with("HTTP/1.1 400 Bad Request\r\n")
+  s.close()
+}
+
+// Sends `req` in `step`-byte writes, then reads the whole response.
+async fn raw_pieces(port: int, req: [int], step: int): str! uses net {
+  var c = net.tcp("127.0.0.1", port)?
+  var at = 0
+  while at < req.len() {
+    let stop = min(at + step, req.len())
+    c.write(req[at..stop])?
+    at = stop
+  }
+  var buf: [int] = []
+  loop {
+    let got = c.read(65536)?
+    if got.len() == 0 { break }
+    buf += got
+  }
+  c.close()
+  str.from_utf8(buf)?
+}
+
+test "integration: a chunked upload sent in many small writes" {
+  var s = listen("127.0.0.1", 0)?
+  var req = "POST /up HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n".bytes()
+  for i in 0..2000 { req += "1\r\n{char(97 + i % 26) else 'a'}\r\n".bytes() }
+  req += "0\r\n\r\n".bytes()
+  let (served, out) = await (
+    serve_n(s, 1, r => text(200, "{r.body.len()} {r.body[0..3]}")),
+    raw_pieces(s.port(), req, 7),
+  )
+  served?
+  assert (out?).ends_with("\r\n\r\n2000 abc")
   s.close()
 }

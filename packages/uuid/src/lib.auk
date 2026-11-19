@@ -85,12 +85,26 @@ pub fn v7_from(ms: int, random: [int]): Uuid
   requires ms >= 0 && ms <= MAX_MS
   requires random.len() == 10 && is_bytes(random)
 {
-  var bs: [int] = []
-  for shift in [40, 32, 24, 16, 8, 0] { bs.push((ms >> shift) & 0xff) }
-  bs = bs + random
-  bs[6] = 0x70 | (bs[6] & 0x0f)
-  bs[8] = 0x80 | (bs[8] & 0x3f)
-  Uuid { bytes: bs }
+  Uuid {
+    bytes: [
+      (ms >> 40) & 0xff,
+      (ms >> 32) & 0xff,
+      (ms >> 24) & 0xff,
+      (ms >> 16) & 0xff,
+      (ms >> 8) & 0xff,
+      ms & 0xff,
+      0x70 | (random[0] & 0x0f),
+      random[1],
+      0x80 | (random[2] & 0x3f),
+      random[3],
+      random[4],
+      random[5],
+      random[6],
+      random[7],
+      random[8],
+      random[9],
+    ],
+  }
 }
 
 let RAND_B_SPAN = 1 << 62
@@ -99,7 +113,10 @@ let RAND_B_SPAN = 1 << 62
 /// millisecond or across a clock that stepped back. When `ms` is later than `prev`'s timestamp
 /// this is just `v7(ms)`; otherwise it keeps `prev`'s timestamp and adds a random amount
 /// (1..2^32) to its 74 random bits (RFC 9562 §6.2, method 2), moving to the next millisecond if
-/// they run out. If `prev` isn't a v7 UUID (e.g. `nil()`), this is `v7(ms)`.
+/// they run out. If `prev` isn't a v7 UUID (e.g. `nil()`), this is `v7(ms)`. At `MAX_MS` there
+/// is no next millisecond: when the random bits run out there it returns the greatest v7 UUID
+/// (`ffffffff-ffff-7fff-bfff-ffffffffffff`), which may equal `prev`, so only then is the result
+/// not strictly after `prev`.
 pub fn v7_after(prev: Uuid, ms: int): Uuid uses rand
   requires ms >= 0 && ms <= MAX_MS
 {
@@ -116,15 +133,30 @@ pub fn v7_after(prev: Uuid, ms: int): Uuid uses rand
     a += 1
   }
   if a > 0xfff {
-    // all 74 bits used up: borrow the next millisecond
+    // all 74 bits used up: borrow the next millisecond, or saturate at the last one
+    if t == MAX_MS { return v7_from(MAX_MS, fill(255).take(10)) }
     return v7_from(t + 1, rand.bytes(10))
   }
-  var bs = p.take(6)
-  bs.push(0x70 | (a >> 8))
-  bs.push(a & 0xff)
-  bs.push(0x80 | (b >> 56))
-  for shift in [48, 40, 32, 24, 16, 8, 0] { bs.push((b >> shift) & 0xff) }
-  Uuid { bytes: bs }
+  Uuid {
+    bytes: [
+      p[0],
+      p[1],
+      p[2],
+      p[3],
+      p[4],
+      p[5],
+      0x70 | (a >> 8),
+      a & 0xff,
+      0x80 | (b >> 56),
+      (b >> 48) & 0xff,
+      (b >> 40) & 0xff,
+      (b >> 32) & 0xff,
+      (b >> 24) & 0xff,
+      (b >> 16) & 0xff,
+      (b >> 8) & 0xff,
+      b & 0xff,
+    ],
+  }
 }
 
 // ---- fields ----
@@ -150,7 +182,8 @@ pub fn variant(u: Uuid): Variant {
 /// The Unix millisecond timestamp of a v7 UUID, or `none` for any other kind.
 pub fn timestamp(u: Uuid): int? {
   if version(u) != 7 || variant(u) != Rfc { return none }
-  u.bytes.take(6).reduce(0, (acc, b) => (acc << 8) | b)
+  let b = u.bytes
+  b[0] << 40 | (b[1] << 32) | (b[2] << 24) | (b[3] << 16) | (b[4] << 8) | b[5]
 }
 
 pub fn is_nil(u: Uuid): bool = u.bytes.all(b => b == 0)
@@ -177,18 +210,48 @@ fn hex(bs: [int]): str {
   str(out)
 }
 
+// The canonical form's hyphens, with a '0' for each hex digit to fill in, and where the two
+// digits of each byte go.
+let BLANK = "00000000-0000-0000-0000-000000000000".chars()
+let PLACE = [0, 2, 4, 6, 9, 11, 14, 16, 19, 21, 24, 26, 28, 30, 32, 34]
+let BLANK_SIMPLE = "00000000000000000000000000000000".chars()
+
 /// The canonical form: lower-case hex in 8-4-4-4-12 groups,
 /// `"919108f7-52d1-4320-9bac-f847db4148a8"`. `"{u}"` gives the same.
 pub fn show(u: Uuid): str {
   let b = u.bytes
-  "{hex(b.take(4))}-{hex(b[4..6])}-{hex(b[6..8])}-{hex(b[8..10])}-{hex(b.skip(10))}"
+  if b.len() != 16 {
+    // not a UUID this package built: the general way
+    return "{hex(b.take(4))}-{hex(b[4..6])}-{hex(b[6..8])}-{hex(b[8..10])}-{hex(b.skip(10))}"
+  }
+  var out = BLANK
+  for i in 0..16 {
+    let x = b[i]
+    let at = PLACE[i]
+    out[at] = HEX[x >> 4]
+    out[at + 1] = HEX[x & 15]
+  }
+  str(out)
 }
 
 /// 32 hex digits without hyphens: `"919108f752d143209bacf847db4148a8"`.
-pub fn simple(u: Uuid): str = hex(u.bytes)
+pub fn simple(u: Uuid): str {
+  let b = u.bytes
+  if b.len() != 16 { return hex(b) }
+  var out = BLANK_SIMPLE
+  for i in 0..16 {
+    let x = b[i]
+    out[2 * i] = HEX[x >> 4]
+    out[2 * i + 1] = HEX[x & 15]
+  }
+  str(out)
+}
 
 /// The URN form: `"urn:uuid:919108f7-52d1-4320-9bac-f847db4148a8"`.
 pub fn urn(u: Uuid): str = "urn:uuid:{show(u)}"
+
+let URN_PREFIX = "urn:uuid:".chars()
+let NO_BYTES = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
 /// Parses a UUID in any common spelling, upper or lower case: canonical 8-4-4-4-12
 /// (`919108f7-52d1-4320-9bac-f847db4148a8`), braced (`{919108F7-...}`), URN
@@ -205,9 +268,8 @@ pub fn parse(s: str): Uuid!UuidErr {
     return hex_digits(cs, 1, true)
   }
   if n == 45 {
-    let prefix = "urn:uuid:".chars()
     for i in 0..9 {
-      if cs[i].lower() != prefix[i] { fail(BadChar(i, cs[i])) }
+      if cs[i].lower() != URN_PREFIX[i] { fail(BadChar(i, cs[i])) }
     }
     return hex_digits(cs, 9, true)
   }
@@ -217,25 +279,28 @@ pub fn parse(s: str): Uuid!UuidErr {
 // 32 hex digits starting at `from`, with hyphens after digits 8, 12, 16 and 20 if `dashed`.
 fn hex_digits(cs: [char], from: int, dashed: bool): Uuid!UuidErr {
   var i = from
-  var bs: [int] = []
+  var bs = NO_BYTES
   for k in 0..16 {
     if dashed && (k == 4 || k == 6 || k == 8 || k == 10) {
       if cs[i] != '-' { fail(BadChar(i, cs[i])) }
       i += 1
     }
-    let hi = nibble(cs[i]) else fail(BadChar(i, cs[i]))
-    let lo = nibble(cs[i + 1]) else fail(BadChar(i + 1, cs[i + 1]))
-    bs.push((hi << 4) | lo)
+    let hi = nibble(cs[i])
+    if hi < 0 { fail(BadChar(i, cs[i])) }
+    let lo = nibble(cs[i + 1])
+    if lo < 0 { fail(BadChar(i + 1, cs[i + 1])) }
+    bs[k] = (hi << 4) | lo
     i += 2
   }
   Uuid { bytes: bs }
 }
 
-fn nibble(c: char): int? {
+// The value of a hex digit (either case), or -1.
+fn nibble(c: char): int {
   if c >= '0' && c <= '9' { return int(c) - int('0') }
   if c >= 'a' && c <= 'f' { return int(c) - int('a') + 10 }
   if c >= 'A' && c <= 'F' { return int(c) - int('A') + 10 }
-  none
+  -1
 }
 
 // ---- tests ----
@@ -362,6 +427,12 @@ test "v7_after: strictly increasing within one millisecond" {
   let full = v7_from(5000, fill(255).take(10))
   let after = v7_after(full, 5000)
   assert after > full && after.timestamp() == some(5001)
+  // ...except at MAX_MS, which saturates at the greatest v7 UUID
+  let last = v7_from(MAX_MS, fill(255).take(10))
+  assert "{last}" == "ffffffff-ffff-7fff-bfff-ffffffffffff"
+  assert v7_after(last, 0) == last && v7_after(last, MAX_MS) == last
+  let near = v7_from(MAX_MS, [255, 255, 255, 255, 255, 255, 255, 255, 255, 0])
+  assert v7_after(near, MAX_MS) > near
   // a non-v7 predecessor just starts a fresh v7
   assert v7_after(max(), 0).timestamp() == some(0)
 }

@@ -5,4 +5,4 @@ name = "encoding"
 version = "0.1.0"
 source = "registry"
 effects = []
-checksum = "sha256:829cf5b17fab114cae3cb325d931009e0d7f03273cb4a5f524e342920c81681c"
+checksum = "sha256:0cf2d01c0a47320806725c6d717bad20e89e318cce291c5ba4c7e27b91d8db36"
