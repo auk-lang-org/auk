@@ -369,7 +369,8 @@ fn func_sig(g: var Gen, fi: int): (Sig, [mir.layout.CPass], mir.layout.CPass) us
 /// Translate the whole program.
 pub fn program(g: var Gen, ex: Exports): ()! uses ffi {
   let prog = g.prog
-  let entry = prog.entry else return fail("no entry point")
+  // (a library of the runtime's dialect has none: `auk build --lib`)
+  let entry = prog.entry else -1
   // which aggregate parameters each function reads in place
   for f in prog.funcs {
     var set = f.vars.map(_ => false)

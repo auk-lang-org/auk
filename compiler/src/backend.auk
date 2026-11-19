@@ -248,6 +248,19 @@ pub fn object(prog: mir.Program, info: mir.types.TyInfo, opt: bool): [int]! uses
   emit(b)
 }
 
+/// A library of the runtime's dialect (`auk build --lib`): an object file, or LLVM bitcode when
+/// `bc` (for the runtime's `auk_rt.bc`), optimized (O2) without the runtime's own bitcode. Its
+/// `export fn`s are external definitions (an `inline export fn` also `inlinehint`).
+pub fn library(prog: mir.Program, info: mir.types.TyInfo, bc: bool): [int]! uses fs, env, ffi {
+  let b = build(prog, info, exports("main"), none, Level.O2, false, false)?
+  if !bc { return emit(b) }
+  let bytes = llvm.kit.bitcode(b.m)
+  llvm.ir.dispose_module(b.m)
+  llvm.ir.context_dispose(b.cx)
+  llvm.target.dispose_target_machine(b.tm)
+  bytes
+}
+
 /// The program's LLVM IR at `level` (`o0`, `light`, `o2`, `o3`, or `build`: O2 with the
 /// runtime's bitcode; a `-raw` suffix stops before the pass pipeline), as `auk ir --llvm=LEVEL`
 /// prints it.

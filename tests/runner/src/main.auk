@@ -37,6 +37,7 @@ fn suites(): [t.Suite] uses fs, env, ffi, time, net, proc = [
   t.Suite { name: "packages_p0", tests: suite.packages_p0.tests() },
   t.Suite { name: "parse", tests: suite.parse.tests() },
   t.Suite { name: "raft", tests: suite.raft.tests() },
+  t.Suite { name: "raw", tests: suite.raw.tests() },
   t.Suite { name: "run", tests: suite.run.tests() },
   t.Suite { name: "shadow", tests: suite.shadow.tests() },
   t.Suite { name: "trace", tests: suite.trace.tests() },

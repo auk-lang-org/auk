@@ -102,12 +102,77 @@ inline export fn auk_retain(p: raw.Ptr<()>): raw.Ptr<()> uses raw { ... }
 
 ## 7. `catch` (and the stack-overflow recovery)
 
-`raw.setjmp(buf: raw.Ptr<raw.JmpBuf>): bool` and `raw.longjmp(buf): never` are
-`llvm.eh.sjlj.setjmp`/`longjmp` (C's `__builtin_setjmp`: five words, no signal mask, no
-unwinding). `catch.c` becomes `catch.auk` with the same frames and semantics; generated code
+`raw.setjmp(buf: raw.Ptr<raw.JmpBuf>): bool` and `raw.longjmp(buf): never` are libc's
+`_setjmp`/`_longjmp` (no signal mask, no unwinding). **Differs from the decision above** (as
+implemented, 2026-11-18): LLVM's `llvm.eh.sjlj.setjmp`/`longjmp` are lowered to nothing on
+AArch64 (`llc` turns the setjmp into `mov w0, wzr` and the longjmp into a `nop`; clang rejects
+`__builtin_setjmp` there), so the dialect calls libc instead, the call marked `returns_twice`.
+`raw.JmpBuf` is 320 bytes, enough for every supported platform's `jmp_buf`. A function that
+calls `raw.setjmp` is compiled `optnone noinline`, so its locals hold their last values after
+the jump back (C's `volatile` rule, without `volatile`). `catch.c` becomes `catch.auk` with the
+same frames and semantics; generated code
 still calls `auk_catch(thunk, env, out)`. The one rule (as now): only the catch module uses them.
 The stack-overflow handler (`stack.c`: `sigaltstack` + `SIGSEGV`) jumps to the same recovery
 points; a signal handler is an `export fn` passed to `sigaction`.
+
+## 7a. As implemented (Phase 7a): what differs, and the details the sections above leave open
+
+- **`raw.setjmp`/`raw.longjmp`** are libc's `_setjmp`/`_longjmp` (§7), not the sjlj intrinsics.
+- **`raw thread var` needs compiled code:** the JIT (`auk run`, `auk test`) links without a
+  platform runtime and has no thread-local storage, so it refuses a program with one; `auk
+  build` and `auk build --lib` use LLVM's default (general-dynamic) TLS model, which Mach-O
+  lowers to TLV descriptors and ELF to `__tls_get_addr` (relaxed by the linker in an
+  executable). The runtime itself is never JIT-compiled (`auk` links it), so this costs nothing.
+- **Types:** there is no `f64` (it is `float`, as §2 says); `isize`/`usize` are their own types
+  (64-bit). An integer literal takes the fixed-width type its context expects (`x + 1`,
+  `let b: u8 = 250`; it must fit); a literal on the left of an operator whose right side is
+  fixed-width does not (write `x + 1`, not `1 + x`). Shift amounts are taken modulo the width.
+  Integer `/` and `%` by zero trap; `f32` has `%` (`frem`).
+- **Ordinary functions of the runtime package may hold raw values** (fixed-width numbers, raw
+  structs, pointers) without `uses raw`; only the intrinsics (and `extern var`s) need the
+  effect, and the E0419 rule (no reference-counted type) applies to `uses raw` functions and
+  `export fn`s.
+- **Intrinsic signatures:** `p.at(i)`, `p.offset(i)`, `raw.from_int(n)` and the byte counts of
+  `copy`/`move`/`fill`/`compare`/`alloc`/`realloc` take any integer type (`int` or fixed-width).
+  `raw.cast<U>(x)` takes a `raw.Ptr`, `raw.Fn`, `ffi.Ptr` or C `extern type` and gives a
+  `raw.Ptr<U>` (a cast *to* a `raw.Fn`, as §10's `complete.invoke` needs, isn't there yet: store
+  the code pointer in a `raw.Fn` field of a raw struct instead). `is_null` works on `raw.Ptr`
+  and `raw.Fn`; `raw.null()` is a `raw.Ptr`. `p.int()` is declared `fn int <T>` in the prelude
+  (a space: `int<` would read as a unit of measure). A `raw.Fn` value is called like a function
+  (`f(x)`); calling one stored in a struct field needs it in a local first.
+- **Explicit type arguments** are written only after `raw.` (`raw.size_of<T>()`): the parser
+  reads `raw.name<` with no space before `<` as type arguments, so ordinary comparisons are
+  untouched. `.f` (a field selector) is an argument form only.
+- **Constants:** initializers of `raw var`/`raw thread var`/`export var` and `raw let`, and
+  `raw assert`, are evaluated by the checker: literals, other `raw let`s of the module,
+  `raw.size_of/align_of/offset_of`, `raw.null()`, conversions, arithmetic, comparisons and raw
+  struct literals (missing fields are zero). Not yet: addresses (`raw.addr_of(&g)`,
+  `raw.fn_of(f)`) in initializers, so a global block literal (§10) is filled in at startup for
+  now. A raw struct literal anywhere may leave fields out (they are zero); a `raw union`
+  literal gives at most one field.
+- **`extern var name: T = "symbol"`** declares C data (no initializer); reading it, writing it
+  and `raw.addr_of(&name)` need `uses raw` (E0410).
+- **`export fn`:** one clause, no type parameters, raw types only (E0419); C's calling
+  convention as `mir/layout.auk` classifies it (AArch64 float aggregates of `f32` were added
+  there for raw structs); external linkage under its own name, so dead-code elimination keeps
+  it; `inline export fn` is the same plus `inlinehint`. `raw.fn_of(f)` takes an `export fn`, or a
+  function whose parameters and result are numbers, `bool` and raw pointers.
+- **`auk build --lib [--bc] <file> -o <out>`** writes an object (or bitcode) at O2 with every
+  function of the program, the `export fn`s and `export var`s external, no `main` and nothing
+  run at startup (a library with string literals or top-level `let`s is refused). The runtime's
+  bitcode isn't linked into it. Raw globals are internal (`raw var`) or thread-local, so
+  `rtlink` treats the functions that touch them exactly as it treats C statics and
+  `_Thread_local`s: never copied into programs.
+- **FFI:** in the runtime package a C prototype may take function pointers (`int (*f)(int)`),
+  matched by `raw.Fn` (or `void *`); `raw.Ptr` is any `T *`, a fixed-width integer a C integer of
+  its width, `f32` `float`, a raw struct a C `struct` by value. On x86-64, a raw struct whose
+  eightbyte holds two `f32`s is still classified as an integer word (only AArch64 is supported
+  and tested here).
+- **Error codes:** E0418 (the gate), E0419 (a reference-counted type in `uses raw` code, an
+  `export fn` or a raw struct), E0421 (not a compile-time constant, a failing `raw assert`, a
+  non-constant or invalid memory order).
+- **No TBAA:** codegen attaches no alias metadata (none anywhere), so `raw.cast`
+  reinterpretation and reading a union through another field are well-defined.
 
 ## 8. What does not change
 

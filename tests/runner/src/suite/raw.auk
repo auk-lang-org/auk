@@ -1,0 +1,220 @@
+/// The runtime's dialect (docs/lowlevel.md, Phase 7a), end to end through the real binary: each
+/// program in runtime/test/raw/ runs in a project of the runtime package (`name = "auk_rt"`),
+/// in the JIT and built (O2): fixed-width arithmetic, pointers on malloc'd memory, unions read
+/// through two fields, globals and constants, setjmp/longjmp out of nested calls, export fns by
+/// value; a library (`auk build --lib`) linked with C that checks layouts against C's, calls
+/// both ways and thread-locals across pthreads; its bitcode (`--bc`); C data (`extern var`);
+/// the gate (E0418), the no-RC type rule (E0419), compile-time constants (E0421); `auk fmt`
+/// and `auk check` on the dialect.
+
+pub fn tests(): [t.Test] uses env, fs, ffi, time = [
+  t.test("fixed_width_arithmetic_wraps", fixed_width_arithmetic_wraps),
+  t.test("pointers_on_malloced_memory", pointers_on_malloced_memory),
+  t.test("unions_and_casts_at_o2", unions_and_casts_at_o2),
+  t.test("globals_constants_and_raw_assert", globals_constants_and_raw_assert),
+  t.test("thread_vars_are_refused_by_the_jit", thread_vars_are_refused_by_the_jit),
+  t.test("setjmp_longjmp_out_of_nested_calls", setjmp_longjmp_out_of_nested_calls),
+  t.test("export_fns_by_value_and_fn_pointers", export_fns_by_value_and_fn_pointers),
+  t.test("a_library_called_from_c", a_library_called_from_c),
+  t.test("library_bitcode_keeps_exports", library_bitcode_keeps_exports),
+  t.test("extern_vars_read_c_data", extern_vars_read_c_data),
+  t.test("raw_is_only_for_the_runtime_e0418", raw_is_only_for_the_runtime_e0418),
+  t.test("refcounted_types_in_raw_code_e0419", refcounted_types_in_raw_code_e0419),
+  t.test("constants_and_raw_assert_e0421", constants_and_raw_assert_e0421),
+  t.test("fmt_and_check_handle_the_dialect", fmt_and_check_handle_the_dialect),
+]
+
+let TOML = "[package]\nname = \"auk_rt\"\nversion = \"0.1.0\"\neffects = [\"raw\", \"ffi\"]\n"
+
+fn auk(args: [str]): cmd.Out uses env, ffi, time = t.auk().unsetenv("AUK_LEAK_CHECK").args(args).output()
+
+/// A project of the runtime package in a fresh directory, `src` as src/main.auk (`toml` its
+/// raft.toml). Returns the main file.
+fn project_with(name: str, toml: str, src: str): str uses env, fs, ffi {
+  let d = t.scratch("raw/{name}")
+  t.write(paths.join(d, "raft.toml"), toml)
+  let f = paths.join(d, "src/main.auk")
+  t.write(f, src)
+  f
+}
+
+fn project(name: str, src: str): str uses env, fs, ffi = project_with(name, TOML, src)
+
+/// runtime/test/raw/<file> in a runtime project.
+fn fixture(name: str, file: str): str uses env, fs, ffi = project(name, t.read("runtime/test/raw/{file}"))
+
+fn dir_of(p: str): str = paths.parent(paths.parent(p) else ".") else "."
+
+/// `auk run` (and `-O`) and `auk build` of a program whose exit code is 0 when every check
+/// passed (the code says which failed); returns the JIT's stdout.
+fn passes(main: str): str uses env, ffi, time {
+  let o = auk(["run", main])
+  t.check(o.success(), "auk run {main}: {o.code}\n{o.stdout}{o.stderr}")
+  let o2 = auk(["run", "-O", main])
+  t.check(o2.success(), "auk run -O {main}: {o2.code}\n{o2.stdout}{o2.stderr}")
+  built_passes(main)
+  o.stdout
+}
+
+fn built_passes(main: str) uses env, ffi, time {
+  let exe = paths.join(dir_of(main), "prog")
+  let b = auk(["build", main, "-o", exe])
+  t.check(b.success(), "auk build {main}:\n{b.stderr}")
+  let r = cmd.new(exe).output()
+  t.check(r.success(), "built {main}: {r.code}\n{r.stdout}{r.stderr}")
+}
+
+/// The diagnostic codes of `auk check --json`.
+fn codes(main: str): [str] uses env, ffi, time {
+  let out = auk(["check", main, "--json"]).stdout
+  out.split("\"code\":\"").skip(1).map(s => s[0..5])
+}
+
+fn fixed_width_arithmetic_wraps() uses env, fs, ffi, time {
+  let main = fixture("arith", "arith.auk")
+  t.eq(passes(main), "4 -2147483648 4 -3 8 3.0 44 true -56\n6\ncmp ok\n", "")
+}
+
+fn pointers_on_malloced_memory() uses env, fs, ffi, time { let _ = passes(fixture("ptr", "ptr.auk")) }
+
+fn unions_and_casts_at_o2() uses env, fs, ffi, time { let _ = passes(fixture("union", "union.auk")) }
+
+fn globals_constants_and_raw_assert() uses env, fs, ffi, time {
+  built_passes(fixture("globals", "globals.auk"))
+}
+
+fn thread_vars_are_refused_by_the_jit() uses env, fs, ffi, time {
+  let main = fixture("tls_jit", "globals.auk")
+  let o = auk(["run", main])
+  t.check(!o.success(), o.stdout)
+  t.has(o.stderr, "`raw thread var`")
+}
+
+fn setjmp_longjmp_out_of_nested_calls() uses env, fs, ffi, time { let _ = passes(fixture("sjlj", "sjlj.auk")) }
+
+fn export_fns_by_value_and_fn_pointers() uses env, fs, ffi, time { let _ = passes(fixture("abi", "abi.auk")) }
+
+fn a_library_called_from_c() uses env, fs, ffi, time {
+  t.skip_if_lacks("cc", "a C compiler to link the library with")
+  let main = fixture("lib", "lib.auk")
+  let d = dir_of(main)
+  let obj = paths.join(d, "lib.o")
+  let b = auk(["build", "--lib", main, "-o", obj])
+  t.check(b.success(), "auk build --lib:\n{b.stderr}")
+  let exe = paths.join(d, "prog")
+  let libs = if t.macos() { [] } else { ["-lpthread"] }
+  let c = cmd.new("cc").args(["runtime/test/raw/lib_main.c", obj, "-o", exe] + libs).output()
+  t.check(c.success(), "cc:\n{c.stderr}")
+  let r = cmd.new(exe).output()
+  t.eq(r.stdout, "ok\n", r.stderr)
+  // the symbols: the exports, by their names; no `main`
+  if t.have("nm") {
+    let syms = cmd.new("nm").arg(obj).output().stdout
+    for s in ["auk_bump", "auk_v2_add", "auk_mk_big", "auk_flag"] { t.has(syms, s) }
+    t.lacks_text(syms, " T _main\n")
+    t.lacks_text(syms, " T main\n")
+  }
+}
+
+/// `llvm-dis` next to the `clang` build.sh uses, if any.
+fn llvm_dis(): str? uses ffi, time {
+  let o = cmd.new("sh").args(["-c", "command -v llvm-dis || ls /opt/homebrew/opt/llvm/bin/llvm-dis 2>/dev/null || ls /usr/lib/llvm-23/bin/llvm-dis 2>/dev/null"]).output()
+  let p = o.stdout.trim()
+  if p == "" { none } else { p.lines()[0] }
+}
+
+fn library_bitcode_keeps_exports() uses env, fs, ffi, time {
+  let main = fixture("lib_bc", "lib.auk")
+  let bc = paths.join(dir_of(main), "lib.bc")
+  let b = auk(["build", "--lib", "--bc", main, "-o", bc])
+  t.check(b.success(), "auk build --lib --bc:\n{b.stderr}")
+  let bytes = t.must(fs.read_bytes(bc), "read {bc}")
+  t.check(bytes.take(4) == [0x42, 0x43, 0xc0, 0xde] || bytes.take(4) == [0xde, 0xc0, 0x17, 0x0b], "not bitcode")
+  let dis = llvm_dis() else return t.skip("llvm-dis not found")
+  let ll = cmd.new(dis).args([bc, "-o", "-"]).output().stdout
+  // an `inline export fn` is an ordinary external definition, marked `inlinehint` (for rtlink)
+  t.has(ll, "define ")
+  t.has(ll, "@auk_str_len(")
+  t.has(ll, "inlinehint")
+  t.lacks_text(ll, "define internal i64 @auk_str_len")
+  // a `raw var` is internal, a `raw thread var` thread-local (rtlink keeps their users out of
+  // programs), an `export var` external
+  t.has(ll, "thread_local")
+  t.has(ll, "@auk_flag = ")
+  t.lacks_text(ll, "@auk_flag = internal")
+  t.has(ll, "internal thread_local")
+}
+
+fn extern_vars_read_c_data() uses env, fs, ffi, time {
+  let _ = passes(fixture("extern_var", "extern_var.auk"))
+  if t.macos() { let _ = passes(fixture("extern_var_macos", "extern_var_macos.auk")) }
+  // reading C data needs `uses raw`
+  let main = project("extern_var_effect", r"""
+    extern var environ: raw.Ptr<raw.Ptr<u8>> = "environ"
+    fn f(): bool = environ.is_null()
+    fn main() {}
+    """)
+  t.check(codes(main).contains("E0410"), "{codes(main)}")
+}
+
+fn raw_is_only_for_the_runtime_e0418() uses env, fs, ffi, time {
+  let plain = "[package]\nname = \"app\"\nversion = \"0.1.0\"\neffects = [\"ffi\"]\n"
+  let srcs = [
+    "fn f() uses raw {{}}\nfn main() {{}}\n",
+    "raw struct S {{ a: int }}\nfn main() {{}}\n",
+    "raw var n: int = 0\nfn main() {{}}\n",
+    "export fn f(): int = 1\nfn main() {{}}\n",
+  ]
+  for i, src in srcs {
+    let main = project_with("gate{i}", plain, src)
+    t.eq("{codes(main)}", "[\"E0418\"]", src)
+  }
+  // a manifest other than the runtime's can't list `raw`
+  let listed = "[package]\nname = \"app\"\nversion = \"0.1.0\"\neffects = [\"raw\"]\n"
+  let main = project_with("gate_toml", listed, "fn main() {{}}\n")
+  t.check(codes(main).contains("E0418"), "{codes(main)}")
+  // ordinary code doesn't see the `raw` module or the fixed-width types
+  let main2 = project_with("gate_names", plain, "fn main() {{ let x: u8 = 1 }}\n")
+  t.eq("{codes(main2)}", "[\"E0104\"]", "")
+}
+
+fn refcounted_types_in_raw_code_e0419() uses env, fs, ffi, time {
+  let srcs = [
+    "fn f(p: raw.Ptr<i64>): i64 uses raw {{\n  let s = \"no\"\n  p.load()\n}}\nfn main() {{}}\n",
+    "fn f(xs: [int], p: raw.Ptr<i64>): i64 uses raw = p.load()\nfn main() {{}}\n",
+    "raw struct S {{ name: str }}\nfn main() {{}}\n",
+    "struct P {{ x: int }}\nfn f(p: raw.Ptr<P>, q: P): i64 uses raw = 0\nfn main() {{}}\n",
+  ]
+  for i, src in srcs {
+    let main = project("rc{i}", src)
+    t.eq("{codes(main)}", "[\"E0419\"]", src)
+  }
+}
+
+fn constants_and_raw_assert_e0421() uses env, fs, ffi, time {
+  let srcs = [
+    "raw struct H {{ a: i64, b: u32 }}\nraw assert raw.size_of<H>() == 12\nfn main() {{}}\n",
+    "fn g(): i64 = 1\nraw var n: i64 = g()\nfn main() {{}}\n",
+    "fn f(p: raw.Ptr<i64>, o: raw.Order): i64 uses raw = raw.atomic_load(p, o)\nfn main() {{}}\n",
+    "fn f(p: raw.Ptr<i64>): i64 uses raw = raw.atomic_load(p, raw.Order.Release)\nfn main() {{}}\n",
+  ]
+  for i, src in srcs {
+    let main = project("const{i}", src)
+    t.eq("{codes(main)}", "[\"E0421\"]", src)
+  }
+}
+
+fn fmt_and_check_handle_the_dialect() uses env, fs, ffi, time {
+  for f in ["lib.auk", "ptr.auk", "globals.auk", "union.auk", "sjlj.auk"] {
+    let src = t.read("runtime/test/raw/{f}")
+    let o = t.auk().args(["fmt", "-"]).stdin(src).output()
+    t.check(o.success(), "auk fmt {f}:\n{o.stderr}")
+    // formatting is stable
+    let o2 = t.auk().args(["fmt", "-"]).stdin(o.stdout).output()
+    t.eq(o2.stdout, o.stdout, "auk fmt {f} twice")
+    let main = project("fmt_{f.strip_suffix(".auk") else f}", o.stdout)
+    t.eq("{codes(main)}", "[]", "auk check of formatted {f}")
+    let d = auk(["dump", "ast", main])
+    t.check(d.success(), "auk dump ast {f}:\n{d.stderr}")
+  }
+}

@@ -301,6 +301,24 @@ pub fn global(g: var Gen, name: str, ty: mir.MTy, init: mir.Ex?, constant: bool)
 
 pub fn global_ex(g: var Gen, gl: int): mir.Ex = mir.ex(mir.K.Global(gl), g.prog.globals[gl].ty)
 
+/// A compile-time constant of the runtime's dialect as a MIR expression of type `t`.
+pub fn raw_const(g: var Gen, v: typed.ConstVal, t: types.Ty): mir.Ex = match v {
+  Int(n) => mir.int_as(n, d(t))
+  Float(x) => mir.ex(mir.K.Float(x), d(types.Ty.Float)).cast(d(t))
+  Zero => mir.zero(d(t))
+  Agg(fs) => {
+    let (dd, args) = match t {
+      Named(dd, args) => (dd, args)
+      _ => return mir.zero(d(t))
+    }
+    let defs = types.fields(g.tp.defs, dd)
+    let s = types.subst_of(g.tp.defs, dd, args)
+    var ms: [(mir.Sel, mir.Ex)] = []
+    for (i, fv) in fs { ms.push((mir.Sel.F(i), g.raw_const(fv, types.subst(defs[i].ty, s)))) }
+    mir.agg(d(t), ms)
+  }
+}
+
 /// The MIR global of global `id` of the runtime's dialect (`typed.GlobalInfo`), made on first
 /// use with the constant `init`.
 pub fn raw_global(g: var Gen, id: int, init: mir.Ex): int {

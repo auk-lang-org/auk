@@ -147,6 +147,8 @@ pub enum RawNode {
   FnOf,
   /// `f(x)` with `f: raw.Fn<...>`: a call through a C function pointer.
   CallFn,
+  /// `p.f` with `p: raw.Ptr<S>`: memory read or written through a pointer (needs `uses raw`).
+  Deref,
 }
 
 pub struct ConstInfo {

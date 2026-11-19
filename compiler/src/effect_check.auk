@@ -242,7 +242,14 @@ fn direct(cx: Cx, m: int, n: int): ([str], Via)? {
   }
   match t.names.get(n) {
     some(Fn(func, _)) => return (cx.fn_uses(func), Via { callee: cx.fn_name(func, m), next: none, declared: true })
+    // the runtime's dialect: C data
+    some(Global(g)) when cx.tp.globals[g].kind == 4 =>
+      return (["raw"], Via { callee: "the `extern var` {cx.tp.globals[g].name}", next: none, declared: true })
     _ => {}
+  }
+  // the runtime's dialect: memory through a pointer
+  if t.raw.get(n) == some(typed.RawNode.Deref) {
+    return (["raw"], Via { callee: "a field through a `raw.Ptr`", next: none, declared: true })
   }
   none
 }

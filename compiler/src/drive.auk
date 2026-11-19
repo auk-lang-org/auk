@@ -267,6 +267,22 @@ pub fn build_native(cx: resolve.Sources, path: str, out: str, debuginfo: bool): 
   native.build(g.prog, g.info, out)
 }
 
+/// `auk build --lib [--bc] <file> -o <out>`: an object file (or LLVM bitcode) with the `export
+/// fn`s of a program of the runtime's dialect and no `main` (docs/lowlevel.md §8).
+pub fn build_lib(cx: resolve.Sources, path: str, out: str, bc: bool): ()! uses fs, env, ffi {
+  let tp = check_program(cx, path)?
+  let emb = mir.build.embeds(tp)
+  let g = mir.build.generate_lib(tp, emb)?
+  let bytes = match backend.library(g.prog, g.info, bc) {
+    ok(b) => b
+    err(e) => return fail("error: code generation failed (this is an auk compiler bug): {e}\n")
+  }
+  match fs.write_bytes(out, bytes) {
+    ok(_) => {}
+    err(e) => return fail("error: cannot write {out}: {e}\n")
+  }
+}
+
 /// Compile `path` in memory and run it in this process with `args` (`argv[0]` is the file);
 /// returns its exit code. `full_opt`: `auk run -O` (a run otherwise gets light optimizations;
 /// tests and debugger builds none).
@@ -507,9 +523,13 @@ pub fn cli(cx: resolve.Sources, cmd: str, args0: [str]): int uses fs, env, proc,
   // takes `-g`: debug info)
   var debuginfo = false
   var trace = no_trace_opts()
+  var lib = false
+  var bc = false
   if cmd == "build" {
     debuginfo = args.contains("-g")
-    args = args.filter(a => a != "-g")
+    lib = args.contains("--lib")
+    bc = args.contains("--bc")
+    args = args.filter(a => a != "-g" && a != "--lib" && a != "--bc")
   } else {
     match trace_flags(args, cmd != "test") {
       ok((t, rest)) => {
@@ -541,7 +561,24 @@ pub fn cli(cx: resolve.Sources, cmd: str, args0: [str]): int uses fs, env, proc,
     } else if rest.len() == 2 && rest[0] == "-o" {
       rest[1]
     } else {
-      eprint("usage: auk build [-g] <file.auk> [-o out]")
+      eprint("usage: auk build [-g] <file.auk> [-o out]  |  auk build --lib [--bc] <file.auk> -o <out>")
+      return 2
+    }
+    if lib {
+      if rest.len() != 2 {
+        eprint("usage: auk build --lib [--bc] <file.auk> -o <out.o|out.bc>")
+        return 2
+      }
+      return match build_lib(cx, path, out, bc) {
+        ok(_) => 0
+        err(e) => {
+          posix.eprint_raw("{e}")
+          1
+        }
+      }
+    }
+    if bc {
+      eprint("error: `--bc` is for `auk build --lib`")
       return 2
     }
     return match build_native(cx, path, out, debuginfo) {

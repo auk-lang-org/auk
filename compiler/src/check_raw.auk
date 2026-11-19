@@ -71,6 +71,7 @@ pub fn ptr_field(c: var check.Checker, e: ast.Expr, t: types.Ty, name: ast.Ident
   match raw_field(&c, inner, name) {
     some((d, i, ft)) => {
       c.cx.t.fields[e.id] = (d, i)
+      c.cx.t.raw[e.id] = typed.RawNode.Deref
       through_ptr(ft)
     }
     none => types.Ty.Error
@@ -264,29 +265,6 @@ pub fn validate(c: var check.Checker, t: typed.Tables, m: int) {
           if bad { c.err_in(m, diag.new("E0421", at, "this memory order isn't valid for `raw.{name}`")) }
         }
       }
-    }
-  }
-}
-
-/// E0410: a body that reads, writes or takes the address of an `extern var` without `uses raw`.
-pub fn extern_vars(c: var check.Checker, t: typed.Tables, m: int, body: typed.BodyRef) {
-  let raw = match body {
-    Fn(f) => c.fns[f].effects.contains("raw")
-    _ => false
-  }
-  if raw { return }
-  for n in t.names.keys().sort() {
-    match t.names[n] {
-      Global(g) => if c.globals[g].kind == 4 {
-        let span = c.first_span(m, [n]) else diag.NONE
-        c.err_in(
-          m,
-          diag.new("E0410", span, "`{c.globals[g].name}` is an `extern var` (C data), which needs `uses raw`")
-            .note("add `uses raw` to the function"),
-        )
-        return
-      }
-      _ => {}
     }
   }
 }

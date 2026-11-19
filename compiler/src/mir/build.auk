@@ -146,6 +146,46 @@ pub fn generate(
   Generated { prog: g.prog, info: g.info, dbg: g.dbg_info, holes: g.holes, tests: ntests, live_keys: g.live_keys }
 }
 
+/// A library of the runtime's dialect (`auk build --lib`): its `export fn`s and what they reach,
+/// no entry point. Globals of the dialect have constant initializers, so
+/// nothing runs at startup; a library that needs `dk_init` (string literals, `let`s) is refused.
+pub fn generate_lib(tp: typed.TypedProgram, emb: {str: [int]}): Generated! {
+  var g = new_gen(tp, mir.progen.Mode.Release, emb)
+  for i, inst in tp.instances {
+    // the exports, and what they reach
+    match inst.body {
+      Fn(f) => if tp.fns[f].export == 0 { continue }
+      _ => continue
+    }
+    emit(&g, i)
+    drain(&g)
+  }
+  // `export var`s are part of the interface, used or not
+  for id, gl in tp.globals {
+    if gl.kind == 3 {
+      let init = g.raw_const(gl.value, gl.ty)
+      let _ = g.raw_global(id, init)
+    }
+  }
+  if g.prog.exports.len() == 0 {
+    return fail("error: `{tp.program.mods[tp.program.root].file}` has no `export fn`: a library's interface is its exported functions\n")
+  }
+  var startup: [str] = []
+  for i in g.emitted.keys() {
+    match tp.instances[i].body {
+      Const(c) => startup.push("`{tp.consts[c].name}`")
+      _ => {}
+    }
+  }
+  for gl in g.prog.globals {
+    if gl.kind == 0 && !gl.constant && gl.init == none { startup.push(gl.name) }
+  }
+  if startup.len() > 0 {
+    return fail("error: a library (`auk build --lib`) can't have values computed at startup (string literals, top-level `let`s: {startup.sort().join(", ")}); use `raw let` and `raw var`\n")
+  }
+  Generated { prog: g.prog, info: g.info, dbg: g.dbg_info, holes: g.holes, tests: 0, live_keys: g.live_keys }
+}
+
 fn trace_init(b: var mir.Body, trace: mir.progen.Trace, tests: bool) {
   if trace.on {
     b.do_(mir.rt("auk_trace_init", [mir.ex(mir.K.Int(if tests { 1 } else { 0 }), mir.MTy.Bool)], mir.MTy.Void))

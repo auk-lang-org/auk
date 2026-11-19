@@ -665,18 +665,19 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
 - [x] The C made line-by-line translatable (2026-11-18): no varargs calls outside `cwrap.c`'s
       fixed-argument wrappers, no `goto`, no macros but the include guard, `AUK_API` and
       `_GNU_SOURCE`, no bit-fields; three unions, all `raw union`s.
-- [ ] The gate: the `raw` effect (E0418 outside `runtime/`), the declarations allowed only there.
-- [ ] Types: fixed-width ints (wrapping), `raw.Ptr<T>`, `raw struct`/`raw union` (C layout,
+- [x] The gate: the `raw` effect (E0418 outside `runtime/`), the declarations allowed only there.
+- [x] Types: fixed-width ints (wrapping), `raw.Ptr<T>`, `raw struct`/`raw union` (C layout,
       flexible array member), `[T; N]`, `raw.Fn<…>`; refcounted types rejected in `uses raw`
-      code (the no-RC mode is the type rule).
-- [ ] Memory intrinsics (load/store, fields and elements through pointers, casts, sizes and
+      code (the no-RC mode is the type rule, E0419).
+- [x] Memory intrinsics (load/store, fields and elements through pointers, casts, sizes and
       offsets, copy/fill/compare, alloc), atomics with orderings, fences.
-- [ ] `raw var` / `raw thread var` / `raw let` / `raw assert`; `export fn`, `export var`,
-      `inline export fn` (inlinehint), `raw.fn_of`.
-- [ ] FFI prototypes over raw types (any `T *`, fixed ints, raw structs by value, `raw.Fn`).
-- [ ] `raw.setjmp`/`raw.longjmp` (`llvm.eh.sjlj.*`).
-- [ ] `auk build --lib`: an object or bitcode with the exported symbols, no `main`; `build.sh`
-      links C and Auk runtime objects into one `libauk_rt.a` / `auk_rt.bc`.
+- [x] `raw var` / `raw thread var` / `raw let` / `raw assert` / `extern var`; `export fn`,
+      `export var`, `inline export fn` (inlinehint), `raw.fn_of`.
+- [x] FFI prototypes over raw types (any `T *`, fixed ints, raw structs by value, `raw.Fn`).
+- [x] `raw.setjmp`/`raw.longjmp` (libc's `_setjmp`/`_longjmp`: LLVM's `llvm.eh.sjlj.*` do
+      nothing on AArch64; lowlevel.md §7).
+- [x] `auk build --lib`: an object or bitcode with the exported symbols, no `main`.
+- [ ] `build.sh` links C and Auk runtime objects into one `libauk_rt.a` / `auk_rt.bc`.
 - [ ] Pilot: one small module ported (`value.c`: unions, structs by value, calls into C),
       checked by the whole suite and perf.
 

@@ -2417,7 +2417,6 @@ fn finish_body(c: var Checker) {
   }
   if c.prog.raw_ok(m) && !c.prog.is_core(m) {
     check_raw.validate(&c, cx.t, m)
-    check_raw.extern_vars(&c, cx.t, m, cx.body)
   }
   c.raw_body_types(cx)
   if unresolved.len() > 0 && c.errs.len() == 0 {

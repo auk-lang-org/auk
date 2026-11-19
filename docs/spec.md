@@ -150,6 +150,8 @@ imprint T = table()   // computed at compile time (pure fns only)
 To see values without editing code: `auk debug -b f.auk:12 -p x,y f.auk` runs to each breakpoint (`file:line` or a function, `-b "f.auk:12 if n > 3"`) and panic and prints the locals and stack there; `-p`/`-e` take Auk expressions too (`-e "xs.len()"`; `--json`, `--timeout S`).
 
 ## C functions
+(The runtime itself is written in a low-level dialect of Auk, `raw`, available only to the runtime package: docs/lowlevel.md.)
+
 A package whose raft.toml has `effects = ["ffi"]` binds C with a C prototype; every call needs `uses ffi`. C libraries go in raft.toml `[link] libs = ["sqlite3"]` (libc needs none).
 ```
 extern type Db = "sqlite3 *"                     // an opaque C pointer type; types don't mix
