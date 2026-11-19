@@ -728,9 +728,12 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       overflow recovery unchanged), `pixels` (2026-11-19; runtime-port.md, "Found by the 7c
       port"); `copy`, `heap` (+ `heap_os.<os>`), `chan`, `ffi` (2026-11-19: line by line, same
       symbols, `auk_rt.h` unchanged; stage 2 = stage 3, C tests 72/72, runner green, ASan, TSan
-      `conc` clean, also with the Auk half instrumented (`SAN_AUK=1`); spawn/await, channel and
-      deep-copy microbenchmarks within noise; runtime-port.md, "Found by copy, heap, chan,
-      ffi"). Next: `rc`, `task`.
+      `conc` clean, also with the Auk half instrumented (`SAN_AUK=1`); a spawn/await, channel and
+      deep-copy microbenchmark, interleaved on a loaded machine: wall medians spawn 0.34→0.39 s
+      (bimodal both ways), 2M channel messages 0.74→0.78 s, 1000 deep copies of 10k strings
+      0.45→0.46 s; instructions retired +0.5%, +1%, +3% (cross-object calls where one C unit
+      inlined, `AukTmp` zeroed); runtime-port.md, "Found by copy, heap, chan, ffi").
+      Next: `rc`, `task`.
 - [ ] `auk_rt.bc` is produced by the Auk compiler; `libauk_rt.a` via LLVM's archive writer.
 - [ ] Same C tests (called through `export fn`), then rewrite them as Auk tests. The first
       half holds for the ported modules (`run.sh` links the Auk half).
