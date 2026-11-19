@@ -290,6 +290,92 @@ both go when the C callee moves to Auk (one module: Auk calls Auk inline):
 4.86 MB, with `auk check` 1% faster. Every program also links ~16 KB more: the Auk half is one
 object, so a program that uses any of it gets all of it.
 
+## Found porting `arr.c` and `map.c` (2026-11-19)
+
+`runtime/src/arr.auk` and `map.auk`, line by line (the radix sort, the merge sorts, the map's
+hashing, probing and insertion order unchanged; golden and the fixed point agree). New here:
+
+1. **One module's `extern fn` of a symbol another module of the package `export`s is renamed**
+   (`auk_arr_new.132`, left undefined at link time): value.auk now calls `arr.auk_arr_new`,
+   `map.auk_map_set`, … by module, and those are `pub export fn`. A module that ports a function
+   must replace every `extern fn` of it in the package.
+2. **Two `extern var`s of one symbol in two modules:** the second is renamed the same way
+   (`auk_ops_str.1`), and `raw.addr_of(&value.auk_ops_str)` doesn't take a qualified name: arr
+   reaches `auk_ops_str`/`auk_ops_float` through `value.ops_str()`/`ops_float()`.
+3. **No uninitialized locals:** `var tmp = abi.Tmp {}` is a 256-byte memset on every call, where
+   C's `AukTmp tmp;` costs nothing; two of them made `auk_map_set` 1.4x slower. `auk_map_set` and
+   `auk_arr_push` use a 32-byte scratch struct for elements up to 32 bytes (every scalar, `str`,
+   `Value`) and `abi.Tmp` above that (the less hot `set`/`insert`/`remove`/`reverse` keep `Tmp`).
+4. **Cancellation points in the runtime's loops:** only `uses raw` functions are free of them,
+   so a plain helper of the runtime package with a loop (`icap_for`) loaded `auk_cancel_pending`
+   and called `auk_cancel_check` per iteration; it now says `uses raw`. (Any function of the
+   runtime package should be without them.)
+5. **Cross-object inlining:** arr.c's translation unit inlined rc.c's `auk_refcount`,
+   `auk__tmp_get`/`auk__tmp_done`, `auk_float_cmp` and `auk_add`; across the C/Auk boundary
+   nothing is inlined inside `libauk_rt.a`, so the two modules keep private copies of those
+   (they're two lines each). The reverse costs the C half: `str.c`, `core.c`, `ffi.c`, `pixels.c`
+   now call `auk_arr_len`/`auk_arr_make_unique` out of line (none in a per-element loop).
+6. Also hit, as listed above: `never` (panics followed by `raw.unreachable()`), `()` results
+   as `i8` (every `void` entry point), literals on the left of a fixed-width operator and in
+   `if` arms (`i64(63) - x`, `let n: i64 = if …`).
+
+**rtlink:** every `export fn` of the two modules is offered (none touches a private global);
+`auk_arr_len`, `_data`, `_at`, `_get_opt`, `auk_map_len`, `_find`, `_get_opt`, `_contains`,
+`_next` are `inline export fn`. Generated code now inlines `auk_arr_new` (and `auk_arr_sorted`
+at some call sites), which the C bitcode didn't.
+
+**Perf** (macOS arm64, 2026-11-19, best and median of 9 runs each, old/new interleaved; the
+machine was shared with other agents' builds, load average 6–20 for this table (20–80 in
+earlier runs, which agreed within their noise), so spreads are wide; old is
+`d2190a8` with the C modules):
+
+| bench | C best | C median | Auk best | Auk median | best ratio | median ratio |
+|---|---:|---:|---:|---:|---:|---:|
+| bench/perf fib | 0.110 | 0.111 | 0.110 | 0.111 | 1.002 | 1.000 |
+| bench/perf sieve | 0.452 | 0.471 | 0.439 | 0.467 | 0.972 | 0.991 |
+| bench/perf nbody | 0.414 | 0.436 | 0.412 | 0.415 | 0.995 | 0.953 |
+| bench/perf hashmap | 0.288 | 0.325 | 0.254 | 0.266 | 0.883 | 0.820 |
+| bench/perf trees | 2.847 | 3.046 | 2.897 | 3.197 | 1.018 | 1.050 |
+| bench/perf strings | 0.448 | 0.492 | 0.452 | 0.488 | 1.009 | 0.993 |
+| bench/perf sort | 0.160 | 0.170 | 0.158 | 0.172 | 0.985 | 1.015 |
+| micro push | 0.088 | 0.092 | 0.107 | 0.113 | 1.213 | 1.227 |
+| micro pushstr | 0.166 | 0.247 | 0.200 | 0.241 | 1.210 | 0.972 |
+| micro index | 0.174 | 0.200 | 0.173 | 0.183 | 0.995 | 0.919 |
+| micro slice | 0.133 | 0.159 | 0.137 | 0.178 | 1.033 | 1.121 |
+| micro sortint | 0.266 | 0.286 | 0.268 | 0.284 | 1.010 | 0.994 |
+| micro sortstr | 0.182 | 0.215 | 0.118 | 0.123 | 0.652 | 0.574 |
+| micro sortstruct | 0.207 | 0.236 | 0.107 | 0.121 | 0.519 | 0.515 |
+| micro listops | 0.278 | 0.293 | 0.274 | 0.290 | 0.988 | 0.987 |
+| micro mapins | 0.146 | 0.173 | 0.141 | 0.153 | 0.962 | 0.885 |
+| micro maplook | 0.121 | 0.140 | 0.125 | 0.135 | 1.029 | 0.963 |
+| micro mapstr | 0.192 | 0.220 | 0.193 | 0.206 | 1.004 | 0.937 |
+| micro mapiter | 0.267 | 0.295 | 0.198 | 0.246 | 0.742 | 0.832 |
+
+Micro sizes: push 20 × 1M ints, pushstr 5 × 4M, index 20 × 10M reads, slice 5M slices,
+sortint 5 × 4M, sortstr/sortstruct 300k (a struct with a user `cmp`), listops 300k `xs + [i]`
+and `contains`, mapins 3 × 1M `{int: int}` inserts, maplook 5M lookups, mapstr 1M `{str: int}`
+inserts and 3M lookups, mapiter 20 × 3M entries. Every output identical. `pushstr` and `slice` swing both ways between runs (pushstr: 0.70x, 0.85x
+and 0.97x medians in three runs).
+
+- **Faster:** `sortstr`/`sortstruct` (~0.55–0.65x in every run; likely because rtlink now inlines
+  `auk_arr_sorted`/`auk_arr_sort` into the program, where the element `cmp` is a known function:
+  the program calls `auk_arr_sorted` at fewer sites), `mapiter` (~0.75–0.8x: `auk_map_next` inlined), `hashmap` (~0.85x).
+- **Slower: `push` of ints, 1.2x, from codegen in the program, not the runtime.** The push
+  fast path is inline in generated code either way, and the loop runs the same instructions,
+  but generated code now inlines `auk_arr_new` (the C one was never inlined, presumably for
+  clang's `target-cpu`/`target-features` attributes, which generated code lacks), and the
+  program's loop comes out differently (the index in a register and stored each iteration,
+  rather than kept in its stack slot): 1.2x on 3M-element lists, the same on 1000-element ones.
+  Checked by making `auk_arr_new` touch a private `raw var` (so rtlink doesn't offer it): the
+  program's code is then instruction for instruction the C build's, and the time 0.98x. Not
+  fixed (no `noinline` in the dialect, and a fake global would be worse); `bench/perf/sort`,
+  which pushes 10M ints, is 0.99x.
+
+Self-compile (`auk build compiler/src/main.auk`, interleaved, load 6–20): best 18.81 s (C) vs
+18.84 s (Auk), medians 19.9 s vs 20.1 s; the front end alone (`auk check`, `auk ir` of
+compiler/, 15 runs each): 0.987x and 1.014x best. The compiler's binary is 2.4% larger
+(6,153,040 → 6,303,568 bytes: more runtime inlined).
+
 ## Per file
 
 Lines are of the C today. "Globals" counts file-scope variables (thread-locals and atomics
@@ -301,8 +387,8 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | ~~`value.c`~~ | 239 | **done** (2026-11-19, the pilot): `runtime/src/value.auk` | `auk_ops_value` stays C (`value_ops.c`): no addresses in raw initializers yet |
 | ~~`err.c`~~ | 125 | **done** (2026-11-19): `runtime/src/err.auk` | — |
 | ~~`copy.c`~~ | 170 | **done** (2026-11-19): `runtime/src/copy.auk` | the ops tables over its `auk__*_copy_elem` stay in `rc.c` |
-| `map.c` | 398 | callbacks (hash/eq/show ops), `const` tables | — |
-| `arr.c` | 727 | callbacks (element ops, sort comparator), `ctz`/`clz` | — |
+| ~~`map.c`~~ | 398 | **done** (2026-11-19): `runtime/src/map.auk` | — |
+| ~~`arr.c`~~ | 727 | **done** (2026-11-19): `runtime/src/arr.auk` | — |
 | ~~`chan.c`~~ | 168 | **done** (2026-11-19): `runtime/src/chan.auk` (`abi.Chan`; locks made with `pthread_*_init`) | — |
 | ~~`heap.c`~~ | 298 | **done** (2026-11-19): `runtime/src/heap.auk` + `heap_os.<os>.auk` | the `#ifdef` is the per-OS `heap_os` module |
 | ~~`catch.c`~~ | 142 | **done** (2026-11-19): `runtime/src/catch.auk`; `sigsetjmp(jb, 0)`/`siglongjmp` are `raw.setjmp`/`raw.longjmp` (libc `_setjmp`/`_longjmp`) | the setjmp half of `auk__catch_run` is its own `optnone` function (`run_at`), the frame in the optimized caller's memory |

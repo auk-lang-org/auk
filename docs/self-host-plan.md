@@ -735,7 +735,9 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       inlined, `AukTmp` zeroed); runtime-port.md, "Found by copy, heap, chan, ffi").
       `str` (2026-11-19: `str.auk` + `str_fmt.auk`, golden against the C build 0 differ, perf
       within noise but `s += x` +6–13% while `heap.c`'s usable-size call wasn't inlined across
-      the C/Auk boundary: runtime-port.md, "Found porting `str.c`"). Next: `rc`, `task`.
+      the C/Auk boundary: runtime-port.md, "Found porting `str.c`"). `arr`, `map` (2026-11-19;
+      perf and the gaps they hit: runtime-port.md, "Found porting `arr.c` and `map.c`").
+      Next: `rc`, `task`.
 - [ ] `auk_rt.bc` is produced by the Auk compiler; `libauk_rt.a` via LLVM's archive writer.
 - [ ] Same C tests (called through `export fn`), then rewrite them as Auk tests. The first
       half holds for the ported modules (`run.sh` links the Auk half).
