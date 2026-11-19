@@ -223,6 +223,11 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   struct literal is still zeroed where fields are missing; one bound by `let`/`var` is built
   in the variable itself (no temporary and copy, which an `optnone` function would keep).
   There is no `[x; N]` literal.
+- **Locals shadow module names:** in the runtime package a local (or parameter) named like a
+  module (`heap`, `copy`, `str`: C's names for locals) wins while it is in scope, `heap.f`
+  being its field (elsewhere that is E0116, "`heap.` is ambiguous"); out of its scope `heap.f`
+  is the module's again. E0422's token scan doesn't see scopes, so a local named like a module
+  that has per-target files still counts as a use of it.
 - **Constant patterns:** in a `match` (or any pattern) of the runtime package, a bare name that
   is an integer `raw let` of the module (`V_NULL => …`) compares with its value, as C's `case`
   does, instead of binding a new name (a local of that name still binds; another module's

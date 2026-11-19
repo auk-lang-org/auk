@@ -189,7 +189,7 @@ and after; the hot loops (fill, blend, composite, blit_mask) as fast as the C). 
 The four moved the same way as the pilot (`runtime/src/copy.auk`, `heap.auk` with
 `heap_os.<os>.auk`, `chan.auk`, `ffi.auk`; their C files deleted). What they ran into:
 
-1. **A local can't share a module's name** (E0116, "`heap.` is ambiguous"): once `heap.auk`
+1. **Fixed** (2026-11-19: in the runtime package a local wins while in scope): **A local can't share a module's name** (E0116, "`heap.` is ambiguous"): once `heap.auk`
    and `copy.auk` exist, a local `heap` or `copy` followed by `.` is refused in every module of
    the package. heap.c's `heap` locals are `hp`; copy.c's `copy` function-pointer locals `cp`.
    Every future module name (`str`, `map`, `arr`, `task`, …) takes the name from locals.

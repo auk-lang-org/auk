@@ -1286,6 +1286,9 @@ pub fn expr_path(c: var Checker, m: int, path: [ast.Ident]): ExprPath {
   let n = first.name
   let head = c.prog.first_segment(m, n) else 0
   if c.prog.is_core(head) && n != "core" { return ExprPath.Value }
+  // the runtime's dialect: in the runtime package a local wins over any module name (its
+  // modules are named like C's locals: `heap`, `copy`, `str`)
+  if c.prog.is_runtime(m) { return ExprPath.Value }
   let pkg = c.prog.pkgs[c.prog.mods[m].pkg]
   let what = if n == "core" {
     "the core library root"
