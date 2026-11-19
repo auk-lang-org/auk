@@ -397,6 +397,10 @@ fn ex(r: var Reader): mir.Ex! {
           mir.Callee.Indirect(code, mtys(&r)?)
         }
         "cptr" => mir.Callee.CPtr(ex(&r)?)
+        "cvar" => {
+          let s = string(&r)?
+          mir.Callee.CVar(s, num(&r)?)
+        }
         c => return bad(r, "a callee, found `{c}`")
       }
       mir.K.Call(c, exs(&r)?)

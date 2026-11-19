@@ -106,6 +106,11 @@ pub enum Callee {
   /// A call through a pointer to a C function (C ABI, like `Rt`; the argument and result types
   /// are the expressions' types): `extern fn` with a `"T (*)(...)"` prototype.
   CPtr(code: Ex),
+  /// A call of the C varargs function `s` (C ABI, like `Rt`): the first `fixed` arguments are
+  /// its fixed parameters, the rest its variadic tail (already promoted: `int`/`double` and
+  /// wider). The call's function type is variadic, so the back end follows the platform's
+  /// varargs convention (Apple arm64: the tail on the stack; x86-64: `%al`).
+  CVar(s: str, fixed: int),
 }
 
 /// A typed expression.

@@ -2,7 +2,7 @@
 /// variant is core_os.macos.auk; both declare the same functions.
 
 // the rest of the runtime (C, for now)
-extern fn auk__c_open(path: raw.Ptr<u8>, flags: i32, mode: i32): i32 = "int auk__c_open(const char *, int, int)"
+extern fn c_open(path: raw.Ptr<u8>, flags: i32, ...): i32 = "int open(const char *, int, ...)"
 // libc
 extern fn getrandom(buf: raw.Ptr<()>, n: usize, flags: u32): i64 = "ssize_t getrandom(void *, size_t, unsigned int)"
 extern fn read(fd: i32, buf: raw.Ptr<()>, n: usize): i64 = "ssize_t read(int, void *, size_t)"
@@ -28,7 +28,7 @@ pub fn os_random(buf: raw.Ptr<u8>, n: usize): bool uses raw, ffi {
   if p == n {
     return true
   }
-  let fd = auk__c_open("/dev/urandom", cfacts.O_RDONLY | cfacts.O_CLOEXEC, 0)
+  let fd = c_open("/dev/urandom", cfacts.O_RDONLY | cfacts.O_CLOEXEC)
   if fd < 0 {
     return false
   }

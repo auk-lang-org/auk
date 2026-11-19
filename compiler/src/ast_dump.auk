@@ -158,6 +158,7 @@ fn clause_dump(tag: str, c: ast.FnClause): str {
   if c.is_async { s += " async" }
   s += generics_dump(c.generics)
   s += if c.params.len() == 0 { " (params)" } else { " (params {jn(c.params, param_dump)})" }
+  if c.variadic is some(_) { s += " ..." }
   match c.ret {
     some(t) => s += " : " + ast.type_dump(t)
     none => {}

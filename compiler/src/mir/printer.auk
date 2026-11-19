@@ -573,7 +573,7 @@ fn ex(pr: var Printer, e: mir.Ex): str = match e.k {
     let al = a.join(", ")
     match c {
       Fn(f) => "{pr.p.funcs[f].name}({al})"
-      Rt(s) => "{s}({al})"
+      Rt(s) | CVar(s, _) => "{s}({al})"
       Indirect(code, ps) => {
         let r = ct(&pr, e.ty)
         var pl: [str] = []

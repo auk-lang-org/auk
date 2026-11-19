@@ -5,7 +5,7 @@
 extern fn auk_release(p: raw.Ptr<()>) = "void auk_release(void *)"
 extern fn auk__make_immortal(p: raw.Ptr<()>) = "void auk__make_immortal(void *)"
 extern fn auk_str_try_from_bytes(p: raw.Ptr<u8>, n: i64): abi.ResStr = "AukRes_str auk_str_try_from_bytes(const char *, int64_t)"
-extern fn auk__c_ioctl_ptr(fd: i32, request: u64, arg: raw.Ptr<()>): i32 = "int auk__c_ioctl_ptr(int, unsigned long, void *)"
+extern fn c_ioctl(fd: i32, request: u64, ...): i32 = "int ioctl(int, unsigned long, ...)"
 // libc
 extern fn fwrite(p: raw.Ptr<()>, size: usize, n: usize, f: raw.Ptr<()>): usize = "size_t fwrite(const void *, size_t, size_t, void *)"
 extern fn fputc(c: i32, f: raw.Ptr<()>): i32 = "int fputc(int, void *)"
@@ -102,7 +102,7 @@ export fn auk_env_columns(): abi.OptInt uses raw, ffi {
   while k < 3 {
     let fd: i32 = if k == 0 { 1 } else if k == 1 { 2 } else { 0 }
     var ws = cfacts.Winsize {}
-    if auk__c_ioctl_ptr(fd, cfacts.TIOCGWINSZ, raw.cast(raw.addr_of(&ws))) == 0 && ws.ws_col > 0 {
+    if c_ioctl(fd, cfacts.TIOCGWINSZ, raw.addr_of(&ws)) == 0 && ws.ws_col > 0 {
       return abi.OptInt { some: true, val: i64(ws.ws_col) }
     }
     k += 1

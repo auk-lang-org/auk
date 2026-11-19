@@ -29,7 +29,7 @@ extern fn auk__xmalloc(n: usize): raw.Ptr<()> = "void *auk__xmalloc(size_t)"
 extern fn auk__xrealloc(p: raw.Ptr<()>, n: usize): raw.Ptr<()> = "void *auk__xrealloc(void *, size_t)"
 extern fn auk__xcalloc(n: usize, size: usize): raw.Ptr<()> = "void *auk__xcalloc(size_t, size_t)"
 extern fn auk_release(p: raw.Ptr<()>) = "void auk_release(void *)"
-extern fn auk__c_fcntl(fd: i32, cmd: i32, arg: i32): i32 = "int auk__c_fcntl(int, int, int)"
+extern fn c_fcntl(fd: i32, cmd: i32, ...): i32 = "int fcntl(int, int, ...)"
 // libc and libm
 extern fn dlopen(path: raw.Ptr<u8>, mode: i32): raw.Ptr<()> = "void *dlopen(const char *, int)"
 extern fn dlsym(handle: raw.Ptr<()>, name: raw.Ptr<u8>): raw.Ptr<()> = "void *dlsym(void *, const char *)"
@@ -1656,7 +1656,7 @@ fn client_reader(arg: raw.Ptr<()>): raw.Ptr<()> uses raw, ffi {
 
 fn add_client(fd: i32) uses raw, ffi {
   gui.auk__wire_no_sigpipe(fd)
-  let _ = auk__c_fcntl(fd, cfacts.F_SETFD, cfacts.FD_CLOEXEC)
+  let _ = c_fcntl(fd, cfacts.F_SETFD, cfacts.FD_CLOEXEC)
   let j = new_job(JOB_ADD_CLIENT)
   j.client = raw.atomic_add(raw.addr_of(&next_client), 1, raw.Order.SeqCst)
   j.fd = fd

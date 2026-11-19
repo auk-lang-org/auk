@@ -5,7 +5,8 @@
 /// value; a library (`auk build --lib`) linked with C that checks layouts against C's, calls
 /// both ways and thread-locals across pthreads; its bitcode (`--bc`); C data (`extern var`);
 /// the gate (E0418), the no-RC type rule (E0419), compile-time constants (E0421); `auk fmt`
-/// and `auk check` on the dialect; runtime/src/abi.auk and cfacts against C (runtime/test/abi).
+/// and `auk check` on the dialect; runtime/src/abi.auk and cfacts against C (runtime/test/abi);
+/// calls of C varargs functions (`extern fn f(a: T, ...)`) against the same calls made by C.
 
 pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("fixed_width_arithmetic_wraps", fixed_width_arithmetic_wraps),
@@ -41,6 +42,9 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("locals_shadow_module_names", locals_shadow_module_names),
   t.test("if_literal_arm_takes_the_other_arms_type", if_literal_arm_takes_the_other_arms_type),
   t.test("other_modules_globals_by_path", other_modules_globals_by_path),
+  t.test("varargs_calls_match_c", varargs_calls_match_c),
+  t.test("varargs_calls_are_variadic_in_llvm", varargs_calls_are_variadic_in_llvm),
+  t.test("varargs_declarations_and_arguments_e0040", varargs_declarations_and_arguments_e0040),
 ]
 
 let TOML = "[package]\nname = \"auk_rt\"\nversion = \"0.1.0\"\neffects = [\"raw\", \"ffi\"]\n"
@@ -546,4 +550,106 @@ fn other_modules_globals_by_path() uses env, fs, ffi, time {
   let _ = passes(main)
   t.write(main, "fn main(): int uses raw = int(raw.addr_of(&facts.hidden).load())\n")
   t.eq("{codes(main)}", "[\"E0120\"]", "")
+}
+
+/// What varargs.auk (and varargs_main.c) print: C's results.
+let VARARGS_OUT = "-5 -300 -70000 200 65535 4000000000\n" +
+  "-9000000000 18446744073709551615 42 -7 beef A 1 0\n" +
+  "3.142 1.230000e-04 1e+21 2.72 -1.234e+03 1.5 -0.25\n" +
+  "[auk|   hi|auk  |ab] 0x1234\n" +
+  "1 1.5 2 2.5 3 3.5 4 4.5 5 5.5 6 6.5 7 7.5 8 8.5 9 9.5 10 10.5 -11 1099511627776 end\n" +
+  "len 15\n" +
+  "printf 7 ok 0.12 9223372036854775808\n" +
+  "open 640 setfd 0 cloexec 1 setfl 0 nonblock 1\n"
+
+/// runtime/test/raw/varargs.auk in a project, with its `facts` module for each target (the
+/// compiler takes this machine's).
+fn varargs_project(name: str): str uses env, fs, ffi {
+  let main = fixture(name, "varargs.auk")
+  let src = paths.parent(main) else "."
+  for (target, creat, trunc, nonblock, st_mode) in [
+    ("macos-arm64", 512, 1024, 4, 4),
+    ("linux-arm64", 64, 512, 2048, 16),
+    ("linux-x86_64", 64, 512, 2048, 24),
+  ] {
+    t.write(
+      paths.join(src, "facts.{target}.auk"),
+      "pub raw let O_WRONLY: i32 = 1\npub raw let O_CREAT: i32 = {creat}\npub raw let O_TRUNC: i32 = {trunc}\n" +
+        "pub raw let O_NONBLOCK: i32 = {nonblock}\npub raw let F_GETFD: i32 = 1\npub raw let F_SETFD: i32 = 2\n" +
+        "pub raw let F_GETFL: i32 = 3\npub raw let F_SETFL: i32 = 4\npub raw let FD_CLOEXEC: i32 = 1\n" +
+        "pub raw let ST_MODE: i64 = {st_mode}\n",
+    )
+  }
+  main
+}
+
+/// `snprintf`, `printf`, `open` with a mode and `fcntl` called from the dialect (JIT, -O,
+/// built): the output is C's, byte for byte (and what varargs_main.c prints, when there's cc).
+fn varargs_calls_match_c() uses env, fs, ffi, time {
+  let main = varargs_project("varargs")
+  t.eq(passes(main), VARARGS_OUT, "auk run")
+  t.eq(auk(["run", "-O", main]).stdout, VARARGS_OUT, "auk run -O")
+  let exe = paths.join(dir_of(main), "prog")
+  t.eq(cmd.new(exe).output().stdout, VARARGS_OUT, "built")
+  if t.have("cc") {
+    let cexe = paths.join(dir_of(main), "cprog")
+    let c = cmd.new("cc").args(["runtime/test/raw/varargs_main.c", "-o", cexe]).output()
+    t.check(c.success(), "cc:\n{c.stderr}")
+    t.eq(cmd.new(cexe).output().stdout, VARARGS_OUT, "varargs_main.c")
+  }
+  // `auk fmt` keeps `...` (and is stable); the formatted program checks
+  let o = t.auk().args(["fmt", "-"]).stdin(t.read(main)).output()
+  t.check(o.success(), "auk fmt:\n{o.stderr}")
+  t.has(o.stdout, "  fmt: raw.Ptr<u8>,\n  ...,\n): i32 = \"int snprintf(char *, size_t, const char *, ...)\"")
+  t.eq(t.auk().args(["fmt", "-"]).stdin(o.stdout).output().stdout, o.stdout, "auk fmt twice")
+  t.write(main, o.stdout)
+  t.eq("{codes(main)}", "[]", "auk check of the formatted program")
+}
+
+/// The call's function type is variadic (`(ptr, i64, ptr, ...)`), so LLVM follows the target's
+/// varargs convention; the tail is promoted (`i8` → `i32` sign-extended, `f32` → `double`).
+fn varargs_calls_are_variadic_in_llvm() uses env, fs, ffi, time {
+  let dis = llvm_dis() else return
+  let main = project("varargs_ll", r"""
+    extern fn c_snprintf(buf: raw.Ptr<u8>, n: usize, fmt: raw.Ptr<u8>, ...): i32 =
+      "int snprintf(char *, size_t, const char *, ...)"
+    extern fn c_open(path: raw.Ptr<u8>, flags: i32, ...): i32 = "int open(const char *, int, ...)"
+    extern fn c_fcntl(fd: i32, cmd: i32, ...): i32 = "int fcntl(int, int, ...)"
+    export fn fmt_it(p: raw.Ptr<u8>, x: f32, c: i8): i32 uses ffi = c_snprintf(p, 64, "%g %d", x, c)
+    export fn open_it(p: raw.Ptr<u8>): i32 uses ffi = c_open(p, 0x200, u32(420))
+    export fn cloexec(fd: i32): i32 uses ffi = c_fcntl(fd, 2, 1)
+    """)
+  let bc = paths.join(dir_of(main), "varargs.bc")
+  let b = auk(["build", "--lib", "--bc", main, "-o", bc])
+  t.check(b.success(), b.stderr)
+  let ll = cmd.new(dis).args([bc, "-o", "-"]).output().stdout
+  t.has(ll, " i32 (ptr, i64, ptr, ...) @snprintf(")
+  t.has(ll, " i32 (ptr, i32, ...) @open(")
+  t.has(ll, " i32 (i32, i32, ...) @fcntl(")
+  t.has(ll, "fpext float")
+  t.has(ll, "sext i8")
+}
+
+/// `...` only on an `extern fn` whose C prototype is variadic too (and only in the dialect);
+/// the variadic tail takes raw scalars.
+fn varargs_declarations_and_arguments_e0040() uses env, fs, ffi, time {
+  let pf = "extern fn c_printf(fmt: raw.Ptr<u8>, ...): i32 = \"int printf(const char *, ...)\"\n"
+  let srcs = [
+    "fn f(a: i32, ...): i32 = a\nfn main() {{}}\n",
+    "extern fn g(a: i32): i32 = \"int g(int, ...)\"\nfn main() {{}}\n",
+    "extern fn h(a: i32, ...): i32 = \"int h(int)\"\nfn main() {{}}\n",
+    pf + "fn main() uses ffi {{\n  let s = \"x\"\n  let _ = c_printf(\"%s\", s)\n}}\n",
+    pf + "raw struct P {{ a: i64 }}\nfn main() uses raw, ffi {{\n  let _ = c_printf(\"%d\", P {{ a: 1 }})\n}}\n",
+  ]
+  for i, src in srcs {
+    let main = project("va_bad{i}", src)
+    t.eq("{codes(main)}", "[\"E0040\"]", src)
+  }
+  // fine: no tail, a long tail of mixed scalars
+  let ok = project("va_ok", pf + "fn main() uses raw, ffi {{\n  let _ = c_printf(\"x\\n\")\n  let _ = c_printf(\"%d %f %p %s\\n\", i32(1), 2.0, raw.null<u8>(), \"s\")\n}}\n")
+  t.eq("{codes(ok)}", "[]", "")
+  // ordinary FFI: still no varargs
+  let plain = "[package]\nname = \"app\"\nversion = \"0.1.0\"\neffects = [\"ffi\"]\n"
+  let app = project_with("va_plain", plain, "extern fn printf(fmt: str, ...): int = \"int printf(const char *, ...)\"\nfn main() {{}}\n")
+  t.eq("{codes(app)}", "[\"E0040\"]", "")
 }

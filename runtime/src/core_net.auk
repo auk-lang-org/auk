@@ -13,7 +13,7 @@ extern fn auk__tls_read(tls: raw.Ptr<()>, max: i64): abi.ResArr = "AukRes_arr au
 extern fn auk__tls_write(tls: raw.Ptr<()>, buf: raw.Ptr<u8>, n: i64): abi.ResUnit =
   "AukRes_unit auk__tls_write(void *, const uint8_t *, int64_t)"
 extern fn auk__tls_free(tls: raw.Ptr<()>) = "void auk__tls_free(void *)"
-extern fn auk__c_fcntl(fd: i32, cmd: i32, arg: i32): i32 = "int auk__c_fcntl(int, int, int)"
+extern fn c_fcntl(fd: i32, cmd: i32, ...): i32 = "int fcntl(int, int, ...)"
 // libc
 extern fn getaddrinfo(host: raw.Ptr<u8>, port: raw.Ptr<u8>, hints: raw.Ptr<cfacts.Addrinfo>, res: raw.Ptr<raw.Ptr<cfacts.Addrinfo>>): i32 =
   "int getaddrinfo(const char *, const char *, const void *, void *)"
@@ -44,7 +44,7 @@ fn conn_sockopts(fd: i32) uses raw, ffi {
     var one: i32 = 1
     setsockopt(fd, cfacts.SOL_SOCKET, cfacts.SO_NOSIGPIPE, raw.cast(raw.addr_of(&one)), 4)
   }
-  let _ = auk__c_fcntl(fd, cfacts.F_SETFD, cfacts.FD_CLOEXEC)
+  let _ = c_fcntl(fd, cfacts.F_SETFD, cfacts.FD_CLOEXEC)
 }
 
 /// Resolve host:port and connect a TCP socket (with the connected-socket options set): the fd,
@@ -190,7 +190,7 @@ export fn auk_net_listen(host: raw.Ptr<abi.Str>, port: i64): abi.ResListener use
     return listener_err(core_util.err_code_sb(mp, e))
   }
   str.auk_sb_free(mp)
-  let _ = auk__c_fcntl(fd, cfacts.F_SETFD, cfacts.FD_CLOEXEC)
+  let _ = c_fcntl(fd, cfacts.F_SETFD, cfacts.FD_CLOEXEC)
   var ss = cfacts.SockaddrStorage {}
   var len: u32 = u32(raw.size_of<cfacts.SockaddrStorage>())
   var bound = port

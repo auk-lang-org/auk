@@ -62,8 +62,13 @@ pub fn ffi_call(lw: var mir.lower.Lower, f: int, args: [mir.lower.ArgV], ret: ty
   if !sig.indirect && !sig.cast && !lw.g.prog.c_syms.contains(sig.name) { lw.g.prog.c_syms.push(sig.name) }
   var cs: [mir.Ex] = []
   var after: [After] = []
+  let nfixed = convs.len() - 1
   for k, a in args {
-    if k >= convs.len() { break }
+    if k >= nfixed {
+      // the variadic tail of a C varargs function
+      if sig.variadic { cs.push(vararg_in(&lw, a)) }
+      continue
+    }
     let conv = convs[k]
     let c = match (a, conv) {
       (Addr(p, ty), List(elem, true)) => {
@@ -118,6 +123,8 @@ pub fn ffi_call(lw: var mir.lower.Lower, f: int, args: [mir.lower.ArgV], ret: ty
   } else if sig.indirect {
     let code = cs[0]
     call = mir.ex(mir.K.Call(mir.Callee.CPtr(code), cs.skip(1)), c_mty(rconv))
+  } else if sig.variadic {
+    call = mir.ex(mir.K.Call(mir.Callee.CVar(sig.name, nfixed), cs), c_mty(rconv))
   } else {
     call = mir.rt(sig.name, cs, c_mty(rconv))
   }
@@ -171,6 +178,26 @@ fn embedded(lw: var mir.lower.Lower, path: str, ret: types.Ty, lc: mir.Ex): mir.
     _ => data.cast(d(ret))
   }
   lw.tmp(ret, e)
+}
+
+/// An argument in the variadic tail of a C varargs call (a raw scalar), with C's default
+/// argument promotions: an integer narrower than `int` (and `bool`) becomes an `int`, an `f32`
+/// a `double`; the rest pass as they are.
+fn vararg_in(lw: var mir.lower.Lower, a: mir.lower.ArgV): mir.Ex {
+  let v = match a {
+    Val(v) => v
+    Addr(_, _) => mir.bug("a `var` argument in a varargs call")
+  }
+  let x = lw.val_as(v, v.ty)
+  match v.ty {
+    Bool => x.cast(mir.MTy.I32)
+    Fixed(k) => match k {
+      I8 | I16 | U8 | U16 => x.cast(mir.MTy.I32)
+      F32 => x.cast(d(types.Ty.Float))
+      _ => x
+    }
+    _ => x
+  }
 }
 
 /// An Auk value as its C argument.

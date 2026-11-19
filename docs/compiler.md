@@ -55,7 +55,7 @@ source ─▶ lex ─▶ parse ─▶ resolve ─▶ check ─▶ lower ─▶ M
 | `compiler/src/fmt.auk`, `fmt/` | `auk fmt`: a Wadler-style document printer over the AST |
 | `compiler/src/dive.auk`, `lsp.auk`, `mcp.auk`, `live.auk`, `cffi.auk`, `stdio.auk` | `auk dive` (the REPL), `auk lsp` (the language server), `auk mcp`, `auk run --live`, C prototypes for FFI (`cffi`) |
 | `raft/` | the `raft` package manager, an Auk project (`raft/src/main.auk`: manifest, semver, TOML, SHA-256) |
-| `runtime/c/*.c` | the runtime (C, below): one file per area (`rc`, `heap`, `str`, `arr`, `map`, `err`, `value`, `copy`, `catch`, `stack`, `task`, `chan`, `core`, `tls`, `testing`, `trace`, `dbg`, `pixels`, `gui`, `gui_host`, `audio_out`, `cwrap` (the only calls of C varargs functions), plus `compiler`: entry points only generated code uses); `auk_rt.h` declares everything, `AUK_API` marking what generated code calls; its unit tests in `runtime/c/test/` |
+| `runtime/c/*.c` | the runtime (C, below): one file per area (`rc`, `heap`, `str`, `arr`, `map`, `err`, `value`, `copy`, `catch`, `stack`, `task`, `chan`, `core`, `tls`, `testing`, `trace`, `dbg`, `pixels`, `gui`, `gui_host`, `audio_out`, plus `compiler`: entry points only generated code uses); `auk_rt.h` declares everything, `AUK_API` marking what generated code calls; its unit tests in `runtime/c/test/` |
 
 ## Runtime ABI (`runtime/c/auk_rt.h` is the source of truth)
 - **Scalars:** `int` → `int64_t` (all arithmetic is checked; overflow calls `auk_panic`), `float` → `double`, `bool` → `bool`, `char` → `uint32_t` (code point).

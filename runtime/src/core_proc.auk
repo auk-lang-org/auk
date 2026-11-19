@@ -8,7 +8,7 @@ extern fn auk_arr_len(a: raw.Ptr<abi.Arr>): i64 = "int64_t auk_arr_len(const voi
 extern fn auk__wait_fd(fd: i32, write: bool) = "void auk__wait_fd(int, bool)"
 extern fn auk__trace_flush() = "void auk__trace_flush(void)"
 extern fn auk_leak_check(): i64 = "int64_t auk_leak_check(void)"
-extern fn auk__c_fcntl(fd: i32, cmd: i32, arg: i32): i32 = "int auk__c_fcntl(int, int, int)"
+extern fn c_fcntl(fd: i32, cmd: i32, ...): i32 = "int fcntl(int, int, ...)"
 // libc
 extern fn pipe(fds: raw.Ptr<i32>): i32 = "int pipe(int *)"
 extern fn read(fd: i32, buf: raw.Ptr<()>, n: usize): i64 = "ssize_t read(int, void *, size_t)"
@@ -53,7 +53,7 @@ export fn auk_proc_run(cmd: raw.Ptr<abi.Str>, args_in: raw.Ptr<abi.Arr>): abi.Re
     raw.free(argv)
     return core_util.str_err(err.auk__err_errno("proc.run", cmd, cfacts.errno()))
   }
-  auk__c_fcntl(fds.r, cfacts.F_SETFD, cfacts.FD_CLOEXEC)
+  c_fcntl(fds.r, cfacts.F_SETFD, cfacts.FD_CLOEXEC)
   var fa = cfacts.PosixSpawnFileActions {}
   let fap = raw.addr_of(&fa)
   posix_spawn_file_actions_init(fap)

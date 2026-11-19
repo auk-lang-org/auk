@@ -418,6 +418,25 @@ fn pattern_list(p: var Parser, close: token.Tok, what: str): [ast.Pat]!diag.Fail
   xs
 }
 
+/// A function's parameter list up to its `)`, and the span of a variadic tail `...` (the
+/// runtime's dialect: an `extern fn` of a C function like `snprintf`; `check` says where it fits).
+fn fn_params(p: var Parser): ([ast.Param], diag.Span?)!diag.Fail {
+  var xs: [ast.Param] = []
+  while !p.list_end(token.RParen) {
+    if p.at(token.DotDotDot) {
+      let dots = p.bump().span
+      p.skip_newlines()
+      let _ = p.eat(token.Comma)
+      p.skip_newlines()
+      p.expect(token.RParen, "after `...` (the variadic tail ends the parameter list)")?
+      return (xs, some(dots))
+    }
+    xs.push(nested_param(&p)?)
+    if p.list_sep(token.RParen, "parameter")? { break }
+  }
+  (xs, none)
+}
+
 fn param_list(p: var Parser, close: token.Tok, what: str): [ast.Param]!diag.Fail {
   var xs: [ast.Param] = []
   while !p.list_end(close) {
@@ -672,7 +691,7 @@ fn fn_signature(p: var Parser, doc: str?, public: bool, start: diag.Span): ast.F
   }
   let generics = generics(&p)?
   p.expect(token.LParen, "to start the parameter list")?
-  let params = param_list(&p, token.RParen, "parameter")?
+  let (params, variadic) = fn_params(&p)?
   var ret: ast.Type? = none
   if p.eat(token.Colon) {
     ret = ty(&p)?
@@ -715,6 +734,7 @@ fn fn_signature(p: var Parser, doc: str?, public: bool, start: diag.Span): ast.F
     is_async,
     generics,
     params,
+    variadic,
     ret,
     effects,
     pre,

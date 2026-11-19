@@ -82,6 +82,9 @@ pub struct FnClause {
   is_async: bool,
   generics: [Generic],
   params: [Param],
+  /// The span of a variadic tail `...` after the parameters: an `extern fn` of a C varargs
+  /// function (the runtime's dialect, docs/lowlevel.md 7a).
+  variadic: diag.Span?,
   ret: Type?,
   effects: [Ident],
   pre: [Expr],

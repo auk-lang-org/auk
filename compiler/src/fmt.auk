@@ -791,12 +791,14 @@ fn clause(f: var Fmt, c: ast.FnClause, method: bool): fmt.doc.Doc {
   if c.is_async { head += "async " }
   head += "fn {c.name.name}{generics(c.generics)}"
   let close = f.close_paren_after(start(c.name.span))
+  let np = c.params.len()
+  let dots = c.variadic
   let (elems, dangling) = f.seq(
-    c.params.len(),
+    if dots is some(_) { np + 1 } else { np },
     c.name.span.line,
     close,
-    i => c.params[i].span,
-    (g, i) => text(g.param(c.params[i])),
+    i => if i < np { c.params[i].span } else { dots! },
+    (g, i) => if i < np { text(g.param(c.params[i])) } else { text("...") },
   )
   let params = f.bracketed("(", ")", elems, dangling, false, Sep.Comma, false)
   var sig = ""

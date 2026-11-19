@@ -722,8 +722,12 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       (runtime-port.md, "Found porting `tls.c`").
 - [ ] Ryu, Unicode tables, `buf_printf` → Auk.
 - [x] Varargs: none in our API (Phase 1 rule); libc varargs (`snprintf` of a double, `open`
-      with mode, `shm_open`, `fcntl`, `ioctl`) only through the fixed-argument wrappers in
-      `runtime/c/cwrap.c` (runtime-port.md). Varargs FFI support stays optional.
+      with mode, `shm_open`, `fcntl`, `ioctl`) went through the fixed-argument wrappers in
+      `runtime/c/cwrap.c` until 2026-11-19, when the dialect got varargs calls: `extern fn
+      f(a: T, ...)` with a prototype ending in `...`, raw scalars in the tail with C's default
+      promotions, a variadic LLVM call (Apple arm64's stack tail, x86-64's `%al`); tested
+      against C on macOS arm64, Linux arm64 and x86-64 (lowlevel.md 7a). Ordinary FFI still
+      has none.
 
 ### 7c. Port
 - [ ] Same order as Phase 1c, one module at a time, C and Auk linked together meanwhile.
@@ -751,7 +755,8 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
       port of `audio_out`, `gui`, `gui_host`"). `rc`, `task` (2026-11-19: the element-ops
       tables are `export var`s; retain/release keep the C's atomics; `s += x` now even with C
       and push 0.8x, the boundary costs gone; runtime-port.md, "Found porting `rc.c` and
-      `task.c`"). Next: `trace`, `dbg`, `cwrap`.
+      `task.c`"). `cwrap` (2026-11-19: deleted; its callers call the varargs functions
+      directly; runtime-port.md, "Found porting `cwrap.c`"). Next: `trace`, `dbg`.
 - [ ] `auk_rt.bc` is produced by the Auk compiler; `libauk_rt.a` via LLVM's archive writer.
 - [ ] Same C tests (called through `export fn`), then rewrite them as Auk tests. The first
       half holds for the ported modules (`run.sh` links the Auk half).

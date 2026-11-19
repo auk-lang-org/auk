@@ -1695,12 +1695,45 @@ pub fn arg_ty_for_choice(c: var check.Checker, a: check.ArgSrc): types.Ty = matc
   }
 }
 
+/// Is `f` a C varargs function (an `extern fn` with `...`)?
+fn varargs(c: check.Checker, f: int): bool = match c.fns[f].kind {
+  Ffi(sig, _, _) => sig.variadic
+  _ => false
+}
+
+/// An argument in the variadic tail of a C varargs call (argument `i` of `name`): a raw
+/// scalar (an integer, a float, a pointer, a C function pointer), passed with C's default
+/// argument promotions. A string literal is a C string there.
+fn vararg(c: var check.Checker, x: ast.Expr, name: str, i: int) {
+  if x.kind is ast.ExprKind.Ref(_) {
+    c.err(diag.new("E0311", x.span, "argument {i + 1} of `{name}` is in its variadic tail, so it takes no `&`"))
+    c.infer_quiet(x)
+    return
+  }
+  let t = match x.kind {
+    Lit(Str(_)) => c.check(x, types.Ty.Ptr(types.Ty.Fixed(types.Fx.U8)))
+    _ => c.infer(x, none)
+  }
+  let r = c.resolve(t)
+  let fits = match r {
+    Int | Float | Bool | Fixed(_) | Ptr(_) | CFn(_, _) | Error => true
+    _ => false
+  }
+  if !fits {
+    c.err(
+      diag.new("E0040", x.span, "argument {i + 1} of `{name}` is a `{c.show(r)}`, which a C varargs function can't take")
+        .note("after the fixed parameters go raw scalars: fixed-width integers, `int`, `float`, `f32`, `bool`, `raw.Ptr`, `raw.Fn` (a string literal is a C string)"),
+    )
+  }
+}
+
 /// Resolve an overloaded call among `cands`, check the arguments, record the call.
 pub fn call_fns(c: var check.Checker, e: ast.Expr, span: diag.Span, name: str, cands: [int], args: [check.ArgSrc], exp: check.Exp, direct: bool): types.Ty {
   let n = args.len()
   var by_arity: [int] = []
   for f in cands {
-    if c.fns[f].params.len() == n { by_arity.push(f) }
+    let np = c.fns[f].params.len()
+    if np == n || (n > np && varargs(c, f)) { by_arity.push(f) }
   }
   if by_arity.len() == 0 {
     let sigs = sigs_of(c, cands, 4)
@@ -1879,6 +1912,13 @@ pub fn call_fns(c: var check.Checker, e: ast.Expr, span: diag.Span, name: str, c
   }
   var out_args: [typed.Arg] = []
   for i, a in args {
+    if i >= info.params.len() {
+      // the variadic tail of a C varargs function
+      let x = check.arg_expr(a)
+      c.vararg(x, name, i)
+      out_args.push(typed.Arg { node: x.id, by_ref: false })
+      continue
+    }
     let var_ = info.params[i].var_
     let p = ps[i]
     match a {

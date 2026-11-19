@@ -199,6 +199,22 @@ points; a signal handler is an `export fn` passed to `sigaction`.
 - **FFI:** in the runtime package a C prototype may take function pointers (`int (*f)(int)`),
   matched by `raw.Fn` (or `void *`); `raw.Ptr` is any `T *`, a fixed-width integer a C integer of
   its width, `f32` `float`, a raw struct a C `struct` by value.
+- **C varargs functions** (2026-11-19): `extern fn snprintf(buf: raw.Ptr<u8>, n: usize, fmt:
+  raw.Ptr<u8>, ...): i32 = "int snprintf(char *, size_t, const char *, ...)"`. The Auk
+  parameters end in `...` exactly when the prototype does (E0040 otherwise, and on any other
+  function; ordinary FFI still has no varargs), and a call passes any number of arguments after
+  the fixed ones: raw scalars only (fixed-width integers, `int`, `float`, `f32`, `bool`,
+  `raw.Ptr`, `raw.Fn`; a string literal there is a C string; E0040 for anything else). They
+  get C's default argument promotions (`i8`/`i16`/`u8`/`u16`/`bool` → `int`, sign by the
+  type; `f32` → `double`); wider integers pass as they are, so write the width the format
+  reads (`i32(n)` for `%d`: a bare literal is an `int`, C's `long`). The call has a variadic
+  LLVM function type (MIR's `Callee.CVar(sym, fixed)`), so LLVM applies the platform's varargs
+  convention: on Apple arm64 the whole tail goes on the stack (8-byte slots), on Linux arm64
+  (AAPCS64) and x86-64 the usual registers then stack, with `%al` = the vector registers used
+  on x86-64. Tested against C (`runtime/test/raw/varargs.auk` vs `varargs_main.c`: `snprintf`
+  and `printf` with every width, doubles, `*` precisions, strings, pointers and more arguments
+  than registers; `open` with a mode; `fcntl`) on the three targets. A variadic prototype can't
+  be called through a pointer (`int (*)(int, ...)`).
 - **The C ABI of raw structs by value** (`mir/layout.auk`, what clang emits; tested both ways
   against `cc` by `runtime/test/raw/cabi.auk`): on x86-64 (SysV) each eightbyte of an aggregate
   of at most 16 bytes is SSE when it holds only floats (two `f32`s travel as the bits of one
@@ -280,7 +296,7 @@ points; a signal handler is an `export fn` passed to `sigaction`.
 ## 9. Not in the dialect (on purpose)
 
 No pointer arithmetic operators (`p + 1`: use `p.offset(1)`), no implicit integer conversions,
-no varargs (call fixed-argument C wrappers), no `goto` (labeled `break`/`continue`), no macros
+no varargs functions of its own (calling C's is supported, §7a), no `goto` (labeled `break`/`continue`), no macros
 (constants and `inline` functions), no bit-fields (masks), no Objective-C (`objc_msgSend` through
 typed `raw.Fn`s, as `gui_host.c` does today), no blocks syntax (`^{ … }`: Network.framework's
 blocks are hand-made raw structs, §10).

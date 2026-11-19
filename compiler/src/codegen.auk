@@ -352,8 +352,20 @@ pub fn c_sig(
   g: var Gen,
   params: [mir.MTy],
   ret: mir.MTy,
+): (Sig, [mir.layout.CPass], mir.layout.CPass) uses ffi = c_sig_var(&g, params, ret, -1)
+
+/// `c_sig`, of a C varargs function when `fixed >= 0`: its first `fixed` parameters are the
+/// fixed ones (the function type has those and `...`; the attributes are theirs), the others
+/// its variadic tail (scalars, already promoted). LLVM then passes the tail as the platform's
+/// varargs convention says.
+pub fn c_sig_var(
+  g: var Gen,
+  params: [mir.MTy],
+  ret: mir.MTy,
+  fixed: int,
 ): (Sig, [mir.layout.CPass], mir.layout.CPass) uses ffi {
   let (pp, rp) = mir.layout.c_sig(&g.lay, params, ret)
+  var nfixed = -1
   var ps: [llvm.Type] = []
   var attrs: [(int, llvm.Attribute)] = []
   let rt = match rp {
@@ -374,7 +386,8 @@ pub fn c_sig(
       g.t_void
     }
   }
-  for (p, c) in params.zip(pp) {
+  for i, (p, c) in params.zip(pp) {
+    if i == fixed { nfixed = ps.len() }
     match c {
       Scalar(s) => {
         match ext_attr(g, p, s) {
@@ -396,6 +409,11 @@ pub fn c_sig(
       }
       Nothing => {}
     }
+  }
+  if fixed >= 0 {
+    if nfixed < 0 { nfixed = ps.len() }
+    let ty = llvm.ir.function_type(rt, ps.take(nfixed), 1)
+    return (Sig { ty, attrs: attrs.filter(a => a.0 <= nfixed) }, pp, rp)
   }
   let ty = llvm.ir.function_type(rt, ps, 0)
   (Sig { ty, attrs }, pp, rp)
@@ -1506,6 +1524,14 @@ fn call(g: var Gen, cl: mir.Callee, args: [mir.Ex], ret: mir.MTy): V uses ffi = 
     let (sig, pp, rp) = c_sig(&g, ps, ret)
     let (vals, out) = c_args(&g, pp, ps, args, rp, ret)
     let c = build_call(g, sig, cv, vals)
+    c_result(&g, c, out, rp, ret)
+  }
+  CVar(sym, fixed) => {
+    let ps = args.map(a => a.ty)
+    let (sig, pp, rp) = c_sig_var(&g, ps, ret, fixed)
+    let (vals, out) = c_args(&g, pp, ps, args, rp, ret)
+    let fv = rt_func(&g, sym, sig)
+    let c = build_call(g, sig, fv, vals)
     c_result(&g, c, out, rp, ret)
   }
   Rt(sym) => {

@@ -287,7 +287,7 @@ fn token(lx: var Lexer, start: diag.Span): token.Tok!diag.Fail {
     }
     ':' => if lx.eat(':') { token.ColonColon } else { token.Colon }
     '.' => if lx.eat('.') {
-      if lx.eat('=') { token.DotDotEq } else { token.DotDot }
+      if lx.eat('=') { token.DotDotEq } else if lx.eat('.') { token.DotDotDot } else { token.DotDot }
     } else {
       token.Dot
     }

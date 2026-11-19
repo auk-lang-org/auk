@@ -54,6 +54,8 @@ pub enum Tok {
   Dot,
   DotDot,
   DotDotEq,
+  /// `...`: the variadic tail of an `extern fn` (the runtime's dialect)
+  DotDotDot,
   FatArrow,
   Arrow,
   PipeGt,
@@ -223,6 +225,7 @@ pub fn text(t: Tok): str = match t {
   Dot => "."
   DotDot => ".."
   DotDotEq => "..="
+  DotDotDot => "..."
   FatArrow => "=>"
   Arrow => "->"
   PipeGt => "|>"
@@ -315,6 +318,7 @@ pub fn name(t: Tok): str = match t {
   Dot => "Dot"
   DotDot => "DotDot"
   DotDotEq => "DotDotEq"
+  DotDotDot => "DotDotDot"
   FatArrow => "FatArrow"
   Arrow => "Arrow"
   PipeGt => "PipeGt"

@@ -959,6 +959,19 @@ fn ffi_fn(c: var Checker, m: int, cl: ast.FnClause, proto: str, params: [typed.P
     }
   }
   if sig.embed is some(_) { return c.ffi_embed(m, cl, sig, params, ret, at) }
+  if sig.variadic != (cl.variadic is some(_)) {
+    c.err_in(
+      m,
+      if sig.variadic {
+        diag.new("E0040", at, "the C prototype of `{name}` is variadic (`...`), so its parameters end in `...` too")
+          .note("e.g. `extern fn snprintf(buf: raw.Ptr<u8>, n: usize, fmt: raw.Ptr<u8>, ...): i32 = \"int snprintf(char *, size_t, const char *, ...)\"`")
+      } else {
+        diag.new("E0040", at, "`{name}` takes `...`, but its C prototype isn't variadic")
+          .note("a C varargs function's prototype ends in `...` as well")
+      },
+    )
+    return none
+  }
   if sig.params.len() != params.len() {
     c.err_in(
       m,
@@ -1930,6 +1943,26 @@ fn declare_fn(c: var Checker, m: int, item: int, g: ast.FnGroup, clauses: [int],
       none => typed.FnKind.Extern(sym, false, item)
     }
     none => typed.FnKind.Auk(item, clauses, header)
+  }
+  // `...`: only an `extern fn` of a C varargs function (its prototype ends in `...`)
+  for x in all {
+    match x.variadic {
+      some(sp) => {
+        let ok = match kind {
+          Ffi(sig, _, _) => sig.variadic
+          Extern(s, _, _) => s == "" && x.body is some(ast.FnBody.Extern(_))
+          _ => false
+        }
+        if !ok {
+          c.err_in(
+            m,
+            diag.new("E0040", sp, "only an `extern fn` of a C varargs function takes `...`")
+              .note("the runtime's dialect: `extern fn snprintf(buf: raw.Ptr<u8>, n: usize, fmt: raw.Ptr<u8>, ...): i32 = \"int snprintf(char *, size_t, const char *, ...)\"`"),
+          )
+        }
+      }
+      none => {}
+    }
   }
   let export = all.reduce(0, (a, x) => if x.export > a { x.export } else { a })
   if export > 0 { check_raw.export_fn(&c, m, first, cls.len(), generics.len() > 0) }

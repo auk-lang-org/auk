@@ -6,15 +6,16 @@ Measured 2026-11-18 (the C after "Write C that will translate to Auk later" was 
 
 ## The rules the C now keeps (lowlevel.md, section 9)
 
-- **No varargs calls** except in `cwrap.c`: fixed-argument wrappers for `open`, `shm_open`
-  (varargs on macOS), `fcntl` (int argument), `ioctl` (pointer argument) and `snprintf` of
-  one double (`%.*e`, `%.*f`, `%g`). Each becomes one `extern fn` with a fixed prototype.
-  Integers and hex are formatted without libc (`str.c`: `auk__fmt_i64`, `auk__fmt_u64`,
+- **No varargs calls** except of `open`, `shm_open` (varargs on macOS), `fcntl` (an int
+  argument), `ioctl` (a pointer argument) and `snprintf` of one double (`%.*e`, `%.*f`, `%g`).
+  These were `cwrap.c`'s fixed-argument wrappers; since 2026-11-19 the Auk modules call them
+  directly, as variadic `extern fn`s (lowlevel.md 7a, "C varargs functions"), and `cwrap.c` is
+  gone. Integers and hex are formatted without libc (`str.c`: `auk__fmt_i64`, `auk__fmt_u64`,
   `auk__fmt_hex`, `auk__sb_u64`, `auk__sb_hex`); messages are built with the string builder
   and then copied into a fixed buffer (`auk__sb_take_into`, cut as `snprintf` cut),
   duplicated (`auk__sb_take_cstr`) or written to stderr in one write (`auk__sb_eprint`).
   Checked with the clang AST (`-Xclang -ast-dump`: no `DeclRefExpr` to a function whose type
-  ends in `...)` outside `cwrap.c`). The runtime's own API has no varargs.
+  ends in `...)` outside `cwrap.c`, 2026-11-18). The runtime's own API has no varargs.
 - **No `goto`** (the last six were `gui_host.c`'s `show`, now early returns).
 - **No macros** but three that have to be: the include guard, `AUK_API` (a marker that
   expands to nothing; `export fn` in Auk) and `stack.c`'s `_GNU_SOURCE` (a glibc feature
@@ -716,6 +717,35 @@ Every output identical. fib/sieve/nbody don't touch rc (their ratios are the noi
   runtime: 7,110,656 vs 6,864,896 bytes), so LLVM optimizes more code; the wall and CPU
   medians were 0.94x (minimums 1.04x) on the loaded machine.
 
+## Found porting `cwrap.c` (2026-11-19)
+
+The last C outside the debugger and the tracer: seven fixed-argument wrappers of libc varargs
+functions. The dialect now calls varargs functions itself (lowlevel.md 7a: `extern fn f(a: T,
+...)` with a prototype ending in `...`; the tail is raw scalars with C's default promotions;
+the call has a variadic LLVM function type, so Apple arm64 puts the tail on the stack and
+x86-64 sets `%al`). Each wrapper's callers call the function directly:
+
+- `snprintf(buf, n, "%.*e" / "%.*f", prec, v)` in `str_fmt.auk` (the shortest round-tripping
+  float, `{x:.N}`), `snprintf(buf, 64, "%g", x)` in `rc.auk` (`int(x)` out of range): the same
+  call C made, so the same bytes (golden corpus: 0 differ).
+- `open(path, flags)` in `stackos.linux.auk`, `core_os.linux.auk`: no `O_CREAT`, so no mode
+  (as C callers write it). `fcntl(fd, F_SETFD, FD_CLOEXEC)` in `core_proc`, `core_net`, `gui`,
+  `gui_host.macos`; `ioctl(fd, TIOCGWINSZ, &ws)` in `core_env` (the `raw.Ptr<Winsize>` passes
+  as is: no cast to `void *` needed in the tail).
+- `shm_open` is varargs on macOS and `(const char *, int, mode_t)` on Linux: `gui.auk` declares
+  it `"int shm_open(const char *, int, ...)"` on both. A variadic call of a fixed-argument
+  function passes integers where the fixed call would on Linux arm64 (AAPCS64 varargs use the
+  same registers) and x86-64 (the same, plus `%al`, which the callee ignores); the mode is a
+  `u32(384)` (0600: `mode_t` is `u16` on macOS, `u32` on Linux, promoted to `int` either way).
+- `trace.c` (still C, being ported) calls `open` itself now.
+- The wrappers' declarations (`auk__c_*`, internal: never `AUK_API`) left `auk_rt.h`; nothing
+  else named them (not generated code, not the debugger, not `rtlink`).
+
+Bootstrap: the runtime now uses `...`, which a seed older than this compiler can't parse
+(`E0022: expected a pattern, found ..`), so `build.sh` builds stage 0 (compiler/ on the C half,
+by the seed) and stage 0 builds runtime/src, as for any new dialect feature, until the seed is
+re-cut.
+
 ## Per file
 
 Lines are of the C today. "Globals" counts file-scope variables (thread-locals and atomics
@@ -733,7 +763,7 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | ~~`heap.c`~~ | 298 | **done** (2026-11-19): `runtime/src/heap.auk` + `heap_os.<os>.auk` | the `#ifdef` is the per-OS `heap_os` module |
 | ~~`catch.c`~~ | 142 | **done** (2026-11-19): `runtime/src/catch.auk`; `sigsetjmp(jb, 0)`/`siglongjmp` are `raw.setjmp`/`raw.longjmp` (libc `_setjmp`/`_longjmp`) | the setjmp half of `auk__catch_run` is its own `optnone` function (`run_at`), the frame in the optimized caller's memory |
 | `compiler.c` | 169 | 2 globals (the imprint file, its mutex), `FILE *` (`fputc`/`fwrite`) | — |
-| ~~`str.c`~~ | 1556 | **done** (2026-11-19): `runtime/src/str.auk`, `str_fmt.auk` (see "Found porting `str.c`") | float formatting still through `cwrap.c`'s `snprintf` and libc `strtod` (7b: "Ryu → Auk"); `auk_ops_str` is an `export var` of `str.auk` (since the rc port) |
+| ~~`str.c`~~ | 1556 | **done** (2026-11-19): `runtime/src/str.auk`, `str_fmt.auk` (see "Found porting `str.c`") | float formatting still through libc's `snprintf` (called directly since `cwrap.c` went) and `strtod` (7b: "Ryu → Auk"); `auk_ops_str` is an `export var` of `str.auk` (since the rc port) |
 
 | `copy.c` | 170 | atomics, callbacks (element copy ops) | — |
 | `map.c` | 398 | callbacks (hash/eq/show ops), `const` tables | — |
@@ -742,21 +772,21 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | `heap.c` | 298 | 1 thread-local, atomics; `malloc_size` (macOS) / `malloc_usable_size` (Linux) | per-OS `#ifdef` |
 | ~~`catch.c`~~ | 142 | **done** (2026-11-19): `runtime/src/catch.auk` (now `recover.auk`: `catch` is a keyword); `sigsetjmp(jb, 0)`/`siglongjmp` are `raw.setjmp`/`raw.longjmp` (libc `_setjmp`/`_longjmp`) | the setjmp half of `auk__catch_run` is its own `optnone` function (`run_at`), the frame in the optimized caller's memory |
 | ~~`compiler.c`~~ | 169 | **done** (2026-11-19): `runtime/src/compiler.auk` | — |
-| `str.c` | 1556 | 2 thread-locals (show budget, debugger flag), atomics; `snprintf %.*e/%.*f` through `cwrap.c`; `strtod` | float formatting through libc is the 7b item "Ryu, Unicode tables → Auk" |
+| `str.c` | 1556 | 2 thread-locals (show budget, debugger flag), atomics; `snprintf %.*e/%.*f` (a varargs call); `strtod` | float formatting through libc is the 7b item "Ryu, Unicode tables → Auk" |
 | ~~`rc.c`~~ | 792 | **done** (2026-11-19): `runtime/src/rc.auk` (see "Found porting `rc.c` and `task.c`"); the element-ops tables are `export var`s (`auk_ops_str` in `str.auk`) | the panic buffer is written in place by `auk_unwrap_err` (C built the message in a 2048-byte local first: same bytes) |
 | ~~`testing.c`~~ | 309 | **done** (2026-11-19): `runtime/src/testing.auk` | — |
 | ~~`task.c`~~ | 467 | **done** (2026-11-19): `runtime/src/task.auk` (`abi.Task`; the static locks from `cfacts.PTHREAD_*_INITIALIZER`) | the `_Atomic bool` fields are byte-wide atomics through `raw.cast<u8>` |
 | ~~`pixels.c`~~ | 446 | **done** (2026-11-19): `runtime/src/pixels.auk` (the statics are module `raw var`s, `raw.add/mul_overflow`) | — |
 | ~~`ffi.c`~~ | 298 | **done** (2026-11-19): `runtime/src/ffi.auk` | — |
-| ~~`core.c`~~ | 1116 | **done** (2026-11-19): `runtime/src/core_{util,fs,net,env,time,proc}.auk`, `core_os.{macos,linux}.auk`; 5 globals + 1 function-local static, `environ` (extern global), `qsort` callback, sockets/`getaddrinfo`/`posix_spawnp` structs, `S_ISDIR`, `W*` macros; `fcntl`/`ioctl`/`open` through `cwrap.c` | 5 `#if`s (OS, `SO_NOSIGPIPE`, `MSG_NOSIGNAL`, `arc4random_buf`/`getrandom`) |
-| `trace.c` | 668 | 20 globals (5 thread-locals), 3 function-local statics, `sigaction` + `atexit` callbacks, `open` through `cwrap.c` | its fatal-signal handler re-raises with `signal(sig, SIG_DFL)`: fine as an `export fn` |
+| ~~`core.c`~~ | 1116 | **done** (2026-11-19): `runtime/src/core_{util,fs,net,env,time,proc}.auk`, `core_os.{macos,linux}.auk`; 5 globals + 1 function-local static, `environ` (extern global), `qsort` callback, sockets/`getaddrinfo`/`posix_spawnp` structs, `S_ISDIR`, `W*` macros; `fcntl`/`ioctl`/`open` (varargs calls, since `cwrap.c` went) | 5 `#if`s (OS, `SO_NOSIGPIPE`, `MSG_NOSIGNAL`, `arc4random_buf`/`getrandom`) |
+| `trace.c` | 668 | 20 globals (5 thread-locals), 3 function-local statics, `sigaction` + `atexit` callbacks, `open` (called directly; `cwrap.c` is gone) | its fatal-signal handler re-raises with `signal(sig, SIG_DFL)`: fine as an `export fn` |
 | ~~`stack.c`~~ | 376 | **done** (2026-11-19): `runtime/src/stack.auk`, `stackos.<os>.auk`, `cpu.auk` | the context's PC/SP through `cfacts.uc_pc`/`uc_sp`; x86-64's return-address slot is `cpu.RET_SLOT` |
 | `dbg.c` | 2141 | 50 globals (5 thread-locals, atomics), `pthread_key_create` destructor, `pthread_create`, `atexit`, `signal(SIGINT)` callbacks, Unix sockets | — (largest file; translate last among the plain ones) |
 | ~~`audio_out.c`~~ | 328 | **done** (2026-11-19): `runtime/src/audio_out.auk` + `audio_os.<os>.auk` | the per-OS `#if` is `audio_os`; the byte-order `#if` is gone (all Linux targets are little-endian) |
 | ~~`gui.c`~~ | 1301 | **done** (2026-11-19): `runtime/src/gui.auk` + `gui_os.<os>.auk` | the `#if`s are `gui_os.SUPPORTED`, `cfacts.HAS_SO_NOSIGPIPE` and gui_os's setters for the per-OS field widths |
 | ~~`gui_host.c`~~ | 1661 | **done** (2026-11-19): `runtime/src/gui_host.macos.auk` (+ `gui_host.linux.auk`) | — |
 | ~~`tls.c`~~ | 916 | **done** (2026-11-19): `runtime/src/tls.auk` (shared checks and messages) + `tls_os.macos.auk` (Network.framework, hand-made blocks) / `tls_os.linux.auk` (OpenSSL through dlopen) | the 8 kinds of blocks are raw structs per lowlevel.md §10; the op refcount is the completion blocks' copy/dispose helpers; `-fblocks` gone from build.sh |
-| `cwrap.c` | 52 | nothing: it is the C half of the varargs boundary | **stays C** (or becomes varargs FFI support in the compiler; self-host-plan 7b) |
+| ~~`cwrap.c`~~ | 52 | **done** (2026-11-19): deleted; the modules call `open`/`shm_open`/`fcntl`/`ioctl`/`snprintf` as variadic `extern fn`s (see "Found porting `cwrap.c`") | — |
 
 ### Non-translatable, in short
 
@@ -765,6 +795,6 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 - `stack.c`: rewriting the interrupted thread's registers from a signal handler; per-OS, per-CPU
   context layouts.
 - ~~`tls.c` (macOS): blocks and libdispatch.~~ Done by hand-made block literals (lowlevel.md §10).
-- `cwrap.c`: calling C varargs functions.
+- ~~`cwrap.c`: calling C varargs functions.~~ Done: varargs calls in the dialect (lowlevel.md 7a).
 - Everywhere: the `#if`s, the C library macros and per-OS constants, `environ` (items 1, 2, 4
   above).

@@ -17,8 +17,9 @@ extern fn auk__trace_on_panic(loc: raw.Ptr<u8>, msg: raw.Ptr<u8>, n: usize, caug
   "void auk__trace_on_panic(const char *, const char *, size_t, bool)"
 extern fn auk__conn_free(p: raw.Ptr<()>) = "void auk__conn_free(void *)"
 extern fn auk__listener_free(p: raw.Ptr<()>) = "void auk__listener_free(void *)"
-extern fn auk__c_fmt_g(buf: raw.Ptr<u8>, cap: usize, v: float): i32 = "int auk__c_fmt_g(char *, size_t, double)"
 // the C library
+extern fn c_snprintf(buf: raw.Ptr<u8>, cap: usize, fmt: raw.Ptr<u8>, ...): i32 =
+  "int snprintf(char *, size_t, const char *, ...)"
 extern fn c_malloc(n: usize): raw.Ptr<()> = "void *malloc(size_t)"
 extern fn c_calloc(n: usize, size: usize): raw.Ptr<()> = "void *calloc(size_t, size_t)"
 extern fn c_realloc(p: raw.Ptr<()>, n: usize): raw.Ptr<()> = "void *realloc(void *, size_t)"
@@ -630,7 +631,7 @@ export fn auk_float_to_int(x: float, loc: raw.Ptr<u8>): i64 uses raw, ffi {
   if !(x >= -9223372036854775808.0 && x < 9223372036854775808.0) {
     var g = Bytes64 {}
     let gp: raw.Ptr<u8> = raw.cast(raw.addr_of(&g))
-    let _ = auk__c_fmt_g(gp, 64, x)
+    let _ = c_snprintf(gp, 64, "%g", x)
     auk__panic3(loc, "int(", gp, ") is out of range")
   }
   i64(x)

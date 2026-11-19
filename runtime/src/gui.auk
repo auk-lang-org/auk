@@ -30,8 +30,9 @@ extern fn auk__xmalloc(n: usize): raw.Ptr<()> = "void *auk__xmalloc(size_t)"
 extern fn auk__xrealloc(p: raw.Ptr<()>, n: usize): raw.Ptr<()> = "void *auk__xrealloc(void *, size_t)"
 extern fn auk__task_cancelled(): bool = "bool auk__task_cancelled(void)"
 extern fn auk__check_cancel(loc: raw.Ptr<u8>) = "void auk__check_cancel(const char *)"
-extern fn auk__c_fcntl(fd: i32, cmd: i32, arg: i32): i32 = "int auk__c_fcntl(int, int, int)"
-extern fn auk__c_shm_open(name: raw.Ptr<u8>, flags: i32, mode: i32): i32 = "int auk__c_shm_open(const char *, int, int)"
+extern fn c_fcntl(fd: i32, cmd: i32, ...): i32 = "int fcntl(int, int, ...)"
+// varargs on macOS, `mode_t` fixed on Linux: passed the same way on all three targets
+extern fn c_shm_open(name: raw.Ptr<u8>, flags: i32, ...): i32 = "int shm_open(const char *, int, ...)"
 extern var auk_ops_int: abi.ElemOps = "auk_ops_int"
 // libc
 extern var environ: raw.Ptr<raw.Ptr<u8>> = "environ"
@@ -773,7 +774,7 @@ fn gui_connect(why: raw.Ptr<raw.Ptr<u8>>): i32 uses raw, ffi {
     }
     fd = svp.at(0)
   }
-  let _ = auk__c_fcntl(fd, cfacts.F_SETFD, cfacts.FD_CLOEXEC)
+  let _ = c_fcntl(fd, cfacts.F_SETFD, cfacts.FD_CLOEXEC)
   auk__wire_no_sigpipe(fd)
   var th = cfacts.PthreadT {}
   var attr = cfacts.PthreadAttr {}
@@ -1080,13 +1081,13 @@ fn shm_new(w: i64, h: i64, s: raw.Ptr<Shm>, why: raw.Ptr<raw.Ptr<u8>>): bool use
   str.auk__sb_put_cstr(nbp, ".")
   str_fmt.auk_sb_int(nbp, raw.atomic_add(raw.addr_of(&shm_counter), 1, raw.Order.SeqCst))
   str_fmt.auk__sb_take_into(nbp, name, 64)
-  let fd = auk__c_shm_open(name, cfacts.O_CREAT | cfacts.O_EXCL | cfacts.O_RDWR, 384)
+  let fd = c_shm_open(name, cfacts.O_CREAT | cfacts.O_EXCL | cfacts.O_RDWR, u32(384))
   if fd < 0 {
     why.store(shm_err(cfacts.errno()))
     return false
   }
   let _ = shm_unlink(name)
-  let _ = auk__c_fcntl(fd, cfacts.F_SETFD, cfacts.FD_CLOEXEC)
+  let _ = c_fcntl(fd, cfacts.F_SETFD, cfacts.FD_CLOEXEC)
   if ftruncate(fd, i64(len)) != 0 {
     let e = cfacts.errno()
     let _ = close(fd)

@@ -179,7 +179,7 @@ fn refs_ex(e: mir.Ex, out: var [int], ind: var [([mir.MTy], mir.MTy)]) {
           refs_ex(code, &out, &ind)
         }
         CPtr(code) => refs_ex(code, &out, &ind)
-        Rt(_) => {}
+        Rt(_) | CVar(_, _) => {}
       }
       for a in args { refs_ex(a, &out, &ind) }
     }

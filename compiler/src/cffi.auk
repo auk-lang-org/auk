@@ -35,6 +35,10 @@ pub struct CSig {
   /// `"#embed path"` (C23's directive): no C function; the result is the file's contents, read
   /// at compile time. The checker resolves the path (relative to the source file).
   embed: str?,
+  /// A C varargs function (`int snprintf(char *, size_t, const char *, ...)`; the runtime's
+  /// dialect only): `params` are the fixed parameters; a call passes more arguments after them,
+  /// raw scalars with C's default argument promotions.
+  variadic: bool,
 }
 
 /// How a list's elements are laid out in the C array (the runtime's `AUK_FFI_*` kinds).
@@ -374,7 +378,7 @@ pub fn parse_proto_in(src: str, fnptr: bool): CSig!CErr {
     some(rest) => {
       let path = trim_quotes(rest.trim())
       if path == "" { return fail(Bad("`#embed` needs the file's path: \"#embed data/font.ttf\"")) }
-      return CSig { name: "#embed", ret: CTy.Void, params: [], free: none, indirect: false, cast: false, embed: path }
+      return CSig { name: "#embed", ret: CTy.Void, params: [], free: none, indirect: false, cast: false, embed: path, variadic: false }
     }
     none => {}
   }
@@ -415,7 +419,7 @@ pub fn parse_proto_in(src: str, fnptr: bool): CSig!CErr {
       Ptr(_, _) | Named(_) => {}
       _ => return fail(Bad("a cast converts between pointer types; `{show(cret)}` isn't one"))
     }
-    return CSig { name: "(cast)", ret: cret, params: [CTy.Ptr(CTy.Void, false)], free: none, indirect: false, cast: true, embed: none }
+    return CSig { name: "(cast)", ret: cret, params: [CTy.Ptr(CTy.Void, false)], free: none, indirect: false, cast: true, embed: none, variadic: false }
   }
   var p = P { toks, pos: 0, fnptr }
   let (ret, name0) = decl(&p, "the result type", true)?
@@ -430,12 +434,22 @@ pub fn parse_proto_in(src: str, fnptr: bool): CSig!CErr {
   if p.peek() != some(Tok.LParen) { return fail(Bad("expected `(` after `{name}`")) }
   p.pos += 1
   var params: [CTy] = []
+  var variadic = false
   if indirect { params.push(CTy.Ptr(CTy.Void, false)) }
   if p.peek() == some(Tok.RParen) || (p.word() == some("void") && p.toks.get(p.pos + 1) == some(Tok.RParen)) {
     if p.peek() != some(Tok.RParen) { p.pos += 1 }
   } else {
     loop {
-      if p.peek() == some(Tok.Dots) { return fail(Bad("variadic C functions (`...`) aren't supported")) }
+      if p.peek() == some(Tok.Dots) {
+        // the runtime's dialect: a varargs C function, its fixed parameters first
+        if !fnptr { return fail(Bad("variadic C functions (`...`) aren't supported")) }
+        if indirect { return fail(Bad("a call through a pointer to a variadic C function (`...`) isn't supported")) }
+        if params.len() == 0 { return fail(Bad("`...` follows the fixed parameters (C needs at least one)")) }
+        p.pos += 1
+        variadic = true
+        if p.peek() != some(Tok.RParen) { return fail(Bad("`...` ends the parameter list")) }
+        break
+      }
       let (t, _) = decl(&p, "parameter {params.len() + 1}", false)?
       if t == CTy.Void { return fail(Bad("a parameter can't be `void`")) }
       params.push(t)
@@ -449,7 +463,7 @@ pub fn parse_proto_in(src: str, fnptr: bool): CSig!CErr {
   if p.peek() != some(Tok.RParen) { return fail(Bad("expected `)` to end the parameter list")) }
   p.pos += 1
   if p.pos < p.toks.len() { return fail(Bad("unexpected text after the prototype")) }
-  CSig { name, ret, params, free, indirect, cast: false, embed: none }
+  CSig { name, ret, params, free, indirect, cast: false, embed: none, variadic }
 }
 
 // ---- matching Auk types to C types ----
@@ -643,6 +657,12 @@ test "prototypes" {
   assert s3.params == [CTy.Named("LLVMModuleRef")]
   assert parse_proto("void f(int xs[], struct S *const *p)")!.params[0] == CTy.Ptr(i(4, true), false)
   assert proto_err("int printf(const char *, ...)").contains("variadic")
+  // the runtime's dialect: varargs, the fixed parameters first
+  let sv = parse_proto_in("int snprintf(char *, size_t, const char *, ...)", true)!
+  assert sv.variadic && sv.params.len() == 3 && !parse_proto_in("int abs(int)", true)!.variadic
+  assert parse_proto_in("int f(...)", true) is err(_)
+  assert parse_proto_in("int f(int, ..., int)", true) is err(_)
+  assert parse_proto_in("int (*)(int, ...)", true) is err(_)
   assert proto_err("void qsort(void *, size_t, size_t, int (*)(const void *, const void *))").contains("callbacks")
   assert proto_err("abs") != ""
   assert proto_err("long double f(void)") != ""

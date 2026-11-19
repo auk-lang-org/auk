@@ -2,7 +2,7 @@
 /// containing an address, read from the executable's own .symtab (dladdr only sees the dynamic
 /// symbol table, which doesn't have Auk's local functions).
 
-extern fn auk__c_open(path: raw.Ptr<u8>, flags: i32, mode: i32): i32 = "int auk__c_open(const char *, int, int)"
+extern fn c_open(path: raw.Ptr<u8>, flags: i32, ...): i32 = "int open(const char *, int, ...)"
 extern fn pthread_self(): cfacts.PthreadT = "pthread_t pthread_self(void)"
 extern fn pthread_getattr_np(th: cfacts.PthreadT, a: raw.Ptr<cfacts.PthreadAttr>): i32 = "int pthread_getattr_np(pthread_t, pthread_attr_t *)"
 extern fn pthread_attr_getstack(a: raw.Ptr<cfacts.PthreadAttr>, addr: raw.Ptr<raw.Ptr<()>>, size: raw.Ptr<usize>): i32 =
@@ -34,7 +34,7 @@ pub fn thread_stack_lo(cur: usize): usize uses raw, ffi {
 /// The function symbol containing pc in the executable's own .symtab, into out (cap bytes).
 /// Read with pread (async-signal-safe), nothing allocated. True when found.
 pub fn elf_sym_name(pc: usize, out: raw.Ptr<u8>, cap: usize): bool uses raw, ffi {
-  let fd = auk__c_open("/proc/self/exe", cfacts.O_RDONLY | cfacts.O_CLOEXEC, 0)
+  let fd = c_open("/proc/self/exe", cfacts.O_RDONLY | cfacts.O_CLOEXEC)
   if fd < 0 {
     return false
   }

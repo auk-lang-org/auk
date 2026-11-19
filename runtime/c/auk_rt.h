@@ -631,16 +631,6 @@ AUK_API AukStr *auk_fmt_str(const AukStr *s, const char *spec);
 AUK_API AukStr *auk_fmt_char(uint32_t c, const char *spec);
 AUK_API AukStr *auk_fmt_bool(bool v, const char *spec);
 
-/* ---- cwrap.c: fixed-argument wrappers for the C library's varargs functions ------------- */
-
-int auk__c_open(const char *path, int flags, int mode);
-int auk__c_shm_open(const char *name, int flags, int mode);
-int auk__c_fcntl(int fd, int cmd, int arg);
-int auk__c_ioctl_ptr(int fd, unsigned long request, void *arg);
-int auk__c_fmt_e(char *buf, size_t cap, int prec, double v);
-int auk__c_fmt_f(char *buf, size_t cap, int prec, double v);
-int auk__c_fmt_g(char *buf, size_t cap, double v);
-
 /* ---- arr.c: arrays ------------------------------------------------------------------------ */
 
 AUK_API int64_t auk_arr_len(const AukArr *a);

@@ -3,11 +3,8 @@
 /// Every `export fn` keeps its C name and is `pub` (other modules call it as `str_fmt.name`).
 
 extern fn auk__xmalloc(n: usize): raw.Ptr<u8> = "void *auk__xmalloc(size_t)"
-// cwrap.c: snprintf of one double
-extern fn auk__c_fmt_e(buf: raw.Ptr<u8>, cap: usize, prec: i32, v: float): i32 =
-  "int auk__c_fmt_e(char *, size_t, int, double)"
-extern fn auk__c_fmt_f(buf: raw.Ptr<u8>, cap: usize, prec: i32, v: float): i32 =
-  "int auk__c_fmt_f(char *, size_t, int, double)"
+extern fn c_snprintf(buf: raw.Ptr<u8>, cap: usize, fmt: raw.Ptr<u8>, ...): i32 =
+  "int snprintf(char *, size_t, const char *, ...)"
 extern fn c_fwrite(p: raw.Ptr<u8>, size: usize, n: usize, f: raw.Ptr<()>): usize =
   "size_t fwrite(const void *, size_t, size_t, void *)"
 extern fn c_atoi(s: raw.Ptr<u8>): i32 = "int atoi(const char *)"
@@ -60,7 +57,7 @@ pub inline export fn auk_sb_int(b: raw.Ptr<abi.StrBuf>, v: i64) uses raw, ffi {
 }
 
 // ---- text without printf --------------------------------------------------------------------
-// The runtime calls no varargs function except through cwrap.c (docs/runtime-port.md): numbers
+// Integers need no printf (only floats use C's `snprintf`, a varargs call): numbers
 // are formatted here, messages are built with the builder (outside the show budget) and then
 // copied, printed or duplicated.
 
@@ -175,7 +172,7 @@ pub export fn auk__sb_eprint(b: raw.Ptr<abi.StrBuf>) uses raw, ffi {
 
 /// Does `%.<prec>e` of v read back as v? Leaves the text in buf.
 fn round_trips(v: float, prec: i32, buf: raw.Ptr<u8>, n: usize): bool uses raw, ffi {
-  let _ = auk__c_fmt_e(buf, n, prec, v)
+  let _ = c_snprintf(buf, n, "%.*e", prec, v)
   str.strtod(buf, raw.null()) == v
 }
 
@@ -521,9 +518,9 @@ pub export fn auk_fmt_float(v: float, spec: raw.Ptr<u8>): raw.Ptr<abi.Str> uses 
   let sp = parse_spec(spec)
   let body = if sp.prec >= 0 && !is_nan(v) && !is_inf(v) {
     let prec = i32(sp.prec)
-    let n = auk__c_fmt_f(raw.null(), 0, prec, v)
+    let n = c_snprintf(raw.null(), 0, "%.*f", prec, v)
     let buf = auk__xmalloc(usize(n) + 1)
-    let _ = auk__c_fmt_f(buf, usize(n) + 1, prec, v)
+    let _ = c_snprintf(buf, usize(n) + 1, "%.*f", prec, v)
     let s = str.auk__str_raw(buf, i64(n), i64(n), true)
     raw.free(buf)
     s
