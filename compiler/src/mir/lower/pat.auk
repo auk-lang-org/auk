@@ -401,8 +401,13 @@ fn bind_sub(lw: var mir.lower.Lower, q: ast.Pat, v: mir.Ex) {
   bind_pat(&lw, q, v, t)
 }
 
-/// Declare local `l` as an owned (retained) copy of `v`.
+/// Declare local `l` as an owned (retained) copy of `v`, or, in an arm on a stable value
+/// (`Lower.bind_borrow`), an immutable `l` as `v` itself (a place in that value).
 fn bind_local(lw: var mir.lower.Lower, l: int, v: mir.Ex, ty: types.Ty) {
+  if lw.f.bind_borrow && v.is_place() && v.ty == mir.MTy.D(ty) && !lw.t.locals[l].mutable && !lw.f.or_into.contains(l) {
+    lw.bind_name(l, mir.lower.Slot { c: v, ty })
+    return
+  }
   let n = lw.decl(ty, v)
   match lw.g.retain(ty, n) {
     some(r) => lw.emit(r)

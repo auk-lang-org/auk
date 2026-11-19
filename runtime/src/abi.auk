@@ -38,7 +38,8 @@ pub raw let K_LISTENER: u32 = 8
 pub raw let K_CHAN: u32 = 9
 pub raw let K_FRAME: u32 = 10
 
-/// AukHeader.flags: the object has a heap Link prefix (heap.c).
+/// AukHeader.flags: the object has a heap Link prefix (heap.c). Bits 8 to 15 hold the
+/// object's size class in heap.auk's pool (0: malloc'd).
 pub raw let TRACKED: u32 = 1
 
 /// Is an object of this kind a handle (never tracked, shared by reference count)?

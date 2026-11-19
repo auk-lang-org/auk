@@ -289,6 +289,7 @@ fn task_entry(p: raw.Ptr<()>): raw.Ptr<()> uses raw, ffi {
   unlock_state()
   let _ = pthread_cond_broadcast(raw.addr_of(&done_cv))
   cur_task = raw.null()
+  heap.auk__heap_thread_end()
   auk__stack_thread_end()
   raw.null()
 }

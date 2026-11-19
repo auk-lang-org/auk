@@ -81,6 +81,14 @@ pub struct FnState {
   dbg: FnDbg?,
   /// While binding an alternative of an or-pattern: the variable each of its locals goes in.
   or_into: {int: mir.Ex},
+  /// While binding a `match` arm on a stable value (`stable_root`): immutable names borrow
+  /// their part of it instead of taking owned copies.
+  bind_borrow: bool,
+  /// In the program's `main` (`is_program_main`): the index of its body block's scope, whose
+  /// end releases through `release_at_exit` (-1 otherwise).
+  exit_scope: int,
+  /// Lowering the body of the program's `main` itself (not a closure in it).
+  main_fn: bool,
 }
 
 pub fn new_fs(ret: types.Ty): FnState = FnState {
@@ -94,6 +102,9 @@ pub fn new_fs(ret: types.Ty): FnState = FnState {
   var_params: {},
   dbg: none,
   or_into: {},
+  bind_borrow: false,
+  exit_scope: -1,
+  main_fn: false,
 }
 
 pub struct Lower {
@@ -337,6 +348,10 @@ pub fn pop(lw: var Lower) {
       lw.f.dbg = some(dd)
     }
     none => {}
+  }
+  if lw.f.scopes.len() == lw.f.exit_scope {
+    lw.release_at_exit(s.owned.reverse())
+    return
   }
   for (c, ty) in s.owned.reverse() {
     match lw.g.release(ty, c) {
@@ -805,6 +820,9 @@ fn clause(lw: var Lower, c: ast.FnClause, pnames: [(mir.Ex, types.Ty, bool)], re
   let guarded = lw.guard(c.guard)
   for r in c.pre { lw.requires_(r) }
   lw.push(ScopeKind.Block)
+  // the body block's scope comes next
+  lw.f.main_fn = lw.is_program_main()
+  lw.f.exit_scope = if lw.f.main_fn { lw.f.scopes.len() } else { -1 }
   let v = match c.body {
     some(Expr(e)) => {
       lw.dbg_hook(e.span, true)
@@ -813,6 +831,7 @@ fn clause(lw: var Lower, c: ast.FnClause, pnames: [(mir.Ex, types.Ty, bool)], re
     some(Block(b)) => lw.block(b, true)
     _ => val_unit()
   }
+  lw.f.exit_scope = -1
   lw.ret_val(v, ret)
   lw.pop()
   if guarded { lw.close() }
@@ -825,8 +844,62 @@ fn ret_val(lw: var Lower, v: Val, ret: types.Ty) {
   if v.is_never() { return }
   let o = lw.own_as(v, ret)
   let rv = lw.decl(ret, o)
-  lw.cleanup_from(0)
+  if lw.f.main_fn { lw.cleanup_main_exit() } else { lw.cleanup_from(0) }
   lw.emit(mir.Stmt.Ret(rv))
+}
+
+/// Is this the program's `main`, in an executable (`auk build`)?
+fn is_program_main(lw: var Lower): bool {
+  if lw.g.mode != mir.progen.Mode.Release { return false }
+  match lw.tp.main {
+    some(mi) => lw.tp.instances[lw.inst].body == typed.BodyRef.Fn(mi.func)
+    none => false
+  }
+}
+
+/// `cleanup_from(0)` at a `return` from the program's `main`.
+fn cleanup_main_exit(lw: var Lower) {
+  var rels: [(mir.Ex, types.Ty)] = []
+  var si = lw.f.scopes.len() - 1
+  while si >= 0 {
+    let owned = lw.f.scopes[si].owned
+    var p = owned.len() - 1
+    while p >= 0 {
+      rels.push(owned[p])
+      p -= 1
+    }
+    si -= 1
+  }
+  lw.release_at_exit(rels)
+}
+
+/// Release `rels` (in order) where the program's `main` ends normally: the process is about
+/// to end, so values that can't reach a handle are released only when the runtime asks for it
+/// (`auk_exit_fast` is 0: a program run inside the compiler, or AUK_LEAK_CHECK). Those that can
+/// are always released (a task's release waits for it to finish).
+fn release_at_exit(lw: var Lower, rels: [(mir.Ex, types.Ty)]) {
+  var soft: [(mir.Ex, types.Ty)] = []
+  for (c, ty) in rels {
+    var seen: {types.Ty: bool} = {}
+    if !mir.types.may_hold_handle(lw.g.info, ty, &seen) {
+      soft.push((c, ty))
+      continue
+    }
+    match lw.g.release(ty, c) {
+      some(r) => lw.emit(r)
+      none => {}
+    }
+  }
+  if soft.len() == 0 { return }
+  let fast = mir.rt_global("auk_exit_fast", ty_int()).deref(ty_int())
+  lw.open_if(mir.bin(mir.BOp.Eq, fast, mir.int_(0)))
+  for (c, ty) in soft {
+    match lw.g.release(ty, c) {
+      some(r) => lw.emit(r)
+      none => {}
+    }
+  }
+  lw.close()
 }
 
 /// The function `name` that checks `ensures` around the clause group's body `body_name`.
@@ -1911,27 +1984,45 @@ fn call_target(lw: var Lower, target: typed.Target, func: int?, args: [ArgV], re
       lw.result(rt, call)
     }
     Variant(_, index) => {
-      var fields: [mir.Ex] = []
+      var fields: [(mir.Ex, bool)] = []
       let layout = mir.types.enum_layout(lw.g.info, ret)
       let isv = lw.g.is_value(ret)
       for k, a in args {
+        var boxed = false
         let ft = if isv {
           a_ty(a)
         } else {
           match layout.get(index) {
             some(l) => match l.get(k) {
-              some(x) => x.0
+              some(x) => {
+                boxed = x.1
+                x.0
+              }
               none => a_ty(a)
             }
             none => a_ty(a)
           }
         }
         match a {
-          Val(v) => fields.push(lw.own_as(v, ft))
-          Addr(p, t) => fields.push(p.deref(d(t)))
+          Val(v) => {
+            // a borrowed read of a box's contents (a field bound from a matched value): share
+            // that box instead of boxing a copy
+            if boxed && !v.owned && !v.is_never() {
+              match lw.g.unboxed_from(ft, v.c) {
+                some(b) => {
+                  lw.do_(mir.rt("auk_retain", [b], mir.void_ptr()))
+                  fields.push((b, true))
+                  continue
+                }
+                none => {}
+              }
+            }
+            fields.push((lw.own_as(v, ft), false))
+          }
+          Addr(p, t) => fields.push((p.deref(d(t)), false))
         }
       }
-      let c = lw.g.variant_new(ret, index, fields)
+      let c = lw.g.variant_new_pre(ret, index, fields)
       lw.tmp(ret, c)
     }
     Closure => {
@@ -3309,6 +3400,18 @@ fn own_drop(lw: var Lower, v: Val) {
   }
 }
 
+/// Is `e` a name whose value stays put, unchanged, while it is in scope: an immutable local
+/// (or parameter) that isn't a `var` parameter, in a function whose self tail calls don't
+/// reassign its parameters? Its parts, boxes included, then live at least as long as anything
+/// bound from them in a `match` arm, and nothing writes them (boxes are copy-on-write).
+fn stable_root(lw: var Lower, e: ast.Expr): bool {
+  if lw.f.tail != none || !(e.kind is ast.ExprKind.Name(_)) { return false }
+  match lw.t.names.get(e.id) {
+    some(Local(l)) => !lw.t.locals[l].mutable && !lw.f.var_params.contains(l) && lw.f.locals.contains(l)
+    _ => false
+  }
+}
+
 fn match_(lw: var Lower, e: ast.Expr, scrut: ast.Expr, arms: [ast.Arm], tail: bool): Val {
   let ty = lw.ty(e.id)
   // arms bind owned copies before their bodies run, and guards are pure
@@ -3323,6 +3426,7 @@ fn match_(lw: var Lower, e: ast.Expr, scrut: ast.Expr, arms: [ast.Arm], tail: bo
   if sv.is_never() { return sv }
   let st = sv.ty
   let s = lw.lvalue(sv, st)
+  let stable = lw.stable_root(scrut) && s.is_place()
   let has = has_value(ty)
   let r = if has { some(lw.zero_decl(ty)) } else { none }
   let end = lw.f.b.label()
@@ -3335,7 +3439,9 @@ fn match_(lw: var Lower, e: ast.Expr, scrut: ast.Expr, arms: [ast.Arm], tail: bo
     lw.open_if(test)
     lw.push(ScopeKind.Block)
     let arm_depth = lw.f.scopes.len() - 1
+    lw.f.bind_borrow = stable
     lw.bind_pat(a.pat, s, st)
+    lw.f.bind_borrow = false
     let guarded = lw.guard(a.guard)
     lw.push(ScopeKind.Block)
     let v = lw.expr_t(a.body, tail)

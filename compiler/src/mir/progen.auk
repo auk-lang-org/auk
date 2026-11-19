@@ -826,15 +826,40 @@ pub fn variant_field(g: var Gen, t: types.Ty, vi: int, fi: int, v: mir.Ex): mir.
 }
 
 /// Variant `vi` of enum `t` from owned field values.
-pub fn variant_new(g: var Gen, t: types.Ty, vi: int, fields: [mir.Ex]): mir.Ex {
+pub fn variant_new(g: var Gen, t: types.Ty, vi: int, fields: [mir.Ex]): mir.Ex =
+  g.variant_new_pre(t, vi, fields.map(f => (f, false)))
+
+/// `variant_new` where a field may already be its box: (an owned `AukObj *`, true).
+pub fn variant_new_pre(g: var Gen, t: types.Ty, vi: int, fields: [(mir.Ex, bool)]): mir.Ex {
   let layout = mir.types.enum_layout(g.info, t)
   var parts = [(mir.Sel.Tag, mir.int_as(vi, mir.MTy.I32))]
-  for fi, f in fields {
+  for fi, (f, pre) in fields {
     let (ft, boxed) = layout[vi][fi]
-    let v = if boxed { g.box_new(ft, f) } else { mir.retype(f, d(ft)) }
+    let v = if pre { f } else if boxed { g.box_new(ft, f) } else { mir.retype(f, d(ft)) }
     parts.push((mir.Sel.V(vi, fi), v))
   }
   mir.agg(d(t), parts)
+}
+
+/// The box `v` reads the contents of, when `v` is `unbox(t, b)`: the value inside a box of
+/// `t` (a place). A field that would box a borrowed copy of `v` can share `b` instead (one
+/// retain, no allocation): boxes are copy-on-write (`box_unique`), so neither holder sees
+/// the other's writes.
+pub fn unboxed_from(g: var Gen, t: types.Ty, v: mir.Ex): mir.Ex? {
+  let inner = match v.k {
+    Field(x, s) when s == mir.Sel.F(1) => x
+    _ => return none
+  }
+  let p = match inner.k {
+    Deref(p) => p
+    _ => return none
+  }
+  let raw = match p.k {
+    Cast(r) => r
+    _ => return none
+  }
+  if raw.ty != mir.obj_ptr() || inner.ty != mir.MTy.Agg(g.box_ty(t)) { return none }
+  some(raw)
 }
 
 /// The tag test of variant `vi` for an enum value `v`.

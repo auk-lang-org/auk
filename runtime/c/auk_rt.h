@@ -785,6 +785,8 @@ AUK_API void auk_peek(const char *loc, const char *src_text, const AukStr *shown
 AUK_API void auk_test_register(const char *name, AukTestFn fn);
 AUK_API int auk_test_main(int argc, char **argv);
 AUK_API int auk_main_wrapper(int argc, char **argv, AukMainFn user_main);
+/* non-zero while main may skip releasing handle-free locals at its normal exit (testing.auk) */
+AUK_API extern int64_t auk_exit_fast;
 
 /* ---- compiler.c: helpers for generated code, the imprint evaluator ---------------------- */
 

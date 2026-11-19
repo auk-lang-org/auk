@@ -62,6 +62,149 @@ raw let DYING: i64 = 9223372036854775807 / 4
 
 raw thread var cur_heap: raw.Ptr<Heap> = raw.null()
 
+// ---- the small-block pool --------------------------------------------------------------------
+//
+// Object memory of up to POOL_MAX bytes (the Link prefix included) comes from size classes of
+// 16 bytes instead of malloc: class c holds blocks of c * 16 bytes. Each thread keeps a free
+// list per class and carves new blocks from CHUNK-byte chunks of its own (malloc'd, never given
+// back). Freeing pushes a block on the freeing thread's list, whichever thread allocated it, so
+// blocks can move between threads; a task's thread hands its lists to a global spill (under a
+// lock) when it ends (auk__heap_thread_end), and a thread whose list is empty takes the spill's
+// before carving. An object's class is in its header's flags (bits 8 to 15; 0: malloc'd).
+
+raw let POOL_MAX: usize = 512
+raw let NCLASS: i64 = 33
+raw let CHUNK: usize = 65536
+raw let CLASS_SHIFT: u32 = 8
+
+/// A free block: the first word links the class's list.
+raw struct FreeBlock {
+  next: raw.Ptr<FreeBlock>,
+}
+
+/// One thread's pool.
+raw struct Pool {
+  free: [raw.Ptr<FreeBlock>; 33],
+  /// the rest of the current chunk
+  bump: raw.Ptr<u8>,
+  end: raw.Ptr<u8>,
+}
+
+raw thread var pool: Pool = Pool {}
+
+/// The free blocks of threads that have ended, by class (under spill_lock); spill_n counts the
+/// classes with any, read without the lock to skip it when there are none.
+raw var spill: [raw.Ptr<FreeBlock>; 33] = []
+raw var spill_n: i64 = 0
+raw var spill_lock: cfacts.PthreadMutex = cfacts.PTHREAD_MUTEX_INITIALIZER
+
+/// The class of an object of total bytes (0 when too big for the pool).
+fn class_for(total: usize): i64 = if total <= POOL_MAX { i64((total + 15) >> 4) } else { 0 }
+
+/// The class recorded in h's flags.
+fn class_of(h: raw.Ptr<abi.Header>): i64 uses raw = i64((h.flags >> CLASS_SHIFT) & 255)
+
+/// A zeroed block of class c.
+fn pool_alloc(c: i64): raw.Ptr<u8> uses raw, ffi {
+  let p = raw.addr_of(&pool)
+  let lists: raw.Ptr<raw.Ptr<FreeBlock>> = raw.cast(raw.field_addr(p, .free))
+  let n = usize(c) * 16
+  let b = lists.at(c)
+  if raw.likely(!b.is_null()) {
+    lists.at(c) = b.next
+    let q: raw.Ptr<u8> = raw.cast(b)
+    raw.fill(q, 0, n)
+    return q
+  }
+  pool_refill(p, c, n)
+}
+
+/// pool_alloc's slow path: the spill's blocks of class c, else a block carved from the chunk.
+fn pool_refill(p: raw.Ptr<Pool>, c: i64, n: usize): raw.Ptr<u8> uses raw, ffi {
+  let lists: raw.Ptr<raw.Ptr<FreeBlock>> = raw.cast(raw.field_addr(p, .free))
+  if raw.atomic_load(raw.addr_of(&spill_n), raw.Order.Relaxed) > 0 {
+    let sp: raw.Ptr<raw.Ptr<FreeBlock>> = raw.cast(raw.addr_of(&spill))
+    let _ = pthread_mutex_lock(raw.addr_of(&spill_lock))
+    let b = sp.at(c)
+    if !b.is_null() {
+      sp.at(c) = raw.null()
+      let _ = raw.atomic_sub(raw.addr_of(&spill_n), 1, raw.Order.Relaxed)
+    }
+    let _ = pthread_mutex_unlock(raw.addr_of(&spill_lock))
+    if !b.is_null() {
+      lists.at(c) = b.next
+      let q: raw.Ptr<u8> = raw.cast(b)
+      raw.fill(q, 0, n)
+      return q
+    }
+  }
+  if p.bump.is_null() || p.end.int() - p.bump.int() < i64(n) {
+    let chunk: raw.Ptr<u8> = raw.cast(rc.auk__xmalloc(CHUNK))
+    p.bump = chunk
+    p.end = chunk.offset(i64(CHUNK))
+  }
+  let q = p.bump
+  p.bump = q.offset(i64(n))
+  raw.fill(q, 0, n)
+  q
+}
+
+/// Give a block of class c back (to this thread's list).
+fn pool_free(q: raw.Ptr<()>, c: i64) uses raw {
+  let lists: raw.Ptr<raw.Ptr<FreeBlock>> = raw.cast(raw.field_addr(raw.addr_of(&pool), .free))
+  let b: raw.Ptr<FreeBlock> = raw.cast(q)
+  b.next = lists.at(c)
+  lists.at(c) = b
+}
+
+/// Free the memory of an object's block: base is where it starts (its Link when tracked).
+fn block_free(base: raw.Ptr<()>, c: i64) uses raw {
+  if c == 0 {
+    raw.free(base)
+  } else {
+    pool_free(base, c)
+  }
+}
+
+/// Zeroed memory for an object of total bytes; sets *class to its class.
+fn block_alloc(total: usize, class: raw.Ptr<i64>): raw.Ptr<()> uses raw, ffi {
+  let c = class_for(total)
+  class.store(c)
+  if c == 0 {
+    return rc.auk__xcalloc(1, total)
+  }
+  raw.cast(pool_alloc(c))
+}
+
+/// A thread that allocated or freed objects is ending: its free blocks go to the spill, for
+/// other threads to use. (The rest of its chunk is lost: at most CHUNK bytes.)
+pub export fn auk__heap_thread_end() uses raw, ffi {
+  let p = raw.addr_of(&pool)
+  let lists: raw.Ptr<raw.Ptr<FreeBlock>> = raw.cast(raw.field_addr(p, .free))
+  let sp: raw.Ptr<raw.Ptr<FreeBlock>> = raw.cast(raw.addr_of(&spill))
+  let _ = pthread_mutex_lock(raw.addr_of(&spill_lock))
+  var c: i64 = 1
+  while c < NCLASS {
+    let b = lists.at(c)
+    if !b.is_null() {
+      var last = b
+      while !last.next.is_null() {
+        last = last.next
+      }
+      if sp.at(c).is_null() {
+        let _ = raw.atomic_add(raw.addr_of(&spill_n), 1, raw.Order.Relaxed)
+      }
+      last.next = sp.at(c)
+      sp.at(c) = b
+      lists.at(c) = raw.null()
+    }
+    c += 1
+  }
+  let _ = pthread_mutex_unlock(raw.addr_of(&spill_lock))
+  p.bump = raw.null()
+  p.end = raw.null()
+}
+
 /// The header of the object whose Link is l.
 fn header_of(l: raw.Ptr<Link>): raw.Ptr<abi.Header> uses raw = raw.cast(raw.cast<u8>(l).offset(raw.size_of<Link>()))
 
@@ -149,18 +292,20 @@ export fn auk_heap_new(): raw.Ptr<()> uses raw, ffi = raw.cast(auk__heap_new())
 pub export fn auk__heap_alloc(size: usize, kind: u32): raw.Ptr<abi.Header> uses raw, ffi {
   let handle = abi.is_handle(kind)
   let hp: raw.Ptr<Heap> = if handle { raw.null() } else { cur_heap }
+  var c: i64 = 0
   if hp.is_null() {
-    let h: raw.Ptr<abi.Header> = raw.cast(rc.auk__xcalloc(1, size))
+    let h: raw.Ptr<abi.Header> = raw.cast(block_alloc(size, raw.addr_of(&c)))
     h.kind = kind
+    h.flags = u32(c) << CLASS_SHIFT
     if handle {
       auk__note_handle(raw.cast(h), 1)
     }
     return h
   }
-  let l: raw.Ptr<Link> = raw.cast(rc.auk__xcalloc(1, raw.size_of<Link>() + size))
+  let l: raw.Ptr<Link> = raw.cast(block_alloc(raw.size_of<Link>() + size, raw.addr_of(&c)))
   let h = header_of(l)
   h.kind = kind
-  h.flags = abi.TRACKED
+  h.flags = abi.TRACKED | (u32(c) << CLASS_SHIFT)
   l.heap = hp
   let _ = pthread_mutex_lock(raw.field_addr(hp, .lock))
   let s = raw.field_addr(hp, .head)
@@ -175,8 +320,9 @@ pub export fn auk__heap_alloc(size: usize, kind: u32): raw.Ptr<abi.Header> uses 
 
 /// Free an object's memory (taking it off its heap's list).
 pub export fn auk__heap_free(h: raw.Ptr<abi.Header>) uses raw, ffi {
+  let c = class_of(h)
   if (h.flags & abi.TRACKED) == 0 {
-    raw.free(h)
+    block_free(raw.cast(h), c)
     return
   }
   let l = link_of(h)
@@ -192,15 +338,16 @@ pub export fn auk__heap_free(h: raw.Ptr<abi.Header>) uses raw, ffi {
   prev.next = next
   next.prev = prev
   let _ = pthread_mutex_unlock(raw.field_addr(hp, .lock))
-  raw.free(l)
+  block_free(raw.cast(l), c)
 }
 
 /// The bytes usable from h (the header included) in its allocation, which may be more than
 /// were asked for.
 pub export fn auk__heap_usable(h: raw.Ptr<abi.Header>): usize uses raw, ffi {
   let tracked = (h.flags & abi.TRACKED) != 0
+  let c = class_of(h)
   let base: raw.Ptr<()> = if tracked { raw.cast(link_of(h)) } else { raw.cast(h) }
-  let n = heap_os.usable_size(base)
+  let n = if c == 0 { heap_os.usable_size(base) } else { usize(c) * 16 }
   if tracked { n - raw.size_of<Link>() } else { n }
 }
 
@@ -208,6 +355,10 @@ pub export fn auk__heap_usable(h: raw.Ptr<abi.Header>): usize uses raw, ffi {
 /// The object must be unique: nothing else may hold the old address. Bytes past the old size
 /// are not zeroed.
 pub export fn auk__heap_resize(h: raw.Ptr<abi.Header>, size: usize): raw.Ptr<abi.Header> uses raw, ffi {
+  let c = class_of(h)
+  if c != 0 {
+    return pool_resize(h, size, c)
+  }
   if (h.flags & abi.TRACKED) == 0 {
     // raw.realloc aborts on failure, as the C did
     return raw.cast(raw.realloc(h, size))
@@ -221,6 +372,39 @@ pub export fn auk__heap_resize(h: raw.Ptr<abi.Header>, size: usize): raw.Ptr<abi
   prev.next = n
   next.prev = n
   let _ = pthread_mutex_unlock(raw.field_addr(hp, .lock))
+  header_of(n)
+}
+
+/// auk__heap_resize of a pooled object: moved to a malloc'd block of exactly size bytes (and
+/// its Link), unless its block already holds them.
+fn pool_resize(h: raw.Ptr<abi.Header>, size: usize, c: i64): raw.Ptr<abi.Header> uses raw, ffi {
+  let tracked = (h.flags & abi.TRACKED) != 0
+  let extra = if tracked { raw.size_of<Link>() } else { usize(0) }
+  let have = usize(c) * 16
+  if extra + size <= have {
+    return h
+  }
+  let flags = h.flags & ~(u32(255) << CLASS_SHIFT)
+  if !tracked {
+    let n: raw.Ptr<abi.Header> = raw.cast(rc.auk__xmalloc(size))
+    raw.copy(n, h, have)
+    n.flags = flags
+    pool_free(raw.cast(h), c)
+    return n
+  }
+  let l = link_of(h)
+  let hp = l.heap
+  let _ = pthread_mutex_lock(raw.field_addr(hp, .lock))
+  let n: raw.Ptr<Link> = raw.cast(rc.auk__xmalloc(extra + size))
+  raw.copy(n, l, have)
+  let nh = header_of(n)
+  nh.flags = flags
+  let prev = n.prev
+  let next = n.next
+  prev.next = n
+  next.prev = n
+  let _ = pthread_mutex_unlock(raw.field_addr(hp, .lock))
+  pool_free(raw.cast(l), c)
   header_of(n)
 }
 
@@ -275,7 +459,7 @@ pub export fn auk__heap_sweep(hp: raw.Ptr<Heap>) uses raw, ffi {
   l = s.next
   while l != s {
     let next = l.next
-    raw.free(l)
+    block_free(raw.cast(l), class_of(header_of(l)))
     l = next
   }
   s.next = s

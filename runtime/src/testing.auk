@@ -324,6 +324,16 @@ raw struct MainRun {
   r: abi.ResInt,
 }
 
+/// Non-zero while the program's `main` may end without freeing what it still holds: the values
+/// in its locals that can't reach a handle (generated code tests this before releasing them at
+/// `main`'s normal exit; the process is about to end, and handles still get released: a task's
+/// release waits for it). Set only for the process's own `main`, not a program the compiler runs
+/// in its process (`auk run`, `dive`), and never under AUK_LEAK_CHECK, which counts every object.
+export var auk_exit_fast: i64 = 0
+
+/// How many auk_main_wrapper calls are running (the compiler's own, then a program it runs).
+raw var main_depth: i64 = 0
+
 fn run_main(p: raw.Ptr<()>) uses raw {
   let m: raw.Ptr<MainRun> = raw.cast(p)
   let f = m.func
@@ -336,9 +346,14 @@ export fn auk_main_wrapper(argc: i32, argv: raw.Ptr<raw.Ptr<u8>>, user_main: raw
     return gui_host.auk__gui_host_main()
   }
   auk_env_set_args(argc, argv)
+  main_depth += 1
+  let fast = auk_exit_fast
+  auk_exit_fast = if main_depth == 1 && getenv("AUK_LEAK_CHECK").is_null() { 1 } else { 0 }
   // on a thread with a big stack, where an overflow is a panic
   var m = MainRun { func: user_main, args: auk_env_args() }
   stack.auk__run_on_big_stack(raw.fn_of(run_main), raw.cast(raw.addr_of(&m)))
+  auk_exit_fast = fast
+  main_depth -= 1
   let r = m.r
   let out = cfacts.stdout()
   let errf = cfacts.stderr()

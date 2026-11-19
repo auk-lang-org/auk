@@ -89,6 +89,47 @@ pub fn enum_layout(info: TyInfo, t: types.Ty): [[(types.Ty, bool)]] {
   )
 }
 
+/// Can a value of type `t` reach a handle (a task, connection, listener, channel or frame),
+/// whose release does more than free memory (a task's waits for it)? Conservative: closures,
+/// `any`, errors and every opaque type may.
+pub fn may_hold_handle(info: TyInfo, t: types.Ty, seen: var {types.Ty: bool}): bool {
+  if seen.contains(t) { return false }
+  seen[t] = true
+  match t {
+    Int | Float | Bool | Char | Str | Never | Fixed(_) | Ptr(_) | CFn(_, _) | Measured(_, _) => false
+    List(x) | Opt(x) => may_hold_handle(info, x, &seen)
+    Map(k, v) => may_hold_handle(info, k, &seen) || may_hold_handle(info, v, &seen)
+    Tuple(ts) => {
+      for x in ts {
+        if may_hold_handle(info, x, &seen) { return true }
+      }
+      false
+    }
+    Named(d, args) => {
+      if some(d) == info.value_def { return false }
+      let s = types.subst_of(info.defs, d, args)
+      match info.defs.types[d].kind {
+        Struct(fields) => {
+          for f in fields {
+            if may_hold_handle(info, types.subst(f.ty, s), &seen) { return true }
+          }
+          false
+        }
+        Enum(variants) => {
+          for v in variants {
+            for f in v.fields {
+              if may_hold_handle(info, types.subst(f.1, s), &seen) { return true }
+            }
+          }
+          false
+        }
+        _ => true
+      }
+    }
+    _ => true
+  }
+}
+
 /// Does `t` contain `target` by value (through tuples, optionals, results, structs, enums)?
 fn reaches(info: TyInfo, t: types.Ty, target: types.Ty, seen: var {types.Ty: bool}): bool {
   if t == target { return true }
