@@ -10,9 +10,19 @@ extern fn auk__panic3(loc: raw.Ptr<u8>, a: raw.Ptr<u8>, b: raw.Ptr<u8>, c: raw.P
   "void auk__panic3(const char *, const char *, const char *, const char *)"
 extern fn auk_hash_int(x: i64): u64 = "uint64_t auk_hash_int(int64_t)"
 extern var auk_ops_float: abi.ElemOps = "auk_ops_float"
-// defined in C (runtime/c/value_ops.c) until a raw global's initializer can hold function
-// addresses: the element ops of `Value`, over the auk__value_elem_* functions below
-extern var auk_ops_value: abi.ElemOps = "auk_ops_value"
+extern fn auk__value_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) = "void auk__value_copy_elem(const void *, void *)"
+
+/// The element ops of `Value` (C: `const AukElemOps auk_ops_value`), over the elem_* functions
+/// at the end.
+export var auk_ops_value: abi.ElemOps = abi.ElemOps {
+  size: raw.size_of<abi.Value>(),
+  retain: raw.fn_of(elem_retain),
+  release: raw.fn_of(elem_release),
+  eq: raw.fn_of(elem_eq),
+  hash: raw.fn_of(elem_hash),
+  show: raw.fn_of(elem_show),
+  copy: raw.fn_of(elem_copy),
+}
 
 // The address of the C table declared here, for the package's other modules (`str.ops_str()`
 // has `auk_ops_str`'s).
@@ -173,16 +183,16 @@ export fn auk_value_show(v: abi.Value): raw.Ptr<abi.Str> uses raw, ffi {
   }
 }
 
-// the element ops of `Value` (auk_ops_value, runtime/c/value_ops.c)
+// the element ops of `Value` (auk_ops_value)
 
-export fn auk__value_elem_retain(p: raw.Ptr<()>) uses raw, ffi = auk_value_retain(raw.cast<abi.Value>(p).load())
+fn elem_retain(p: raw.Ptr<()>) uses raw, ffi = auk_value_retain(raw.cast<abi.Value>(p).load())
 
-export fn auk__value_elem_release(p: raw.Ptr<()>) uses raw, ffi = auk_value_release(raw.cast<abi.Value>(p).load())
+fn elem_release(p: raw.Ptr<()>) uses raw, ffi = auk_value_release(raw.cast<abi.Value>(p).load())
 
-export fn auk__value_elem_eq(a: raw.Ptr<()>, b: raw.Ptr<()>): bool uses raw, ffi =
+fn elem_eq(a: raw.Ptr<()>, b: raw.Ptr<()>): bool uses raw, ffi =
   auk_value_eq(raw.cast<abi.Value>(a).load(), raw.cast<abi.Value>(b).load())
 
-export fn auk__value_elem_hash(p: raw.Ptr<()>): u64 uses raw, ffi {
+fn elem_hash(p: raw.Ptr<()>): u64 uses raw, ffi {
   let v: raw.Ptr<abi.Value> = raw.cast(p)
   let t = v.tag
   if t == abi.V_STR {
@@ -201,4 +211,7 @@ export fn auk__value_elem_hash(p: raw.Ptr<()>): u64 uses raw, ffi {
   }
 }
 
-export fn auk__value_elem_show(p: raw.Ptr<()>): raw.Ptr<abi.Str> uses raw, ffi = auk_value_show(raw.cast<abi.Value>(p).load())
+fn elem_show(p: raw.Ptr<()>): raw.Ptr<abi.Str> uses raw, ffi = auk_value_show(raw.cast<abi.Value>(p).load())
+
+/// copy.c's, through a function of this module: a constant's `raw.fn_of` names an Auk function.
+fn elem_copy(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi = auk__value_copy_elem(src, dst)
