@@ -358,8 +358,8 @@ export fn auk_main_wrapper(argc: i32, argv: raw.Ptr<raw.Ptr<u8>>, user_main: raw
     fputs("error: ", errf)
     fwrite(raw.cast(auk_str_cstr(s)), 1, usize(auk_str_byte_len(s)), errf)
     fputc(10, errf)
-    rc.auk_release(raw.cast(s))
-    rc.auk_release(raw.cast(r.err))
+    rc.release(raw.cast(s))
+    rc.release(raw.cast(r.err))
     fflush(errf)
     return if auk_leak_check() != 0 { 102 } else { 1 }
   }

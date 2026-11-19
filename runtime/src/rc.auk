@@ -159,7 +159,54 @@ export fn auk_leak_check(): i64 uses raw, ffi {
   n
 }
 
-pub inline export fn auk_retain(p: raw.Ptr<()>): raw.Ptr<()> uses raw, ffi {
+/// heap.auk's auk__note_handle, called through this pointer by `retain`/`release` so that LLVM
+/// can't inline it there (the dialect has no `noinline`/`cold` yet): inlined, its locking made
+/// every caller save registers on the fast path too (C called it across translation units).
+/// External and mutable, so it isn't folded back into a direct call.
+export var auk__note_handle_slow: raw.Fn<(raw.Ptr<()>, i64) => ()> = raw.fn_of(heap.auk__note_handle)
+
+/// auk_retain for the package's own modules (inlined into them; the handle path out of line).
+pub fn retain(p: raw.Ptr<()>): raw.Ptr<()> uses raw {
+  if p.is_null() {
+    return p
+  }
+  let h: raw.Ptr<abi.Header> = raw.cast(p)
+  if raw.atomic_load(raw.field_addr(h, .rc), raw.Order.Relaxed) < 0 {
+    return p
+  }
+  let _ = raw.atomic_add(raw.field_addr(h, .rc), 1, raw.Order.Relaxed)
+  if abi.is_handle(h.kind) {
+    let f = auk__note_handle_slow
+    f(p, 1)
+  }
+  p
+}
+
+/// auk_release for the package's own modules.
+pub fn release(p: raw.Ptr<()>) uses raw, ffi {
+  if p.is_null() {
+    return
+  }
+  let h: raw.Ptr<abi.Header> = raw.cast(p)
+  if raw.atomic_load(raw.field_addr(h, .rc), raw.Order.Relaxed) < 0 {
+    return
+  }
+  if abi.is_handle(h.kind) {
+    let f = auk__note_handle_slow
+    f(p, -1)
+  }
+  if raw.atomic_sub(raw.field_addr(h, .rc), 1, raw.Order.Release) != 1 {
+    return
+  }
+  raw.fence(raw.Order.Acquire)
+  auk__free_now(p)
+}
+
+// The exported pair (generated code's slow path for handles, C, FFI) calls heap.auk__note_handle
+// directly: it reaches a thread-local then, so rtlink doesn't offer these two to programs (where
+// they'd be inlined at every handle site for nothing), as the C ones weren't.
+
+export fn auk_retain(p: raw.Ptr<()>): raw.Ptr<()> uses raw, ffi {
   if p.is_null() {
     return p
   }
@@ -174,7 +221,7 @@ pub inline export fn auk_retain(p: raw.Ptr<()>): raw.Ptr<()> uses raw, ffi {
   p
 }
 
-pub inline export fn auk_release(p: raw.Ptr<()>) uses raw, ffi {
+export fn auk_release(p: raw.Ptr<()>) uses raw, ffi {
   if p.is_null() {
     return
   }
@@ -386,7 +433,7 @@ export fn auk_unwrap_err(loc: raw.Ptr<u8>, e: raw.Ptr<abi.Err>): never uses raw,
   let prefix: raw.Ptr<u8> = "unwrapped an error: "
   raw.copy(m, prefix, np)
   raw.copy(m.offset(np), raw.field_addr(s, .data), ns)
-  auk_release(raw.cast(s))
+  release(raw.cast(s))
   auk__panic_bytes(loc, m, np + ns)
 }
 
@@ -723,10 +770,10 @@ export var auk_ops_unit: abi.ElemOps = abi.ElemOps {
 }
 
 pub export fn auk__ptr_retain(p: raw.Ptr<()>) uses raw, ffi {
-  let _ = auk_retain(raw.cast<raw.Ptr<()>>(p).load())
+  let _ = retain(raw.cast<raw.Ptr<()>>(p).load())
 }
 
-pub export fn auk__ptr_release(p: raw.Ptr<()>) uses raw, ffi = auk_release(raw.cast<raw.Ptr<()>>(p).load())
+pub export fn auk__ptr_release(p: raw.Ptr<()>) uses raw, ffi = release(raw.cast<raw.Ptr<()>>(p).load())
 
 // `auk_ops_str` is str.auk's (its element functions inline the string functions there)
 
@@ -790,10 +837,10 @@ export var auk_ops_task: abi.ElemOps = abi.ElemOps {
 }
 
 fn closure_retain(p: raw.Ptr<()>) uses raw, ffi {
-  let _ = auk_retain(raw.cast(raw.cast<abi.Closure>(p).env))
+  let _ = retain(raw.cast(raw.cast<abi.Closure>(p).env))
 }
 
-fn closure_release(p: raw.Ptr<()>) uses raw, ffi = auk_release(raw.cast(raw.cast<abi.Closure>(p).env))
+fn closure_release(p: raw.Ptr<()>) uses raw, ffi = release(raw.cast(raw.cast<abi.Closure>(p).env))
 
 export var auk_ops_closure: abi.ElemOps = abi.ElemOps {
   size: 16,
@@ -803,10 +850,10 @@ export var auk_ops_closure: abi.ElemOps = abi.ElemOps {
 }
 
 export fn auk_closure_retain(c: abi.Closure) uses raw, ffi {
-  let _ = auk_retain(raw.cast(c.env))
+  let _ = retain(raw.cast(c.env))
 }
 
-export fn auk_closure_release(c: abi.Closure) uses raw, ffi = auk_release(raw.cast(c.env))
+export fn auk_closure_release(c: abi.Closure) uses raw, ffi = release(raw.cast(c.env))
 
 /// The tables' addresses, for the package's other modules.
 pub fn ops_int(): raw.Ptr<abi.ElemOps> uses raw = raw.addr_of(&auk_ops_int)

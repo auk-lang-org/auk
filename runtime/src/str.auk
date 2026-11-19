@@ -262,7 +262,7 @@ pub inline export fn auk_sb_str(b: raw.Ptr<abi.StrBuf>, s: raw.Ptr<abi.Str>) use
 
 pub inline export fn auk_sb_str_own(b: raw.Ptr<abi.StrBuf>, s: raw.Ptr<abi.Str>) uses raw, ffi {
   auk_sb_str(b, s)
-  rc.auk_release(raw.cast(s))
+  rc.release(raw.cast(s))
 }
 
 pub export fn auk_sb_char(b: raw.Ptr<abi.StrBuf>, c: u32) uses raw, ffi {
@@ -461,7 +461,7 @@ pub export fn auk_str_slice(s: raw.Ptr<abi.Str>, a: i64, b: i64, loc: raw.Ptr<u8
     auk__panic_sb(loc, mp)
     raw.unreachable()
   }
-  if a == 0 && b == n && !s.is_null() { return raw.cast(rc.auk_retain(raw.cast(s))) }
+  if a == 0 && b == n && !s.is_null() { return raw.cast(rc.retain(raw.cast(s))) }
   let ba = auk__str_byte_offset(s, a)
   let bb = auk__str_byte_offset(s, b)
   auk__str_raw(sdata(s).offset(ba), bb - ba, b - a, is_ascii(s))
@@ -487,7 +487,7 @@ pub export fn auk_str_append(ps: raw.Ptr<raw.Ptr<abi.Str>>, b0: raw.Ptr<abi.Str>
   if nb == 0 { return }
   if a.is_null() || raw.atomic_load(raw.field_addr(raw.field_addr(a, .h), .rc), raw.Order.Acquire) != 1 {
     ps.store(auk_str_concat(a, b))
-    rc.auk_release(raw.cast(a))
+    rc.release(raw.cast(a))
     return
   }
   // unique: nobody else can see a change; grow in place
@@ -600,7 +600,7 @@ fn chars_in(p: raw.Ptr<u8>, n: i64): i64 uses raw {
 
 /// Sub-string by byte range [a, b) of s (valid UTF-8, a and b on boundaries).
 fn sub_bytes(s: raw.Ptr<abi.Str>, a: i64, b: i64): raw.Ptr<abi.Str> uses raw, ffi {
-  if !s.is_null() && a == 0 && b == s.len_bytes { return raw.cast(rc.auk_retain(raw.cast(s))) }
+  if !s.is_null() && a == 0 && b == s.len_bytes { return raw.cast(rc.retain(raw.cast(s))) }
   let p = sdata(s).offset(a)
   let ascii = is_ascii(s)
   auk__str_raw(p, b - a, if ascii { b - a } else { chars_in(p, b - a) }, ascii)
@@ -609,7 +609,7 @@ fn sub_bytes(s: raw.Ptr<abi.Str>, a: i64, b: i64): raw.Ptr<abi.Str> uses raw, ff
 fn push_own(a: raw.Ptr<raw.Ptr<abi.Arr>>, s: raw.Ptr<abi.Str>) uses raw, ffi {
   var e = s
   auk_arr_push(a, raw.cast(raw.addr_of(&e)))
-  rc.auk_release(raw.cast(s))
+  rc.release(raw.cast(s))
 }
 
 /// ' ', '\t', '\n', '\r', '\v', '\f'
@@ -723,7 +723,7 @@ pub export fn auk_str_replace(s: raw.Ptr<abi.Str>, from: raw.Ptr<abi.Str>, to: r
   let fn_ = slen(from)
   let p = sdata(s)
   let n = slen(s)
-  if fn_ == 0 { return if s.is_null() { auk_str_lit("") } else { raw.cast(rc.auk_retain(raw.cast(s))) } }
+  if fn_ == 0 { return if s.is_null() { auk_str_lit("") } else { raw.cast(rc.retain(raw.cast(s))) } }
   var b = abi.StrBuf {}
   let bp = raw.addr_of(&b)
   var st: i64 = 0

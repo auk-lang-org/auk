@@ -79,7 +79,7 @@ export fn auk_arr_from(ops: raw.Ptr<abi.ElemOps>, elems: raw.Ptr<()>, n: i64): r
 
 pub export fn auk__arr_free(a: raw.Ptr<abi.Arr>) uses raw, ffi {
   if !a.base.is_null() {
-    rc.auk_release(raw.cast(a.base))
+    rc.release(raw.cast(a.base))
   } else {
     let release = a.ops.release
     if !release.is_null() {
@@ -151,7 +151,7 @@ fn ensure_unique_cap(pa: raw.Ptr<raw.Ptr<abi.Arr>>, need: i64) uses raw, ffi {
   }
   if !is_unique(a) {
     let c = copy_with_cap(a, if need > a.len { need } else { a.len })
-    rc.auk_release(raw.cast(a))
+    rc.release(raw.cast(a))
     pa.store(c)
     return
   }
@@ -281,7 +281,7 @@ export fn auk_arr_clear(pa: raw.Ptr<raw.Ptr<abi.Arr>>) uses raw, ffi {
   let a = pa.load()
   if !is_unique(a) {
     pa.store(auk_arr_new(a.ops, 0))
-    rc.auk_release(raw.cast(a))
+    rc.release(raw.cast(a))
     return
   }
   let release = a.ops.release
@@ -310,12 +310,12 @@ export fn auk_arr_slice(a: raw.Ptr<abi.Arr>, lo: i64, hi: i64, loc: raw.Ptr<u8>)
     raw.unreachable()
   }
   if lo == 0 && hi == n {
-    return raw.cast(rc.auk_retain(raw.cast(a)))
+    return raw.cast(rc.retain(raw.cast(a)))
   }
   let root = if !a.base.is_null() { a.base } else { a }
   let v: raw.Ptr<abi.Arr> = raw.cast(rc.auk__alloc(raw.size_of<abi.Arr>(), abi.K_ARR))
   v.ops = a.ops
-  v.base = raw.cast(rc.auk_retain(raw.cast(root)))
+  v.base = raw.cast(rc.retain(raw.cast(root)))
   v.data = elem(a, lo)
   v.len = hi - lo
   v.cap = v.len
@@ -347,7 +347,7 @@ export fn auk_arr_extend(pa: raw.Ptr<raw.Ptr<abi.Arr>>, b: raw.Ptr<abi.Arr>) use
   if bn == 0 {
     return
   }
-  let keep = rc.auk_retain(raw.cast(b)) // b may be *pa
+  let keep = rc.retain(raw.cast(b)) // b may be *pa
   ensure_unique_cap(pa, pa.load().len + bn)
   let a = pa.load()
   raw.copy(elem(a, a.len), b.data, usize(bn) * a.ops.size)
@@ -360,7 +360,7 @@ export fn auk_arr_extend(pa: raw.Ptr<raw.Ptr<abi.Arr>>, b: raw.Ptr<abi.Arr>) use
     }
   }
   a.len += bn
-  rc.auk_release(keep)
+  rc.release(keep)
 }
 
 fn reverse_in_place(a: raw.Ptr<abi.Arr>) uses raw, ffi {

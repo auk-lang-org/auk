@@ -273,7 +273,7 @@ fn task_entry(p: raw.Ptr<()>): raw.Ptr<()> uses raw, ffi {
       if !t.panic.is_null() {
         auk_task_cancel(t.kids.at(i))
       }
-      rc.auk_release(raw.cast(t.kids.at(i)))
+      rc.release(raw.cast(t.kids.at(i)))
       i += 1
     }
     raw.free(t.kids)
@@ -400,7 +400,7 @@ export fn auk_task_spawn(
     while i < parent.nkids {
       let kid = parent.kids.at(i)
       if is_done(kid) {
-        rc.auk_release(raw.cast(kid))
+        rc.release(raw.cast(kid))
       } else {
         parent.kids.at(k) = kid
         k += 1
@@ -412,7 +412,7 @@ export fn auk_task_spawn(
       parent.capkids = if parent.capkids == 0 { 4 } else { parent.capkids * 2 }
       parent.kids = raw.cast(rc.auk__xrealloc(raw.cast(parent.kids), usize(parent.capkids) * raw.size_of<raw.Ptr<abi.Task>>()))
     }
-    parent.kids.at(parent.nkids) = raw.cast(rc.auk_retain(raw.cast(t)))
+    parent.kids.at(parent.nkids) = raw.cast(rc.retain(raw.cast(t)))
     parent.nkids += 1
     let _ = heap.auk__heap_switch(old)
   }

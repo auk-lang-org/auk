@@ -290,7 +290,7 @@ pub export fn auk__heap_sweep(hp: raw.Ptr<Heap>) uses raw, ffi {
   while i < held.cap {
     var k: i64 = 0
     while k < held.counts.at(i) {
-      rc.auk_release(raw.from_int(int(held.keys.at(i))))
+      rc.release(raw.from_int(int(held.keys.at(i))))
       k += 1
     }
     i += 1

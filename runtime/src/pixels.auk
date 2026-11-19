@@ -92,7 +92,7 @@ fn unique(pf: raw.Ptr<raw.Ptr<abi.Frame>>, loc: raw.Ptr<u8>, what: raw.Ptr<u8>):
     report_copy(w, h, loc, what)
     let g = frame_alloc(w, h)
     raw.copy(g.data, f.data, usize(w * h) * 4)
-    rc.auk_release(raw.cast(f))
+    rc.release(raw.cast(f))
     pf.store(g)
   }
   pf.load().data

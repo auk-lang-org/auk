@@ -396,7 +396,7 @@ fn bad_spec(spec: raw.Ptr<u8>, too_large: bool) uses raw, ffi {
   str.auk__sb_put_cstr(mp, if too_large { "format spec \"" } else { "bad format spec \"" })
   let shown = str.auk_str_lit(spec)  // invalid UTF-8 shown repaired
   str.auk_sb_str(mp, shown)
-  rc.auk_release(raw.cast(shown))
+  rc.release(raw.cast(shown))
   str.auk__sb_put_cstr(mp, if too_large { "\" is too large" } else { "\"" })
   str.auk__panic_sb("format", mp)
   raw.unreachable()
@@ -490,7 +490,7 @@ fn pad(body: raw.Ptr<abi.Str>, sp: Spec, numeric: bool): raw.Ptr<abi.Str> uses r
       k += 1
     }
   }
-  rc.auk_release(raw.cast(body))
+  rc.release(raw.cast(body))
   str.auk_sb_finish(bp)
 }
 
@@ -540,7 +540,7 @@ pub export fn auk_fmt_str(s: raw.Ptr<abi.Str>, spec: raw.Ptr<u8>): raw.Ptr<abi.S
   } else if s.is_null() {
     str.auk_str_lit("")
   } else {
-    raw.cast(rc.auk_retain(raw.cast(s)))
+    raw.cast(rc.retain(raw.cast(s)))
   }
   pad(body, sp, false)
 }

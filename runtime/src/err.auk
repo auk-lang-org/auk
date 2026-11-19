@@ -15,7 +15,7 @@ extern fn strerror(err: i32): raw.Ptr<u8> = "char *strerror(int)"
 /// New error; msg is borrowed.
 export fn auk_err_new(msg: raw.Ptr<abi.Str>): raw.Ptr<abi.Err> uses raw, ffi {
   let e: raw.Ptr<abi.Err> = raw.cast(rc.auk__alloc(raw.size_of<abi.Err>(), abi.K_ERR))
-  e.msg = if msg.is_null() { auk_str_lit("") } else { raw.cast(rc.auk_retain(raw.cast(msg))) }
+  e.msg = if msg.is_null() { auk_str_lit("") } else { raw.cast(rc.retain(raw.cast(msg))) }
   e
 }
 
@@ -26,7 +26,7 @@ export fn auk__err_bytes(msg: raw.Ptr<u8>, n: usize): raw.Ptr<abi.Err> uses raw,
   auk_sb_bytes(raw.addr_of(&b), msg, i64(n))
   let s = auk_sb_finish(raw.addr_of(&b))
   let e = auk_err_new(s)
-  rc.auk_release(raw.cast(s))
+  rc.release(raw.cast(s))
   e
 }
 
@@ -40,21 +40,21 @@ pub export fn auk_err_new_cstr(msg: raw.Ptr<u8>): raw.Ptr<abi.Err> uses raw, ffi
 
 export fn auk_err_wrap(msg: raw.Ptr<abi.Str>, cause: raw.Ptr<abi.Err>): raw.Ptr<abi.Err> uses raw, ffi {
   let e = auk_err_new(msg)
-  e.cause = raw.cast(rc.auk_retain(raw.cast(cause)))
+  e.cause = raw.cast(rc.retain(raw.cast(cause)))
   e
 }
 
 export fn auk_err_typed(type_id: u32, value: raw.Ptr<()>, ops: raw.Ptr<abi.ElemOps>, msg: raw.Ptr<abi.Str>): raw.Ptr<abi.Err> uses raw, ffi {
   let show = ops.show
   let m: raw.Ptr<abi.Str> = if !msg.is_null() {
-    raw.cast(rc.auk_retain(raw.cast(msg)))
+    raw.cast(rc.retain(raw.cast(msg)))
   } else if !show.is_null() {
     show(value)
   } else {
     auk_str_lit("error")
   }
   let e = auk_err_new(m)
-  rc.auk_release(raw.cast(m))
+  rc.release(raw.cast(m))
   let pl = raw.field_addr(e, .payload)
   pl.type_id = type_id
   pl.ops = ops
@@ -93,7 +93,7 @@ pub export fn auk__err_free(e0: raw.Ptr<abi.Err>) uses raw, ffi {
   var e = e0
   while !e.is_null() {
     let next = e.cause
-    rc.auk_release(raw.cast(e.msg))
+    rc.release(raw.cast(e.msg))
     let data = e.payload.data
     if !data.is_null() {
       let release = e.payload.ops.release

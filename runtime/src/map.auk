@@ -243,7 +243,7 @@ export fn auk_map_make_unique(pm: raw.Ptr<raw.Ptr<abi.Map>>): raw.Ptr<()> uses r
   let m = pm.load()
   if refcount(m) != 1 {
     pm.store(auk_map_copy(m))
-    rc.auk_release(raw.cast(m))
+    rc.release(raw.cast(m))
   }
   raw.cast(pm.load())
 }

@@ -36,7 +36,7 @@ export fn auk_obj_copy(o: raw.Ptr<abi.Obj>): raw.Ptr<abi.Obj> uses raw, ffi {
   if !cp.is_null() {
     return cp(o)
   }
-  raw.cast(rc.auk_retain(raw.cast(o)))
+  raw.cast(rc.retain(raw.cast(o)))
 }
 
 export fn auk_str_copy(s: raw.Ptr<abi.Str>): raw.Ptr<abi.Str> uses raw, ffi {
@@ -114,7 +114,7 @@ export fn auk_err_copy_deep(e: raw.Ptr<abi.Err>): raw.Ptr<abi.Err> uses raw, ffi
   }
   let msg = auk_str_copy(e.msg)
   let c = auk_err_new(msg)
-  rc.auk_release(raw.cast(msg))
+  rc.release(raw.cast(msg))
   c.code = e.code
   c.cause = auk_err_copy_deep(e.cause)
   if !e.payload.data.is_null() {
@@ -163,7 +163,7 @@ pub export fn auk__obj_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, f
 
 /// A handle (a task): shared, not copied.
 pub export fn auk__handle_copy_elem(src: raw.Ptr<()>, dst: raw.Ptr<()>) uses raw, ffi {
-  raw.cast<raw.Ptr<()>>(dst).store(rc.auk_retain(raw.cast<raw.Ptr<()>>(src).load()))
+  raw.cast<raw.Ptr<()>>(dst).store(rc.retain(raw.cast<raw.Ptr<()>>(src).load()))
 }
 
 /// A closure {code, env}: the same code with a copy of the env.

@@ -31,17 +31,17 @@ export fn auk_value_int(i: i64): abi.Value = abi.Value { tag: abi.V_INT, u: abi.
 export fn auk_value_float(f: float): abi.Value = abi.Value { tag: abi.V_FLOAT, u: abi.ValueU { f } }
 
 export fn auk_value_str(s: raw.Ptr<abi.Str>): abi.Value uses raw, ffi {
-  let s2: raw.Ptr<abi.Str> = if s.is_null() { str.auk_str_lit("") } else { raw.cast(rc.auk_retain(raw.cast(s))) }
+  let s2: raw.Ptr<abi.Str> = if s.is_null() { str.auk_str_lit("") } else { raw.cast(rc.retain(raw.cast(s))) }
   abi.Value { tag: abi.V_STR, u: abi.ValueU { s: s2 } }
 }
 
 export fn auk_value_list(xs: raw.Ptr<abi.Arr>): abi.Value uses raw, ffi {
-  let l: raw.Ptr<abi.Arr> = if xs.is_null() { auk_value_list_new() } else { raw.cast(rc.auk_retain(raw.cast(xs))) }
+  let l: raw.Ptr<abi.Arr> = if xs.is_null() { auk_value_list_new() } else { raw.cast(rc.retain(raw.cast(xs))) }
   abi.Value { tag: abi.V_LIST, u: abi.ValueU { list: l } }
 }
 
 export fn auk_value_map(m: raw.Ptr<abi.Map>): abi.Value uses raw, ffi {
-  let m2: raw.Ptr<abi.Map> = if m.is_null() { auk_value_map_new() } else { raw.cast(rc.auk_retain(raw.cast(m))) }
+  let m2: raw.Ptr<abi.Map> = if m.is_null() { auk_value_map_new() } else { raw.cast(rc.retain(raw.cast(m))) }
   abi.Value { tag: abi.V_MAP, u: abi.ValueU { map: m2 } }
 }
 
@@ -54,7 +54,7 @@ export fn auk_value_map_put(pm: raw.Ptr<raw.Ptr<abi.Map>>, key: raw.Ptr<u8>, val
   var k = str.auk_str_lit(key)
   var v = val
   map.auk_map_set(pm, raw.cast(raw.addr_of(&k)), raw.cast(raw.addr_of(&v)))
-  rc.auk_release(raw.cast(k))
+  rc.release(raw.cast(k))
 }
 
 fn value_ptr(v: abi.Value): raw.Ptr<()> uses raw {
@@ -71,10 +71,10 @@ fn value_ptr(v: abi.Value): raw.Ptr<()> uses raw {
 }
 
 export fn auk_value_retain(v: abi.Value) uses raw, ffi {
-  let _ = rc.auk_retain(value_ptr(v))
+  let _ = rc.retain(value_ptr(v))
 }
 
-export fn auk_value_release(v: abi.Value) uses raw, ffi = rc.auk_release(value_ptr(v))
+export fn auk_value_release(v: abi.Value) uses raw, ffi = rc.release(value_ptr(v))
 
 pub export fn auk_value_tag_name(t: u32): raw.Ptr<u8> {
   if t == abi.V_NULL {
