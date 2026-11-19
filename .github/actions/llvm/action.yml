@@ -1,5 +1,5 @@
 name: LLVM 23
-description: Install LLVM 23 (clang, llvm-config, libLLVM) and what the tests use; sets LLVM_CONFIG.
+description: Install LLVM 23 (llvm-config, libLLVM, llc, lld, dsymutil) and what the tests use; sets LLVM_CONFIG.
 runs:
   using: composite
   steps:
@@ -22,7 +22,7 @@ runs:
       run: |
         curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
         sudo bash /tmp/llvm.sh 23
-        sudo apt-get install -y --no-install-recommends llvm-23-dev libclang-rt-23-dev lldb-23 \
+        sudo apt-get install -y --no-install-recommends llvm-23-dev lld-23 libclang-rt-23-dev lldb-23 \
           libssl-dev openssl libsqlite3-dev zlib1g-dev libzstd-dev libxml2-dev libffi-dev
         echo "LLVM_CONFIG=llvm-config-23" >> "$GITHUB_ENV"
         echo "/usr/lib/llvm-23/bin" >> "$GITHUB_PATH"

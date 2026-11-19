@@ -35,8 +35,11 @@ programs live in [`examples/`](examples/): start with `hello.auk`, `fib.auk` and
 
 ## Usage
 
-Requires LLVM 23 (`brew install llvm@23` on macOS; `llvm-23-dev` and `clang-23` from
-apt.llvm.org on Linux) and a C linker (`cc`). The compiler is written in Auk (`compiler/`);
+Requires LLVM 23 (`brew install llvm@23` on macOS; `llvm-23-dev` and `lld-23` from
+apt.llvm.org on Linux) and the system linker: Apple's `ld` and the macOS SDK (the Command Line
+Tools, `xcode-select --install`) on macOS; LLVM's `ld.lld` (or binutils' `ld`) and the C
+library's development files (`libc6-dev`) on Linux. No C compiler: everything, the runtime
+included, is Auk; only the tests of C interop compile C (`cc`). The compiler is written in Auk (`compiler/`);
 `./build.sh` builds it from the previous `auk`, or on a fresh clone from the checked-in seed
 (`seed/`: the compiler as LLVM bitcode), and installs `auk` and `raft` in `~/.auk/bin`.
 `auk run`/`test` compile in memory (LLVM's ORC JIT); `auk build` also needs the linker.
@@ -72,7 +75,8 @@ scripts/check.sh                                # everything: build, tests, gold
 | `raft new\|add\|remove\|install\|list` | the package manager |
 
 Environment: `AUK_LEAK_CHECK=1` makes `run`/`test` programs fail on leaked runtime objects,
-`AUK_LINKER` picks the linker `auk build` uses (default `cc`), and `AUK_HATCH_CMD` is the
+`AUK_LINKER` names a C compiler driver (`cc`) for `auk build` to link with instead of calling
+the system linker itself, and `AUK_HATCH_CMD` is the
 model command `auk hatch` runs (via `sh -c`, prompt on stdin, answer on stdout; default
 `claude -p`).
 

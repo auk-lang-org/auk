@@ -6,8 +6,9 @@
 # The tests are modules of the runtime package itself (the `raw` dialect is only for the
 # package named `auk_rt`): a fresh build directory gets runtime/raft.toml and a src/ holding
 # runtime/src/*.auk and runtime/test/unit/*.auk, and `auk build --lib` compiles the runtime and
-# the tests into one object, whose `export fn main` (ut_main.auk) is the program's entry; cc
-# links it (with any C file still in runtime/c) into auk_rt_tests. Each test runs in a forked
+# the tests into one object, whose `export fn main` (ut_main.auk) is the program's entry; the
+# system linker (scripts/link.sh, as `auk build` links) links it into auk_rt_tests; with a
+# sanitizer, CC does (it brings the sanitizer's runtime). Each test runs in a forked
 # child; the program prints one `ok <name>` / `FAIL <name>` line per test and a summary, and
 # exits non-zero if anything fails to build or any test fails. The filter keeps only tests
 # whose name contains it.
@@ -63,6 +64,8 @@ can_sanitize() {
     printf 'int main(void) { return 0; }\n' > "$build/probe.c"
     "$1" $san "$build/probe.c" -o "$build/probe" > /dev/null 2>&1
 }
+link=${CC:-}  # what links the program: without a sanitizer, the system linker (scripts/link.sh)
+if [ -z "$link" ] && [ -z "$san" ]; then link=$rt/../scripts/link.sh; fi
 if [ -z "${CC:-}" ]; then
     CC=cc
     if [ -x "$llvm_clang" ]; then
@@ -116,7 +119,7 @@ for src in "$rt"/c/*.c; do
     $CC $cflags $san -c "$src" -o "$obj"
     objs="$objs $obj"
 done
-$CC $san $objs $libs -o "$build/auk_rt_tests"
+${link:-$CC} $san $objs $libs -o "$build/auk_rt_tests"
 
 if [ "${TSAN:-0}" = 1 ]; then
     # Tests fork children that start threads (child(), the trace and debugger tests), after

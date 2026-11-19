@@ -781,12 +781,34 @@ overflow intrinsics) is [runtime-port.md](runtime-port.md).
 - [ ] ±5% perf bar against Phase 1 numbers.
 
 ### 7d. Drop the C compiler from the toolchain
-- [ ] Linking: `auk build` currently runs `cc` (`AUK_LINKER`). Switch to calling the system
-      linker directly (`ld` on macOS with the right `-syslibroot`/`-platform_version`;
-      `ld`/crt objects on Linux) or embed LLD via the LLVM binding.
-- [ ] `dsymutil` for `-g` on macOS: keep calling it (ships with Xcode CLT / LLVM) or use
-      LLVM's library.
-- [ ] Delete `runtime/c/`; build script needs only `auk` + LLVM.
+- [x] Linking (2026-11-19): `auk build` calls the system linker itself (compiler/src/native.auk;
+      `scripts/link.sh` is the same in shell, for build.sh): Apple's `ld` with `-arch`,
+      `-platform_version macos <min> <sdk>`, `-syslibroot` (`$SDKROOT`, the `xcode-select`ed
+      developer directory's SDK, the Command Line Tools', else `xcrun`'s: no subprocess in the
+      usual case), `-lSystem`; on Linux `ld.lld` (else GNU `ld`) with glibc's `Scrt1.o`/`crti.o`/
+      `crtn.o` (searched in the multiarch, lib64 and lib directories), the psABI's dynamic linker
+      (else `/bin/sh`'s `PT_INTERP`), `-pie`, `--export-dynamic`. `AUK_LINKER` still names a
+      driver (`cc`). Embedding LLD was rejected: LLVM's C API has no linker, LLD's entry points
+      are C++ (a C++ shim would need a C++ compiler) and Homebrew's/apt.llvm.org's libLLVM don't
+      contain it (`lld` is its own formula/package of tools). The seed: `llc -O0` with FastISel
+      (as `clang -c` did; 2.1 s) and `scripts/link.sh`; what the seed builds links through
+      `scripts/link.sh` as `AUK_LINKER`, so seeds from before this never call `cc`. Old seeds
+      carry clang-compiled C, which on AArch64 Linux calls libgcc's outline atomics: link.sh adds
+      compiler-rt's builtins (libclang-rt-23-dev), else libgcc.a; code auk compiles needs
+      neither. Checked: `./build.sh --from-seed --check` on macOS arm64 with a PATH without
+      `cc`/`clang` and failing shims for them; Linux arm64 in `ci/linux` built with
+      `TEST_CC=` (no gcc, no clang, no binutils: ld.lld only).
+- [x] `dsymutil` for `-g` on macOS: LLVM's, from the bin directory next to the libLLVM `auk` runs
+      on (`dladdr`), else the PATH's.
+- [x] build.sh needs only the seed + LLVM + the system linker (`runtime/c` has no C to compile
+      since `dbg`; its C-half step is gone). **The line:** building Auk needs no C compiler;
+      testing its C interop does (`cc`: the `ffi` suite's C library, the `raw` suite's C mains
+      and ABI probe, the `llvm` package's example), and so do the sanitizer builds of the
+      runtime's unit tests (`ASAN=1`/`TSAN=1`: clang compiles the instrumented bitcode and links
+      the sanitizer's runtime); the plain unit tests (`runtime/test/unit/run.sh`) link through
+      `scripts/link.sh`. ci/linux's image installs gcc for those tests only (`TEST_CC`); GitHub's
+      runners have one.
+- [ ] Delete `runtime/c/` (`auk_rt.h` and the C tests remain).
 
 **Done when:** no `.c`, `.h`, `.m`, `.rs` in the repo; a fresh machine with LLVM and the seed
 builds and passes everything.

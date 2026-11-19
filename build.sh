@@ -1,21 +1,16 @@
 #!/usr/bin/env bash
-# Build Auk without Rust (docs/self-host-plan.md, Phase 6): the runtime (C), then the compiler
-# and raft (Auk), from a seed `auk`.
+# Build Auk with LLVM and the system linker alone (docs/self-host-plan.md, Phases 6 and 7): the
+# runtime, the compiler and raft, all Auk, from a seed `auk`. No C compiler.
 #
 #   ./build.sh [--check] [--test] [--install [<dir>]] [--seed <auk> | --from-seed]
 #
 # Steps:
-#   1. runtime   target/auk-rt/libauk_rt.a and auk_rt.bc, from two halves (Phase 7: the runtime
-#                moves from C to Auk module by module, docs/lowlevel.md):
-#                - runtime/c, with the clang of the LLVM the back end links (as build.rs did):
-#                  one translation unit for the files that include each other's code, the
-#                  `auk: own translation unit` files alone;
-#                - runtime/ (the `auk_rt` package, the modules already ported), with the seed:
-#                  `auk build --lib` (an object; `--bc`, bitcode), every `export fn` under its C
-#                  name. A seed older than the `raw` dialect can't: then the seed first builds
-#                  compiler/ as "stage 0" (target/auk-build/stage0/auk, embedding the C half
-#                  only, which `auk build --lib` doesn't use), and stage 0 builds the Auk half.
-#                The objects go into one archive, the bitcode is llvm-linked into one module.
+#   1. runtime   target/auk-rt/libauk_rt.a and auk_rt.bc: runtime/ (the `auk_rt` package), built
+#                by the seed with `auk build --lib` (an object; `--bc`, bitcode), every
+#                `export fn` under its C name. A seed older than the `raw` dialect can't: then
+#                the seed first builds compiler/ as "stage 0" (target/auk-build/stage0/auk,
+#                embedding an empty runtime, which `auk build --lib` doesn't use), and stage 0
+#                builds the runtime.
 #   2. raft      the seed builds raft/ (no dependencies) → target/auk-build/seed-raft, which
 #                installs compiler/'s dependencies (compiler/.raft: packages/llvm).
 #   3. stage 1   the seed builds compiler/ → target/auk-build/stage1/auk. It runs on the seed's
@@ -23,7 +18,7 @@
 #   4. stage 2   stage 1 builds compiler/ → target/bin/auk: the new compiler on the new runtime.
 #   5. raft      stage 2 builds raft/ → target/bin/raft.
 #   --check      also stage 3 (stage 2 builds compiler/): must be bit-identical to stage 2; and
-#                stage 2 builds runtime/'s Auk half again, which must be identical to step 1's.
+#                stage 2 builds the runtime again, which must be identical to step 1's.
 #                If it isn't (the seed is an older compiler that compiles it differently), the
 #                whole build runs once more with stage 2 as the seed, so that the runtime stage
 #                2 embeds and links is the one its own source compiles.
@@ -34,8 +29,12 @@
 #
 # The seed: --seed, else $AUK_SEED, else the target/bin/auk of an earlier build, else `auk` on
 # the PATH, else (or with --from-seed) the checked-in seed: seed/<os>-<arch>.bc.gz, the
-# compiler as LLVM bitcode (scripts/cut_seed.sh), compiled with clang and linked with cc into
-# target/auk-build/seed/auk. A fresh clone needs only LLVM 23 and a C linker.
+# compiler as LLVM bitcode (scripts/cut_seed.sh), compiled with LLVM's llc and linked by the
+# system linker into target/auk-build/seed/auk. A fresh clone needs LLVM 23 and the system
+# linker, no C compiler: Apple's ld and the macOS SDK (the Command Line Tools) on macOS;
+# ld.lld (LLVM's lld) or binutils' ld, and the C library's development files (libc6-dev) on
+# Linux. Executables are linked as `auk build` links them (scripts/link.sh,
+# compiler/src/native.auk); AUK_LINKER names a C compiler driver (cc) to link with instead.
 # LLVM: $LLVM_CONFIG, else Homebrew's llvm@23 (macOS) or llvm-config-23 (Linux).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,7 +51,7 @@ while [ $# -gt 0 ]; do
       AGAIN+=(--install "$INSTALL") ;;
     --seed) SEED="$2"; shift ;;
     --from-seed) FROM_SEED=1 ;;
-    -h|--help) sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "build.sh: unknown argument $1" >&2; exit 2 ;;
   esac
   shift
@@ -71,8 +70,10 @@ esac
 LLVM_CONFIG="${LLVM_CONFIG:-$DEFAULT_LLVM_CONFIG}"
 command -v "$LLVM_CONFIG" > /dev/null || die "no llvm-config at $LLVM_CONFIG (install LLVM 23 or set LLVM_CONFIG)"
 LLVM_BIN="$("$LLVM_CONFIG" --bindir)"
-CLANG="$LLVM_BIN/clang"
-[ -x "$CLANG" ] || die "no clang in $LLVM_BIN"
+# link_exe <out> <objects and libraries...>: an executable, linked the way `auk build` links one
+# (the system linker, called directly; $AUK_LINKER names a C compiler driver to use instead)
+export LLVM_BIN LLVM_CONFIG
+. "$ROOT/scripts/link.sh"
 
 BUILD="$ROOT/target/auk-build"
 mkdir -p "$BUILD" target/auk-rt target/bin
@@ -91,14 +92,16 @@ if [ "$FROM_SEED" = 1 ]; then
   say "seed ($bc, $(sed -n 's/^commit //p' "seed/$OS-$ARCH.txt" | cut -c1-12))"
   mkdir -p "$BUILD/seed"
   gzip -d -c "$bc" > "$BUILD/seed/seed.bc"
-  "$CLANG" -c -Wno-override-module "$BUILD/seed/seed.bc" -o "$BUILD/seed/seed.o"
+  # code generation only (the bitcode is optimized already): -O0 with FastISel, as `clang -c`
+  "$LLVM_BIN/llc" -O0 -global-isel=0 -fast-isel -relocation-model=pic -filetype=obj \
+    "$BUILD/seed/seed.bc" -o "$BUILD/seed/seed.o" || die "compiling the seed failed"
   if [ "$OS" = macos ]; then
     libs=("$("$LLVM_CONFIG" --libdir)/libLLVM.dylib" -framework CoreFoundation -framework Security
-      -framework Network -lm -lpthread -Wl,-export_dynamic)
+      -framework Network)
   else
-    libs=("$("$LLVM_CONFIG" --libdir)/libLLVM.so" -ldl -lpthread -lm -rdynamic)
+    libs=("$("$LLVM_CONFIG" --libdir)/libLLVM.so" -ldl -lpthread)
   fi
-  "${CC:-cc}" "$BUILD/seed/seed.o" "${libs[@]}" -o "$BUILD/seed/auk" || die "linking the seed failed"
+  link_exe "$BUILD/seed/auk" "$BUILD/seed/seed.o" "${libs[@]}" || die "linking the seed failed"
   rm -f "$BUILD/seed/seed.bc" "$BUILD/seed/seed.o"
   SEED="$BUILD/seed/auk"
   echo "   target/auk-build/seed/auk ($(secs "$t0"))"
@@ -112,7 +115,13 @@ build() {
   local t tmp; t=$(ms)
   tmp="$(dirname "$3")/.tmp$$"
   mkdir -p "$tmp"
-  "$1" build "$2" -o "$tmp/$(basename "$3")" || die "$(basename "$1") failed to build $2"
+  # the seed links through scripts/link.sh (a seed from before 7d would call cc), the new
+  # compilers as they do themselves
+  if [ "$1" = "$SEED" ] && [ -z "${AUK_LINKER:-}" ]; then
+    AUK_LINKER="$ROOT/scripts/link.sh" "$1" build "$2" -o "$tmp/$(basename "$3")"
+  else
+    "$1" build "$2" -o "$tmp/$(basename "$3")"
+  fi || die "$(basename "$1") failed to build $2"
   mv "$tmp/$(basename "$3")" "$3"
   rmdir "$tmp"
   echo "   ${3#"$ROOT"/} ($(wc -c < "$3" | tr -d ' ') bytes, $(secs "$t"))"
@@ -138,31 +147,9 @@ raft_deps() {
 
 # ---- 1. runtime ----------------------------------------------------------------------------
 t0=$(ms)
-say "runtime (runtime/c with $CLANG, runtime/src with the seed)"
-CDIR="$ROOT/runtime/c"
+say "runtime (runtime/src with the seed)"
 RT="$BUILD/rt"
 rm -rf "$RT"; mkdir -p "$RT"
-# macOS: no C file uses blocks since tls.c moved to Auk (clang enables them by default there)
-if [ "$OS" = macos ]; then PLATFORM=(-fno-blocks); else PLATFORM=(-D_GNU_SOURCE); fi
-FLAGS=(-std=c11 -O2 -fno-strict-aliasing -fno-stack-protector -fPIC -ffunction-sections
-  -fdata-sections -Wall -Wextra -Wno-unused-parameter "${PLATFORM[@]}" -I "$CDIR")
-units=()
-: > "$RT/auk_rt_all.c"
-for f in $(LC_ALL=C ls "$CDIR"/*.c); do
-  if grep -q "auk: own translation unit" "$f"; then units+=("$f")
-  else printf '#include "%s"\n' "$f" >> "$RT/auk_rt_all.c"
-  fi
-done
-units+=("$RT/auk_rt_all.c")
-pids=() objs=() bcs=()
-for i in "${!units[@]}"; do
-  u="${units[$i]}"
-  objs+=("$RT/rt_$i.o"); bcs+=("$RT/rt_$i.bc")
-  "$CLANG" -c "${FLAGS[@]}" "$u" -o "$RT/rt_$i.o" & pids+=($!)
-  "$CLANG" -c -emit-llvm -O2 -std=c11 -fno-strict-aliasing -fno-stack-protector "${PLATFORM[@]}" \
-    -I "$CDIR" "$u" -o "$RT/rt_$i.bc" & pids+=($!)
-done
-c_done() { for p in ${pids[@]+"${pids[@]}"}; do wait "$p" || die "compiling the runtime failed"; done; pids=(); }
 # install <dir>: <dir>'s libauk_rt.a and auk_rt.bc into target/auk-rt/, each replaced whole (the
 # compiler `#embed`s them from there), never seen half-written
 install_rt() {
@@ -173,25 +160,19 @@ install_rt() {
 
 if ! rt_auk "$SEED" "$RT"; then
   # The seed predates the dialect: stage 0 (compiler/, built by the seed) builds runtime/src.
-  # It embeds the C half alone (`auk build --lib` links no runtime).
+  # It embeds an empty runtime (`auk build --lib` links none).
   echo "   the seed can't build runtime/src ($( (grep -m1 -o "error.*" "$RT/auk.log" || head -1 "$RT/auk.log") | cut -c1-60)): stage 0 will"
-  c_done
-  mkdir -p "$RT/c-only"
-  "$LLVM_BIN/llvm-ar" crs "$RT/c-only/libauk_rt.a" "${objs[@]}"
-  "$LLVM_BIN/llvm-link" "${bcs[@]}" -o "$RT/c-only/auk_rt.bc"
-  install_rt "$RT/c-only"
+  mkdir -p "$RT/empty"
+  "$LLVM_BIN/llvm-ar" crs "$RT/empty/libauk_rt.a"
+  printf '' | "$LLVM_BIN/llvm-as" -o "$RT/empty/auk_rt.bc"
+  install_rt "$RT/empty"
   raft_deps
-  say "stage 0 (compiler/ on the C half of the runtime, built by the seed)"
+  say "stage 0 (compiler/ without a runtime to embed, built by the seed)"
   build "$SEED" compiler/src/main.auk "$BUILD/stage0/auk"
   rt_auk "$BUILD/stage0/auk" "$RT" || { cat "$RT/auk.log" >&2; die "building runtime/src failed"; }
 fi
-c_done
-"$LLVM_BIN/llvm-ar" crs "$RT/libauk_rt.a" "${objs[@]}" "$RT/auk_rt_auk.o"
-# auk names the target as LLVM's default triple (`arm64-apple-darwin…`), clang normalizes it
-# (`arm64-apple-macosx…`): the same target, but llvm-link warns. (rtlink sets the program's.)
-"$LLVM_BIN/llvm-link" "${bcs[@]}" "$RT/auk_rt_auk.bc" -o "$RT/auk_rt.bc" 2> "$RT/link.log" ||
-  { cat "$RT/link.log" >&2; die "linking the runtime's bitcode failed"; }
-grep -v -e "different target triples" -e '^$' "$RT/link.log" >&2 || true
+"$LLVM_BIN/llvm-ar" crs "$RT/libauk_rt.a" "$RT/auk_rt_auk.o"
+cp "$RT/auk_rt_auk.bc" "$RT/auk_rt.bc"
 install_rt "$RT"
 echo "   target/auk-rt/libauk_rt.a, auk_rt.bc ($(secs "$t0"))"
 

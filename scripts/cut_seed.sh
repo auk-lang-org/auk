@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cut the bootstrap seed for this platform (docs/self-host-plan.md, Phase 6): the compiler as
-# LLVM bitcode, so a fresh clone builds with LLVM and a C linker alone (`./build.sh` uses it
+# LLVM bitcode, so a fresh clone builds with LLVM and the system linker alone (`./build.sh` uses it
 # when there is no `auk` to start from).
 #
 #   scripts/cut_seed.sh

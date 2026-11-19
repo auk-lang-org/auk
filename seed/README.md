@@ -4,9 +4,11 @@
 bitcode, linked), cut from the bootstrap fixed point by `scripts/cut_seed.sh`; `<os>-<arch>.txt`
 names the commit it was cut from, its date, LLVM version and the sha256 of the bitcode.
 
-`./build.sh` uses it when there is no `auk` to start from (or with `--from-seed`): clang
-compiles it, `cc` links it with LLVM's library into `target/auk-build/seed/auk`, which builds
-stage 1 and stage 2 from the sources. A fresh clone needs only LLVM 23 and a C linker.
+`./build.sh` uses it when there is no `auk` to start from (or with `--from-seed`): LLVM's
+`llc` compiles it, the system linker links it with LLVM's library (`scripts/link.sh`) into
+`target/auk-build/seed/auk`, which builds stage 1 and stage 2 from the sources (linking through
+`scripts/link.sh` too, so a seed cut before `auk build` called the linker itself never calls
+`cc`). A fresh clone needs only LLVM 23 and the system linker, no C compiler.
 
 A new seed is cut when the compiler can no longer be built by the current one (a language or
 ABI change the seed doesn't know), and at every release. The tag `v0-rust-final` keeps the
