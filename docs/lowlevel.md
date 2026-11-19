@@ -203,8 +203,17 @@ points; a signal handler is an `export fn` passed to `sigaction`.
   `src/x.auk` are variants of the module `x`; the loader takes the most specific one for the
   host (`<os>` is `macos`/`linux`, `<arch>` `arm64`/`x86_64` as `uname -m` normalizes), and
   ignores the others (other packages keep reading `a.b.auk` as the module `a.b`). There is no
-  cross-compilation yet, so "the target" is the machine running `auk`. The variants' public
-  items aren't compared yet. `raw.add_overflow/sub_overflow/mul_overflow(a, b): (T, bool)`
+  cross-compilation yet, so "the target" is the machine running `auk`. **The variants must
+  agree on what is used** (E0422; `resolve.check_variants`): every file of the package is
+  parsed (so a syntax error in another target's file shows on any host), and for each target
+  (macOS and Linux on arm64 and x86-64, and any other a file name tags) every `m.NAME` that a
+  file compiled for it writes must be `pub` in that target's variant of `m`, with the same
+  signature in every variant used for it (functions by parameter and result types, effects
+  and `export`; plain structs and enums by their fields and variants; `raw struct`s, `raw
+  union`s and `raw type`s only by kind, since their layout is the platform's; constants and
+  globals by type). Items that only one target's own files use may exist only in its variant
+  (cfacts' "only on <os>" part). Uses are found by tokens (`m.NAME`, not after a `.`), so a
+  local named like the module would be taken for it. `raw.add_overflow/sub_overflow/mul_overflow(a, b): (T, bool)`
   (`llvm.{s,u}{add,sub,mul}.with.overflow` by `T`'s signedness), `raw.ctz`/`raw.clz` (the width
   for 0), `raw.popcount`, `raw.bswap` (16 bits and wider) take `int` or a fixed-width integer.
 - **No TBAA:** codegen attaches no alias metadata (none anywhere), so `raw.cast`
@@ -329,9 +338,9 @@ The runtime chooses by OS and CPU in 30 places (`#if`), and needs what C headers
 
 - **Per-target files** (`raw` packages only): beside `os.auk` a module may have `os.macos.auk`,
   `os.linux.auk`, `os.linux-arm64.auk`, … The resolver loads the most specific one matching the
-  target (`<os>-<arch>`, then `<os>`, then the plain file), and only that one; all variants must
-  declare the same public items (checked when the variants are compiled for their targets, and by
-  CI on each platform). Like Go's `_linux.go`.
+  target (`<os>-<arch>`, then `<os>`, then the plain file), and only that one; what the rest of
+  the package uses from a module must be in every target's variant of it (§7a: E0422, checked on
+  any host for all targets). Like Go's `_linux.go`.
 - **The headers' facts, generated:** `runtime/gen/cfacts.sh` compiles a small C program on a
   platform that prints the constants and layouts the runtime uses (`O_*`, `F_*`, `SIG*`, `E*`,
   `SO_*`, `AF_*`, the `W*` status tests as functions, `PTHREAD_*_INITIALIZER` bytes, `struct stat`,

@@ -29,6 +29,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("fmt_and_check_handle_the_dialect", fmt_and_check_handle_the_dialect),
   t.test("overflow_and_bit_intrinsics", overflow_and_bit_intrinsics),
   t.test("per_target_module_files", per_target_module_files),
+  t.test("per_target_variants_agree_e0422", per_target_variants_agree_e0422),
   t.test("abi_and_cfacts_match_c", abi_and_cfacts_match_c),
 ]
 
@@ -337,4 +338,32 @@ fn abi_and_cfacts_match_c() uses env, fs, ffi, time {
   let o = cmd.new("bash").args(["runtime/test/abi/run.sh", t.auk_bin()]).unsetenv("AUK_LEAK_CHECK").output()
   t.check(o.success(), "runtime/test/abi/run.sh:\n{o.stdout}{o.stderr}")
   t.has(o.stdout, "ok: abi.auk and cfacts.")
+}
+
+/// What the package uses from a module with per-target files must be in the variant of every
+/// target that uses it, with one signature; a target's own items may be its alone; the other
+/// targets' files are parsed too (E0422).
+fn per_target_variants_agree_e0422() uses env, fs, ffi, time {
+  let main = project("variants", "fn main() {{ print(plat.name()) }}\n")
+  let src = paths.parent(main) else "."
+  t.write(paths.join(src, "plat.macos.auk"), "pub fn name(): str = \"macos\"\npub raw let ONLY_MAC: i32 = 1\n")
+  t.write(paths.join(src, "plat.linux.auk"), "pub fn name(): str = \"linux\"\npub raw let ELF: i32 = 2\n")
+  // each target's own file uses its own extras
+  t.write(paths.join(src, "hooks.macos.auk"), "pub fn f(): i32 = plat.ONLY_MAC\n")
+  t.write(paths.join(src, "hooks.linux.auk"), "pub fn f(): i32 = plat.ELF\n")
+  t.eq("{codes(main)}", "[]", "")
+  // shared code using one target's extra
+  t.write(main, "fn main() {{ print(plat.name())\n let _ = plat.ONLY_MAC }}\n")
+  t.eq("{codes(main)}", "[\"E0422\"]", "once, for linux-arm64 and linux-x86_64")
+  let o = auk(["check", main])
+  t.has(o.stderr, "`plat.ONLY_MAC` isn't declared in `plat.linux.auk`")
+  // a signature that differs
+  t.write(main, "fn main() {{ print(plat.name()) }}\n")
+  let other = if paths.os() == "macos" { "plat.linux.auk" } else { "plat.macos.auk" }
+  t.write(paths.join(src, other), "pub fn name(): int = 1\npub raw let ELF: i32 = 2\npub raw let ONLY_MAC: i32 = 1\n")
+  t.eq("{codes(main)}", "[\"E0422\"]", "")
+  t.has(auk(["check", main]).stderr, "`name` is `fn name(): int` here but `fn name(): str`")
+  // another target's file that doesn't parse
+  t.write(paths.join(src, other), "pub fn name(: str = 1\n")
+  t.check(codes(main).len() > 0, "a parse error in {other}")
 }

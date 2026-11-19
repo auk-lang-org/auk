@@ -203,6 +203,238 @@ test "per-target files" {
   assert select_targets(fs, "freebsd", "x86_64") == ["s/os.auk", "s/a.auk"]
 }
 
+/// A per-target file's module key in its directory: `os` of `os.auk`, `os.linux.auk`,
+/// `os.linux-arm64.auk` (as `select_targets` reads it), and its target tag (`""` if none).
+fn variant_base(f: str): (str, str, str) {
+  let stem = paths.file_name(f).strip_suffix(".auk") else paths.file_name(f)
+  let parts = stem.split(".")
+  if parts.len() == 1 { return (paths.parent(f) else "", stem, "") }
+  (paths.parent(f) else "", parts.take(parts.len() - 1).join("."), parts[parts.len() - 1])
+}
+
+/// A parsed file of the runtime package, for `check_variants`: its `pub` items by name
+/// (signature, span) and its uses of other modules' items (module key, name, span).
+struct VFile { items: {str: [(str, diag.Span)]}, refs: [((str, str), str, diag.Span)] }
+
+/// The per-target files of the runtime package must agree (docs/lowlevel.md §11): for every
+/// target (macOS and Linux on arm64 and x86-64, and any other a file names), each file that
+/// target compiles may use from a module with variants (`cfacts.O_CREAT`) only what that
+/// target's variant of it declares `pub`, and every variant used for the same item declares
+/// it with the same signature. Items only a target's own files use may exist only there (the
+/// "only on <os>" parts). Every file is parsed, so this host also checks the other targets'.
+/// E0422 at the use (a missing item) or at the variant that differs.
+fn check_variants(l: var Loader, files: [str], host: [str], src_dir: str) uses fs {
+  // the modules with more than one file
+  var groups: {(str, str): [str]} = {}
+  var tags: [str] = []
+  for f in files {
+    let (dir, base, tag) = variant_base(f)
+    groups[(dir, base)] = (groups.get((dir, base)) else []) + [f]
+    if tag != "" && !tags.contains(tag) { tags.push(tag) }
+  }
+  var mods: [((str, str), [str])] = []
+  for key in groups.keys().sort() {
+    if groups[key].len() < 2 { continue }
+    let segs = paths.strip_base(paths.join(key.0, key.1), src_dir) else continue
+    mods.push((key, segs))
+  }
+  if mods.len() == 0 { return }
+  // every file, parsed once
+  var vf: {str: VFile} = {}
+  for f in files {
+    let src = read_file(l.cx, f) else continue
+    let toks = match lexer.lex(src) {
+      ok(x) => x.toks
+      err(_) => []
+    }
+    match parser.parse(src, false) {
+      ok(a) => vf[f] = VFile { items: pub_items(a), refs: module_uses(toks, mods) }
+      // the host's files report their own errors when they are loaded
+      err(Many(ds)) => if !host.contains(f) { l.errs = l.errs + file_diags(f, ds) }
+    }
+  }
+  // the targets
+  var targets: [(str, str)] = []
+  var oses = ["macos", "linux"]
+  for t in tags {
+    let os = t.split("-")[0]
+    if !oses.contains(os) { oses.push(os) }
+  }
+  for os in oses {
+    for arch in ["arm64", "x86_64"] { targets.push((os, arch)) }
+  }
+  for t in tags {
+    let parts = t.split("-")
+    if parts.len() == 2 && !targets.contains((parts[0], parts[1])) { targets.push((parts[0], parts[1])) }
+  }
+  // (module, name) -> the variants used for it, and by whom
+  var needed: {((str, str), str): [(str, str)]} = {}
+  var seen: {str: bool} = {}
+  for (os, arch) in targets {
+    let sel = select_targets(files, os, arch)
+    for (key, _) in mods {
+      let v = sel.find(f => (variant_base(f).0, variant_base(f).1) == key) else continue
+      for u in sel {
+        let uf = vf.get(u) else continue
+        for (k, name, at) in uf.refs {
+          if k != key { continue }
+          let have = vf.get(v) else continue
+          if have.items.contains(name) {
+            let users = needed.get((key, name)) else []
+            if !users.any(p => p.0 == v) { needed[(key, name)] = users + [(v, u)] }
+          } else {
+            let msg = "`{key.1}.{name}` isn't declared in `{paths.file_name(v)}`, the module `{key.1}` on {os}-{arch}"
+            // once per use and variant (not per target that compiles both)
+            let k = "{u}:{at.line}:{at.col}:{v}"
+            if !seen.contains(k) {
+              seen[k] = true
+              l.errs.push(diag.FileDiag { file: u, diag: diag.new("E0422", at, msg).note("a module's per-target files must agree on what the rest of the package uses from it") })
+            }
+          }
+        }
+      }
+    }
+  }
+  for kn in needed.keys().sort() {
+    let (key, name) = kn
+    let vs = needed[kn]
+    // compare with the host's variant when it is one of them
+    let ri = vs.find_index(p => host.contains(p.0)) else 0
+    let (rf, ru) = vs[ri]
+    let rsig = vf[rf].items[name].map(x => x.0).sort()
+    for (v, u) in vs {
+      if v == rf { continue }
+      let items = vf[v].items[name]
+      let sig = items.map(x => x.0).sort()
+      if sig != rsig {
+        l.errs.push(diag.FileDiag {
+          file: v,
+          diag: diag.new(
+            "E0422",
+            items[0].1,
+            "`{name}` is `{sig.join("; ")}` here but `{rsig.join("; ")}` in `{paths.file_name(rf)}`, and both are used (`{paths.file_name(u)}`, `{paths.file_name(ru)}`)",
+          ).note("a module's per-target files must agree on what the rest of the package uses from it"),
+        })
+      }
+    }
+  }
+}
+
+/// The `pub` items of a module by name: (signature, span) per declaration (functions may be
+/// overloaded). Functions by their parameter and result types, effects and `export`; enums
+/// with their variants; plain structs with their fields; a `raw struct`/`raw union` or `raw
+/// type` only by kind (its layout or meaning is the platform's); constants and globals with
+/// their types (not their values).
+fn pub_items(a: ast.Module): {str: [(str, diag.Span)]} {
+  var out: {str: [(str, diag.Span)]} = {}
+  for it in a.items {
+    match it {
+      Fn(g) => {
+        let c = g.header else g.clauses.first() else continue
+        if !c.public { continue }
+        let gens = if c.generics.len() == 0 { "" } else { "<{c.generics.map(x => x.name.name).join(", ")}>" }
+        let ps = c.params.map(p => {
+          let t = match p.ty {
+            some(t) => type_sig(t)
+            none => "_"
+          }
+          if p.var_ { "var {t}" } else { t }
+        })
+        let ret = match c.ret {
+          some(t) => ": {type_sig(t)}"
+          none => ""
+        }
+        let effs = if c.effects.len() == 0 { "" } else { " uses {c.effects.map(e => e.name).sort().join(", ")}" }
+        let kw = ["fn", "export fn", "inline export fn"][c.export]
+        add_item(&out, g.name, "{kw} {g.name}{gens}({ps.join(", ")}){ret}{effs}", c.name.span)
+      }
+      Struct(d) => if d.public {
+        let kw = ["struct", "raw struct", "raw union"][d.raw]
+        let fs = if d.raw == 0 { " {{ {d.fields.map(f => "{f.name.name}: {type_sig(f.ty)}").join(", ")} }}" } else { "" }
+        add_item(&out, d.name.name, "{kw} {d.name.name}{fs}", d.name.span)
+      }
+      Enum(d) => if d.public {
+        let vs = d.variants.map(v => if v.fields.len() == 0 {
+          v.name.name
+        } else {
+          "{v.name.name}({v.fields.map(f => type_sig(f.ty)).join(", ")})"
+        })
+        add_item(&out, d.name.name, "enum {d.name.name} {{ {vs.join(", ")} }}", d.name.span)
+      }
+      Shape(d) => if d.public { add_item(&out, d.name.name, "shape {d.name.name}", d.name.span) }
+      ExternType(d) => if d.public { add_item(&out, d.name.name, "extern type {d.name.name}", d.name.span) }
+      RawType(d) => if d.public { add_item(&out, d.name.name, "raw type {d.name.name}", d.name.span) }
+      Let(d) | Imprint(d) => if d.public {
+        let t = match d.ty {
+          some(t) => ": {type_sig(t)}"
+          none => ""
+        }
+        add_item(&out, d.name.name, "let {d.name.name}{t}", d.name.span)
+      }
+      Global(d) => if d.public {
+        let t = match d.ty {
+          some(t) => ": {type_sig(t)}"
+          none => ""
+        }
+        add_item(&out, d.name.name, "{ast.global_kw(d.kind)} {d.name.name}{t}", d.name.span)
+      }
+      _ => {}
+    }
+  }
+  out
+}
+
+fn add_item(m: var {str: [(str, diag.Span)]}, n: str, sig: str, at: diag.Span) {
+  m[n] = (m.get(n) else []) + [(sig, at)]
+}
+
+/// `m.NAME` in the tokens for each module path `m` of `mods` (not after a `.`): (module key,
+/// NAME, span of NAME).
+fn module_uses(toks: [token.Token], mods: [((str, str), [str])]): [((str, str), str, diag.Span)] {
+  var out: [((str, str), str, diag.Span)] = []
+  for i in 0..toks.len() {
+    if i > 0 && toks[i - 1].tok == token.Tok.Dot { continue }
+    for (key, segs) in mods {
+      var j = i
+      var ok = true
+      for s in segs {
+        if j + 1 >= toks.len() || toks[j].tok != token.Tok.Ident(s) || toks[j + 1].tok != token.Tok.Dot {
+          ok = false
+          break
+        }
+        j += 2
+      }
+      if !ok || j >= toks.len() { continue }
+      match toks[j].tok {
+        Ident(n) => out.push((key, n, toks[j].span))
+        _ => {}
+      }
+    }
+  }
+  out
+}
+
+/// A type as written, spacing normalized.
+fn type_sig(t: ast.Type): str = match t.kind {
+  Named(path, args) => {
+    let p = path.map(i => i.name).join(".")
+    if args.len() == 0 { p } else { "{p}<{args.map(type_sig).join(", ")}>" }
+  }
+  List(x) => "[{type_sig(x)}]"
+  Map(k, v) => "{{{type_sig(k)}: {type_sig(v)}}}"
+  Tuple(ts) => "({ts.map(type_sig).join(", ")})"
+  Optional(x) => "{type_sig(x)}?"
+  Fallible(ok, e) => match e {
+    some(x) => "{type_sig(ok)}!{type_sig(x)}"
+    none => "{type_sig(ok)}!"
+  }
+  Any(x) => "any {type_sig(x)}"
+  Fn(ps, r) => "({ps.map(type_sig).join(", ")}) => {type_sig(r)}"
+  Measured(b, us) => "{type_sig(b)}<{us.map(u => "{u.0}^{u.1}").join(" ")}>"
+  Var(x) => "var {type_sig(x)}"
+  Array(x, n) => if n < 0 { "[{type_sig(x)}; ..]" } else { "[{type_sig(x)}; {n}]" }
+}
+
 /// The keys of a map in sorted order (Rust's `BTreeMap` iteration).
 pub fn sorted_keys<V>(m: {str: V}): [str] = m.keys().sort()
 
@@ -349,7 +581,11 @@ fn load_core(l: var Loader): int {
 fn add_tree(l: var Loader, pkg: int, root: int, src_dir: str, skip: str?) uses fs, ffi {
   var files: [str] = []
   collect_auk_files(src_dir, &files)
-  if l.pkgs[pkg].name == "auk_rt" { files = select_targets(files, l.cx.os, paths.arch()) }
+  if l.pkgs[pkg].name == "auk_rt" {
+    let host = select_targets(files, l.cx.os, paths.arch())
+    check_variants(&l, files, host, src_dir)
+    files = host
+  }
   // `PathBuf` order: component by component
   for f in files.sort_by(f => paths.components(f)) {
     match skip {

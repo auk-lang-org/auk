@@ -187,6 +187,7 @@ pub let CODES: [(str, str)] = [
   ("E0419", "a reference-counted type in `uses raw` code or a raw struct"),
   ("E0420", "imprint panicked at compile time"),
   ("E0421", "not a compile-time constant, or a `raw assert` that fails"),
+  ("E0422", "per-target files of a module disagree on what the package uses"),
 ]
 
 /// The one-line title of `code`, if it is registered.
