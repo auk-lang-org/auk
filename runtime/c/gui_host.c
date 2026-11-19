@@ -659,17 +659,15 @@ static bool area_inside(Area a, const Areas *v) {
 
 /* Bring the back surface up to date from the client's latest buffer and flip the layer to it.
  * Returns true if something is still pending because the compositor still had that surface. */
-static bool show(int64_t id) {
-    int64_t t0 = now_us();
-    bool again = false;
+static bool show_now(int64_t id) {
     HWin *win = hwin(id);
     if (win == NULL || win->front < 0 || !win->has_buf[win->front]) {
-        goto done;
+        return false;
     }
     double scale = backing_scale(win->view);
     win = hwin(id); /* AppKit may have called back into the view */
     if (win == NULL) {
-        goto done;
+        return false;
     }
     HBuf *src = &win->bufs[win->front];
     size_t fw = src->fw;
@@ -680,12 +678,12 @@ static bool show(int64_t id) {
         HSurf b;
         if (!surf_new(fw, fh, &a)) {
             no_surface(fw, fh);
-            goto done;
+            return false;
         }
         if (!surf_new(fw, fh, &b)) {
             sys.cf_release(a.s);
             no_surface(fw, fh);
-            goto done;
+            return false;
         }
         if (win->has_surfs) {
             sys.cf_release(win->surfs[0].s);
@@ -703,14 +701,13 @@ static bool show(int64_t id) {
         add_area(&win->pending, all);
     }
     if (win->pending.n == 0) {
-        goto done;
+        return false;
     }
     int back = 1 - win->shown;
     HSurf *surf = &win->surfs[back];
     /* the compositor keeps the surface it showed last until the next refresh */
     if (sys.surface_in_use(surf->s)) {
-        again = true;
-        goto done;
+        return true;
     }
     sys.surface_lock(surf->s, 0, NULL);
     uint8_t *base = sys.surface_base(surf->s);
@@ -741,7 +738,13 @@ static bool show(int64_t id) {
     void *contents = surf->s;
     m_void_f64(layer, "setContentsScale:", scale);
     m_void_ptr(layer, "setContents:", contents);
-done:
+    return false;
+}
+
+/* show_now, timed for AUK_GUI_TRACE. */
+static bool show(int64_t id) {
+    int64_t t0 = now_us();
+    bool again = show_now(id);
     if (trace_on) {
         trace_add(0, t0);
     }
