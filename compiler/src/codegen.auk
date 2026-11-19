@@ -481,10 +481,14 @@ pub fn program(g: var Gen, ex: Exports): ()! uses ffi {
     }
     g.funcs.push((fv, sig))
   }
-  for gl in prog.globals {
-    let gv = global(&g, gl)?
-    g.globals.push(gv)
+  // definitions first, then `extern var` declarations (kind 5), which reuse a definition of the
+  // same name in this package (another module's `export var`) or an earlier declaration
+  var made: [llvm.Value?] = []
+  for gl in prog.globals { made.push(if gl.kind == 5 { none } else { some(global(&g, gl)?) }) }
+  for i, gl in prog.globals {
+    if gl.kind == 5 { made[i] = some(global(&g, gl)?) }
   }
+  for v in made { g.globals.push(v!) }
   rawgen.init_globals(&g)?
   for i in 0..prog.funcs.len() { body(&g, i)? }
   dwarf.finish(g.debug)
@@ -1131,7 +1135,8 @@ fn rt_data_addr(g: var Gen, name: str): llvm.Value uses ffi {
     some(gl) => return gl
     none => {}
   }
-  let gl = llvm.values.add_global(g.m, g.t_i8, name)
+  // defined by the package itself (an `export var` another module declares with `extern var`)
+  let gl = llvm.values.get_named_global(g.m, name) else llvm.values.add_global(g.m, g.t_i8, name)
   g.rt_data[name] = gl
   gl
 }
@@ -1443,6 +1448,15 @@ fn call(g: var Gen, cl: mir.Callee, args: [mir.Ex], ret: mir.MTy): V uses ffi = 
 pub fn rt_func(g: var Gen, sym: str, sig: Sig): llvm.Value uses ffi {
   match g.rt_funcs.get(sym) {
     some(f) => return f
+    none => {}
+  }
+  // the package itself may define it (an `export fn` of another module of the runtime that a
+  // module declares with `extern fn`): call that definition, don't add a renamed declaration
+  match llvm.ir.get_named_function(g.m, sym) {
+    some(def) => {
+      g.rt_funcs[sym] = def
+      return def
+    }
     none => {}
   }
   let f = llvm.ir.add_function(g.m, sym, sig.ty)

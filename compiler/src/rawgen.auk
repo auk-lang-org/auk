@@ -152,7 +152,12 @@ pub fn call(g: var codegen.Gen, sym: str, args: [mir.Ex], ret: mir.MTy): codegen
 pub fn global(g: var codegen.Gen, gl: mir.Global): llvm.Value! uses ffi {
   let l = codegen.lay(&g, gl.ty)
   if gl.kind == 5 {
-    // `extern var`: defined in C, declared here (no initializer)
+    // `extern var`: defined in C (or by another module of the package: `export var`, made
+    // first), declared here (no initializer); one declaration per name
+    match llvm.values.get_named_global(g.m, gl.name) {
+      some(existing) => return existing
+      none => {}
+    }
     let gv = llvm.values.add_global(g.m, llvm.ir.array_type2(g.t_i8, l.size), gl.name)
     llvm.values.set_linkage(gv, llvm.EXTERNAL_LINKAGE)
     return gv
