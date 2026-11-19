@@ -490,6 +490,40 @@ Gaps hit:
 `-fblocks`; no C file uses blocks now: clang enables them by default on Darwin, so the flag
 makes it a compile error to start again).
 
+## Found by the 7c port of `core` (2026-11-19)
+
+`core.c` became six modules: `core_util` (results, `Bytes`, `slurp`, `auk__bytes_to_arr`),
+`core_fs`, `core_net`, `core_env` (print, env, stdin, terminal), `core_time` (time, rand),
+`core_proc`, and the per-OS `core_os.macos.auk`/`core_os.linux.auk` (C's `stdin`, which
+`cfacts` lacks, and `os_random`: `arc4random_buf` / `getrandom` + `/dev/urandom`: the `#if`s).
+Same symbols, messages byte for byte; `auk__send_flags` is an `export var` (`cfacts.MSG_NOSIGNAL`,
+0 where absent), the `SO_NOSIGPIPE` `#if` an `if cfacts.HAS_SO_NOSIGPIPE`. A program over
+every entry point (seeded rand, env, proc errors and signals, fs and net errors, stdin, exit
+codes) prints the same bytes before and after. Speed, interleaved C/Auk runs (5 each, medians,
+macOS arm64, machine loaded): fs (3000 × write/append/read/read_bytes/exists) 365 / 365 ms,
+20000 TCP round trips on localhost 938 / 928 ms, 1M `print` + `rand.int` 115 / 117 ms: the
+same within the noise. New findings:
+
+1. **An `extern fn` (or `extern var`) of a symbol the package also defines or declares
+   elsewhere** linked as a renamed, undefined symbol (`_auk__err_errno.33`, `_auk_ops_int.1`)
+   until codegen's fix on main. `core` now calls the ported modules by path (`str.auk_str_cstr`,
+   `str_fmt.auk_sb_int`, `arr.auk_arr_push`, `err.auk__err_errno`, `str.ops_str()`; the two
+   `err` functions became `pub export fn`); `extern fn`s remain for the C half and for exports
+   their modules don't make `pub` (`auk_str_try_from_bytes`, `auk_arr_make_unique`,
+   `auk_arr_len`). A module call needs the caller's effects to cover the callee's (`uses raw`
+   where an `extern fn` needed only `ffi`).
+2. `raw.addr_of(&m.g)` of another module's (`pub`) global is accepted only in constant
+   initializers (`raw let P = raw.addr_of(&m.g)`), not in function bodies.
+3. **A local can't be named like a module** (E0116: `err` is the `err` module), so C's `int *err`
+   out-parameters are renamed (`errp`).
+4. **`stdin` isn't in `cfacts`** (`stdout()`/`stderr()` are): `core_os` declares it
+   (`__stdinp` / `stdin`).
+5. A call whose `int` result C ignores, as a function's last statement, is the function's
+   result (E0200): `let _ = f(…)`.
+6. Fixed arrays as locals (C's `char ports[24]`, `uint8_t b[32]`) are one-field raw structs
+   (`PortBuf { b: [u8; 24] }`); a raw global `[u64; 4]` is indexed through
+   `raw.cast<u64>(raw.addr_of(&g)).at(i)`.
+
 ## Per file
 
 Lines are of the C today. "Globals" counts file-scope variables (thread-locals and atomics
@@ -522,7 +556,7 @@ among them); "callbacks" are function pointers handed to C or kept in tables.
 | `task.c` | 467 | 6 globals (1 thread-local), atomics, `pthread_create` callback | — |
 | ~~`pixels.c`~~ | 446 | **done** (2026-11-19): `runtime/src/pixels.auk` (the statics are module `raw var`s, `raw.add/mul_overflow`) | — |
 | ~~`ffi.c`~~ | 298 | **done** (2026-11-19): `runtime/src/ffi.auk` | — |
-| `core.c` | 1116 | 5 globals + 1 function-local static, `environ` (extern global), `qsort` callback, sockets/`getaddrinfo`/`posix_spawnp` structs, `S_ISDIR`, `W*` macros; `fcntl`/`ioctl`/`open` through `cwrap.c` | 5 `#if`s (OS, `SO_NOSIGPIPE`, `MSG_NOSIGNAL`, `arc4random_buf`/`getrandom`) |
+| ~~`core.c`~~ | 1116 | **done** (2026-11-19): `runtime/src/core_{util,fs,net,env,time,proc}.auk`, `core_os.{macos,linux}.auk`; 5 globals + 1 function-local static, `environ` (extern global), `qsort` callback, sockets/`getaddrinfo`/`posix_spawnp` structs, `S_ISDIR`, `W*` macros; `fcntl`/`ioctl`/`open` through `cwrap.c` | 5 `#if`s (OS, `SO_NOSIGPIPE`, `MSG_NOSIGNAL`, `arc4random_buf`/`getrandom`) |
 | `trace.c` | 668 | 20 globals (5 thread-locals), 3 function-local statics, `sigaction` + `atexit` callbacks, `open` through `cwrap.c` | its fatal-signal handler re-raises with `signal(sig, SIG_DFL)`: fine as an `export fn` |
 | ~~`stack.c`~~ | 376 | **done** (2026-11-19): `runtime/src/stack.auk`, `stackos.<os>.auk`, `cpu.auk` | the context's PC/SP through `cfacts.uc_pc`/`uc_sp`; x86-64's return-address slot is `cpu.RET_SLOT` |
 | `dbg.c` | 2141 | 50 globals (5 thread-locals, atomics), `pthread_key_create` destructor, `pthread_create`, `atexit`, `signal(SIGINT)` callbacks, Unix sockets | — (largest file; translate last among the plain ones) |
