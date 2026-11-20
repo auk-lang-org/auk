@@ -2,21 +2,21 @@
 
 [[package]]
 name = "encoding"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry"
 effects = []
-checksum = "sha256:829cf5b17fab114cae3cb325d931009e0d7f03273cb4a5f524e342920c81681c"
+checksum = "sha256:d67d2db60e3c837aa813b93a374bdf6b3e82bea8a2d4b531bf5393c7bda03ba1"
 
 [[package]]
 name = "json"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry"
 effects = []
-checksum = "sha256:6a977afed6bd684d1107f2cdc1382319a7a081cda6949a6853d84fc5e375410f"
+checksum = "sha256:b343ac526901f9843afe44d853e5722fc0a4748a8b67d1ec50ea62058a004b9c"
 
 [[package]]
 name = "url"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry"
 effects = []
-checksum = "sha256:c8f65efd0f6532d8fd16899bbbef77dfe51eedca838f683cd10b3505280ffe7b"
+checksum = "sha256:6f7901901edcd1e74c17f9251b9bf9f2b3640025a40071cc93e30622913920b0"

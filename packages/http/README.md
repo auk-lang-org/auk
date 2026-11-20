@@ -98,6 +98,7 @@ These are public, so you can test or reuse them:
 - `http.wire`, the client side: `encode(method, target, host, headers, body): str!` and `decode(bytes: [int], head_req: bool): (int, {str: str}, str)!`.
 - `http.wire`, the server side:
   - `decode_request(bytes): Got!ReqErr`, where `Got { More(need, cont), Done(method, target, headers, body) }`
+  - `struct Progress`, `progress(): Progress` and `decode_request(bytes, &p): Got!ReqErr` handle a request that arrives in pieces. Pass the same `Progress` after every read, with `bytes` holding everything read so far (it may only grow). Each call picks up where the last one stopped, so reading a request takes time linear in its size, not quadratic. The results are the same as `decode_request(bytes)`. `http.server` reads every request this way (see `src/server.auk`).
   - `encode_response(status, headers, body, head_req): str!`
   - `ReqErr { BadRequest(why), TooLarge, HeadTooLarge, NotImplemented(why), BadVersion(version) }`, with `status(e)` and `message(e)`
   - `reason(status): str`

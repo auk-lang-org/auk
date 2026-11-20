@@ -2,7 +2,7 @@
 
 [[package]]
 name = "json"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry"
 effects = []
-checksum = "sha256:c6b63a11a1a1d614a17661703f77ffad5017ef8126b0faf61af958dfd978cc30"
+checksum = "sha256:b343ac526901f9843afe44d853e5722fc0a4748a8b67d1ec50ea62058a004b9c"

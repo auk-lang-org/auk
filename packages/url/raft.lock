@@ -2,7 +2,7 @@
 
 [[package]]
 name = "encoding"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry"
 effects = []
-checksum = "sha256:0cf2d01c0a47320806725c6d717bad20e89e318cce291c5ba4c7e27b91d8db36"
+checksum = "sha256:d67d2db60e3c837aa813b93a374bdf6b3e82bea8a2d4b531bf5393c7bda03ba1"

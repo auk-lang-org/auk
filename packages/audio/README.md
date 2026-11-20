@@ -60,6 +60,12 @@ Bytes are `[int]` (0–255), as in `fs.read_bytes`. Samples are planar floats, n
 | AU (`.snd`) | μ-law, A-law, s8–s32, f32, f64; the annotation as `comment` | the same |
 | FLAC | everything: 4–32 bits, 1–8 channels, fixed or variable blocks, all subframe types, Rice/Rice2, escape codes, wasted bits, stereo decorrelation; CRC-8/CRC-16 checked; Vorbis comments; a leading ID3v2 tag skipped | 8, 16 or 24 bits; LPC up to order 8, fixed predictors, partitioned Rice, best of 4 stereo modes per frame; STREAMINFO with MD5; Vorbis comments |
 
+To write raw samples with no container, use `audio.pcm`:
+- `pcm.encode(chans, fmt, big_endian): [int]` interleaves the channels and encodes every frame.
+- `pcm.encode_into(&out, chans, fmt, big_endian)` does the same but appends to `out`. That way a header you have already written and the samples share one list, with no copy.
+- `pcm.decode(bytes, at, frames, nch, fmt, big_endian): [[float]]` reads samples back.
+- Both encoders take the byte-aligned formats plus A-law and μ-law. `Ima` writes nothing, because ADPCM is encoded in blocks.
+
 A WAV whose data chunk is cut short decodes what is there, as ffmpeg does. Every other truncation is `Truncated`. For ADPCM, `fact` caps the frame count.
 
 ### Making audio
