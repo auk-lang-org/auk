@@ -258,6 +258,17 @@ hashmap +3% and trees +2%, which interleaving showed to be noise).
   trees' code is identical to phase 1's. Tests: tests/fixtures/reuse.auk (unique and shared
   trees, swapped fields, inline fields, lists, aliases), same output with AUK_NO_MOVES=1.
 
+- **Calls through `any S` (2026-11-20):** owned like closure calls: the arguments after the
+  receiver go through `closure_owns` in `call_target`'s `Vtable` case and in the vtable's
+  method thunks (the receiver, the boxed object, stays borrowed). 2001 copies → 1 in the
+  suite's test.
+- **Workarounds (2026-11-20):** FLAC's `chans[c] = []`, the writer's two `out = []` and
+  `residual`'s local copy are gone (same output, time and copy count). Kept, because the
+  compiler can't do them: `subs = []` (two takes from one list, rebuilt as `[l, r]`), the
+  FLAC writer's `w.out = []` and http's `s.chunk = none` (takes from a struct field around
+  code that uses the struct). The 32 copies per block left in FLAC's encoder are
+  `levinson`'s `var next = a`, which reads the old `a` while writing `next`: a real copy.
+
 Then remove the hand-written workarounds that the compiler now handles (FLAC's
 `chans[c] = []`, `out0 = []` and the like) one package at a time, keeping each package's
 differential fuzz.

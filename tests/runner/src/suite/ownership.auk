@@ -10,6 +10,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("moves_keep_every_result", moves_keep_every_result),
   t.test("a_consumed_parameter_is_passed_owned", a_consumed_parameter_is_passed_owned),
   t.test("closures_own_their_arguments", closures_own_their_arguments),
+  t.test("calls_through_any_own_their_arguments", calls_through_any_own_their_arguments),
 ]
 
 fn scratch(name: str): str uses env, fs, ffi = t.scratch("ownership/{name}")
@@ -217,5 +218,34 @@ fn closures_own_their_arguments() uses env, fs, ffi, time {
       """, true)
   t.eq(out, "2000 2000 " + r"""["a!", "b!"]""" + "\n", "")
   // the first append to the literal `""` (immortal)
+  t.eq("{copies}", "1", "copy-on-write copies")
+}
+
+/// A call through `any S` owns its arguments after the receiver, as a closure call does: a list
+/// threaded through a method that consumes it is pushed in place; one that only reads it gets
+/// it released after the call.
+fn calls_through_any_own_their_arguments() uses env, fs, ffi, time {
+  let (out, copies) = run_counted("any", r"""
+      shape Grow { fn grow(self, xs: [int], x: int): [int] }
+      struct Pusher { k: int }
+      struct Keeper { k: int }
+      fn grow(p: Pusher, xs: [int], x: int): [int] {
+        var ys = xs
+        ys.push(x * p.k)
+        ys
+      }
+      fn grow(k: Keeper, xs: [int], x: int): [int] = [xs.len() + k.k]
+      fn main() {
+        let gs: [any Grow] = [Pusher { k: 1 }, Keeper { k: 100 }]
+        var v: [int] = []
+        for i in 0..2000 { v = gs[0].grow(v, i) }
+        let kept = v
+        let w = gs[0].grow(kept, -1)
+        let z = gs[1].grow(kept, 5)
+        print("{v.len()} {w.len()} {kept.len()} {z}")
+      }
+      """, true)
+  t.eq(out, "2000 2001 2000 [2100]\n", "")
+  // one: `kept` is still read after it's passed
   t.eq("{copies}", "1", "copy-on-write copies")
 }

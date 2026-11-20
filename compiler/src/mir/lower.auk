@@ -475,7 +475,8 @@ fn sole_local(lw: var Lower, l: int, c: mir.Ex): bool {
 
 /// Does a closure own its argument of type `t` (design/ownership-plan.md, section 5)? Every
 /// reference-counted one but a `var` parameter's: the caller moves or retains it, the closure
-/// releases it. (`dk_fv` thunks pass it on.)
+/// releases it. (`dk_fv` thunks pass it on.) The same for the arguments after the receiver of
+/// a call through `any S` (the vtable's thunks pass them on).
 fn closure_owns(lw: var Lower, t: types.Ty): bool = match t {
   Mut(_) => false
   _ => lw.g.needs_rc(t)
@@ -2460,7 +2461,8 @@ fn call_target(lw: var Lower, target: typed.Target, func: int?, args: [ArgV], re
         let pt = lw.g.method_ty(m.params[k], shape)
         pts.push(d(pt))
         cs.push(match args[k] {
-          Val(v) => lw.val_as(v, pt)
+          // owned, as a closure's (`closure_owns`); the receiver stays borrowed
+          Val(v) => if lw.closure_owns(pt) { lw.own_as(v, pt) } else { lw.val_as(v, pt) }
           Addr(p, _) => p
         })
         k += 1
@@ -2910,7 +2912,8 @@ fn vtable(lw: var Lower, vid: int): mir.Ex {
     for j, p in m.params {
       if j == 0 { continue }
       let pt = lw.g.method_ty(p, vt.shape)
-      args.push(ArgV.Val(plain(pv[j], pt)))
+      // owned (`closure_owns`): passed on to a target that owns it, else released after
+      args.push(ArgV.Val(if lw.closure_owns(pt) { lw.reown(pv[j], pt) } else { plain(pv[j], pt) }))
     }
     let func = match target {
       Instance(i) => match lw.tp.instances[i].body {
