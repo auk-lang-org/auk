@@ -226,6 +226,20 @@ benchmark slower by more than 2%, and the phase's micro-benchmarks scale linearl
   multi-clause function each clause binds the same variable, so `sole_local` blocks moves
   of it (still correct: the callee releases what it owns).
 
+- **Phase 4 (2026-11-19):** closures own their reference-counted, non-`var` arguments
+  (`closure_owns`): `call_target`'s `Closure` case moves or retains them, a lambda registers
+  them for release, and a `dk_fv` thunk holds them as owned and passes them to a target that
+  owns them (else releases them after the call). Nothing else calls closure code (the runtime
+  never does). Vtable calls (`any S`) stay borrowed. Perf gate: every `tests/perf` program and
+  a `map`/`filter`/`reduce` micro within noise of phase 1 (sort's generated code is
+  identical to phase 1's; its ±2% is noise). `reduce` with an accumulating lambda: 4000
+  copies → 1. The BST is unchanged (0.27 → 0.25 s): `insert` rebuilds nodes rather than
+  copying them, so it needs phase 5's reuse.
+
+Perf before phase 4 (phases 2–3, interleaved best-of runs vs phase 1): fib, sieve, nbody,
+hashmap, trees, strings, sort all within ±1% (an earlier non-interleaved run showed
+hashmap +3% and trees +2%, which interleaving showed to be noise).
+
 Then remove the hand-written workarounds that the compiler now handles (FLAC's
 `chans[c] = []`, `out0 = []` and the like) one package at a time, keeping each package's
 differential fuzz.

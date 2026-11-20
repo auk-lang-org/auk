@@ -9,6 +9,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("a_local_moves_at_its_last_use", a_local_moves_at_its_last_use),
   t.test("moves_keep_every_result", moves_keep_every_result),
   t.test("a_consumed_parameter_is_passed_owned", a_consumed_parameter_is_passed_owned),
+  t.test("closures_own_their_arguments", closures_own_their_arguments),
 ]
 
 fn scratch(name: str): str uses env, fs, ffi = t.scratch("ownership/{name}")
@@ -189,5 +190,31 @@ fn a_consumed_parameter_is_passed_owned() uses env, fs, ffi, time {
       """, true)
   // one copy: `kept` is still read after it's passed
   t.eq(out, "2000 2001 2000\n", "")
+  t.eq("{copies}", "1", "copy-on-write copies")
+}
+
+/// A closure owns its arguments: `reduce`'s accumulator and a value threaded through a lambda
+/// move in and out of it, so the pushes and appends are in place.
+fn closures_own_their_arguments() uses env, fs, ffi, time {
+  let (out, copies) = run_counted("closures", r"""
+      fn main() {
+        let out = (0..2000).reduce([], (acc, x) => {
+          var a = acc
+          a.push(x)
+          a
+        })
+        let f = (s: str, n: int) => {
+          var t = s
+          t += "{n}"
+          t
+        }
+        var s = ""
+        for i in 0..2000 { s = f(s, i % 10) }
+        let names = ["a", "b"].map(w => w + "!")
+        print("{out.len()} {s.len()} {names}")
+      }
+      """, true)
+  t.eq(out, "2000 2000 " + r"""["a!", "b!"]""" + "\n", "")
+  // the first append to the literal `""` (immortal)
   t.eq("{copies}", "1", "copy-on-write copies")
 }

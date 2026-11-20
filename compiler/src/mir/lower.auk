@@ -449,6 +449,14 @@ fn sole_local(lw: var Lower, l: int, c: mir.Ex): bool {
   true
 }
 
+/// Does a closure own its argument of type `t` (design/ownership-plan.md, section 5)? Every
+/// reference-counted one but a `var` parameter's: the caller moves or retains it, the closure
+/// releases it. (`dk_fv` thunks pass it on.)
+fn closure_owns(lw: var Lower, t: types.Ty): bool = match t {
+  Mut(_) => false
+  _ => lw.g.needs_rc(t)
+}
+
 /// Plan the moves of a body (its statements): the last-use reads of its locals.
 fn plan_moves(lw: var Lower, body: [ast.Expr]) {
   if lw.f.dbg != none || !lw.g.moves { return }
@@ -2460,7 +2468,8 @@ fn call_target(lw: var Lower, target: typed.Target, func: int?, args: [ArgV], re
         let pt = ps[k]
         pts.push(param_mty(pt))
         cs.push(match a {
-          Val(v) => lw.val_as(v, pt)
+          // the closure owns its arguments (`closure_owns`): moved or retained
+          Val(v) => if lw.closure_owns(pt) { lw.own_as(v, pt) } else { lw.val_as(v, pt) }
           Addr(p, _) => p
         })
       }
@@ -2797,7 +2806,8 @@ fn fn_value(lw: var Lower, target: typed.Target, func: int?, fty: types.Ty): int
     args.push(match p {
       // a `var` parameter: pass the caller's variable on
       Mut(t) => ArgV.Addr(pv[k2 + 1], t)
-      _ => ArgV.Val(plain(pv[k2 + 1], p))
+      // owned (`closure_owns`): passed on to a target that owns it, else released after
+      _ => if lw.closure_owns(p) { ArgV.Val(lw.reown(pv[k2 + 1], p)) } else { ArgV.Val(plain(pv[k2 + 1], p)) }
     })
   }
   let v = lw.call_target(target, func, args, r, mir.cstr("<fn>"), none)
@@ -4820,6 +4830,10 @@ fn closure(lw: var Lower, e: ast.Expr, params: [ast.Param], body: ast.Expr): Val
       }
     }
     none => {}
+  }
+  // the arguments are owned (`closure_owns`): released when the body ends
+  for i, t in fty {
+    if i + 1 < pv.len() && lw.closure_owns(t) { lw.register(pv[i + 1], t) }
   }
   if info.unpack {
     for i, p in params {
