@@ -651,6 +651,8 @@ AUK_API void auk_arr_remove(AukArr **pa, int64_t i, void *out, const char *loc);
 AUK_API void auk_arr_clear(AukArr **pa);
 AUK_API AukArr *auk_arr_slice(AukArr *a, int64_t lo, int64_t hi, const char *loc);
 AUK_API AukArr *auk_arr_take(AukArr *a, int64_t n);
+AUK_API void auk_arr_truncate(AukArr **pa, int64_t n, const char *loc);
+AUK_API AukArr *auk_arr_repeat(AukArr *a, int64_t n, const char *loc);
 AUK_API AukArr *auk_arr_skip(AukArr *a, int64_t n);
 AUK_API AukArr *auk_arr_copy(const AukArr *a);
 AUK_API AukArr *auk_arr_concat(const AukArr *a, const AukArr *b);

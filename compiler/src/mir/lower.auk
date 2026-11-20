@@ -262,10 +262,13 @@ fn has_coercions(lw: var Lower, id: int): bool = match lw.t.coercions.get(id) {
 }
 
 /// A cancellation point at the top of every iteration of a user loop (none in the runtime
-/// package, `uses raw` or not, nor in other `uses raw` code: the runtime's own loops).
+/// package, `uses raw` or not, nor in other `uses raw` code: the runtime's own loops). The flag
+/// is read with a relaxed atomic load: another thread sets it, and a plain load would let LLVM
+/// hoist it out of a loop that makes no calls, which then never sees the cancel.
 fn cancel_point(lw: var Lower, span: diag.Span) {
   if mir.lower.lowlevel.raw_fn(&lw) || lw.tp.program.is_runtime(lw.m) { return }
-  let pending = mir.rt_global("auk_cancel_pending", ty_int()).deref(ty_int())
+  let at = mir.rt_global("auk_cancel_pending", ty_int())
+  let pending = mir.rt("@raw.atomic_load.2", [at], ty_int())
   lw.open_if(mir.bin(mir.BOp.Ne, pending, mir.int_(0)))
   let l = lw.loc(span)
   lw.do_(mir.rt("auk_cancel_check", [l], mir.MTy.Void))
@@ -3647,19 +3650,15 @@ fn for_(lw: var Lower, e: ast.Expr, index: ast.Pat?, pat: ast.Pat, iter: ast.Exp
       let hc = lw.val_as(h, types.Ty.Int)
       let hv = lw.decl(types.Ty.Int, hc)
       let i = lw.decl(types.Ty.Int, lc)
-      lw.f.b.open_loop([mir.Stmt.Set(i, mir.bin(mir.BOp.Add, i, mir.int_(1)))])
-      lw.cancel_point(e.span)
       let op = if inclusive { mir.BOp.Le } else { mir.BOp.Lt }
-      lw.open_if(mir.bin(op, i, hv).not())
-      lw.emit(mir.Stmt.Break)
-      lw.close()
+      let blocked = lw.short_body(body)
+      let stop = lw.counted_open(e.span, i, hv, op, inclusive, blocked)
       lw.push(ScopeKind.Block)
       let depth = lw.f.scopes.len() - 1
       lw.bind_top(pat, i, types.Ty.Int)
       lw.loop_body(depth, body)
       lw.pop()
-      lw.emit(mir.Stmt.Continue)
-      lw.close()
+      lw.counted_close(i, stop, op)
     }
     List => {
       let v = lw.expr(iter)
@@ -3669,25 +3668,30 @@ fn for_(lw: var Lower, e: ast.Expr, index: ast.Pat?, pat: ast.Pat, iter: ast.Exp
       }
       let it = lw.hold(v)
       lw.register(it, types.list(et))
-      let k = lw.decl(types.Ty.Int, mir.int_(0))
-      lw.f.b.open_loop([mir.Stmt.Set(k, mir.bin(mir.BOp.Add, k, mir.int_(1)))])
-      lw.cancel_point(e.span)
-      let len = mir.rt("auk_arr_len", [it], ty_int())
-      lw.open_if(mir.bin(mir.BOp.Lt, k, len).not())
-      lw.emit(mir.Stmt.Break)
+      // `it` is the loop's own reference, so the body can't change the list under it (a change
+      // copies): its length and data pointer are read once, here
+      let n = lw.decl(types.Ty.Int, mir.rt("auk_arr_len", [it], ty_int()))
+      let pt = d(types.Ty.Ptr(et))
+      let data = lw.bdecl(mir.int_as(0, pt))
+      lw.open_if(mir.bin(mir.BOp.Gt, n, mir.int_(0)))
+      lw.set(data, mir.rt_field(it, mir.RtF.ArrData).cast(pt))
       lw.close()
+      let k = lw.decl(types.Ty.Int, mir.int_(0))
+      let blocked = lw.short_body(body)
+      let stop = lw.counted_open(e.span, k, n, mir.BOp.Lt, false, blocked)
       lw.push(ScopeKind.Block)
       let depth = lw.f.scopes.len() - 1
       match index {
         some(ix) => lw.bind_top(ix, k, types.Ty.Int)
         none => {}
       }
-      let ev = lw.decl(et, mir.elem(it, k, d(et)))
+      let off = mir.bin(mir.BOp.Mul, k, mir.size_of(d(et)).cast(ty_int()))
+      let at = mir.bin(mir.BOp.Add, data, off).cast(mir.ptr(d(et))).deref(d(et))
+      let ev = lw.decl(et, at)
       lw.bind_top(pat, ev, et)
       lw.loop_body(depth, body)
       lw.pop()
-      lw.emit(mir.Stmt.Continue)
-      lw.close()
+      lw.counted_close(k, stop, mir.BOp.Lt)
     }
     Map => {
       let v = lw.expr(iter)
@@ -3753,6 +3757,97 @@ fn for_(lw: var Lower, e: ast.Expr, index: ast.Pat?, pat: ast.Pat, iter: ast.Exp
       lw.close()
     }
   }
+}
+
+/// Iterations of a blocked loop between cancellation checks.
+let LOOP_BLOCK = 1024
+
+/// Opens a counted loop over `i` while `i op end` (`op` is `Lt`, or `Le` when `inclusive`),
+/// stepping by 1. Returns the bound of the inner loop when it is `blocked` (else none).
+/// `blocked`: the loop runs as blocks of up to LOOP_BLOCK iterations, with the cancellation check
+/// once per block and an inner loop free of it, which LLVM can unroll and vectorize. Only for
+/// bodies that can't run long (`short_body`), so a cancel still lands within microseconds.
+fn counted_open(
+  lw: var Lower,
+  span: diag.Span,
+  i: mir.Ex,
+  end: mir.Ex,
+  op: mir.BOp,
+  inclusive: bool,
+  blocked: bool,
+): mir.Ex? {
+  if !blocked {
+    lw.f.b.open_loop([mir.Stmt.Set(i, mir.bin(mir.BOp.Add, i, mir.int_(1)))])
+    lw.cancel_point(span)
+    lw.open_if(mir.bin(op, i, end).not())
+    lw.emit(mir.Stmt.Break)
+    lw.close()
+    return none
+  }
+  lw.f.b.open_loop([])
+  lw.cancel_point(span)
+  lw.open_if(mir.bin(op, i, end).not())
+  lw.emit(mir.Stmt.Break)
+  lw.close()
+  // this block ends at `end`, or LOOP_BLOCK iterations on. `end - i` wraps negative only when
+  // the true distance is over 2^63, far past a block, and `i + LOOP_BLOCK` is then below `end`
+  let stop = lw.decl(types.Ty.Int, end)
+  let room = lw.decl(types.Ty.Int, mir.bin(mir.BOp.Sub, end, i))
+  let last = if inclusive { LOOP_BLOCK - 1 } else { LOOP_BLOCK }
+  let near = mir.bin(mir.BOp.BitAnd, mir.bin(mir.BOp.Ge, room, mir.int_(0)), mir.bin(mir.BOp.Le, room, mir.int_(last)))
+  lw.open_if(near.not())
+  lw.set(stop, mir.bin(mir.BOp.Add, i, mir.int_(last)))
+  lw.close()
+  lw.f.b.open_loop([mir.Stmt.Set(i, mir.bin(mir.BOp.Add, i, mir.int_(1)))])
+  lw.open_if(mir.bin(op, i, stop).not())
+  lw.emit(mir.Stmt.Break)
+  lw.close()
+  some(stop)
+}
+
+/// Closes a loop `counted_open` opened (with the `stop` it returned).
+fn counted_close(lw: var Lower, i: mir.Ex, stop: mir.Ex?, op: mir.BOp) {
+  lw.emit(mir.Stmt.Continue)
+  lw.close()
+  match stop {
+    // the inner loop ended early only through a `break` in the body: leave the outer one too
+    some(stop) => {
+      lw.open_if(mir.bin(op, i, stop))
+      lw.emit(mir.Stmt.Break)
+      lw.close()
+      lw.close()
+    }
+    none => {}
+  }
+}
+
+/// A loop body that can't run long: it calls nothing but the runtime's C functions, intrinsics
+/// and variant constructors (no Auk function, closure, shape method or user C function, any of
+/// which may recurse or block). Its own loops don't count: they check for cancellation.
+fn short_body(lw: var Lower, body: ast.Block): bool {
+  var es: [ast.Expr] = []
+  for s in body.stmts { visit.visit_expr(s, &es) }
+  for x in es {
+    match x.kind {
+      Call(_, _) | MethodCall(_, _, _) | Pipe(_, _, _) | OptChain(_, _, some(_)) =>
+        if !lw.short_call(x.id) { return false }
+      Await(_) | AwaitAny(_) => return false
+      _ => {}
+    }
+  }
+  true
+}
+
+fn short_call(lw: var Lower, id: int): bool = match lw.t.calls.get(id) {
+  some(c) => match c.callee {
+    Fn(f, _) => match lw.tp.fns[f].kind {
+      Extern(_, _, _) | Intrinsic(_, _) => true
+      _ => false
+    }
+    Variant(_) => true
+    _ => false
+  }
+  none => false
 }
 
 fn loop_body(lw: var Lower, depth: int, body: ast.Block) {

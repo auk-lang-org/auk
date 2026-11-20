@@ -366,6 +366,88 @@ export fn auk_arr_skip(a: raw.Ptr<abi.Arr>, n0: i64): raw.Ptr<abi.Arr> uses raw,
   auk_arr_slice(a, if n < len { n } else { len }, len, raw.null())
 }
 
+/// Panics with "<what> <n> is negative".
+fn negative(loc: raw.Ptr<u8>, what: raw.Ptr<u8>, n: i64) uses raw, ffi {
+  var b = abi.StrBuf {}
+  let pb = raw.addr_of(&b)
+  auk__sb_put_cstr(pb, what)
+  auk__sb_put_cstr(pb, " ")
+  auk_sb_int(pb, n)
+  auk__sb_put_cstr(pb, " is negative")
+  auk__panic_sb(loc, pb)
+  raw.unreachable()
+}
+
+/// `xs.truncate(n)`: drops every element from index `n` on; nothing when `n >= len`. A unique
+/// list keeps its buffer; a shared one is replaced by a copy of its first `n` elements.
+export fn auk_arr_truncate(pa: raw.Ptr<raw.Ptr<abi.Arr>>, n: i64, loc: raw.Ptr<u8>) uses raw, ffi {
+  if n < 0 { negative(loc, "truncate length", n) }
+  let a = pa.load()
+  let len = auk_arr_len(a)
+  if n >= len { return }
+  if !is_unique(a) {
+    let c = auk_arr_new(a.ops, n)
+    if n != 0 { raw.copy(c.data, a.data, usize(n) * a.ops.size) }
+    c.len = n
+    let retain = a.ops.retain
+    if !retain.is_null() {
+      var i: i64 = 0
+      while i < n {
+        retain(raw.cast(elem(c, i)))
+        i += 1
+      }
+    }
+    rc.release(raw.cast(a))
+    pa.store(c)
+    return
+  }
+  let release = a.ops.release
+  if !release.is_null() {
+    var i = n
+    while i < len {
+      release(raw.cast(elem(a, i)))
+      i += 1
+    }
+  }
+  a.len = n
+}
+
+/// `xs.repeat(n)`: `xs` `n` times over, in one allocation (`[0].repeat(n)` is `n` zeros).
+export fn auk_arr_repeat(a: raw.Ptr<abi.Arr>, n: i64, loc: raw.Ptr<u8>): raw.Ptr<abi.Arr> uses raw, ffi {
+  if n < 0 { negative(loc, "repeat count", n) }
+  let len = auk_arr_len(a)
+  if len == 0 || n == 1 { return raw.cast(rc.retain(raw.cast(a))) }
+  let (total, overflow) = raw.mul_overflow(len, n)
+  if overflow {
+    rc.auk_panic_overflow(loc, "repeat")
+    raw.unreachable()
+  }
+  let sz = a.ops.size
+  let c = auk_arr_new(a.ops, total)
+  let bytes = usize(len) * sz
+  if total != 0 {
+    // one copy of `a`, then the filled part doubled until the end
+    raw.copy(c.data, a.data, bytes)
+    let all = usize(total) * sz
+    var done = bytes
+    while done < all {
+      let k = if done < all - done { done } else { all - done }
+      raw.copy(c.data.offset(i64(done)), c.data, k)
+      done += k
+    }
+  }
+  c.len = total
+  let retain = a.ops.retain
+  if !retain.is_null() {
+    var i: i64 = 0
+    while i < total {
+      retain(raw.cast(elem(c, i)))
+      i += 1
+    }
+  }
+  c
+}
+
 export fn auk_arr_copy(a: raw.Ptr<abi.Arr>): raw.Ptr<abi.Arr> uses raw, ffi = copy_with_cap(a, a.len)
 
 export fn auk_arr_concat(a: raw.Ptr<abi.Arr>, b: raw.Ptr<abi.Arr>): raw.Ptr<abi.Arr> uses raw, ffi {

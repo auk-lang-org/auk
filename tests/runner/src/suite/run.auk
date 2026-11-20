@@ -63,6 +63,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time, net = [
   t.test("catch_without_a_panic_leaks_nothing", catch_without_a_panic_leaks_nothing),
   t.test("task_panics_are_raised_at_await", task_panics_are_raised_at_await),
   t.test("await_any_and_cancel", await_any_and_cancel),
+  t.test("tight_loops_can_be_cancelled", tight_loops_can_be_cancelled),
   t.test("channels_and_task_heaps", channels_and_task_heaps),
   t.test("live_reload_swaps_code_and_keeps_state", live_reload_swaps_code_and_keeps_state),
   t.test(
@@ -1856,6 +1857,49 @@ fn await_any_and_cancel() uses env, fs, ffi, time {
       err(panic: cancelled at a blocking call)
       true
       """, o.stderr)
+}
+
+/// Loops that call nothing still see a cancel once optimized: the flag is read atomically (a
+/// plain load was hoisted out of such loops, so they spun forever), and a blocked `for` checks it
+/// once per block.
+fn tight_loops_can_be_cancelled() uses env, fs, ffi, time {
+  let d = scratch("tight_cancel")
+  t.write(paths.join(d, "spin.auk"), r"""
+      async fn spin_range(): int {
+        var n = 0
+        for i in 0..9223372036854775807 { n = n ^ i }
+        n
+      }
+      async fn spin_list(xs: [int]): int {
+        var n = 0
+        loop {
+          for x in xs { n = n ^ x }
+        }
+        n
+      }
+      async fn spin_while(): int {
+        var n = 0
+        var i = 0
+        while i >= 0 {
+          n = n ^ i
+          i = (i + 1) & 1023
+        }
+        n
+      }
+      fn main() uses time {
+        var xs: [int] = []
+        for i in 0..5000 { xs.push(i) }
+        let ts = [spin_range(), spin_list(xs), spin_while()]
+        time.sleep(20)
+        for k in ts { k.cancel() }
+        for k in ts { print((catch await k) is err(_)) }
+      }
+      """)
+  let exe = paths.join(d, "spin")
+  let o = auk_cmd().args(["build", "spin.auk", "-o"]).arg(exe).cwd(d).output()
+  t.check(o.success(), o.describe())
+  let o = cmd.new(exe).cwd(d).timeout(10_000).output()
+  t.eq(o.stdout, "true\ntrue\ntrue\n", o.describe())
 }
 
 /// Tasks share nothing: arguments, results and channel messages are deep copies, and a task

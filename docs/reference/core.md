@@ -73,6 +73,7 @@ else returns a new value.
 | `xs.insert(i, x)` | |
 | `xs.remove(i): T` | |
 | `xs[i] = x` | |
+| `xs.truncate(n)` | drop everything from index `n` on (nothing when `n >= len`) |
 
 | reading | |
 |---|---|
@@ -92,6 +93,7 @@ else returns a new value.
 | `xs.reduce(init, (acc, x) => ...)` | |
 | `xs.take(n)`, `skip(n)`, `take_while(pred)` | |
 | `xs.reverse()` | |
+| `xs.repeat(n)` | `xs` `n` times over: `[0].repeat(n)` is `n` zeros |
 | `xs.sort()` | a sorted copy; stable; needs `Ord` |
 | `xs.sort_by(key)` | by a key; a tuple key sorts by several fields |
 | `xs.unique()` | keeps the first of each |

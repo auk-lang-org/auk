@@ -231,6 +231,10 @@ pub extern fn take<T>(xs: [T], n: int): [T] = "auk_arr_take"
 pub extern fn skip<T>(xs: [T], n: int): [T] = "auk_arr_skip"
 /// A reversed copy.
 pub extern fn reverse<T>(xs: [T]): [T] = "auk_arr_reversed"
+/// Drop every element from index `n` on (nothing when `n >= len`): `xs.truncate(0)` empties it.
+pub extern fn truncate<T>(xs: var [T], n: int) = "auk_arr_truncate +loc"
+/// The list `n` times over, in one allocation: `[0].repeat(n)` is `n` zeros.
+pub extern fn repeat<T>(xs: [T], n: int): [T] = "auk_arr_repeat +loc"
 extern fn join_strs(xs: [str], sep: str): str = "auk_arr_join"
 
 // ---- lists: written in Auk ----
@@ -295,7 +299,12 @@ pub fn take_while<T>(xs: [T], pred: (T) => bool): [T] {
   xs.take(n)
 }
 
-pub fn contains<T: Eq>(xs: [T], x: T): bool = xs.any(y => y == x)
+pub fn contains<T: Eq>(xs: [T], x: T): bool {
+  for y in xs {
+    if y == x { return true }
+  }
+  false
+}
 
 pub fn sum(xs: [int]): int = xs.reduce(0, (a, b) => a + b)
 pub fn sum(xs: [float]): float = xs.reduce(0.0, (a, b) => a + b)
