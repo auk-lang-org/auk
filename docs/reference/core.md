@@ -32,6 +32,7 @@ Indexes and lengths count characters, not bytes.
 | `s.len()`, `s.byte_len()` | |
 | `s[i]`, `s[a..b]` | a `char`, a slice |
 | `s.chars(): [char]`, `s.bytes(): [int]` | |
+| `str(cs)`, `str(cs[a..b])` | the string of a `[char]`; of a slice, it is built straight from the range, with no list in between |
 | `s.split()`, `s.split(sep)` | on whitespace, or on a separator |
 | `s.lines()` | |
 | `s.trim()`, `trim_start()`, `trim_end()` | |
