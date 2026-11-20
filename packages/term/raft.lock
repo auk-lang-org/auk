@@ -2,7 +2,7 @@
 
 [[package]]
 name = "text"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry"
 effects = []
-checksum = "sha256:10d6572ed18db2dccec306bf754514533fb0ba2710c0178bef58d1c5b39adf4e"
+checksum = "sha256:c24692d077fc553cb00b64e9a58ecd55d6a201278954cc52d00bf325fa213cd6"
