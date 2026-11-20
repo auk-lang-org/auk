@@ -418,7 +418,7 @@ fn fixed_restore(s: var [int], order: int) {
   }
 }
 
-fn residual(b: var Bits, n: int, order: int, out0: var [int]): ()! {
+fn residual(b: var Bits, n: int, order: int, out: var [int]): ()! {
   let method = b.rd(2)
   if method > 1 { fail("reserved residual coding method {method}") }
   let pbits = 4 + method
@@ -426,9 +426,6 @@ fn residual(b: var Bits, n: int, order: int, out0: var [int]): ()! {
   let porder = b.rd(4)
   let psize = n >> porder
   if (psize << porder) != n || psize < order { fail("partition order {porder} for {n} samples") }
-  // work on the list as a local (the caller's is emptied meanwhile, so pushes don't copy)
-  var out = out0
-  out0 = []
   let d = b.d
   let len = d.len()
   for p in 0..(1 << porder) {
@@ -484,7 +481,6 @@ fn residual(b: var Bits, n: int, order: int, out0: var [int]): ()! {
     }
     if b.over() { fail("truncated") }
   }
-  out0 = out
 }
 
 // One frame: (frames decoded, next byte position), with each channel's samples appended to
@@ -569,7 +565,6 @@ fn frame(d: [int], at: int, s: Stream, chans: var [[int]]): (int, int)! {
   if bps != s.bps { fail("frame at byte {at} has {bps} bits per sample, the stream {s.bps}") }
   for c in 0..nch {
     var ch = chans[c]
-    chans[c] = []
     for v in subs[c] { ch.push(v) }
     chans[c] = ch
   }
@@ -1258,7 +1253,6 @@ fn put_subframe(w: var W, p: Plan, x: [int]) {
         acc = acc & (1 << nb) - 1
       } else {
         w.out = out
-        out = []
         w.acc = acc
         w.n = nb
         w.put_zeros(q)
@@ -1271,7 +1265,6 @@ fn put_subframe(w: var W, p: Plan, x: [int]) {
       }
     }
     w.out = out
-    out = []  // drop this reference, or the writer's next push would copy
     w.acc = acc
     w.n = nb
   }
