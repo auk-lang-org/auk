@@ -80,6 +80,11 @@ pub struct FnState {
   var_params: {int: bool},
   /// The names of the `var` parameters (`move_out` keeps them out of a take and its put).
   var_param_names: {str: bool},
+  /// The reads that are a local's last use (`mir.lower.live`), by expression id.
+  moves: {int: bool},
+  /// Reads at a last use not yet owned: (the variable holding the value, the local's own
+  /// variable). `own` moves them: no retain, and a zero left in the local.
+  movable: [(mir.Ex, mir.Ex, str)],
   dbg: FnDbg?,
   /// While binding an alternative of an or-pattern: the variable each of its locals goes in.
   or_into: {int: mir.Ex},
@@ -103,6 +108,8 @@ pub fn new_fs(ret: types.Ty): FnState = FnState {
   olds: {},
   var_params: {},
   var_param_names: {},
+  moves: {},
+  movable: [],
   dbg: none,
   or_into: {},
   bind_borrow: false,
@@ -388,17 +395,65 @@ pub fn cleanup_from(lw: var Lower, depth: int) {
   }
 }
 
-/// Take ownership of a value: moves an owned temporary, retains a borrowed value.
+/// Take ownership of a value: moves an owned temporary, retains a borrowed value, or moves a
+/// local read at its last use (leaving a zero in it).
 pub fn own(lw: var Lower, v: Val): mir.Ex {
   if v.owned {
     lw.unregister(v.c)
     return v.c
   }
+  if lw.take_movable(v) { return v.c }
   match lw.g.retain(v.ty, v.c) {
     some(r) => lw.emit(r)
     none => {}
   }
   v.c
+}
+
+/// If `v` is a local's last-use read (`name_ref`), move it: zero the local. Returns whether it
+/// did (then `v.c` is owned by the caller).
+fn take_movable(lw: var Lower, v: Val): bool {
+  if lw.f.movable.len() == 0 { return false }
+  var i = lw.f.movable.len() - 1
+  while i >= 0 {
+    let (alias, slot, site) = lw.f.movable[i]
+    if alias == v.c {
+      let _ = lw.f.movable.remove(i)
+      if lw.g.move_limit >= 0 && lw.g.move_count >= lw.g.move_limit { return false }
+      lw.g.move_count += 1
+      if lw.g.move_log { lw.g.move_sites.push(site) }
+      lw.set(slot, lw.g.zero(v.ty))
+      return true
+    }
+    i -= 1
+  }
+  false
+}
+
+/// Does a scope own the variable `c` (released when the scope ends)?
+fn owns_var(lw: var Lower, c: mir.Ex): bool {
+  for s in lw.f.scopes {
+    for (x, _) in s.owned {
+      if x == c { return true }
+    }
+  }
+  false
+}
+
+/// Is `l` the only local held in the variable `c`? (A pattern that binds the whole value, as
+/// in `match ty { t => t }`, may name the matched variable itself: moving `t` would empty `ty`.)
+fn sole_local(lw: var Lower, l: int, c: mir.Ex): bool {
+  for (other, s) in lw.f.locals {
+    if other != l && s.c == c { return false }
+  }
+  true
+}
+
+/// Plan the moves of a body (its statements): the last-use reads of its locals.
+fn plan_moves(lw: var Lower, body: [ast.Expr]) {
+  if lw.f.dbg != none || !lw.g.moves { return }
+  let ms = mir.lower.live.analyze(lw.t, body)
+  for (id, _) in ms { lw.f.moves[id] = true }
 }
 
 /// `own`, giving a zero of `ty` for a `never` value.
@@ -835,10 +890,14 @@ fn clause(lw: var Lower, c: ast.FnClause, pnames: [(mir.Ex, types.Ty, bool)], re
   lw.f.exit_scope = if lw.f.main_fn { lw.f.scopes.len() } else { -1 }
   let v = match c.body {
     some(Expr(e)) => {
+      lw.plan_moves([e])
       lw.dbg_hook(e.span, true)
       lw.expr_t(e, true)
     }
-    some(Block(b)) => lw.block(b, true)
+    some(Block(b)) => {
+      lw.plan_moves(b.stmts)
+      lw.block(b, true)
+    }
     _ => val_unit()
   }
   lw.f.exit_scope = -1
@@ -1035,6 +1094,7 @@ fn emit_test(lw: var Lower, body: ast.Block) {
     _ => {}
   }
   lw.push(ScopeKind.Block)
+  lw.plan_moves(body.stmts)
   for s in body.stmts { lw.stmt(s) }
   lw.cleanup_from(0)
   let okv = lw.ok_(ret, mir.unit())
@@ -1820,7 +1880,20 @@ fn name_ref(lw: var Lower, e: ast.Expr): Val {
   match n {
     Local(l) => {
       match lw.f.locals.get(l) {
-        some(s) => return plain(s.c, s.ty)
+        some(s) => {
+          // a last use of a local that owns its value: `own` may move it
+          if lw.f.moves.contains(e.id) && s.c.is_var() && lw.g.needs_rc(s.ty) && lw.owns_var(s.c) &&
+            lw.sole_local(l, s.c) {
+            var seen: {types.Ty: bool} = {}
+            if !mir.types.may_hold_handle(lw.g.info, s.ty, &seen) {
+              let alias = lw.decl(s.ty, s.c)
+              let site = if lw.g.move_log { "{lw.file}:{e.span.line}:{e.span.col}" } else { "" }
+              lw.f.movable.push((alias, s.c, site))
+              return plain(alias, s.ty)
+            }
+          }
+          return plain(s.c, s.ty)
+        }
         none => {}
       }
       // a local we never bound (unreachable code): a zero
@@ -2150,6 +2223,11 @@ fn call_extern(lw: var Lower, symbol: str, wants_loc: bool, func: int?, args: [A
     match (args[0], args[1]) {
       (Addr(pa, _), Val(v)) => if v.owned && v.c.is_var() && lw.g.needs_rc(v.ty) {
         lw.unregister(v.c)
+        let e = v.c.addr().cast(mir.void_ptr())
+        lw.do_(mir.rt("auk_arr_push_own", [pa, e], mir.MTy.Void))
+        return val_unit()
+      } else if !v.owned && lw.take_movable(v) {
+        // a local at its last use: moved in
         let e = v.c.addr().cast(mir.void_ptr())
         lw.do_(mir.rt("auk_arr_push_own", [pa, e], mir.MTy.Void))
         return val_unit()
@@ -4509,6 +4587,7 @@ fn closure(lw: var Lower, e: ast.Expr, params: [ast.Param], body: ast.Expr): Val
     }
   }
   if !(body.kind is ast.ExprKind.Block(_)) { lw.dbg_hook(body.span, true) }
+  lw.plan_moves([body])
   let v = lw.expr(body)
   if types.is_unit(ret) {
     if !v.is_never() {

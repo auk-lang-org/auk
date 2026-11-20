@@ -56,6 +56,9 @@ pub fn generate(
 ): Generated! uses ffi {
   var g = new_gen(tp, mode, emb)
   g.imprints = imprints
+  g.moves = !posix.env_set("AUK_NO_MOVES")
+  g.move_limit = int.parse(posix.env_str("AUK_MOVES_LIMIT") else "-1") else -1
+  g.move_log = posix.env_set("AUK_MOVES_LOG")
   g.trace = mir.progen.Trace { debug: false, lines: false, ..trace }
   g.lines = trace.lines
   g.dbg = mir.progen.Debug { on: trace.debug, core: false }
@@ -143,6 +146,9 @@ pub fn generate(
   for s in tail { b.emit(s) }
   g.define(entry, b)
   g.prog.entry = some(entry)
+  if g.move_log {
+    for i, site in g.move_sites { posix.eprint_raw("move {i} {site}\n") }
+  }
   Generated { prog: g.prog, info: g.info, dbg: g.dbg_info, holes: g.holes, tests: ntests, live_keys: g.live_keys }
 }
 

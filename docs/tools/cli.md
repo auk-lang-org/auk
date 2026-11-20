@@ -158,5 +158,7 @@ statements with effects (`rand`, `time`, files) run again on each input.
 |---|---|
 | `AUK_LEAK_CHECK=1` | `run` and `test` fail if the program leaks runtime objects |
 | `AUK_STATS=1` | programs print how many copy-on-write copies they made at exit |
+| `AUK_NO_MOVES=1` | compile without moving locals at their last use (to rule moves out when chasing a bug) |
+| `AUK_MOVES_LIMIT=n`, `AUK_MOVES_LOG=1` | compile with only the first `n` moves; print where each move is (bisecting a bad move) |
 | `AUK_LINKER` | a C compiler driver (`cc`, `clang`) for `build` to link with, instead of calling the system linker directly |
 | `AUK_HATCH_CMD` | the model command `auk hatch` runs (default `claude -p`) |

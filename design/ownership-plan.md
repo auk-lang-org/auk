@@ -193,6 +193,23 @@ benchmark slower by more than 2%, and the phase's micro-benchmarks scale linearl
   `tests/runner/src/suite/ownership.auk`. Not done in phase 1: `xs.get(i) else d` on lists
   (rare; `xs[i]` already works).
 
+- **Phase 2 (2026-11-19):** `mir/lower/live.auk` (the analysis) and the move in `own`, plus
+  `push` of a moved local (`auk_arr_push_own`). Locals move only if a scope owns their
+  variable (so borrowed parameters and borrowed pattern bindings never do), their type can't
+  reach a handle, and the read isn't followed by another mention in the same statement.
+  Conservative where order is unclear: closure and `catch` bodies, guards, struct bases and
+  shorthand fields, assignment targets other than a plain name, and the roots of
+  `match`/`is`/`for`. `AUK_NO_MOVES=1` turns it off at compile time. Case B: 1000 copies → 0.
+  Not moved yet: values stored by runtime calls that retain (`m[k] = x`, `xs[i] = x`).
+  Two bugs found while bringing it up, both fixed and covered by `tests/fixtures/moves.auk`:
+  an earlier read in the same statement can still be a pending borrowed value (interpolation
+  parts), so a move needs the local's only mention in its statement; and a pattern binding
+  the whole matched value (`match ty { t => t }`) shares the matched variable, so a local
+  moves only if no other local is bound to its variable. The second one miscompiled the
+  compiler itself (found by bisecting with `AUK_MOVES_LIMIT`/`AUK_MOVES_LOG`).
+  Found along the way (pre-existing, both with and without moves): `(xs, { xs = ys; 1 })`
+  gives `([3], 1)`. The tuple reads `xs` after the block reassigns it.
+
 Then remove the hand-written workarounds that the compiler now handles (FLAC's
 `chans[c] = []`, `out0 = []` and the like) one package at a time, keeping each package's
 differential fuzz.

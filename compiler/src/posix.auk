@@ -11,6 +11,7 @@ extern fn c_dup2(a: int, b: int): int = "int dup2(int, int)"
 extern fn c_close(fd: int): int = "int close(int)"
 extern fn c_waitpid(pid: int, status: ffi.Ptr, flags: int): int = "int waitpid(int, void *, int)"
 extern fn c_getpid(): int = "int getpid(void)"
+extern fn c_getenv(name: str): ffi.Ptr = "char *getenv(const char *)"
 
 /// Write `s` to stdout as is (`print` adds a newline), after what `print` buffered.
 pub fn print_raw(s: str) uses ffi { write_all(1, s) }
@@ -37,6 +38,16 @@ pub fn flush() uses ffi { let _ = c_fflush(ffi.null) }
 
 /// This process's id.
 pub fn pid(): int uses ffi = c_getpid()
+
+/// Is the environment variable `name` set? (For switches read where `env` isn't available.)
+pub fn env_set(name: str): bool uses ffi = !c_getenv(name).is_null()
+
+/// The environment variable `name`, if set.
+pub fn env_str(name: str): str? uses ffi {
+  let p = c_getenv(name)
+  if p.is_null() { return none }
+  some(ffi.cstr(p))
+}
 
 /// Where a forked child's standard streams go: a file to create (or `/dev/null`), none to keep
 /// the parent's.

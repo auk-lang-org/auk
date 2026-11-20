@@ -6,6 +6,8 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("take_and_put_back_changes_in_place", take_and_put_back_changes_in_place),
   t.test("take_and_put_back_falls_back_when_unsafe", take_and_put_back_falls_back_when_unsafe),
   t.test("a_caught_panic_leaves_a_var_parameter_valid", a_caught_panic_leaves_a_var_parameter_valid),
+  t.test("a_local_moves_at_its_last_use", a_local_moves_at_its_last_use),
+  t.test("moves_keep_every_result", moves_keep_every_result),
 ]
 
 fn scratch(name: str): str uses env, fs, ffi = t.scratch("ownership/{name}")
@@ -117,4 +119,49 @@ fn a_caught_panic_leaves_a_var_parameter_valid() uses env, fs, ffi, time {
       }
       """, false)
   t.eq(out, "true\ntrue\n", "")
+}
+
+/// `var w = v; w.push(i); v = w`: `v` is dead after the copy, so it moves into `w` and the
+/// push is in place.
+fn a_local_moves_at_its_last_use() uses env, fs, ffi, time {
+  let (out, copies) = run_counted("last_use", r"""
+      fn main() {
+        var v: [int] = []
+        for i in 0..2000 {
+          var w = v
+          w.push(i)
+          v = w
+        }
+        var s = ""
+        for i in 0..2000 {
+          var t = s
+          t += "x"
+          s = t
+        }
+        var kept: [[int]] = []
+        var u: [int] = []
+        for i in 0..3 {
+          var w = u
+          w.push(i)
+          kept.push(u)
+          u = w
+        }
+        print("{v.len()} {s.len()} {kept} {u}")
+      }
+      """, true)
+  t.eq(out, "2000 2000 [[], [0], [0, 1]] [0, 1, 2]\n", "")
+  // 3 in the last loop (`u` is still read after `w` takes it, so each push copies) and 1 for
+  // the first append to the literal `""` (immortal)
+  t.eq("{copies}", "4", "copy-on-write copies")
+}
+
+/// tests/fixtures/moves.auk (loops, branches, matches, closures, `catch`, shadowing, tail
+/// calls): the same output with and without moves, and nothing leaks.
+fn moves_keep_every_result() uses env, fs, ffi, time {
+  let f = t.abs("tests/fixtures/moves.auk")
+  let a = t.auk().args(["run", f]).setenv("AUK_LEAK_CHECK", "1").output()
+  t.check(a.success(), a.describe())
+  let b = t.auk().args(["run", f]).setenv("AUK_LEAK_CHECK", "1").setenv("AUK_NO_MOVES", "1").output()
+  t.check(b.success(), b.describe())
+  t.eq(a.stdout, b.stdout, "with moves vs AUK_NO_MOVES=1")
 }

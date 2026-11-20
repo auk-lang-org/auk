@@ -161,6 +161,14 @@ pub struct Gen {
   lines: bool,
   /// The bytes of every `"#embed path"` file (read before lowering, so lowering needs no `fs`).
   embeds: {str: [int]},
+  /// Move locals at their last use (design/ownership-plan.md; off with AUK_NO_MOVES).
+  moves: bool,
+  /// Debugging moves: make only the first `move_limit` moves (-1: all; AUK_MOVES_LIMIT), and
+  /// with `move_log` (AUK_MOVES_LOG) record where each one is.
+  move_limit: int,
+  move_count: int,
+  move_log: bool,
+  move_sites: [str],
 }
 
 /// Move the state out of `g` (leaving an empty one that shares only the read-only parts), so
@@ -236,6 +244,11 @@ pub fn new(tp: typed.TypedProgram, mode: Mode): Gen {
     dbg_info: DbgInfo { sites: [], fns: [], types: [], type_ids: {} },
     lines: false,
     embeds: {},
+    moves: true,
+    move_limit: -1,
+    move_count: 0,
+    move_log: false,
+    move_sites: [],
   }
 }
 
