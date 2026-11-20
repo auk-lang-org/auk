@@ -158,10 +158,11 @@ fn a_local_moves_at_its_last_use() uses env, fs, ffi, time {
 }
 
 /// tests/fixtures/moves.auk (loops, branches, matches, closures, `catch`, shadowing, tail
-/// calls) and owned_params.auk (direct calls, function values, recursion, clauses): the same
-/// output with and without moves, and nothing leaks.
+/// calls), owned_params.auk (direct calls, function values, recursion, clauses) and reuse.auk
+/// (arms that reuse a matched value's boxes, shared or not): the same output with and without
+/// moves, and nothing leaks.
 fn moves_keep_every_result() uses env, fs, ffi, time {
-  for name in ["moves", "owned_params"] {
+  for name in ["moves", "owned_params", "reuse"] {
     let f = t.abs("tests/fixtures/{name}.auk")
     let a = t.auk().args(["run", f]).setenv("AUK_LEAK_CHECK", "1").output()
     t.check(a.success(), a.describe())

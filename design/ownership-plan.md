@@ -1,6 +1,6 @@
 # Ownership at last use
 
-Status: **approved 2026-11-19**, phases 0–1 in progress. Follows up item (1) of `mem-pot-results.md`.
+Status: **approved 2026-11-19**; phases 0–5 done 2026-11-19 (workaround cleanup left). Follows up item (1) of `mem-pot-results.md`.
 
 ## The problem
 
@@ -239,6 +239,24 @@ benchmark slower by more than 2%, and the phase's micro-benchmarks scale linearl
 Perf before phase 4 (phases 2–3, interleaved best-of runs vs phase 1): fib, sieve, nbody,
 hashmap, trees, strings, sort all within ±1% (an earlier non-interleaved run showed
 hashmap +3% and trees +2%, which interleaving showed to be noise).
+
+- **Phase 5 (2026-11-19):** `reuse_arms`/`reuse_arm` (lower.auk). `mir.lower.live` finds the
+  `match`es on a local that is dead afterwards and mentioned in the statement only by the
+  scrutinee and by arms that don't reuse it (`Plan.reuse`). A `match` root is pinned only
+  inside arms that bind names (so `_ => t` moves `t`), and the scrutinee read itself is never
+  a move. An arm `V(a, b, ..) => V(..)` on such a local (owned, alone in its variable, an enum
+  that can't reach a handle) evaluates the new fields first, keeping a binding passed back in
+  its own field as it is, then takes the old value apart: a replaced boxed field gets the
+  new value in its old box when `auk_refcount` is 1 (old contents released first), else a
+  new box; an inline field's old value is released; the local is zeroed. A replaced box's
+  binding mentioned once in the new fields is moved out of the box when the box is ours
+  alone (a run-time-conditional move: `movable` entries carry a condition), so a recursive
+  callee finds its part unique too. `param_modes` counts a parameter as consumed when such a
+  `match` has an arm of that shape (`rebuilds`). An earlier version counted any eligible arm,
+  which made `check` in tests/perf/trees own its tree and retain each child (+10%).
+  BST benchmark (auk-bench 18_bst): 0.165 → 0.095 s. tests/perf: within noise;
+  trees' code is identical to phase 1's. Tests: tests/fixtures/reuse.auk (unique and shared
+  trees, swapped fields, inline fields, lists, aliases), same output with AUK_NO_MOVES=1.
 
 Then remove the hand-written workarounds that the compiler now handles (FLAC's
 `chans[c] = []`, `out0 = []` and the like) one package at a time, keeping each package's

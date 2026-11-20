@@ -84,7 +84,10 @@ pub struct FnState {
   moves: {int: bool},
   /// Reads at a last use not yet owned: (the variable holding the value, the local's own
   /// variable). `own` moves them: no retain, and a zero left in the local.
-  movable: [(mir.Ex, mir.Ex, str)],
+  /// With a condition (`reuse_arm`): moved only when it holds at run time, else retained.
+  movable: [(mir.Ex, mir.Ex, str, mir.Ex?)],
+  /// Per `match` (by id): which arms may take its scrutinee apart and reuse its cells.
+  reuse: {int: [bool]},
   dbg: FnDbg?,
   /// While binding an alternative of an or-pattern: the variable each of its locals goes in.
   or_into: {int: mir.Ex},
@@ -110,6 +113,7 @@ pub fn new_fs(ret: types.Ty): FnState = FnState {
   var_param_names: {},
   moves: {},
   movable: [],
+  reuse: {},
   dbg: none,
   or_into: {},
   bind_borrow: false,
@@ -402,7 +406,10 @@ pub fn own(lw: var Lower, v: Val): mir.Ex {
     lw.unregister(v.c)
     return v.c
   }
-  if lw.take_movable(v) { return v.c }
+  match lw.take_movable(v) {
+    some(c) => return c
+    none => {}
+  }
   match lw.g.retain(v.ty, v.c) {
     some(r) => lw.emit(r)
     none => {}
@@ -412,22 +419,39 @@ pub fn own(lw: var Lower, v: Val): mir.Ex {
 
 /// If `v` is a local's last-use read (`name_ref`), move it: zero the local. Returns whether it
 /// did (then `v.c` is owned by the caller).
-fn take_movable(lw: var Lower, v: Val): bool {
-  if lw.f.movable.len() == 0 { return false }
+fn take_movable(lw: var Lower, v: Val): mir.Ex? {
+  if lw.f.movable.len() == 0 { return none }
   var i = lw.f.movable.len() - 1
   while i >= 0 {
-    let (alias, slot, site) = lw.f.movable[i]
+    let (alias, slot, site, cond) = lw.f.movable[i]
     if alias == v.c {
       let _ = lw.f.movable.remove(i)
-      if lw.g.move_limit >= 0 && lw.g.move_count >= lw.g.move_limit { return false }
+      if lw.g.move_limit >= 0 && lw.g.move_count >= lw.g.move_limit { return none }
       lw.g.move_count += 1
       if lw.g.move_log { lw.g.move_sites.push(site) }
-      lw.set(slot, lw.g.zero(v.ty))
-      return true
+      match cond {
+        none => {
+          lw.set(slot, lw.g.zero(v.ty))
+          return some(v.c)
+        }
+        some(c) => {
+          // the value, then: moved out (a zero left behind) or retained
+          let held = lw.decl(v.ty, v.c)
+          lw.open_if(c)
+          lw.set(slot, lw.g.zero(v.ty))
+          lw.else_()
+          match lw.g.retain(v.ty, held) {
+            some(r) => lw.emit(r)
+            none => {}
+          }
+          lw.close()
+          return some(held)
+        }
+      }
     }
     i -= 1
   }
-  false
+  none
 }
 
 /// Does a scope own the variable `c` (released when the scope ends)?
@@ -460,8 +484,9 @@ fn closure_owns(lw: var Lower, t: types.Ty): bool = match t {
 /// Plan the moves of a body (its statements): the last-use reads of its locals.
 fn plan_moves(lw: var Lower, body: [ast.Expr]) {
   if lw.f.dbg != none || !lw.g.moves { return }
-  let ms = mir.lower.live.analyze(lw.t, body)
-  for (id, _) in ms { lw.f.moves[id] = true }
+  let plan = mir.lower.live.analyze(lw.t, body)
+  for (id, _) in plan.moves { lw.f.moves[id] = true }
+  for (id, arms) in plan.reuse { lw.f.reuse[id] = arms }
 }
 
 /// `own`, giving a zero of `ty` for a `never` value.
@@ -889,8 +914,8 @@ pub fn param_modes(g: var mir.progen.Gen, i: int): [bool] {
       some(Block(b)) => b.stmts
       _ => []
     }
-    let ms = mir.lower.live.analyze(t, body)
-    var cx = Consume { t, inst: i, moves: ms, params: pl, out }
+    let plan = mir.lower.live.analyze(t, body)
+    var cx = Consume { t, inst: i, moves: plan.moves, reuse: plan.reuse, params: pl, out }
     for k2, s in body { consume(&g, &cx, s, k2 == body.len() - 1) }
     out = cx.out
   }
@@ -899,10 +924,28 @@ pub fn param_modes(g: var mir.progen.Gen, i: int): [bool] {
   out
 }
 
+/// Is the arm `V(a, b, ..) => V(..)`: plain bindings, and a body that builds the same variant
+/// (the shape `reuse_arm` handles)?
+fn rebuilds(resolved: {int: typed.Target}, t: typed.Tables, a: ast.Arm): bool {
+  let sub = match a.pat.kind {
+    Variant(_, some(ps)) => ps
+    _ => return false
+  }
+  for q in sub {
+    if !((q.kind is ast.PatKind.Bind(_)) || (q.kind is ast.PatKind.Wild)) { return false }
+  }
+  let vr = t.variants.get(a.pat.id) else return false
+  match resolved.get(a.body.id) {
+    some(Variant(_, idx)) => idx == vr.index
+    _ => false
+  }
+}
+
 struct Consume {
   t: typed.Tables,
   inst: int,
   moves: {int: bool},
+  reuse: {int: [bool]},
   /// The candidate parameters' locals, and their positions.
   params: {int: int},
   out: [bool],
@@ -945,6 +988,20 @@ fn consume(g: var mir.progen.Gen, cx: var Consume, e: ast.Expr, owning: bool) {
       }
     }
     Match(s, arms) => {
+      // a `match` with an arm that rebuilds the variant it matched, reusing the parameter's
+      // cells, takes it
+      match cx.reuse.get(e.id) {
+        some(rs) => if arms.enum().any((ai, a) => ai < rs.len() && rs[ai] && rebuilds(g.tp.instances[cx.inst].resolved, cx.t, a)) {
+          match cx.t.names.get(s.id) {
+            some(Local(l)) => match cx.params.get(l) {
+              some(k) => cx.out[k] = true
+              none => {}
+            }
+            _ => {}
+          }
+        }
+        none => {}
+      }
       consume(&g, &cx, s, false)
       for a in arms {
         match a.guard {
@@ -2147,7 +2204,7 @@ fn name_ref(lw: var Lower, e: ast.Expr): Val {
             if !mir.types.may_hold_handle(lw.g.info, s.ty, &seen) {
               let alias = lw.decl(s.ty, s.c)
               let site = if lw.g.move_log { "{lw.file}:{e.span.line}:{e.span.col}" } else { "" }
-              lw.f.movable.push((alias, s.c, site))
+              lw.f.movable.push((alias, s.c, site, none))
               return plain(alias, s.ty)
             }
           }
@@ -2489,11 +2546,16 @@ fn call_extern(lw: var Lower, symbol: str, wants_loc: bool, func: int?, args: [A
         let e = v.c.addr().cast(mir.void_ptr())
         lw.do_(mir.rt("auk_arr_push_own", [pa, e], mir.MTy.Void))
         return val_unit()
-      } else if !v.owned && lw.take_movable(v) {
+      } else if !v.owned {
         // a local at its last use: moved in
-        let e = v.c.addr().cast(mir.void_ptr())
-        lw.do_(mir.rt("auk_arr_push_own", [pa, e], mir.MTy.Void))
-        return val_unit()
+        match lw.take_movable(v) {
+          some(c) => {
+            let e = c.addr().cast(mir.void_ptr())
+            lw.do_(mir.rt("auk_arr_push_own", [pa, e], mir.MTy.Void))
+            return val_unit()
+          }
+          none => {}
+        }
       }
       _ => {}
     }
@@ -3979,6 +4041,7 @@ fn match_(lw: var Lower, e: ast.Expr, scrut: ast.Expr, arms: [ast.Arm], tail: bo
   let r = if has { some(lw.zero_decl(ty)) } else { none }
   let end = lw.f.b.label()
   let lit_case = lw.str_switch(arms, s, st)
+  let reuse = if stable { lw.reuse_arms(e, scrut, s, st) } else { [] }
   for ai, a in arms {
     let test = match lit_case {
       some((k, idx)) when idx[ai] >= 0 => mir.bin(mir.BOp.Eq, k, mir.int_(idx[ai]))
@@ -3992,7 +4055,11 @@ fn match_(lw: var Lower, e: ast.Expr, scrut: ast.Expr, arms: [ast.Arm], tail: bo
     lw.f.bind_borrow = false
     let guarded = lw.guard(a.guard)
     lw.push(ScopeKind.Block)
-    let v = lw.expr_t(a.body, tail)
+    let reused = if ai < reuse.len() && reuse[ai] { lw.reuse_arm(a.pat, a.body, s, st) } else { none }
+    let v = match reused {
+      some(rv) => rv
+      none => lw.expr_t(a.body, tail)
+    }
     let never = v.is_never()
     match r {
       some(r) => if !never {
@@ -4018,6 +4085,153 @@ fn match_(lw: var Lower, e: ast.Expr, scrut: ast.Expr, arms: [ast.Arm], tail: bo
     some(r) => lw.reown(r, ty)
     none => if ty == types.Ty.Never { val_never() } else { val_unit() }
   }
+}
+
+/// Which arms of the `match` `e` may take its scrutinee apart and reuse its cells
+/// (design/ownership-plan.md, section 6): the scrutinee is a local this frame owns, alone in
+/// its variable, dead after the `match` (`mir.lower.live`), of an enum type that can't reach a
+/// handle; `s` is its variable.
+fn reuse_arms(lw: var Lower, e: ast.Expr, scrut: ast.Expr, s: mir.Ex, st: types.Ty): [bool] {
+  let arms = lw.f.reuse.get(e.id) else return []
+  if lw.f.dbg != none || !lw.g.moves || !s.is_var() || !lw.g.needs_rc(st) { return [] }
+  let l = match lw.t.names.get(scrut.id) {
+    some(Local(l)) => l
+    _ => return []
+  }
+  if !lw.owns_var(s) || !lw.sole_local(l, s) { return [] }
+  let is_enum = match st {
+    Named(dd, _) => !types.is_raw_def(lw.tp.defs, dd) && !lw.g.is_value(st) && mir.types.enum_layout(lw.g.info, st).len() > 0
+    _ => false
+  }
+  if !is_enum { return [] }
+  var seen: {types.Ty: bool} = {}
+  if mir.types.may_hold_handle(lw.g.info, st, &seen) { return [] }
+  arms
+}
+
+/// An arm `V(a, b, c) => V(x, y, z)` that rebuilds the variant it matched, on a scrutinee `s`
+/// it may take apart (`reuse_arms`): the arguments are evaluated first (a binding passed back
+/// in its own field is not: that field is kept as it is), then the old value's fields are
+/// taken over. A boxed field gets the new value in its old box when nobody else holds the
+/// box (its contents released first), else a new box; an inline field's old value is
+/// released. `s` is left zero. `none` when the arm isn't of this shape.
+fn reuse_arm(lw: var Lower, pat: ast.Pat, body: ast.Expr, s: mir.Ex, st: types.Ty): Val? {
+  let sub = match pat.kind {
+    Variant(_, some(ps)) => ps
+    _ => return none
+  }
+  let vr = lw.t.variants.get(pat.id) else return none
+  if lw.has_coercions(body.id) || lw.ty(body.id) != st { return none }
+  let same = match lw.tp.instances[lw.inst].resolved.get(body.id) {
+    some(Variant(_, idx)) => idx == vr.index
+    _ => false
+  }
+  if !same { return none }
+  let call = lw.t.calls.get(body.id) else return none
+  let layout = mir.types.enum_layout(lw.g.info, st)[vr.index]
+  if call.args.len() != sub.len() || layout.len() != sub.len() { return none }
+  // the local each field is bound to (none: `_`)
+  var bound: [int?] = []
+  for q in sub {
+    match q.kind {
+      Bind(_) => {
+        if lw.t.variants.contains(q.id) { return none }
+        bound.push(lw.t.binds.get(q.id))
+      }
+      Wild => bound.push(none)
+      _ => return none
+    }
+  }
+  let exprs = arg_exprs(body)
+  var xs: [ast.Expr] = []
+  for a in call.args {
+    if a.by_ref { return none }
+    xs.push(find_expr(exprs, a.node) else return none)
+  }
+  // which fields are kept: a binding passed back in its own place
+  var keeps: [bool] = []
+  for k, x in xs {
+    var keep = false
+    match (x.kind, bound[k]) {
+      (Name(_), some(bl)) => match lw.t.names.get(x.id) {
+        some(Local(l)) => keep = l == bl && !lw.has_coercions(x.id)
+        _ => {}
+      }
+      _ => {}
+    }
+    keeps.push(keep)
+  }
+  // a boxed field that will be replaced, whose binding the new fields mention once: when the
+  // box is ours alone, taking that binding moves the contents out (`take_movable`), so a
+  // callee that rebuilds it finds it unique too
+  var all: [ast.Expr] = []
+  for x in xs { visit.visit_expr(x, &all) }
+  for k, (ft, boxed) in layout {
+    if !boxed || keeps[k] { continue }
+    let bl = bound[k] else continue
+    var n = 0
+    for y in all {
+      match lw.t.names.get(y.id) {
+        some(Local(l)) => if l == bl && (y.kind is ast.ExprKind.Name(_)) { n += 1 }
+        _ => {}
+      }
+    }
+    if n != 1 { continue }
+    let slot = lw.f.locals.get(bl) else continue
+    let bx = lw.fld(s, mir.Sel.V(vr.index, k))
+    let alone = lw.bdecl(mir.bin(mir.BOp.Eq, mir.rt("auk_refcount", [bx], mir.MTy.I64), mir.i64(1)))
+    lw.f.movable.push((slot.c, slot.c, "", some(alone)))
+  }
+  // evaluate the new fields (owned), keeping a field passed back in its own place
+  var vals: [mir.Ex?] = []
+  for k, x in xs {
+    if keeps[k] {
+      vals.push(none)
+      continue
+    }
+    let v = lw.expr(x)
+    if v.is_never() {
+      lw.f.movable = lw.f.movable.filter(m => m.3 == none)
+      return some(v)
+    }
+    let ft = layout[k].0
+    let o = lw.own_as(v, ft)
+    vals.push(some(lw.decl(ft, o)))
+  }
+  // the conditional moves not taken lapse here (another arm binds the same places)
+  lw.f.movable = lw.f.movable.filter(m => m.3 == none)
+  // take the old value apart
+  var fields: [(mir.Ex, bool)] = []
+  for k, (ft, boxed) in layout {
+    let place = lw.fld(s, mir.Sel.V(vr.index, k))
+    match vals[k] {
+      none => fields.push((lw.bdecl(place), boxed))
+      some(nv) => if boxed {
+        let bx = lw.bdecl(place)
+        lw.open_if(mir.bin(mir.BOp.Eq, mir.rt("auk_refcount", [bx], mir.MTy.I64), mir.i64(1)))
+        let inside = lw.g.unbox(ft, bx)
+        match lw.g.release(ft, inside) {
+          some(rr) => lw.emit(rr)
+          none => {}
+        }
+        lw.set(inside, nv)
+        lw.else_()
+        lw.do_(mir.rt("auk_release", [bx], mir.MTy.Void))
+        lw.set(bx, lw.g.box_new(ft, nv))
+        lw.close()
+        fields.push((bx, true))
+      } else {
+        match lw.g.release(ft, place) {
+          some(rr) => lw.emit(rr)
+          none => {}
+        }
+        fields.push((nv, false))
+      }
+    }
+  }
+  lw.set(s, lw.g.zero(st))
+  let c = lw.g.variant_new_pre(st, vr.index, fields)
+  some(lw.tmp(st, c))
 }
 
 fn arm_str_lit(a: ast.Arm): str? = match a.pat.kind {

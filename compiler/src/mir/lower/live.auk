@@ -11,9 +11,13 @@
 ///
 /// Conservative where evaluation order isn't plain left to right: a closure or `catch` body,
 /// a `match` guard, a struct literal's base, an assignment target. Their names are live and
-/// mentioned, and never moved. A local that is the root of a `match` or `is` scrutinee or a
-/// `for` loop's iterable is never moved (pattern bindings and loop elements may borrow from
-/// it).
+/// mentioned, and never moved. A local that is the root of an `is` scrutinee or a `for`
+/// loop's iterable is never moved (pattern bindings and loop elements may borrow from it), nor
+/// the root of a `match` scrutinee inside an arm that binds names.
+///
+/// Also finds the `match`es whose scrutinee, a local, can be taken apart and its cells reused
+/// by an arm (section 6 of the plan): dead after the `match`, and mentioned nowhere else in the
+/// statement but in arms that don't reuse it.
 
 pub struct Live {
   t: typed.Tables,
@@ -29,16 +33,26 @@ pub struct Live {
   brk: [{int: bool}],
   /// Live at the head of each enclosing loop (`continue`).
   cont: [{int: bool}],
+  /// Per `match` (by id): which arms may reuse the scrutinee local.
+  reuse: {int: [bool]},
+}
+
+/// What `analyze` finds in a body.
+pub struct Plan {
+  /// The reads that are last uses (by expression id).
+  moves: {int: bool},
+  /// Per `match` (by id): which arms may reuse its scrutinee, a local.
+  reuse: {int: [bool]},
 }
 
 /// The last-use reads of a function body (`body`: its statements, or one expression).
-pub fn analyze(t: typed.Tables, body: [ast.Expr]): {int: bool} {
-  var lv = Live { t, moves: {}, pinned: {}, mentioned: {}, counts: {}, brk: [], cont: [] }
+pub fn analyze(t: typed.Tables, body: [ast.Expr]): Plan {
+  var lv = Live { t, moves: {}, pinned: {}, mentioned: {}, counts: {}, brk: [], cont: [], reuse: {} }
   var all: [ast.Expr] = []
   for s in body { visit.visit_expr(s, &all) }
   for e in all {
     match e.kind {
-      Match(x, _) | Is(x, _) => lv.pin_root(x)
+      Is(x, _) => lv.pin_root(x)
       For(_, _, x, _) => lv.pin_root(x)
       _ => {}
     }
@@ -48,7 +62,14 @@ pub fn analyze(t: typed.Tables, body: [ast.Expr]): {int: bool} {
   for (id, m) in lv.moves {
     if m { out[id] = true }
   }
-  out
+  Plan { moves: out, reuse: lv.reuse }
+}
+
+/// The local a place expression is rooted at (`t` for `t.a[i]`).
+fn root_of(lv: var Live, e: ast.Expr): int? = match e.kind {
+  Name(_) => lv.local_of(e)
+  Field(x, _) | TupleField(x, _) | Index(x, _) | Slice(x, _, _, _) | Unwrap(x) | Ref(x) => lv.root_of(x)
+  _ => none
 }
 
 fn local_of(lv: var Live, e: ast.Expr): int? = match lv.t.names.get(e.id) {
@@ -347,19 +368,65 @@ fn ex(lv: var Live, e: ast.Expr, out: {int: bool}): {int: bool} {
       let after = lv.mentioned
       var live = out
       var ms = after
+      let root = lv.root_of(scrut)
+      var arm_uses: [int] = []
       for a in arms {
         lv.mentioned = after
+        // bindings may borrow from the scrutinee: its root stays put in their arm
+        let binds = lv.binds_of(a.pat)
+        var pin_here = false
+        match root {
+          some(r) => if binds.len() > 0 && !lv.pinned.contains(r) {
+            lv.pinned[r] = true
+            pin_here = true
+          }
+          none => {}
+        }
         var l2 = lv.ex(a.body, out)
         match a.guard {
           some(g) => l2 = lv.mention_all(g, l2)
           none => {}
         }
-        l2 = without(l2, lv.binds_of(a.pat))
+        if pin_here {
+          match root {
+            some(r) => { let _ = lv.pinned.remove(r) }
+            none => {}
+          }
+        }
+        l2 = without(l2, binds)
         live = union(live, l2)
         ms = union(ms, lv.mentioned)
+        var n = 0
+        match root {
+          some(r) => {
+            n = lv.count_mentions(a.body).get(r) else 0
+            match a.guard {
+              some(g) => n += lv.count_mentions(g).get(r) else 0
+              none => {}
+            }
+          }
+          none => {}
+        }
+        arm_uses.push(n)
       }
       lv.mentioned = ms
-      lv.ex(scrut, live)
+      // reuse: the scrutinee is a local, dead after the `match`, and its other mentions in
+      // the statement are all in arms (which then don't reuse it)
+      match (scrut.kind, root) {
+        (Name(_), some(r)) => {
+          let in_arms = arm_uses.sum()
+          if !out.contains(r) && !lv.pinned.contains(r) && (lv.counts.get(r) else 0) == 1 + in_arms {
+            lv.reuse[e.id] = arm_uses.map(n => n == 0)
+          } else {
+            let _ = lv.reuse.remove(e.id)
+          }
+        }
+        _ => {}
+      }
+      // a `match` borrows its scrutinee: never a move
+      let before = lv.ex(scrut, live)
+      if scrut.kind is ast.ExprKind.Name(_) { lv.moves[scrut.id] = false }
+      before
     }
     Loop(body) => lv.loop_(none, body, [], out)
     While(c, body) => lv.loop_(some(c), body, [], out)
