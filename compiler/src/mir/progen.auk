@@ -169,6 +169,10 @@ pub struct Gen {
   move_count: int,
   move_log: bool,
   move_sites: [str],
+  /// Per instance: which parameters its direct calls pass owned (`mir.lower.param_modes`).
+  own_modes: {int: [bool]},
+  /// Instances whose modes are being inferred (a call back into one counts as borrowed).
+  own_busy: {int: bool},
 }
 
 /// Move the state out of `g` (leaving an empty one that shares only the read-only parts), so
@@ -249,6 +253,8 @@ pub fn new(tp: typed.TypedProgram, mode: Mode): Gen {
     move_count: 0,
     move_log: false,
     move_sites: [],
+    own_modes: {},
+    own_busy: {},
   }
 }
 
@@ -437,6 +443,27 @@ pub fn inst_fn(g: var Gen, i: int): int {
     _ => {}
   }
   if !g.emitted.contains(i) { g.queue.push(i) }
+  f
+}
+
+/// The entry of instance `i` that owns its consuming parameters (design/ownership-plan.md,
+/// section 4): the body is emitted into it, and `inst_fn(i)` becomes a wrapper that retains
+/// them and calls it. Direct calls use this one.
+pub fn inst_own_fn(g: var Gen, i: int): int {
+  let key = "own{i}"
+  match g.memo2.get(key) {
+    some(f) => return f
+    none => {}
+  }
+  let outer = g.inst_fn(i)
+  let fo = g.prog.funcs[outer]
+  let f = g.declare("{fo.name}_own", fo.vars, fo.ret, mir.Abi.Auk)
+  g.memo2[key] = f
+  // `auk run --live` swaps it too
+  match g.live_keys.get(outer) {
+    some(k) => g.live_keys[f] = "{k} (owned)"
+    none => {}
+  }
   f
 }
 

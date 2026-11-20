@@ -167,16 +167,27 @@ fn stmts(lv: var Live, ss: [ast.Expr], out: {int: bool}): {int: bool} {
   live
 }
 
-/// How often each local is mentioned in `e` (shorthand struct fields too).
+/// How often each local is mentioned in `e` (shorthand struct fields too; not a plain
+/// assignment's target).
 fn count_mentions(lv: var Live, e: ast.Expr): {int: int} {
   var all: [ast.Expr] = []
   visit.visit_expr(e, &all)
+  // a plain assignment's target is a store after its value, not a read waiting in it
+  var stores: {int: bool} = {}
+  for x in all {
+    match x.kind {
+      Assign(none, target, _) => if target.kind is ast.ExprKind.Name(_) { stores[target.id] = true }
+      _ => {}
+    }
+  }
   var out: {int: int} = {}
   for x in all {
     match x.kind {
-      Name(_) => match lv.local_of(x) {
-        some(l) => out[l] = (out.get(l) else 0) + 1
-        none => {}
+      Name(_) => if !stores.contains(x.id) {
+        match lv.local_of(x) {
+          some(l) => out[l] = (out.get(l) else 0) + 1
+          none => {}
+        }
       }
       Struct(_, fields, _) => for f in fields {
         if f.value is none {

@@ -210,6 +210,22 @@ benchmark slower by more than 2%, and the phase's micro-benchmarks scale linearl
   Found along the way (pre-existing, both with and without moves): `(xs, { xs = ys; 1 })`
   gives `([3], 1)`. The tuple reads `xs` after the block reassigns it.
 
+- **Phase 3 (2026-11-19):** `param_modes` (lower.auk) infers per instance which parameters the
+  body consumes: a last-use read of the parameter in an owning position (a `let` or
+  assignment value, the result, a literal's or variant's element, `push`'s argument, an
+  argument another instance owns; a call back into an instance being inferred counts as
+  borrowed). Such an instance gets a second entry, `inst_own_fn` (`<f>_own`), holding the
+  body with those parameters owned. `inst_fn` stays borrowed for every other use (function
+  values and closures, element ops, shows, tests, `raw.fn_of`) as a wrapper that retains and
+  calls it, so no other call site changes. Direct calls (`call_target`) pass owned
+  arguments with `own_as`. Never for `var` parameters, handle-reachable types, `async` or
+  exported functions, the debugger, tracing, or checked `ensures`. `auk run --live` gives
+  `_own` entries their own slots. The one-mention rule now ignores a plain assignment's
+  target (a store after the value), so `v = add(v, i)` moves `v`. Case C: 1000 copies → 0.
+  Limits: parameters bound by a pattern (not a plain name) aren't inferred, and in a
+  multi-clause function each clause binds the same variable, so `sole_local` blocks moves
+  of it (still correct: the callee releases what it owns).
+
 Then remove the hand-written workarounds that the compiler now handles (FLAC's
 `chans[c] = []`, `out0 = []` and the like) one package at a time, keeping each package's
 differential fuzz.

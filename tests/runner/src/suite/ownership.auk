@@ -8,6 +8,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("a_caught_panic_leaves_a_var_parameter_valid", a_caught_panic_leaves_a_var_parameter_valid),
   t.test("a_local_moves_at_its_last_use", a_local_moves_at_its_last_use),
   t.test("moves_keep_every_result", moves_keep_every_result),
+  t.test("a_consumed_parameter_is_passed_owned", a_consumed_parameter_is_passed_owned),
 ]
 
 fn scratch(name: str): str uses env, fs, ffi = t.scratch("ownership/{name}")
@@ -156,12 +157,37 @@ fn a_local_moves_at_its_last_use() uses env, fs, ffi, time {
 }
 
 /// tests/fixtures/moves.auk (loops, branches, matches, closures, `catch`, shadowing, tail
-/// calls): the same output with and without moves, and nothing leaks.
+/// calls) and owned_params.auk (direct calls, function values, recursion, clauses): the same
+/// output with and without moves, and nothing leaks.
 fn moves_keep_every_result() uses env, fs, ffi, time {
-  let f = t.abs("tests/fixtures/moves.auk")
-  let a = t.auk().args(["run", f]).setenv("AUK_LEAK_CHECK", "1").output()
-  t.check(a.success(), a.describe())
-  let b = t.auk().args(["run", f]).setenv("AUK_LEAK_CHECK", "1").setenv("AUK_NO_MOVES", "1").output()
-  t.check(b.success(), b.describe())
-  t.eq(a.stdout, b.stdout, "with moves vs AUK_NO_MOVES=1")
+  for name in ["moves", "owned_params"] {
+    let f = t.abs("tests/fixtures/{name}.auk")
+    let a = t.auk().args(["run", f]).setenv("AUK_LEAK_CHECK", "1").output()
+    t.check(a.success(), a.describe())
+    let b = t.auk().args(["run", f]).setenv("AUK_LEAK_CHECK", "1").setenv("AUK_NO_MOVES", "1").output()
+    t.check(b.success(), b.describe())
+    t.eq(a.stdout, b.stdout, "{name}: with moves vs AUK_NO_MOVES=1")
+  }
+}
+
+/// `v = add(v, i)` where `add` copies its parameter into a variable and pushes: `v` is dead
+/// after the call, so it moves into `add`, which owns it, and the push is in place.
+fn a_consumed_parameter_is_passed_owned() uses env, fs, ffi, time {
+  let (out, copies) = run_counted("owned_param", r"""
+      fn add(xs: [int], x: int): [int] {
+        var ys = xs
+        ys.push(x)
+        ys
+      }
+      fn main() {
+        var v: [int] = []
+        for i in 0..2000 { v = add(v, i) }
+        let kept = v
+        let w = add(kept, -1)
+        print("{v.len()} {w.len()} {kept.len()}")
+      }
+      """, true)
+  // one copy: `kept` is still read after it's passed
+  t.eq(out, "2000 2001 2000\n", "")
+  t.eq("{copies}", "1", "copy-on-write copies")
 }

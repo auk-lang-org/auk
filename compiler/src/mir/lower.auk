@@ -688,9 +688,15 @@ fn emit_fn(lw: var Lower, fid: int, group: ast.FnGroup) {
     none => false
   }
   let ensures_ = lw.g.debug() && (hdr_ens || cls.any(c => c.post.len() > 0))
+  // parameters the body consumes: owned through the `_own` entry (never with ensures or
+  // tracing, see `param_modes`)
+  let modes = param_modes(&lw.g, lw.inst)
+  let owning = modes.any(x => x)
   let body_name = if ensures_ {
     let n = lw.g.prog.funcs[name].name
     lw.g.declare("{n}_body", sig, rty, mir.Abi.Auk)
+  } else if owning {
+    lw.g.inst_own_fn(lw.inst)
   } else {
     name
   }
@@ -729,7 +735,10 @@ fn emit_fn(lw: var Lower, fid: int, group: ast.FnGroup) {
       continue
     }
     let p = lw.decl(t, args[k])
-    if tail {
+    if owning && modes[k] {
+      // owned: the caller passed its reference
+      lw.register(p, t)
+    } else if tail {
       match lw.g.retain(t, p) {
         some(r) => lw.emit(r)
         none => {}
@@ -766,6 +775,248 @@ fn emit_fn(lw: var Lower, fid: int, group: ast.FnGroup) {
   lw.end(body_name)
   if ensures_ { lw.ensures_wrapper(fid, name, body_name, params, ret, hdr, cls) }
   if traced { lw.trace_wrapper(fid, outer, name, params, ret) }
+  if owning { lw.borrow_wrapper(outer, body_name, params, modes, ret) }
+}
+
+/// `outer`, the instance's entry for everything but direct calls (function values, element
+/// ops, shows, tests, `raw.fn_of`): borrows its arguments, retains the ones `inner` owns, and
+/// calls it.
+fn borrow_wrapper(lw: var Lower, outer: int, inner: int, params: [(types.Ty, bool)], modes: [bool], ret: types.Ty) {
+  let ps = lw.begin_fn(outer, ret)
+  for k, (t, _) in params {
+    if modes[k] {
+      match lw.g.retain(t, ps[k]) {
+        some(r) => lw.emit(r)
+        none => {}
+      }
+    }
+  }
+  let call = lw.g.call(inner, ps)
+  lw.emit(mir.Stmt.Ret(call))
+  lw.end(outer)
+}
+
+/// Which parameters of instance `i` its body consumes, so that direct calls pass them owned
+/// (design/ownership-plan.md, section 4). A parameter is consumed when a read of it at its last
+/// use (`mir.lower.live`) is in an owning position: a `let` or assignment's value, the result,
+/// an element of a literal or a variant, `push`'s argument, or an argument the callee owns in
+/// turn. Never for `var` parameters, values that can reach a handle, `async` or exported
+/// functions, or with moves off, the debugger, tracing or checked `ensures`.
+pub fn param_modes(g: var mir.progen.Gen, i: int): [bool] {
+  match g.own_modes.get(i) {
+    some(m) => return m
+    none => {}
+  }
+  let inst = g.tp.instances[i]
+  let fid = match inst.body {
+    Fn(f) => f
+    _ => return []
+  }
+  let info = g.tp.fns[fid]
+  let none_owned = info.params.map(_ => false)
+  if g.own_busy.contains(i) { return none_owned }
+  if !g.moves || g.dbg.on || info.is_async || info.export > 0 || g.traced(info.module) {
+    g.own_modes[i] = none_owned
+    return none_owned
+  }
+  let cs = match info.kind {
+    Auk(_, cs, _) => cs
+    _ => {
+      g.own_modes[i] = none_owned
+      return none_owned
+    }
+  }
+  let (m, item) = g.body_item(inst.body)
+  let group = match item {
+    Fn(gr) => gr
+    _ => {
+      g.own_modes[i] = none_owned
+      return none_owned
+    }
+  }
+  let hdr_post = match group.header {
+    some(h) => h.post.len() > 0
+    none => false
+  }
+  let cls = cs.map(c => group.clauses[c])
+  if g.debug() && (hdr_post || cls.any(c => c.post.len() > 0)) {
+    g.own_modes[i] = none_owned
+    return none_owned
+  }
+  let subst = typed.inst_subst(inst, g.tp.fns)
+  var cand = none_owned
+  var any = false
+  for k, p in info.params {
+    let t = types.subst(p.ty, subst)
+    var seen: {types.Ty: bool} = {}
+    if !p.var_ && g.needs_rc(t) && !mir.types.may_hold_handle(g.info, t, &seen) {
+      cand[k] = true
+      any = true
+    }
+  }
+  if !any {
+    g.own_modes[i] = none_owned
+    return none_owned
+  }
+  g.own_busy[i] = true
+  let t = g.tp.tables[m]
+  var out = none_owned
+  for c in cls {
+    // the parameters bound to plain names
+    var pl: {int: int} = {}
+    for k, p in c.params {
+      if k < cand.len() && cand[k] {
+        match p.pat.kind {
+          Bind(_) => match t.binds.get(p.pat.id) {
+            some(l) => pl[l] = k
+            none => {}
+          }
+          _ => {}
+        }
+      }
+    }
+    if pl.len() == 0 { continue }
+    let body = match c.body {
+      some(Expr(e)) => [e]
+      some(Block(b)) => b.stmts
+      _ => []
+    }
+    let ms = mir.lower.live.analyze(t, body)
+    var cx = Consume { t, inst: i, moves: ms, params: pl, out }
+    for k2, s in body { consume(&g, &cx, s, k2 == body.len() - 1) }
+    out = cx.out
+  }
+  let _ = g.own_busy.remove(i)
+  g.own_modes[i] = out
+  out
+}
+
+struct Consume {
+  t: typed.Tables,
+  inst: int,
+  moves: {int: bool},
+  /// The candidate parameters' locals, and their positions.
+  params: {int: int},
+  out: [bool],
+}
+
+/// Mark the parameters `e` consumes; `owning`: its value is taken (see `param_modes`).
+fn consume(g: var mir.progen.Gen, cx: var Consume, e: ast.Expr, owning: bool) {
+  match e.kind {
+    Name(_) => if owning && cx.moves.contains(e.id) {
+      match cx.t.names.get(e.id) {
+        some(Local(l)) => match cx.params.get(l) {
+          some(k) => cx.out[k] = true
+          none => {}
+        }
+        _ => {}
+      }
+    }
+    Let(_, _, _, value, els) => {
+      consume(&g, &cx, value, true)
+      match els {
+        some(a) => consume(&g, &cx, a.body, true)
+        none => {}
+      }
+    }
+    Assign(op, target, value) => {
+      consume(&g, &cx, target, false)
+      consume(&g, &cx, value, op == none)
+    }
+    Return(v) | Break(v) => match v {
+      some(x) => consume(&g, &cx, x, true)
+      none => {}
+    }
+    Block(b) => for k, s in b.stmts { consume(&g, &cx, s, owning && k == b.stmts.len() - 1) }
+    If(c, th, els) => {
+      consume(&g, &cx, c, false)
+      for k, s in th.stmts { consume(&g, &cx, s, owning && k == th.stmts.len() - 1) }
+      match els {
+        some(x) => consume(&g, &cx, x, owning)
+        none => {}
+      }
+    }
+    Match(s, arms) => {
+      consume(&g, &cx, s, false)
+      for a in arms {
+        match a.guard {
+          some(gd) => consume(&g, &cx, gd, false)
+          none => {}
+        }
+        consume(&g, &cx, a.body, owning)
+      }
+    }
+    Else(x, arm) => {
+      consume(&g, &cx, x, false)
+      consume(&g, &cx, arm.body, owning)
+    }
+    List(xs) | Tuple(xs) => for x in xs { consume(&g, &cx, x, true) }
+    Map(es) => for (k, v) in es {
+      consume(&g, &cx, k, true)
+      consume(&g, &cx, v, true)
+    }
+    Struct(_, fields, base) => {
+      for f in fields {
+        match f.value {
+          some(v) => consume(&g, &cx, v, true)
+          none => {}
+        }
+      }
+      match base {
+        some(b) => consume(&g, &cx, b, false)
+        none => {}
+      }
+    }
+    Loop(b) => for s in b.stmts { consume(&g, &cx, s, false) }
+    While(c, b) => {
+      consume(&g, &cx, c, false)
+      for s in b.stmts { consume(&g, &cx, s, false) }
+    }
+    For(_, _, it, b) => {
+      consume(&g, &cx, it, false)
+      for s in b.stmts { consume(&g, &cx, s, false) }
+    }
+    Call(_, _) | MethodCall(_, _, _) | Pipe(_, _, _) => {
+      // which arguments the callee takes: a variant's fields, `push`'s element, an owned
+      // parameter of another instance
+      var takes: {int: bool} = {}
+      match cx.t.calls.get(e.id) {
+        some(call) => match g.tp.instances[cx.inst].resolved.get(e.id) {
+          some(Variant(_, _)) => for a in call.args { takes[a.node] = true }
+          some(Extern(symbol, _)) => if symbol == "auk_arr_push" && call.args.len() == 2 {
+            takes[call.args[1].node] = true
+          }
+          some(Instance(j)) => {
+            let ms = param_modes(&g, j)
+            for k, a in call.args {
+              if k < ms.len() && ms[k] && !a.by_ref { takes[a.node] = true }
+            }
+          }
+          _ => {}
+        }
+        none => {}
+      }
+      var kids: [ast.Expr] = []
+      match e.kind {
+        Call(callee, args) => kids = [callee] + args
+        MethodCall(recv, _, args) => kids = [recv] + args
+        Pipe(lhs, callee, args) => kids = [lhs, callee] + args
+        _ => {}
+      }
+      for x in kids { consume(&g, &cx, x, takes.contains(x.id)) }
+    }
+    _ => {
+      // anything else: its parts are read, not taken
+      var all: [ast.Expr] = []
+      visit.visit_expr(e, &all)
+      for x in all.skip(1) {
+        match x.kind {
+          Let(_, _, _, _, _) | Assign(_, _, _) | Return(_) | Break(_) => consume(&g, &cx, x, false)
+          _ => {}
+        }
+      }
+    }
+  }
 }
 
 fn unitish(t: types.Ty): bool = types.is_unit(t) || t == types.Ty.Never
@@ -2096,14 +2347,17 @@ fn is_param(t: types.Ty): bool = t is types.Ty.Param(_)
 fn call_target(lw: var Lower, target: typed.Target, func: int?, args: [ArgV], ret: types.Ty, lc: mir.Ex, callee: Val?): Val {
   match target {
     Instance(i) => {
-      let f = lw.g.inst_fn(i)
+      let modes = param_modes(&lw.g, i)
+      let owning = modes.any(x => x)
+      let f = if owning { lw.g.inst_own_fn(i) } else { lw.g.inst_fn(i) }
       let ps = lw.g.inst_params(i)
       let rt = lw.g.inst_ret(i)
       var cs: [mir.Ex] = []
       for k, a in args {
         if k >= ps.len() { break }
         cs.push(match a {
-          Val(v) => lw.val_as(v, ps[k].0)
+          // an owned parameter: the callee takes it (a move, or a retain)
+          Val(v) => if owning && k < modes.len() && modes[k] { lw.own_as(v, ps[k].0) } else { lw.val_as(v, ps[k].0) }
           Addr(p, _) => p
         })
       }
