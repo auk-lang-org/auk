@@ -245,6 +245,7 @@ fn tmp_done(t: raw.Ptr<abi.Tmp>) uses raw = rc.auk__tmp_done(t)
 export fn auk_map_make_unique(pm: raw.Ptr<raw.Ptr<abi.Map>>): raw.Ptr<()> uses raw, ffi {
   let m = pm.load()
   if refcount(m) != 1 {
+    rc.auk_note_cow()
     pm.store(auk_map_copy(m))
     rc.release(raw.cast(m))
   }

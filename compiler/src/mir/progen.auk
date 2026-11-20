@@ -804,6 +804,7 @@ pub fn box_unique(g: var Gen, t: types.Ty): int = g.helper("boxuniq", t, [mir.pt
   b.open_if(mir.bin(mir.BOp.Eq, mir.rt("auk_refcount", [p], mir.MTy.I64), mir.i64(1)))
   b.emit(mir.Stmt.Ret(none))
   b.close()
+  b.do_(mir.rt("auk_note_cow", [], mir.MTy.Void))
   let inner = g.unbox(t, p)
   let v = b.decl(inner)
   match g.retain(t, v) {

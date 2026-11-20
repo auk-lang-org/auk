@@ -165,6 +165,7 @@ fn ensure_unique_cap(pa: raw.Ptr<raw.Ptr<abi.Arr>>, need: i64) uses raw, ffi {
     raw.unreachable()
   }
   if !is_unique(a) {
+    rc.auk_note_cow()
     let c = copy_with_cap(a, if need > a.len { need } else { a.len })
     rc.release(raw.cast(a))
     pa.store(c)

@@ -157,5 +157,6 @@ statements with effects (`rand`, `time`, files) run again on each input.
 | | |
 |---|---|
 | `AUK_LEAK_CHECK=1` | `run` and `test` fail if the program leaks runtime objects |
+| `AUK_STATS=1` | programs print how many copy-on-write copies they made at exit |
 | `AUK_LINKER` | a C compiler driver (`cc`, `clang`) for `build` to link with, instead of calling the system linker directly |
 | `AUK_HATCH_CMD` | the model command `auk hatch` runs (default `claude -p`) |

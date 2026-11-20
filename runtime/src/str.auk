@@ -559,6 +559,7 @@ pub export fn auk_str_append(ps: raw.Ptr<raw.Ptr<abi.Str>>, b0: raw.Ptr<abi.Str>
   let nb = slen(b)
   if nb == 0 { return }
   if a.is_null() || raw.atomic_load(raw.field_addr(raw.field_addr(a, .h), .rc), raw.Order.Acquire) != 1 {
+    if !a.is_null() { rc.auk_note_cow() }
     ps.store(auk_str_concat(a, b))
     rc.release(raw.cast(a))
     return

@@ -61,6 +61,31 @@ raw var leak_baseline: i64 = 0
 
 export fn auk_leak_baseline() uses raw {
   raw.atomic_store(raw.addr_of(&leak_baseline), raw.atomic_load(raw.addr_of(&live_objects), raw.Order.SeqCst), raw.Order.SeqCst)
+  raw.atomic_store(raw.addr_of(&cow_baseline), raw.atomic_load(raw.addr_of(&cow_copies), raw.Order.SeqCst), raw.Order.SeqCst)
+}
+
+/// Copy-on-write copies: a list, map, string or box copied because a change found it shared.
+/// Printed at exit under AUK_STATS (from the baseline, as the leak check counts), so tests can
+/// check that a loop changes its values in place.
+raw var cow_copies: i64 = 0
+raw var cow_baseline: i64 = 0
+
+pub export fn auk_note_cow() uses raw {
+  let _ = raw.atomic_add(raw.addr_of(&cow_copies), 1, raw.Order.Relaxed)
+}
+
+fn print_stats() uses raw, ffi {
+  if c_getenv("AUK_STATS").is_null() {
+    return
+  }
+  let _ = c_fflush(cfacts.stdout())
+  var m = abi.StrBuf {}
+  let mp = raw.addr_of(&m)
+  str.auk__sb_put_cstr(mp, "auk: ")
+  str_fmt.auk_sb_int(mp, raw.atomic_load(raw.addr_of(&cow_copies), raw.Order.SeqCst) - raw.atomic_load(raw.addr_of(&cow_baseline), raw.Order.SeqCst))
+  str.auk__sb_put_cstr(mp, " copy-on-write copies\n")
+  str_fmt.auk__sb_eprint(mp)
+  let _ = c_fflush(cfacts.stderr())
 }
 
 fn oom(): never uses raw, ffi {
@@ -140,6 +165,7 @@ export fn auk_set_cleanup(f: raw.Fn<() => ()>) uses raw, ffi {
 }
 
 export fn auk_leak_check(): i64 uses raw, ffi {
+  print_stats()
   if c_getenv("AUK_LEAK_CHECK").is_null() {
     return 0
   }
