@@ -44,6 +44,16 @@ fn p0_package_tests_pass_without_leaks() uses env, fs, ffi, time {
   }
 }
 
+fn manifest_version(p: str): str uses env, fs, ffi {
+  for l in t.read(t.abs("packages/{p}/raft.toml")).lines() {
+    match l.strip_prefix("version = \"") {
+      some(rest) => return rest.strip_suffix("\"") else rest
+      none => {}
+    }
+  }
+  ""
+}
+
 fn raft_adds_each_p0_package() uses env, fs, ffi, time {
   let dir = t.scratch("p0/app")
   t.write(
@@ -55,7 +65,8 @@ fn raft_adds_each_p0_package() uses env, fs, ffi, time {
     t.check(out.success(), "raft add {p}: {out.stderr}")
   }
   let list = raft(dir, ["list"]).stdout
-  for p in PKGS { t.check(list.contains("{p} 0.1.0"), list) }
+  // each at the version in its own manifest (the registry here is packages/)
+  for p in PKGS { t.check(list.contains("{p} {manifest_version(p)}"), list) }
   t.check(!list.contains("uses"), "P0 packages use no effects:\n{list}")
   t.write(paths.join(dir, "src/main.auk"), r"""
       fn main(): int! {

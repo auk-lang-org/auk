@@ -1,7 +1,8 @@
 /// tests/raft.rs: the package manager end to end against the fixture registry
 /// (tests/fixtures/registry): `new`, `add` (transitive, path and URL dependencies), `remove`,
-/// `install`, `list`, `pack`, the lock file, effects, checksums and errors. Fetching over HTTP
-/// uses a local `python3 -m http.server` (skipped without python3). The raft under test is
+/// `install`, `list`, `pack`, `publish`, the lock file, effects, checksums and errors. Fetching
+/// over HTTP uses a local `python3 -m http.server`, and an rpm registry is played by
+/// tests/fixtures/rpm_server.py (both skipped without python3). The raft under test is
 /// `$RAFT_BIN`, else target/bin/raft.
 
 pub fn tests(): [t.Test] uses env, fs, ffi, time = [
@@ -16,6 +17,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time = [
   t.test("version_mismatch", version_mismatch),
   t.test("outside_a_project", outside_a_project),
   t.test("url_registry_and_url_dep", url_registry_and_url_dep),
+  t.test("rpm_publish_and_versions", rpm_publish_and_versions),
 ]
 
 /// A fresh scratch directory (Rust's `Tmp`; removed at the end of the test).
@@ -272,7 +274,11 @@ fn url_registry_and_url_dep() uses env, fs, ffi, time {
   t.check(b_sum.starts_with("sha256:"), packed)
   for p in ["a", "c"] { let _ = ok(paths.join(registry(), p), ["pack", srv]) }
 
-  var server = cmd.new("python3").args(["-u", "-m", "http.server", "0", "--bind", "127.0.0.1"]).cwd(srv).start()
+  var server = cmd
+    .new("python3")
+    .args(["-u", "-m", "http.server", "0", "--bind", "127.0.0.1"])
+    .cwd(srv)
+    .start()
   let line = sys.read_line(&server, 20000) else ""
   let port = match line.split(" port ") {
     [_, rest] => rest.split(" ")[0]
@@ -282,7 +288,12 @@ fn url_registry_and_url_dep() uses env, fs, ffi, time {
     }
   }
   let url = "http://127.0.0.1:{port}"
-  let net = (dir: str, args: [str]) => t.raft().args(args).cwd(dir).setenv("RAFT_REGISTRY", url).output()
+  let net = (dir: str, args: [str]) => t
+    .raft()
+    .args(args)
+    .cwd(dir)
+    .setenv("RAFT_REGISTRY", url)
+    .output()
 
   let _ = ok(d, ["new", "app"])
   let dir = paths.join(d, "app")
@@ -298,8 +309,14 @@ fn url_registry_and_url_dep() uses env, fs, ffi, time {
   t.has(read(paths.join(dir, "raft.toml")), "c = {{ url = \"{url}/c.raft\" }}")
   t.has(read(paths.join(dir, "raft.lock")), "source = \"url:{url}/c.raft\"")
 
-  t.has(net(dir, ["add", "zz", "--url", "{url}/zz.raft"]).stderr, "error: cannot fetch {url}/zz.raft: HTTP 404")
-  t.has(net(dir, ["add", "d", "--url", "{url}/c.raft"]).stderr, "error: {url}/c.raft is package `c`, not `d`")
+  t.has(
+    net(dir, ["add", "zz", "--url", "{url}/zz.raft"]).stderr,
+    "error: cannot fetch {url}/zz.raft: HTTP 404",
+  )
+  t.has(
+    net(dir, ["add", "d", "--url", "{url}/c.raft"]).stderr,
+    "error: {url}/c.raft is package `c`, not `d`",
+  )
 
   // A changed bundle at the locked URL is refused once it has to be fetched.
   let c2 = paths.join(d, "c2")
@@ -318,5 +335,139 @@ fn url_registry_and_url_dep() uses env, fs, ffi, time {
   let _ = cmd.wait(&server, 5000)
   let o = net(dir, ["install"])
   t.check(o.success() && o.stdout == "", o.stderr)
+  t.rm_rf(d)
+}
+
+/// An rpm registry (tests/fixtures/rpm_server.py): `raft publish`, installing the newest version
+/// that fits, `raft add <pkg>@<version>`, the lock keeping its version, and yanked versions.
+fn rpm_publish_and_versions() uses env, fs, ffi, time {
+  if !t.have("python3") { t.skip("needs python3 for a local registry") }
+  let d = tmp("rpm_publish_and_versions")
+  var server = cmd.new("python3").args(["-u", t.abs("tests/fixtures/rpm_server.py")]).start()
+  let line = sys.read_line(&server, 20000) else ""
+  let port = match line.trim().strip_prefix("port ") {
+    some(p) => p
+    none => {
+      sys.kill(&server)
+      t.bail("no port from rpm_server.py: `{line}`")
+    }
+  }
+  let url = "http://127.0.0.1:{port}"
+  let run = (dir: str, args: [str], token: str) => t
+    .raft()
+    .args(args)
+    .cwd(dir)
+    .setenv("RAFT_REGISTRY", url)
+    .setenv("RPM_TOKEN", token)
+    .output()
+  let net = (dir: str, args: [str]) => run(dir, args, "rpm_test")
+  let good = (dir: str, args: [str]) => {
+    let o = net(dir, args)
+    t.check(o.success(), "raft {args} failed:\n{o.stderr}")
+    o.stdout
+  }
+
+  // publishing: a token is needed, the right one; the checksum is `raft pack`'s
+  let b = paths.join(d, "b")
+  t.copy_dir(paths.join(registry(), "b"), b)
+  let o = run(b, ["publish"], "")
+  t.eq(
+    o.stderr,
+    "error: publishing needs a token\n  help: make one at {url}/account, then set RPM_TOKEN or pass --token <token>\n",
+    "no token",
+  )
+  t.eq(
+    run(b, ["publish"], "wrong").stderr,
+    "error: cannot publish b 1.0.3 to {url}: publishing needs an API token\n",
+    "a wrong token",
+  )
+  let b_sum = ok(b, ["pack", paths.join(d, "packed")]).split("\n")[1].trim()
+  t.eq(good(b, ["publish"]), "published b 1.0.3 -> {url}/packages/b/1.0.3\n  {b_sum}\n", "publish")
+  t.has(
+    net(b, ["publish"]).stderr,
+    "error: cannot publish b 1.0.3 to {url}: b 1.0.3 is already published",
+  )
+  t.has(run(b, ["publish", "--token", "rpm_test"], "").stderr, "b 1.0.3 is already published")
+  // two more versions of b, and a (which needs b ^1.0)
+  for v in ["1.0.4", "1.1.0"] {
+    t.write(paths.join(b, "raft.toml"), read(paths.join(b, "raft.toml")).replace("1.0.3", v))
+    t.has(good(b, ["publish"]), "published b {v}")
+    t.write(paths.join(b, "raft.toml"), read(paths.join(b, "raft.toml")).replace(v, "1.0.3"))
+  }
+  t.has(good(paths.join(registry(), "a"), ["publish"]), "published a 1.2.0")
+
+  // a registry that is a directory, or would get the token unencrypted
+  t.has(
+    fails(b, ["publish", "--token", "x"]),
+    "error: cannot publish to {registry()}: it is a directory, not an rpm server",
+  )
+  let o = t
+    .raft()
+    .args(["publish", "--token", "x"])
+    .cwd(b)
+    .setenv("RAFT_REGISTRY", "http://rpm.example.com")
+    .output()
+  t.has(
+    o.stderr,
+    "error: cannot publish to http://rpm.example.com: the token would be sent unencrypted",
+  )
+
+  // installing: the newest version that fits, checked against the registry's checksum
+  let _ = ok(d, ["new", "app"])
+  let dir = paths.join(d, "app")
+  let locked = (name: str) => {
+    let l = read(paths.join(dir, "raft.lock"))
+    l.split("name = \"{name}\"\nversion = \"")[1].split("\"")[0]
+  }
+  t.eq(good(dir, ["add", "a"]), "  + a 1.2.0\n  + b 1.1.0   (via a)\n", "add a")
+  t.eq(
+    net(dir, ["add", "nope"]).stderr,
+    "error: package `nope` not found in the registry (app -> nope)\n  help: the registry is {url}; set RAFT_REGISTRY to use another\n",
+    "a package rpm doesn't have",
+  )
+  let _ = good(dir, ["remove", "a"])
+
+  // pinning: an exact version, then a requirement (the locked version stays while it fits)
+  t.eq(good(dir, ["add", "b@1.0.3"]), "  + b 1.0.3\n", "add b@1.0.3")
+  t.has(read(paths.join(dir, "raft.toml")), "b = \"=1.0.3\"")
+  t.has(
+    read(paths.join(dir, "raft.lock")),
+    "name = \"b\"\nversion = \"1.0.3\"\nsource = \"registry\"\neffects = []\nchecksum = \"{b_sum}\"",
+  )
+  t.eq(good(dir, ["add", "b@~1.0"]), "", "add b@~1.0 keeps the locked 1.0.3")
+  t.has(read(paths.join(dir, "raft.toml")), "b = \"~1.0\"")
+  t.eq(locked("b"), "1.0.3", "still locked")
+  t.eq(good(dir, ["add", "b@1.0.4"]), "  + b 1.0.4\n", "add b@1.0.4")
+  t.has(read(paths.join(dir, ".raft/b/raft.toml")), "version = \"1.0.4\"")
+  t.eq(good(dir, ["add", "b"]), "  + b 1.1.0\n", "add b takes the newest")
+  t.has(read(paths.join(dir, "raft.toml")), "b = \"^1.1\"")
+  let before = read(paths.join(dir, "raft.toml"))
+  t.eq(
+    net(dir, ["add", "b@2.0.0"]).stderr,
+    "error: no version of b in the registry matches =2.0.0\n  help: the newest is 1.1.0\n",
+    "a version rpm doesn't have",
+  )
+  t.eq(
+    net(dir, ["add", "b@new"]).stderr,
+    "error: invalid version `new` for b\n  help: give a version (1.2.3) or a requirement (^1.2, ~1.2.3, *)\n",
+    "not a version",
+  )
+  t.has(
+    net(dir, ["add", "b@1.0.3", "--path", "../b"]).stderr,
+    "error: `b@1.0.3`: only a registry package takes a version",
+  )
+  t.eq(read(paths.join(dir, "raft.toml")), before, "raft.toml is as it was")
+
+  // a yanked version: still installed where it is locked, never chosen anew
+  let yank = "import sys, urllib.request; urllib.request.urlopen(sys.argv[1] + '/yank', data=b'{{\"name\": \"b\", \"version\": \"1.1.0\"}}')"
+  t.check(cmd.new("python3").args(["-c", yank, url]).output().success(), "yank b 1.1.0")
+  t.rm_rf(paths.join(dir, ".raft"))
+  t.check(net(dir, ["install"]).success(), "the locked b installs")
+  t.eq(locked("b"), "1.1.0", "locked")
+  t.rm_rf(paths.join(dir, "raft.lock"))
+  t.has(net(dir, ["install"]).stderr, "error: b ^1.1 does not match the registry version 1.0.4")
+
+  sys.kill(&server)
+  let _ = cmd.wait(&server, 5000)
   t.rm_rf(d)
 }

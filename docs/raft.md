@@ -80,26 +80,34 @@ checksum = "sha256:9f2c…"
 The checksum is SHA-256 over the installed files (`raft.toml`, `README.md` if present, `src/**`), in sorted relative-path order using `/` separators. Each file contributes its path, a NUL byte, its length as 8 big-endian bytes, then its contents. `raft install` verifies both the registry copy and `.raft/<name>/` against the lock and fails loudly on a mismatch. URL dependencies are recorded as `source = "url:<url>"` and verified like registry ones. Path dependencies are recorded as `source = "path:../geo"` (relative to the project) and aren't verified, since they're edited freely. A registry or URL package is taken from `.raft/<name>/` without downloading when the lock pins it (same name and source) and the installed copy has the locked checksum, so a locked, installed project installs offline.
 
 ## Registry
-v1's registry is a directory of packages, each one `<registry>/<name>/` with a `raft.toml`, or an `http://`/`https://` URL serving one bundle per package at `<registry>/<name>.raft`. It defaults to the `packages/` folder of the Auk installation; override it with `RAFT_REGISTRY=/path` or `RAFT_REGISTRY=https://…`.
+The registry defaults to rpm, `https://rpm.auk-lang.org`; override it with `RAFT_REGISTRY`. It can be:
+- **an rpm server** (`raft/src/rpm.auk`): raft asks `GET <registry>/api/v1/packages/<name>` for the published versions and picks the one in raft.lock if it is still published and fits the requirement (even if yanked), else the newest unyanked version that fits. It downloads it from `GET …/<name>/<version>/download` (files, base64) and checks the files against rpm's checksum, which is raft's lock checksum, before unpacking. A 404 with a JSON body means rpm has no such package.
+- **a bundle host**: any other `http://`/`https://` URL, serving one bundle per package at `<registry>/<name>.raft` (one version per name).
+- **a directory** of packages, each one `<registry>/<name>/` with a `raft.toml` (one version per name).
 
 ### Bundles
-`raft pack [<dir>]` writes the project as `<dir>/<name>.raft` (default: the project directory). A bundle is exactly the checksum input above (each file's path, NUL, 8-byte big-endian length, contents, in sorted path order), so its SHA-256 is the lock checksum, which `pack` prints. raft unpacks only `raft.toml`, `README.md` and `src/**` (strictly sorted, no empty, `.` or `..` components), so a bundle can't write outside `.raft/<name>/`. Downloads use core `net` (raft has no dependencies, so `raft/src/fetch.auk` is a small GET-only HTTP/1.1 client: chunked/`Content-Length`/close framing, up to 5 redirects, TLS always verified). Each name has one published version in v1. (A hosted index with many versions per package comes later; the manifest and lock formats don't change.)
+`raft pack [<dir>]` writes the project as `<dir>/<name>.raft` (default: the project directory). A bundle is exactly the checksum input above (each file's path, NUL, 8-byte big-endian length, contents, in sorted path order), so its SHA-256 is the lock checksum, which `pack` prints. raft unpacks only `raft.toml`, `README.md` and `src/**` (strictly sorted, no empty, `.` or `..` components), so a bundle can't write outside `.raft/<name>/`. Downloads use core `net` (raft has no dependencies, so `raft/src/fetch.auk` is a small HTTP/1.1 client: GET, and POST for `raft publish`; chunked/`Content-Length`/close framing, up to 5 redirects on a GET, TLS always verified). A bundle host or directory has one version per name; rpm keeps every version.
 
 ## Commands
 | command | does |
 |---|---|
 | `raft new <name> [--lib]` | create `<name>/` with `raft.toml` and `src/main.auk` (or `src/lib.auk`) |
-| `raft add <pkg> [--path <dir>]` | add a dependency (latest version, as `^MAJOR.MINOR`), then install |
+| `raft add <pkg>` | add a registry dependency (latest version, as `^MAJOR.MINOR`), then install |
+| `raft add <pkg>@<version>` | add exactly that version (`http@0.1.1` writes `http = "=0.1.1"`), or the newest that fits a requirement (`http@^0.1`, `http@~0.1.1`, written as given), then install |
+| `raft add <pkg> --path <dir>` | add a dependency on a local package, then install |
 | `raft add <pkg> --url <url>` | add a dependency on a `raft pack` bundle at an http(s) URL, then install |
 | `raft remove <pkg>` | drop a dependency, then re-install |
 | `raft install` | resolve, check effects, copy into `.raft/<name>/`, write `raft.lock` |
 | `raft list` | show the dependency tree with versions and effects |
 | `raft pack [<dir>]` | write the package as `<dir>/<name>.raft` for serving from a URL |
+| `raft publish [--token <token>]` | publish this version of the package to the registry (an rpm server) |
 
 Behavior:
 - Every command finds the project by searching upward from the current directory.
 - **All-or-nothing:** resolution, version matching, the effects check and checksums all happen before anything is written. On any error nothing is installed, and `add`/`remove` restore the previous `raft.toml`.
 - `raft add` edits `[deps]` in place, keeping comments and formatting.
+- A requirement that no longer takes the locked version (after `raft add <pkg>@<version>`, or an edit of raft.toml) makes install choose again: the newest unyanked version that fits. While the locked version fits it is kept, so `raft add http@^0.1` doesn't upgrade a locked `0.1.1`; `raft add http@0.1.2` does.
+- `raft publish` sends the files the checksum covers (`raft.toml`, `README.md`, `src/**`) to `POST <registry>/api/v1/packages` as `{"files": [{"path", "base64"}, …]}` with `Authorization: Bearer <token>`; the token is `--token` or `$RPM_TOKEN`, made on the registry's account page. rpm reads the name and version from `raft.toml`, applies its rules (a version is permanent; dependencies must be published; no path dependencies) and answers with the checksum, which raft compares to its own. The token is only sent over https (or to this machine), and never to a redirect.
 - `raft new` also writes a `.gitignore` containing `/.raft/`, and refuses to overwrite an existing directory.
 - Errors print `error: …` (naming the dependency chain, e.g. `(weather -> http -> json)`) and an optional `  help: …` line, then exit 1. Running with no arguments or an unknown command prints usage and exits 2.
 - `install` prints `+` for new or changed packages and `-` for removed ones, direct dependencies first, and prints nothing when nothing changed.

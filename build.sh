@@ -238,9 +238,8 @@ if [ -n "$INSTALL" ]; then
     # a new file, then a rename: a running auk keeps its old binary
     cp "target/bin/$b" "$INSTALL/.$b.tmp$$" && mv "$INSTALL/.$b.tmp$$" "$INSTALL/$b"
   done
-  # raft's package registry: this checkout's packages/ (raft finds it through this file)
-  echo "$ROOT/packages" > "$INSTALL/raft.registry"
-  echo "   $INSTALL/auk, $INSTALL/raft (registry: $ROOT/packages)"
+  rm -f "$INSTALL/raft.registry"  # left by older installs; raft now defaults to rpm.auk-lang.org
+  echo "   $INSTALL/auk, $INSTALL/raft"
   case ":$PATH:" in
     *":$INSTALL:"*) ;;
     *) echo "   $INSTALL is not on your PATH: add  export PATH=\"$INSTALL:\$PATH\"  to your shell profile" ;;

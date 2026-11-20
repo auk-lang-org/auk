@@ -3,24 +3,31 @@
 /// The port is line by line, with the same names and order. Differences in shape from the Rust:
 /// errors are `T!res.Fail` (Rust's `Res<T>`); paths are `/`-separated `str`s (`paths.auk`); the
 /// lazily built "missing" message of `load_dep` is a plain `str`; the closures of `list` are
-/// functions. The default registry is the `packages/` of the checkout the binary sits in (found
-/// upward from the executable), where Rust bakes in the checkout it was built from.
+/// functions. The default registry is rpm, https://rpm.auk-lang.org (rpm.auk).
 
 let USAGE = """
   usage: raft <command> [args]
 
   commands:
     new <name> [--lib]          create <name>/ with raft.toml and src/main.auk (or src/lib.auk)
-    add <pkg> [--path <dir>]    add a dependency (latest version, as ^MAJOR.MINOR), then install
+    add <pkg>[@<version>]       add a dependency, then install: the latest version (as
+                                ^MAJOR.MINOR), or exactly <version>, or the newest that fits
+                                a requirement (http@0.1.1, http@^0.1, http@~0.1.1)
+    add <pkg> --path <dir>      add a dependency on a local package
     add <pkg> --url <url>       add a dependency on a package bundle at an http(s) URL
     remove <pkg>                drop a dependency, then re-install
     install                     resolve, check effects, copy into .raft/, write raft.lock
     list                        show the dependency tree with versions and effects
     pack [<dir>]                write the package as <dir>/<name>.raft (default: the project)
+    publish [--token <token>]   publish this version of the package to the registry (an rpm
+                                server); a version is permanent. The token comes from your
+                                account page there (or $RPM_TOKEN)
 
   environment:
-    RAFT_REGISTRY              package registry: a directory, or an http(s) URL serving
-                               <name>.raft bundles (default: Auk's packages/)
+    RAFT_REGISTRY              package registry: an rpm server, a directory, or an http(s)
+                               URL serving <name>.raft bundles
+                               (default: https://rpm.auk-lang.org)
+    RPM_TOKEN                  the token `raft publish` signs in with
   """
 
 fn main(args: [str]): int uses fs, net, env, ffi {
@@ -47,6 +54,8 @@ fn main(args: [str]): int uses fs, net, env, ffi {
       ok(dir) => pack(dir, out)
       err(Bad(e)) => bad(e)
     }
+    ["publish"] => publish(none)
+    ["publish", "--token", token] => publish(some(token))
     ["help"] | ["--help"] | ["-h"] => {
       print(USAGE.strip_suffix("\n") else USAGE)
       return 0
@@ -74,48 +83,22 @@ fn bad<T>(e: res.Error): T!res.Fail = fail(res.Bad(e))
 /// Run `f` with a new private scratch directory (where fetched packages are unpacked), removing
 /// it afterwards whatever the result.
 fn with_work<T>(f: (str) => T!res.Fail): T!res.Fail uses fs, ffi {
-  let work = fs.temp_dir() else e => return bad(res.err("cannot make a temporary directory: {paths.io_error(e.show())}"))
+  let work = fs.temp_dir() else e => return bad(
+    res.err("cannot make a temporary directory: {paths.io_error(e.show())}"),
+  )
   let r = f(work)
   let _ = paths.remove_all(work)
   r
 }
 
-/// The registry directory: `$RAFT_REGISTRY`, else the `packages/` folder of the checkout the
-/// binary is in, else the directory named in `raft.registry` next to the binary (written by
-/// `build.sh --install`).
-fn registry(): str uses fs, env, ffi {
-  match env.get("RAFT_REGISTRY") {
-    some(r) => return r
-    none => {}
-  }
-  match checkout() {
-    some(c) => return paths.join(c, "packages")
-    none => {}
-  }
-  match paths.exe() {
-    some(x) => match fs.read(paths.join(paths.parent(x) else ".", "raft.registry")) {
-      ok(t) => {
-        let d = t.trim()
-        if d != "" { return d }
-      }
-      err(_) => {}
-    }
-    none => {}
-  }
-  "packages"
-}
+/// The registry rpm.auk-lang.org runs, used unless `RAFT_REGISTRY` names another.
+let DEFAULT_REGISTRY = "https://rpm.auk-lang.org"
 
-/// The Auk checkout the running binary was built in: the first directory above the executable
-/// with `packages/` and `compiler/prelude/core.auk`.
-fn checkout(): str? uses fs, env, ffi {
-  var d = paths.parent(paths.exe()?)
-  loop {
-    let x = d else return none
-    if fs.is_dir(paths.join(x, "packages")) &&
-      paths.is_file(paths.join(x, "compiler/prelude/core.auk")) {
-      return x
-    }
-    d = paths.parent(x)
+/// The registry: `$RAFT_REGISTRY` (an rpm server, a directory, or a bundle host), else rpm.
+fn registry(): str uses env {
+  match env.get("RAFT_REGISTRY") {
+    some(r) when r != "" => r
+    _ => DEFAULT_REGISTRY
   }
 }
 
@@ -176,7 +159,30 @@ enum From {
 }
 
 /// `raft add`: write the requirement into `[deps]`, then install (restoring raft.toml on failure).
-fn add(pkg: str, from: From?): ()!res.Fail uses fs, net, env, ffi {
+/// `spec` is `<pkg>`, or for a registry package `<pkg>@<version>` (exactly that version) or
+/// `<pkg>@<requirement>`.
+fn add(spec: str, from: From?): ()!res.Fail uses fs, net, env, ffi {
+  let (pkg, pin) = match spec.find("@") {
+    some(i) => (spec[0..i], some(spec[i + 1..spec.len()]))
+    none => (spec, none)
+  }
+  let want = match pin {
+    some(w) => {
+      if from != none {
+        return bad(
+          res.err("`{pkg}@{w}`: only a registry package takes a version").help("a path or URL dependency is whatever version is there"),
+        )
+      }
+      let text = if semver.parse_version(w) != none { "={w}" } else { w }
+      let req = semver.parse_req(
+        text,
+      ) else return bad(
+        res.err("invalid version `{w}` for {pkg}").help("give a version (1.2.3) or a requirement (^1.2, ~1.2.3, *)"),
+      )
+      some(req)
+    }
+    none => none
+  }
   let dir = project()?
   let root = manifest.load(dir)?
   if pkg == root.name {
@@ -200,8 +206,18 @@ fn add(pkg: str, from: From?): ()!res.Fail uses fs, net, env, ffi {
       toml.value_str(toml.Table([toml.Entry { key: "url", value: toml.Str(u) }]))
     }
     none => {
-      let (m, _) = with_work(work => load_registry(pkg, [root.name, pkg], work))?
-      toml.value_str(toml.Str("^{m.version.major}.{m.version.minor}"))
+      let (m, _) = with_work(work => load_registry(pkg, [root.name, pkg], work, want, none))?
+      match want {
+        some(req) => {
+          if !semver.matches(req, m.version) {
+            return bad(
+              res.err("no version of {pkg} in the registry matches {req.text}").help("the newest is {semver.show(m.version)}"),
+            )
+          }
+          toml.value_str(toml.Str(req.text))
+        }
+        none => toml.value_str(toml.Str("^{m.version.major}.{m.version.minor}"))
+      }
     }
   }
   edit_and_install(dir, pkg, some(value))
@@ -268,10 +284,30 @@ fn load_dep(dir: str, name: str, chain: [str], missing: str): manifest.Manifest!
 
 /// Download the bundle at `url`, unpack it into `<work>/<name>`, and load it as dependency
 /// `name`: (manifest, directory).
-fn fetch_pkg(url: str, name: str, chain: [str], work: str): (manifest.Manifest, str)!res.Fail uses fs, net {
+fn fetch_pkg(
+  url: str,
+  name: str,
+  chain: [str],
+  work: str,
+): (manifest.Manifest, str)!res.Fail uses fs, net {
+  let data = fetch.get(
+    url,
+  ) else e => return bad(res.err("cannot fetch {url}: {e} ({chain_str(chain)})"))
+  unpack(data, url, name, chain, work)
+}
+
+/// Unpack bundle `data` (from `url`) into `<work>/<name>` and load it as dependency `name`.
+fn unpack(
+  data: [int],
+  url: str,
+  name: str,
+  chain: [str],
+  work: str,
+): (manifest.Manifest, str)!res.Fail uses fs {
   let chain_s = chain_str(chain)
-  let data = fetch.get(url) else e => return bad(res.err("cannot fetch {url}: {e} ({chain_s})"))
-  let files = bundle.decode(data) else e => return bad(
+  let files = bundle.decode(
+    data,
+  ) else e => return bad(
     res.err("{url} is not a raft package bundle: {e} ({chain_s})").help("make one with `raft pack`"),
   )
   let dir = paths.join(work, name)
@@ -289,16 +325,42 @@ fn fetch_pkg(url: str, name: str, chain: [str], work: str): (manifest.Manifest, 
 }
 
 /// `load_dep`, with the directory: (manifest, `dir`).
-fn local_dep(dir: str, name: str, chain: [str], missing: str): (manifest.Manifest, str)!res.Fail uses fs {
+fn local_dep(
+  dir: str,
+  name: str,
+  chain: [str],
+  missing: str,
+): (manifest.Manifest, str)!res.Fail uses fs {
   (load_dep(dir, name, chain, missing)?, dir)
 }
 
-/// Load registry package `name` (fetching `<registry>/<name>.raft` into `work` when the
-/// registry is a URL): (manifest, directory).
-fn load_registry(name: str, chain: [str], work: str): (manifest.Manifest, str)!res.Fail uses fs, net, env, ffi {
+/// Load registry package `name`: (manifest, directory). From an rpm server, the version that
+/// fits `want` (preferring the `locked` one) is downloaded into `work`; from a bundle host,
+/// `<registry>/<name>.raft`; from a directory, `<registry>/<name>/`.
+fn load_registry(
+  name: str,
+  chain: [str],
+  work: str,
+  want: semver.Req?,
+  locked: str?,
+): (manifest.Manifest, str)!res.Fail uses fs, net, env {
   let reg = registry()
+  let missing = res.err("package `{name}` not found in the registry ({chain_str(chain)})")
   let found = if fetch.is_url(reg) {
-    fetch_pkg(fetch.join(reg, "{name}.raft"), name, chain, work)
+    match rpm.releases(reg, name) {
+      rpm.Found(rs) => match rpm.choose(rs, want, locked) {
+        some(r) => {
+          let what = "{name} {semver.show(r.version)} from {reg}"
+          match rpm.download(reg, name, r) {
+            ok(data) => unpack(data, what, name, chain, work)
+            err(e) => bad(res.err("cannot fetch {what}: {e} ({chain_str(chain)})"))
+          }
+        }
+        none => bad(missing)
+      }
+      rpm.Missing() => bad(missing)
+      rpm.NotRpm() => fetch_pkg(fetch.join(reg, "{name}.raft"), name, chain, work)
+    }
   } else {
     local_dep(paths.join(reg, name), name, chain, "package `{name}` not found in the registry")
   }
@@ -320,7 +382,12 @@ fn load_registry(name: str, chain: [str], work: str): (manifest.Manifest, str)!r
 /// A package that would be downloaded is taken from `.raft/` instead when raft.lock pins it (same
 /// name and source) and the installed copy still has the locked checksum, so a locked project
 /// installs offline. Downloads go under `work`.
-fn resolve(root: manifest.Manifest, root_dir: str, lock: [manifest.Locked], work: str): [Pkg]!res.Fail uses fs, net, env, ffi {
+fn resolve(
+  root: manifest.Manifest,
+  root_dir: str,
+  lock: [manifest.Locked],
+  work: str,
+): [Pkg]!res.Fail uses fs, net, env {
   var pkgs: [Pkg] = []
   // (dependency, index of the package declaring it; none = root)
   var queue: [(manifest.Dep, int?)] = root.deps.map(d => (d, none))
@@ -368,13 +435,22 @@ fn resolve(root: manifest.Manifest, root_dir: str, lock: [manifest.Locked], work
       none => {
         let installed = paths.join(root_dir, ".raft/{dep.name}")
         let remote = dep.src is Url(_) || (dep.src is Registry(_) && fetch.is_url(registry()))
-        let cached = remote && match lock.find(l => l.name == dep.name && l.source == source) {
-          some(l) => ok_sum(installed) == some(l.checksum)
-          none => false
-        }
+        // (a locked version the requirement no longer takes is not used: raft.toml changed)
+        let cached = remote &&
+          match lock.find(l => l.name == dep.name && l.source == source) {
+            some(l) => takes(dep.src, l.version) && ok_sum(installed) == some(l.checksum)
+            none => false
+          }
         let (m, dir) = match dep.src {
-          _ when cached => (load_dep(installed, dep.name, chain, "no raft.toml in {installed}")?, installed)
-          Registry(_) => load_registry(dep.name, chain, work)?
+          _ when cached =>
+            (load_dep(installed, dep.name, chain, "no raft.toml in {installed}")?, installed)
+          Registry(req) => load_registry(
+            dep.name,
+            chain,
+            work,
+            some(req),
+            lock.find(l => l.name == dep.name && l.source == "registry")?.version,
+          )?
           Url(u) => fetch_pkg(u, dep.name, chain, work)?
           Path(p) => {
             let dir = paths.join(pdir, p)
@@ -425,6 +501,15 @@ fn resolve(root: manifest.Manifest, root_dir: str, lock: [manifest.Locked], work
     }
   }
   pkgs
+}
+
+/// Whether a dependency from `src` can be version `version`: a registry requirement must match.
+fn takes(src: manifest.DepSrc, version: str): bool = match src {
+  Registry(req) => match semver.parse_version(version) {
+    some(v) => semver.matches(req, v)
+    none => false
+  }
+  _ => true
 }
 
 /// The files a package ships: raft.toml, README.md if present, and everything under src/,
@@ -483,6 +568,53 @@ fn pack(dir: str, out: str): ()!res.Fail uses fs {
   fs.write_bytes(path, data) else e => return bad(io(e))
   print("packed {m.name} {semver.show(m.version)} -> {path}")
   print("  sha256:{sha256.hex(data)}")
+}
+
+/// `raft publish`: send the package's files to the registry, an rpm server, as a new version.
+fn publish(token: str?): ()!res.Fail uses fs, net, env, ffi {
+  let dir = project()?
+  let m = manifest.load(dir)?
+  let reg = registry()
+  if !fetch.is_url(reg) {
+    return bad(
+      res.err("cannot publish to {reg}: it is a directory, not an rpm server").help("unset RAFT_REGISTRY to publish to {DEFAULT_REGISTRY}"),
+    )
+  }
+  if !fetch.private(reg) {
+    return bad(
+      res.err("cannot publish to {reg}: the token would be sent unencrypted").help("use the registry's https:// address"),
+    )
+  }
+  let token = token else env.get("RPM_TOKEN") else ""
+  if token == "" {
+    return bad(
+      res.err("publishing needs a token").help("make one at {fetch.join(reg, "account")}, then set RPM_TOKEN or pass --token <token>"),
+    )
+  }
+  if token.chars().any(c => int(c) <= 32 || int(c) >= 127) {
+    return bad(res.err("the token has a space or an unprintable character in it"))
+  }
+  var files: [(str, [int])] = []
+  for (rel, path) in package_files(dir)? {
+    let bytes = fs.read_bytes(
+      path,
+    ) else e => return bad(res.err("cannot read {path}: {paths.io_error(e.show())}"))
+    files.push((rel, bytes))
+  }
+  let what = "{m.name} {semver.show(m.version)}"
+  let p = rpm.publish(
+    reg,
+    token,
+    files,
+  ) else e => return bad(res.err("cannot publish {what} to {reg}: {e}"))
+  let sum = "sha256:{sha256.hex(bundle.encode(files))}"
+  if p.checksum != sum {
+    return bad(
+      res.err("{reg} published {p.name} {p.version} with other files than these").help("its checksum is {p.checksum}, this package's is {sum}"),
+    )
+  }
+  print("published {p.name} {p.version} -> {fetch.join(reg, "packages/{p.name}/{p.version}")}")
+  print("  {sum}")
 }
 
 /// `checksum(dir).ok()` (`checksum(dir) else none` is typed `str` in a comparison).

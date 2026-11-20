@@ -1,5 +1,6 @@
 /// Downloading over HTTP(S) with core `net` (raft has no dependencies, since the seed builds it
-/// before anything is installed, so this is a small GET-only client rather than packages/http).
+/// before anything is installed, so this is a small client of its own rather than packages/http:
+/// GET, and POST for `raft publish`).
 /// Bodies are bytes (ints 0..255), framed by chunked encoding, `Content-Length` or close; up to
 /// 5 redirects are followed. TLS always verifies the server (core `net.tls`).
 
@@ -46,7 +47,9 @@ fn parse(s: str): Url! {
     let close = auth.find("]") else fail("bad host")
     let h = auth[1..close]
     let p = auth[close + 1..auth.len()]
-    if p == "" { (h, default) } else {
+    if p == "" {
+      (h, default)
+    } else {
       let ps = p.strip_prefix(":") else fail("bad host")
       (h, port_of(ps, default)?)
     }
@@ -95,30 +98,57 @@ fn resolve(base: Url, loc: str): str {
 
 /// GET `url`, following redirects; the body of the final 200 response.
 pub fn get(url: str): [int]! uses net {
+  let (status, _, body) = request(url)?
+  if status != 200 { fail("HTTP {status}") }
+  body
+}
+
+/// GET `url`, following redirects: the final response's (status, lower-cased headers, body).
+pub fn request(url: str): (int, {str: str}, [int])! uses net {
   var cur = url
   for _ in 0..6 {
     let u = parse(cur)?
     let (status, headers, body) = once(u)?
-    if status == 200 { return body }
     if [301, 302, 303, 307, 308].contains(status) {
       let loc = headers.get("location") else fail("{status} redirect without a Location")
       cur = resolve(u, loc)
       continue
     }
-    fail("HTTP {status}")
+    return (status, headers, body)
   }
   fail("too many redirects")
 }
 
+/// POST `body` to `url` with `headers` added: the response's (status, lower-cased headers,
+/// body). Redirects are not followed, so the headers (a token) go to `url` only.
+pub fn post(url: str, headers: [(str, str)], body: [int]): (int, {str: str}, [int])! uses net {
+  send(parse(url)?, "POST", headers, body)
+}
+
+/// Whether what is sent to `url` stays private: https, or http to this machine.
+pub fn private(url: str): bool {
+  match parse(url) {
+    ok(u) => u.tls || ["localhost", "127.0.0.1", "::1"].contains(u.host)
+    err(_) => false
+  }
+}
+
+/// One GET on its own connection.
+fn once(u: Url): (int, {str: str}, [int])! uses net = send(u, "GET", [], [])
+
 /// One request on its own connection, read until the server closes it.
-fn once(u: Url): (int, {str: str}, [int])! uses net {
+fn send(u: Url, method: str, extra: [(str, str)], body: [int]): (int, {str: str}, [int])! uses net {
   let h = if u.host.contains(":") { "[{u.host}]" } else { u.host }
   let default = if u.tls { 443 } else { 80 }
   let host = if u.port == default { h } else { "{h}:{u.port}" }
-  let req = "GET {u.target} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: raft\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+  var req = "{method} {u.target} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: raft\r\nAccept: */*\r\nConnection: close\r\n"
+  for (k, v) in extra { req += "{k}: {v}\r\n" }
+  if method != "GET" { req += "Content-Length: {body.len()}\r\n" }
+  var data = "{req}\r\n".bytes()
+  data += body
   var c = if u.tls { net.tls(u.host, u.port)? } else { net.tcp(u.host, u.port)? }
   var buf: [int] = []
-  let r = exchange(&c, req.bytes(), &buf)
+  let r = exchange(&c, data, &buf)
   c.close()
   r?
   decode(buf)
@@ -139,7 +169,9 @@ fn decode(bs: [int]): (int, {str: str}, [int])! {
   let head = str.from_utf8(bs[0..end]) else fail("bad response: headers are not UTF-8")
   let lines = head.split("\r\n")
   let status = match lines[0].split(" ") {
-    [v, code, ..] when v.starts_with("HTTP/1.") && code.len() == 3 && code.chars().all(c => c.is_digit()) => int.parse(code)?
+    [v, code, ..] when v.starts_with("HTTP/1.") &&
+      code.len() == 3 &&
+      code.chars().all(c => c.is_digit()) => int.parse(code)?
     _ => fail("bad response: status line `{lines[0]}`")
   }
   var headers: {str: str} = {}
@@ -222,11 +254,19 @@ fn index_of(bs: [int], pat: [int], from: int): int? {
 test "parse URLs" {
   assert parse("https://pkgs.example.org/auk/json.raft")? ==
     Url { tls: true, host: "pkgs.example.org", port: 443, target: "/auk/json.raft" }
-  assert parse("http://127.0.0.1:8080")? == Url { tls: false, host: "127.0.0.1", port: 8080, target: "/" }
+  assert parse("http://127.0.0.1:8080")? ==
+    Url { tls: false, host: "127.0.0.1", port: 8080, target: "/" }
   assert parse("http://[::1]:9/x?y#z")? == Url { tls: false, host: "::1", port: 9, target: "/x?y" }
   assert parse("ftp://a/b") is err(_)
   assert parse("https://u:p@a/b") is err(_)
   assert parse("http://a:99999/") is err(_)
+}
+
+test "private" {
+  assert private("https://rpm.auk-lang.org") &&
+    private("http://127.0.0.1:8080") &&
+    private("http://[::1]:9/x")
+  assert !private("http://rpm.auk-lang.org") && !private("rpm.auk-lang.org")
 }
 
 test "redirect locations" {
