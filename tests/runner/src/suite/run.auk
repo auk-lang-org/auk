@@ -51,6 +51,7 @@ pub fn tests(): [t.Test] uses env, fs, ffi, time, net = [
   t.test("build_refuses_holes", build_refuses_holes),
   t.test("async_tasks_and_any_shapes", async_tasks_and_any_shapes),
   t.test("control_flow_and_formatting", control_flow_and_formatting),
+  t.test("operands_are_read_before_later_ones_run", operands_are_read_before_later_ones_run),
   t.test("runtime_bindings_link", runtime_bindings_link),
   t.test("imprints_are_computed_at_compile_time", imprints_are_computed_at_compile_time),
   t.test("imprint_errors", imprint_errors),
@@ -2319,4 +2320,50 @@ fn gui_window_shows_the_frame() uses env, fs, ffi, time {
   t.check(g > 200 && g > r + 60 && g > b + 40, "bottom left is {(r, g, b)}")
   let (r, g, b) = at(w - 30, h - 30)
   t.check(r > 200 && g > 200 && b + 100 < r, "bottom right is {(r, g, b)}")
+}
+
+/// An operand is read before the ones after it run, even when one of those changes its variable
+/// (a block that assigns it, a `&` argument): tuples, lists, variants, interpolations and call
+/// arguments once read such a variable only when they were built.
+fn operands_are_read_before_later_ones_run() uses env, fs, ffi, time {
+  expect_out("operand_order", r"""
+      enum E { V(a: [int], b: int) }
+      fn pair(a: [int], b: int): ([int], int) = (a, b)
+      fn bump(x: var [int]): int {
+        x = [3]
+        1
+      }
+      fn main() {
+        var xs = [1, 2]
+        let t = (xs, {
+          xs = [3]
+          1
+        })
+        var n = 1
+        let u = (n, {
+          n = 5
+          n
+        })
+        var ys = [1, 2]
+        let l = [ys, {
+          ys = [3]
+          [0]
+        }]
+        var ws = [1, 2]
+        let v = V(ws, {
+          ws = [3]
+          1
+        })
+        var us = [1, 2]
+        let s = "{us} {bump(&us)} {us}"
+        var qs = [1, 2]
+        let c = pair(qs, {
+          qs = [3]
+          1
+        })
+        print("{t} {u} {l} {v} {s} {c}")
+      }
+      """, r"""
+      ([1, 2], 1) (1, 5) [[1, 2], [0]] V([1, 2], 1) [1, 2] 1 [3] ([1, 2], 1)
+      """)
 }

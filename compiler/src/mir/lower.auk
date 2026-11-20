@@ -2130,8 +2130,8 @@ fn expr_inner(lw: var Lower, e: ast.Expr, tail: bool): Val = match e.kind {
     let new = mir.rt("auk_arr_new", [ops, mir.int_(xs.len())], d(ty))
     if xs.len() == 0 { return lw.tmp(ty, new) }
     var parts: [mir.Ex] = []
-    for x in xs {
-      let v = lw.expr(x)
+    for i, x in xs {
+      let v = lw.settle(lw.expr(x), xs.skip(i + 1))
       parts.push(lw.val_as(v, et))
     }
     // the array is built after its elements are evaluated (like a C array literal)
@@ -2169,7 +2169,10 @@ fn expr_inner(lw: var Lower, e: ast.Expr, tail: bool): Val = match e.kind {
       _ => return val_never()
     }
     var vals: [Val] = []
-    for x in xs { vals.push(lw.expr(x)) }
+    for i, x in xs {
+      let v = lw.expr(x)
+      vals.push(lw.settle(v, xs.skip(i + 1)))
+    }
     var parts: [(mir.Sel, mir.Ex)] = []
     for i, v in vals {
       if i < ts.len() { parts.push((mir.Sel.F(i), lw.own_as(v, ts[i]))) }
@@ -2339,6 +2342,14 @@ fn call(lw: var Lower, e: ast.Expr, first0: Val?, tail: bool): Val {
         }
       }
       var v = lw.expr_borrow_if(x, rest_pure)
+      // a later argument that may change a variable (not a `&` one: handled below)
+      if !any_ref && !rest_pure {
+        var later: [ast.Expr] = []
+        for y in exprs {
+          if call.args.skip(k + 1).any(b => b.node == y.id) { later.push(y) }
+        }
+        v = lw.settle(v, later)
+      }
       // a value read from a variable that a `var` argument may change during the call
       // (`f(p.name, &p)`): an owned copy, so the change can't free it under the callee
       if any_ref && !v.owned && !v.is_never() && lw.g.needs_rc(v.ty) {
@@ -3201,6 +3212,22 @@ fn field_val(lw: var Lower, e: ast.Expr, b: Val, name: str): Val {
     return Val { c, ty: ft, owned: false }
   }
   val_never()
+}
+
+/// `v`, evaluated before `later`, as a value `later` can't change: when one of them may change
+/// a variable (`pure_read` fails: an assignment, a `&` argument, a block), a borrowed `v` (a
+/// variable, read only when it's used) is copied now (retained when counted), so that
+/// `(xs, { xs = ys; 1 })` holds the old `xs`.
+fn settle(lw: var Lower, v: Val, later: [ast.Expr]): Val {
+  if v.owned || v.is_never() || v.c.is_simple() && !v.c.is_place() { return v }
+  var pure = true
+  for y in later {
+    if pure && !lw.pure_read(y) { pure = false }
+  }
+  if pure { return v }
+  if lw.g.needs_rc(v.ty) { return lw.own_tmp(v) }
+  let c = lw.decl(v.ty, v.c)
+  Val { c, ty: v.ty, owned: false }
 }
 
 /// An owned copy of a value borrowed from a borrowed element read.
@@ -4713,13 +4740,15 @@ fn dshow(lw: var Lower, v: Val): mir.Ex {
 // ---- literals ----
 
 fn interp(lw: var Lower, parts: [ast.InterpPart]): Val {
-  var vals: [Val] = []
+  var xs: [ast.Expr] = []
   for p in parts {
     match p {
-      Expr(x, _) => vals.push(lw.expr(x))
+      Expr(x, _) => xs.push(x)
       _ => {}
     }
   }
+  var vals: [Val] = []
+  for i, x in xs { vals.push(lw.settle(lw.expr(x), xs.skip(i + 1))) }
   let sb = lw.bdecl(mir.zero(mir.MTy.Rt(mir.Rt.StrBuf)))
   let sbp = sb.addr()
   var k = 0

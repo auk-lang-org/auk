@@ -208,7 +208,8 @@ benchmark slower by more than 2%, and the phase's micro-benchmarks scale linearl
   moves only if no other local is bound to its variable. The second one miscompiled the
   compiler itself (found by bisecting with `AUK_MOVES_LIMIT`/`AUK_MOVES_LOG`).
   Found along the way (pre-existing, both with and without moves): `(xs, { xs = ys; 1 })`
-  gives `([3], 1)`. The tuple reads `xs` after the block reassigns it.
+  gave `([3], 1)`, as did lists, variants, interpolations and call arguments. A borrowed
+  operand was read only when the whole was built. Fixed 2026-11-20 by `settle` (lower.auk).
 
 - **Phase 3 (2026-11-19):** `param_modes` (lower.auk) infers per instance which parameters the
   body consumes: a last-use read of the parameter in an owning position (a `let` or
