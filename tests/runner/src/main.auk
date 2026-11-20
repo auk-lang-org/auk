@@ -33,6 +33,7 @@ fn suites(): [t.Suite] uses fs, env, ffi, time, net, proc = [
   t.Suite { name: "lsp", tests: suite.lsp.tests() },
   t.Suite { name: "mcp", tests: suite.mcp.tests() },
   t.Suite { name: "net", tests: suite.net.tests() },
+  t.Suite { name: "ownership", tests: suite.ownership.tests() },
   t.Suite { name: "packages_next", tests: suite.packages_next.tests() },
   t.Suite { name: "packages_p0", tests: suite.packages_p0.tests() },
   t.Suite { name: "parse", tests: suite.parse.tests() },

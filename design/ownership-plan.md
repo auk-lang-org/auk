@@ -185,6 +185,14 @@ benchmark slower by more than 2%, and the phase's micro-benchmarks scale linearl
 
 ### Progress
 
+- **Phases 0–1 (2026-11-19):** `rc.auk_note_cow` counts copies in `ensure_unique_cap` (lists),
+  `auk_map_make_unique`, `auk_str_append` and the generated `box_unique`; `auk_leak_check`
+  prints them under `AUK_STATS`, from the same baseline as the leak check (so `auk run`
+  counts only the program's). `move_out` takes `m.get(k) else d` and works through `var`
+  parameters. Case A: 996 copies per 1000 iterations → 0. Tests:
+  `tests/runner/src/suite/ownership.auk`. Not done in phase 1: `xs.get(i) else d` on lists
+  (rare; `xs[i]` already works).
+
 Then remove the hand-written workarounds that the compiler now handles (FLAC's
 `chans[c] = []`, `out0 = []` and the like) one package at a time, keeping each package's
 differential fuzz.

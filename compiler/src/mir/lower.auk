@@ -78,6 +78,8 @@ pub struct FnState {
   tail: TailCx?,
   olds: {int: mir.Ex},
   var_params: {int: bool},
+  /// The names of the `var` parameters (`move_out` keeps them out of a take and its put).
+  var_param_names: {str: bool},
   dbg: FnDbg?,
   /// While binding an alternative of an or-pattern: the variable each of its locals goes in.
   or_into: {int: mir.Ex},
@@ -100,6 +102,7 @@ pub fn new_fs(ret: types.Ty): FnState = FnState {
   tail: none,
   olds: {},
   var_params: {},
+  var_param_names: {},
   dbg: none,
   or_into: {},
   bind_borrow: false,
@@ -647,6 +650,10 @@ fn emit_fn(lw: var Lower, fid: int, group: ast.FnGroup) {
         match lw.t.binds.get(p.pat.id) {
           some(l) => lw.f.var_params[l] = true
           none => {}
+        }
+        match p.pat.kind {
+          Bind(n) => lw.f.var_param_names[n] = true
+          _ => {}
         }
       }
     }
@@ -1238,14 +1245,21 @@ fn block(lw: var Lower, b: ast.Block, tail: bool): Val {
 /// g.clauses.push(c)     // anything that doesn't mention `items`
 /// items[k] = g          // the same place, the same index
 /// ```
-/// moves the element out (see src/mir/lower.rs). `stmts[start..]` are the statements. Returns
-/// whether it lowered `stmts[start]` this way.
+/// moves the element out (see src/mir/lower.rs). So does `var g = m.get(k) else d` on a map
+/// (the fallback when `k` is absent). `stmts[start..]` are the statements. Returns whether it
+/// lowered `stmts[start]` this way.
+///
+/// The container is a plain local of the frame, which nothing else can see (the hole is a
+/// zero), or a `var` parameter whose elements are lists or maps: the caller sees its variable
+/// again if a panic in between is caught, so the hole is a valid empty value, and nothing in
+/// between may mention a `var` parameter (two of them can be the same variable).
+/// (design/ownership-plan.md, section 3)
 fn move_out(lw: var Lower, stmts: [ast.Expr], start: int): bool {
   // (a debugger stopped in between would see the hole)
   if lw.f.dbg != none { return false }
   let first = stmts[start]
-  let (pat, value) = match first.kind {
-    Let(true, pat, _, value, none) => (pat, value)
+  let (pat, value, els) = match first.kind {
+    Let(true, pat, _, value, els) => (pat, value, els)
     _ => return false
   }
   let x = match pat.kind {
@@ -1253,8 +1267,32 @@ fn move_out(lw: var Lower, stmts: [ast.Expr], start: int): bool {
     _ => return false
   }
   if lw.t.variants.contains(pat.id) || lw.has_coercions(value.id) { return false }
-  let (cont, index) = match value.kind {
-    Index(c, i) => (c, i)
+  // `c[i]`, or `c.get(k) else d` (`fallback`) on a map
+  var fallback: ast.Expr? = none
+  var cont = value
+  var index = value
+  match value.kind {
+    Index(c, i) => {
+      if els is some(_) { return false }
+      cont = c
+      index = i
+    }
+    MethodCall(c, n, args) => {
+      let arm = els else return false
+      if n.name != "get" || args.len() != 1 || arm.binder != none { return false }
+      let core_get = match lw.tp.instances[lw.inst].resolved.get(value.id) {
+        some(Extern(symbol, _)) => symbol == "auk_map_get_opt"
+        _ => false
+      }
+      let plain_else = match lw.t.elses.get(first.id) {
+        some(info) => info.kind is typed.ElseKind.Option
+        none => false
+      }
+      if !core_get || !plain_else { return false }
+      fallback = some(arm.body)
+      cont = c
+      index = args[0]
+    }
     _ => return false
   }
   let cname = match cont.kind {
@@ -1270,12 +1308,22 @@ fn move_out(lw: var Lower, stmts: [ast.Expr], start: int): bool {
     some(sl) => sl.c.is_var()
     none => false
   }
-  if !plain_var || lw.f.var_params.contains(cl) { return false }
-  let ty = lw.ty(value.id)
+  let var_param = lw.f.var_params.contains(cl)
+  if !plain_var && !var_param { return false }
+  let ty = match fallback {
+    some(_) => match lw.ty(value.id) {
+      Opt(t) => t
+      _ => return false
+    }
+    none => lw.ty(value.id)
+  }
   let ct = lw.ty(cont.id)
   if !((ct is types.Ty.List(_)) || (ct is types.Ty.Map(_, _))) || !lw.g.needs_rc(ty) || !lw.pure_read(index) {
     return false
   }
+  if (fallback is some(_)) && !(ct is types.Ty.Map(_, _)) { return false }
+  // a var parameter's hole must be a value: an empty list or map
+  if var_param && !((ty is types.Ty.List(_)) || (ty is types.Ty.Map(_, _))) { return false }
   let xl = lw.t.binds.get(pat.id) else return false
   if lw.local_ty(xl) != ty { return false }
   var inames = new_scan()
@@ -1308,12 +1356,45 @@ fn move_out(lw: var Lower, stmts: [ast.Expr], start: int): bool {
       if between.exits || between.names.contains(cname) || inames.names.keys().any(n => between.changed.contains(n)) {
         return false
       }
+      if var_param && between.names.keys().any(n => lw.f.var_param_names.contains(n)) { return false }
       lw.dbg_hook(first.span, false)
       lw.push(ScopeKind.Stmt)
-      let (pl, _) = lw.place(value)
-      let v = lw.bdecl(pl)
-      let z = lw.g.zero(ty)
-      lw.set(pl, z)
+      let v = match fallback {
+        none => {
+          let (pl, _) = lw.place(value)
+          let v = lw.bdecl(pl)
+          let hole = lw.take_hole(ty, var_param)
+          lw.set(pl, hole)
+          v
+        }
+        some(fb) => {
+          // the map's own slot when `k` is present (the map made unique first, as a store
+          // would), else the fallback
+          let kt = match ct {
+            Map(k, _) => k
+            _ => return false
+          }
+          let (b, _) = lw.place(cont)
+          let kv = lw.expr(index)
+          let k = lw.lvalue(kv, kt)
+          lw.do_(mir.rt("auk_map_make_unique", [b.addr()], mir.void_ptr()))
+          let found = mir.rt("auk_map_find", [b, k.addr().cast(mir.void_ptr())], mir.void_ptr())
+          let p = lw.bdecl(found.cast(mir.ptr(d(ty))))
+          let r = lw.zero_decl(ty)
+          lw.open_if(mir.bin(mir.BOp.Ne, p, mir.null().cast(mir.ptr(d(ty)))))
+          lw.set(r, p.deref(d(ty)))
+          let hole = lw.take_hole(ty, var_param)
+          lw.set(p.deref(d(ty)), hole)
+          lw.else_()
+          lw.push(ScopeKind.Block)
+          let dv = lw.expr(fb)
+          let o = lw.own_as(dv, ty)
+          lw.set(r, o)
+          lw.pop()
+          lw.close()
+          r
+        }
+      }
       let val = lw.reown(v, ty)
       lw.let_binds()
       lw.bind_value(pat, val)
@@ -1325,6 +1406,17 @@ fn move_out(lw: var Lower, stmts: [ast.Expr], start: int): bool {
     j += 1
   }
   false
+}
+
+/// What `move_out` leaves in the slot it took a `ty` from: a zero, or for a `var` parameter's
+/// element an empty list or map (its caller may see it).
+fn take_hole(lw: var Lower, ty: types.Ty, valid: bool): mir.Ex {
+  if !valid { return lw.g.zero(ty) }
+  match ty {
+    List(et) => mir.rt("auk_arr_new", [lw.g.ops(et), mir.int_(0)], d(ty))
+    Map(kt, vt) => mir.rt("auk_map_new", [lw.g.ops(kt), lw.g.ops(vt)], d(ty))
+    _ => lw.g.zero(ty)
+  }
 }
 
 /// Are two index expressions the same value (both evaluated with the same variables)?
